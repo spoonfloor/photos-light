@@ -1,0 +1,59 @@
+<!-- Import Overlay (Google Photos style) -->
+<div class="import-overlay" id="importOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Import</span>
+      <button class="import-close-btn" id="importCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Progress Section -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="importStatusText">
+        Preparing import<span class="import-spinner"></span>
+      </div>
+      
+      <div class="import-stats" id="importStats" style="display: none;">
+        <span class="import-stat">
+          <span class="import-stat-label">Imported:</span>
+          <span class="import-stat-value" id="importedCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Duplicates:</span>
+          <span class="import-stat-value" id="duplicateCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Errors:</span>
+          <span class="import-stat-value" id="errorCount">0</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Details Section (expandable) -->
+    <div class="import-details-section" id="importDetailsSection" style="display: none;">
+      <button class="import-details-toggle" id="importDetailsToggle">
+        <span class="material-symbols-outlined">expand_more</span>
+        <span>Show details</span>
+      </button>
+      
+      <div class="import-details-list" id="importDetailsList" style="display: none;">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="importCancelBtn" style="display: none;">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-secondary" id="importUndoBtn" style="display: none;">
+        Undo import
+      </button>
+      <button class="import-btn import-btn-primary" id="importDoneBtn" style="display: none;">
+        Done
+      </button>
+    </div>
+  </div>
+</div>

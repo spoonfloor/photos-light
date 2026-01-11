@@ -1,0 +1,105 @@
+<!-- Date Editor Dialog -->
+<div class="date-editor-overlay" id="dateEditorOverlay" style="display: none;">
+  <div class="date-editor">
+    <h2 class="date-editor-title">Edit date & time</h2>
+    
+    <!-- Current date display -->
+    <div class="date-editor-current" id="dateEditorCurrent">
+      Tuesday, November 4, 2025, 8:12 AM
+    </div>
+    
+    <!-- Bulk edit mode selector (hidden for single photo) -->
+    <div class="date-editor-bulk-mode" id="dateEditorBulkMode" style="display: none;">
+      <div class="date-editor-radio">
+        <input type="radio" id="dateEditorModeShift" name="dateEditorMode" value="shift" checked>
+        <label for="dateEditorModeShift">
+          <span class="radio-title">Shift dates</span>
+          <span class="radio-description">Set new date for first photo. Others will shift by the same offset.</span>
+        </label>
+      </div>
+      
+      <div class="date-editor-radio">
+        <input type="radio" id="dateEditorModeSame" name="dateEditorMode" value="same">
+        <label for="dateEditorModeSame">
+          <span class="radio-title">Set all to same date</span>
+          <span class="radio-description">All photos will have the exact same date & time.</span>
+        </label>
+      </div>
+      
+      <div class="date-editor-radio">
+        <input type="radio" id="dateEditorModeSequence" name="dateEditorMode" value="sequence">
+        <label for="dateEditorModeSequence">
+          <span class="radio-title">Sequence with interval</span>
+          <span class="radio-description">
+            Base time below. Each photo increments by 
+            <select id="dateEditorIntervalAmount" class="interval-select">
+              <!-- Will be populated by JS -->
+            </select>
+            <select id="dateEditorIntervalUnit" class="interval-select">
+              <option value="seconds">seconds</option>
+              <option value="minutes" selected>minutes</option>
+              <option value="hours">hours</option>
+            </select>
+          </span>
+        </label>
+      </div>
+    </div>
+    
+    <!-- Date/Time inputs -->
+    <div class="date-editor-inputs">
+      <div class="date-editor-field">
+        <label>Year</label>
+        <select id="dateEditorYear">
+          <!-- Will be populated by JS -->
+        </select>
+      </div>
+      
+      <div class="date-editor-field">
+        <label>Month</label>
+        <select id="dateEditorMonth">
+          <!-- Will be populated by JS -->
+        </select>
+      </div>
+      
+      <div class="date-editor-field">
+        <label>Day</label>
+        <select id="dateEditorDay">
+          <!-- Will be populated by JS -->
+        </select>
+      </div>
+      
+      <div class="date-editor-field">
+        <label>Time</label>
+        <select id="dateEditorHour">
+          <!-- Will be populated by JS -->
+        </select>
+      </div>
+      
+      <div class="date-editor-field date-editor-field-narrow">
+        <label>&nbsp;</label>
+        <span class="date-editor-separator">:</span>
+      </div>
+      
+      <div class="date-editor-field">
+        <label>&nbsp;</label>
+        <select id="dateEditorMinute">
+          <!-- Will be populated by JS -->
+        </select>
+      </div>
+      
+      <div class="date-editor-field">
+        <label>&nbsp;</label>
+        <select id="dateEditorAmPm">
+          <option value="AM">AM</option>
+          <option value="PM">PM</option>
+        </select>
+      </div>
+    </div>
+    
+    <!-- Actions -->
+    <div class="date-editor-actions">
+      <button class="date-editor-button date-editor-button-secondary" id="dateEditorCancelBtn">Cancel</button>
+      <button class="date-editor-button date-editor-button-primary" id="dateEditorSaveBtn">Save</button>
+    </div>
+  </div>
+</div>

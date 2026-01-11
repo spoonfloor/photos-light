@@ -1,0 +1,96 @@
+<!-- App Bar Shell -->
+<div class="app-bar-wrapper no-select">
+  <div class="app-bar-elements-layer">
+    <div class="title-and-back">
+      <!-- LEFT: lightning icon -->
+      <button class="app-bar-icon-button" id="appBarMenuBtn" aria-label="Menu">
+        <img
+          src="assets/lightning_bolt.svg"
+          alt=""
+          class="app-bar-icon lightning-icon"
+          style="width: 24px; height: 24px"
+        />
+      </button>
+
+      <span class="title title-photos" id="appBarTitle">Photos Lite</span>
+    </div>
+
+    <!-- CENTER: Date picker -->
+    <div class="date-picker">
+      <span class="date-picker-label">Month</span>
+      <select id="monthPicker" class="date-picker-select">
+        <option value="1">January</option>
+        <option value="2">February</option>
+        <option value="3">March</option>
+        <option value="4">April</option>
+        <option value="5">May</option>
+        <option value="6">June</option>
+        <option value="7">July</option>
+        <option value="8">August</option>
+        <option value="9">September</option>
+        <option value="10">October</option>
+        <option value="11">November</option>
+        <option value="12">December</option>
+      </select>
+
+      <span class="date-picker-label">Year</span>
+      <select id="yearPicker" class="date-picker-select">
+        <!-- Populated by JS -->
+      </select>
+    </div>
+
+    <div class="actions">
+      <!-- RIGHT: Delete, Deselect all, Edit Date, Sort toggle, and Add photo buttons -->
+      <button
+        class="app-bar-icon-button"
+        id="deleteBtn"
+        aria-label="Delete"
+        title="Delete selected"
+        style="opacity: 0.3; pointer-events: none"
+      >
+        <span class="material-symbols-outlined app-bar-icon">delete</span>
+      </button>
+
+      <button
+        class="app-bar-icon-button inactive"
+        id="deselectAllBtn"
+        aria-label="Deselect All"
+        title="Deselect all"
+      >
+        <span class="material-symbols-outlined app-bar-icon">cancel</span>
+      </button>
+
+      <button
+        class="app-bar-icon-button"
+        id="editDateBtn"
+        aria-label="Edit Date"
+        title="Change date"
+        style="opacity: 0.3; pointer-events: none"
+      >
+        <span class="material-symbols-outlined app-bar-icon"
+          >edit_calendar</span
+        >
+      </button>
+
+      <button
+        class="app-bar-icon-button"
+        id="sortToggleBtn"
+        aria-label="Sort"
+        title="Newest first"
+      >
+        <span class="material-symbols-outlined app-bar-icon" id="sortIcon"
+          >hourglass_arrow_down</span
+        >
+      </button>
+
+      <button
+        class="app-bar-icon-button"
+        id="addPhotoBtn"
+        aria-label="Add Photo"
+        title="Add photo"
+      >
+        <span class="material-symbols-outlined app-bar-icon">add_a_photo</span>
+      </button>
+    </div>
+  </div>
+</div>
