@@ -41,6 +41,10 @@ LOG_DIR = os.path.join(LIBRARY_PATH, '.logs')
 for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR]:
     os.makedirs(directory, exist_ok=True)
 
+# Supported media file extensions
+PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+VIDEO_EXTENSIONS = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+
 # ============================================================================
 # LOGGING CONFIGURATION (Hybrid Approach: print() + persistent logs)
 # ============================================================================
@@ -593,24 +597,24 @@ def delete_photos():
         if not photo_ids:
             return jsonify({'error': 'No photo IDs provided'}), 400
         
-        print(f"\n🗑️  DELETE REQUEST: {len(photo_ids)} photos")
-        print(f"    Photo IDs: {photo_ids}")
+        print(f"\n🗑️  DELETE REQUEST: {len(photo_ids)} photos", flush=True)
+        print(f"    Photo IDs: {photo_ids}", flush=True)
         app.logger.info(f"Delete request: {len(photo_ids)} photos (IDs: {photo_ids})")
         
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Create deleted_photos table if it doesn't exist
+        # Create deleted_photos table with correct schema (drop old incompatible table)
+        cursor.execute("DROP TABLE IF EXISTS deleted_photos")
         cursor.execute("""
-            CREATE TABLE IF NOT EXISTS deleted_photos (
+            CREATE TABLE deleted_photos (
                 id INTEGER PRIMARY KEY,
                 original_path TEXT NOT NULL,
                 trash_filename TEXT NOT NULL,
                 deleted_at TEXT NOT NULL,
                 photo_data TEXT NOT NULL
             )
-        """)
-        
+        """)        
         deleted_count = 0
         errors = []
         trash_dir = TRASH_DIR
@@ -619,8 +623,11 @@ def delete_photos():
         from datetime import datetime
         import json
         
+        print(f"    Starting delete loop for {len(photo_ids)} photos...", flush=True)
+        
         for photo_id in photo_ids:
             try:
+                print(f"    Processing photo_id: {photo_id}", flush=True)
                 # Get full photo record
                 cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
                 row = cursor.fetchone()
@@ -688,7 +695,7 @@ def delete_photos():
         conn.commit()
         conn.close()
         
-        print(f"✅ Deleted {deleted_count} photos\n")
+        print(f"✅ Deleted {deleted_count} photos\n", flush=True)
         
         response = {
             'deleted': deleted_count,
@@ -1135,6 +1142,108 @@ def jump_to_date():
         app.logger.error(f"Error jumping to date: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/import/browse', methods=['POST'])
+def browse_import():
+    """Open native macOS file/folder picker for import"""
+    try:
+        data = request.json
+        script = data.get('script')
+        
+        if not script:
+            return jsonify({'error': 'No script provided'}), 400
+        
+        result = subprocess.run(
+            ['osascript', '-e', script],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode != 0:
+            # User cancelled
+            return jsonify({'status': 'cancelled'})
+        
+        # Parse paths from output
+        # Handle both single path (string) and multiple paths (newline-separated)
+        output = result.stdout.strip()
+        if not output:
+            return jsonify({'status': 'cancelled'})
+        
+        # Split by newlines for multiple selections
+        paths = [p.strip() for p in output.split('\n') if p.strip()]
+        
+        return jsonify({
+            'status': 'success',
+            'paths': paths
+        })
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Selection timeout'}), 408
+    except Exception as e:
+        error_logger.error(f"Browse import failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/import/scan-paths', methods=['POST'])
+def scan_import_paths():
+    """
+    Scan selected paths (files and/or folders) and return list of media files
+    Handles mixed selection: individual files + recursive folder scans
+    """
+    try:
+        data = request.json
+        paths = data.get('paths', [])
+        
+        if not paths:
+            return jsonify({'error': 'No paths provided'}), 400
+        
+        print(f"\n🔍 Scanning {len(paths)} path(s)...")
+        
+        media_files = []
+        files_count = 0
+        folders_count = 0
+        
+        for path in paths:
+            if not os.path.exists(path):
+                print(f"  ⚠️  Path not found: {path}")
+                continue
+            
+            if os.path.isfile(path):
+                # Individual file
+                _, ext = os.path.splitext(path)
+                ext_lower = ext.lower()
+                if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
+                    media_files.append(path)
+                    files_count += 1
+            
+            elif os.path.isdir(path):
+                # Folder - scan recursively
+                folders_count += 1
+                print(f"  📁 Scanning folder: {path}")
+                
+                for root, dirs, files in os.walk(path):
+                    for filename in files:
+                        _, ext = os.path.splitext(filename)
+                        ext_lower = ext.lower()
+                        if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
+                            full_path = os.path.join(root, filename)
+                            media_files.append(full_path)
+        
+        print(f"  ✅ Found {len(media_files)} media files")
+        print(f"     {files_count} direct file(s), {folders_count} folder(s) scanned")
+        
+        return jsonify({
+            'status': 'success',
+            'files': media_files,
+            'total_count': len(media_files),
+            'files_selected': files_count,
+            'folders_scanned': folders_count
+        })
+        
+    except Exception as e:
+        error_logger.error(f"Scan paths failed: {e}")
+        print(f"\n❌ Scan paths failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/photos/import', methods=['POST'])
 def import_photos():
     """
@@ -1343,6 +1452,145 @@ def import_photos():
         except Exception as e:
             print(f"❌ Import error: {e}")
             error_logger.error(f"Import session failed: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+@app.route('/api/photos/import-from-paths', methods=['POST'])
+def import_from_paths():
+    """
+    Import photos from file paths (SSE streaming version with fixes)
+    """
+    def generate():
+        try:
+            data = request.json
+            file_paths = data.get('paths', [])
+            
+            if not file_paths:
+                yield f"event: error\ndata: {json.dumps({'error': 'No paths provided'})}\n\n"
+                return
+            
+            total_files = len(file_paths)
+            print(f"\n{'='*60}")
+            print(f"📥 IMPORT FROM PATHS: {total_files} file(s)")
+            print(f"LIBRARY_PATH: {LIBRARY_PATH}")
+            print(f"DB_PATH: {DB_PATH}")
+            print(f"{'='*60}\n")
+            
+            yield f"event: start\ndata: {json.dumps({'total': total_files})}\n\n"
+            
+            # Track results
+            imported_count = 0
+            duplicate_count = 0
+            error_count = 0
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            for file_index, source_path in enumerate(file_paths, 1):
+                try:
+                    if not os.path.exists(source_path):
+                        print(f"{file_index}. ❌ File not found: {source_path}")
+                        error_count += 1
+                        yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        continue
+                    
+                    filename = os.path.basename(source_path)
+                    print(f"{file_index}. Processing: {filename}")
+                    
+                    # Hash the file
+                    content_hash = compute_hash(source_path)
+                    print(f"   Hash: {content_hash[:16]}...")
+                    
+                    # Check for duplicates
+                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
+                    existing = cursor.fetchone()
+                    
+                    if existing:
+                        print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
+                        duplicate_count += 1
+                        yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        continue
+                    
+                    # Determine date_taken
+                    date_taken = extract_exif_date(source_path)
+                    if not date_taken:
+                        date_taken = datetime.fromtimestamp(os.path.getmtime(source_path)).strftime('%Y:%m:%d %H:%M:%S')
+                    print(f"   Date: {date_taken}")
+                    
+                    # Build target path
+                    date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
+                    year = date_obj.strftime('%Y')
+                    date_folder = date_obj.strftime('%Y-%m-%d')
+                    target_dir = os.path.join(LIBRARY_PATH, year, date_folder)
+                    os.makedirs(target_dir, exist_ok=True)
+                    
+                    # Generate canonical filename
+                    _, ext = os.path.splitext(filename)
+                    short_hash = content_hash[:8]
+                    base_name = f"img_{date_obj.strftime('%Y%m%d')}_{short_hash}"
+                    canonical_name = base_name + ext.lower()
+                    target_path = os.path.join(target_dir, canonical_name)
+                    
+                    # Handle naming collisions
+                    counter = 1
+                    while os.path.exists(target_path):
+                        canonical_name = f"{base_name}_{counter}{ext.lower()}"
+                        target_path = os.path.join(target_dir, canonical_name)
+                        counter += 1
+                    
+                    # Get dimensions
+                    dimensions = get_image_dimensions(source_path)
+                    width = dimensions[0] if dimensions else None
+                    height = dimensions[1] if dimensions else None
+                    
+                    # Insert into DB FIRST (atomic)
+                    relative_path = os.path.relpath(target_path, LIBRARY_PATH)
+                    file_size = os.path.getsize(source_path)
+                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'image'
+                    date_added = datetime.now().strftime('%Y:%m:%d %H:%M:%S')
+                    
+                    cursor.execute('''
+                        INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, date_added, width, height)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, date_added, width, height))
+                    
+                    photo_id = cursor.lastrowid
+                    conn.commit()
+                    print(f"   DB: Inserted ID {photo_id}")
+                    
+                    # Copy file to library
+                    shutil.copy2(source_path, target_path)
+                    print(f"   ✅ Copied to: {relative_path}")
+                    
+                    imported_count += 1
+                    
+                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    print(f"   ❌ Error: {error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                    error_count += 1
+                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files, 'error': error_msg, 'error_file': filename})}\n\n"
+            
+            conn.close()
+            
+            print(f"\n{'='*60}")
+            print(f"IMPORT COMPLETE:")
+            print(f"  Imported: {imported_count}")
+            print(f"  Duplicates: {duplicate_count}")
+            print(f"  Errors: {error_count}")
+            print(f"{'='*60}\n")
+            
+            yield f"event: complete\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
+            
+        except Exception as e:
+            print(f"❌ Import error: {e}")
+            import traceback
+            traceback.print_exc()
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
@@ -1802,10 +2050,237 @@ def rebuild_thumbnails():
         return jsonify({'error': str(e)}), 500
 
 
+# ============================================================================
+# LIBRARY SWITCHING
+# ============================================================================
+
+CONFIG_FILE = os.path.join(BASE_DIR, '.config.json')
+
+def load_config():
+    """Load library configuration from .config.json"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️  Failed to load config: {e}")
+    return None
+
+def save_config(library_path, db_path):
+    """Save library configuration to .config.json"""
+    config = {
+        'library_path': library_path,
+        'db_path': db_path
+    }
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=2)
+
+def update_app_paths(library_path, db_path):
+    """Update all global path variables"""
+    global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR
+    
+    LIBRARY_PATH = library_path
+    DB_PATH = db_path
+    THUMBNAIL_CACHE_DIR = os.path.join(LIBRARY_PATH, '.thumbnails')
+    TRASH_DIR = os.path.join(LIBRARY_PATH, '.trash')
+    DB_BACKUP_DIR = os.path.join(LIBRARY_PATH, '.db_backups')
+    IMPORT_TEMP_DIR = os.path.join(LIBRARY_PATH, '.import_temp')
+    LOG_DIR = os.path.join(LIBRARY_PATH, '.logs')
+    
+    # Ensure directories exist
+    for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR]:
+        os.makedirs(directory, exist_ok=True)
+
+@app.route('/api/library/current', methods=['GET'])
+def get_current_library():
+    """Get current library path"""
+    return jsonify({
+        'library_path': LIBRARY_PATH,
+        'db_path': DB_PATH
+    })
+
+@app.route('/api/library/status', methods=['GET'])
+def library_status():
+    """Check if current library is valid"""
+    return jsonify({'valid': LIBRARY_VALID})
+
+@app.route('/api/library/browse', methods=['POST'])
+def browse_library():
+    """Open native macOS folder picker"""
+    try:
+        # Use AppleScript to show native folder picker
+        script = 'POSIX path of (choose folder with prompt "Select photo library folder")'
+        result = subprocess.run(
+            ['osascript', '-e', script],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout for user to choose
+        )
+        
+        if result.returncode != 0:
+            # User cancelled
+            return jsonify({'status': 'cancelled'})
+        
+        selected_path = result.stdout.strip()
+        
+        # Check if path has a database
+        potential_db_path = os.path.join(selected_path, 'photo_library.db')
+        
+        if os.path.exists(potential_db_path):
+            # Valid existing library
+            return jsonify({
+                'status': 'exists',
+                'library_path': selected_path,
+                'db_path': potential_db_path
+            })
+        else:
+            # New library needs initialization
+            return jsonify({
+                'status': 'needs_init',
+                'library_path': selected_path,
+                'db_path': potential_db_path
+            })
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Selection timeout'}), 408
+    except Exception as e:
+        error_logger.error(f"Browse library failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/library/create', methods=['POST'])
+def create_library():
+    """Create new library structure at specified path"""
+    try:
+        data = request.json
+        library_path = data.get('library_path')
+        db_path = data.get('db_path')
+        
+        if not library_path or not db_path:
+            return jsonify({'error': 'Missing library_path or db_path'}), 400
+        
+        print(f"\n📦 Creating new library at: {library_path}")
+        
+        # Create directory structure
+        os.makedirs(library_path, exist_ok=True)
+        os.makedirs(os.path.join(library_path, '.thumbnails'), exist_ok=True)
+        os.makedirs(os.path.join(library_path, '.trash'), exist_ok=True)
+        os.makedirs(os.path.join(library_path, '.db_backups'), exist_ok=True)
+        os.makedirs(os.path.join(library_path, '.import_temp'), exist_ok=True)
+        os.makedirs(os.path.join(library_path, '.logs'), exist_ok=True)
+        
+        # Create empty database with schema
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Create photos table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                current_path TEXT NOT NULL UNIQUE,
+                original_filename TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                file_type TEXT NOT NULL,
+                date_taken TEXT,
+                date_added TEXT NOT NULL,
+                import_batch_id TEXT
+            )
+        ''')
+        
+        # Create deleted_photos table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS deleted_photos (
+                id INTEGER PRIMARY KEY,
+                original_path TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                moved_to_trash_path TEXT
+            )
+        ''')
+        
+        # Create indices
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_content_hash ON photos(content_hash)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_date_taken ON photos(date_taken)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_date_added ON photos(date_added)')
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"  ✅ Created database: {db_path}")
+        print(f"  ✅ Created directory structure")
+        
+        return jsonify({
+            'status': 'created',
+            'library_path': library_path,
+            'db_path': db_path
+        })
+        
+    except Exception as e:
+        error_logger.error(f"Create library failed: {e}")
+        print(f"\n❌ Create library failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/library/switch', methods=['POST'])
+def switch_library():
+    """Switch to a different library"""
+    global LIBRARY_VALID
+    
+    try:
+        data = request.json
+        library_path = data.get('library_path')
+        db_path = data.get('db_path')
+        
+        if not library_path or not db_path:
+            return jsonify({'error': 'Missing library_path or db_path'}), 400
+        
+        if not os.path.exists(db_path):
+            return jsonify({'error': 'Database does not exist'}), 400
+        
+        print(f"\n🔄 Switching to library: {library_path}")
+        
+        # Update global paths
+        update_app_paths(library_path, db_path)
+        
+        # Save to config file
+        save_config(library_path, db_path)
+        
+        # Mark library as valid
+        LIBRARY_VALID = True
+        
+        print(f"  ✅ Switched to: {library_path}")
+        print(f"  💾 Database: {db_path}")
+        
+        return jsonify({
+            'status': 'success',
+            'library_path': LIBRARY_PATH,
+            'db_path': DB_PATH
+        })
+        
+    except Exception as e:
+        error_logger.error(f"Switch library failed: {e}")
+        print(f"\n❌ Switch library failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
+    # Load config on startup
+    config = load_config()
+    if config:
+        print(f"\n📖 Loading config from {CONFIG_FILE}")
+        update_app_paths(config['library_path'], config['db_path'])
+    
+    # Validate library
+    LIBRARY_VALID = os.path.exists(LIBRARY_PATH) and os.path.exists(DB_PATH)
+    
     print("\n🖼️  Photo Viewer Starting...")
     print(f"📁 Serving from: {STATIC_DIR}")
     print(f"💾 Database: {DB_PATH}")
+    print(f"📚 Library: {LIBRARY_PATH}")
+    
+    if LIBRARY_VALID:
+        print(f"✅ Library is valid")
+    else:
+        print(f"⚠️  Library not found - user will be prompted to select one")
+    
     print(f"🌐 Open: http://localhost:5001\n")
     
     app.run(debug=True, port=5001, host='0.0.0.0')

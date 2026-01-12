@@ -91,6 +91,13 @@ function wireAppBar() {
     console.warn('⚠️ Utilities button not found in app bar');
   }
 
+  if (addPhotoBtn) {
+    addPhotoBtn.addEventListener('click', () => {
+      console.log('📸 Add photo clicked');
+      triggerImport();
+    });
+  }
+
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
       const count = state.selectedPhotos.size;
@@ -152,13 +159,6 @@ function wireAppBar() {
 
       // Reload photos with new sort
       await loadAndRenderPhotos();
-    });
-  }
-
-  if (addPhotoBtn) {
-    addPhotoBtn.addEventListener('click', () => {
-      console.log('📸 Add photo clicked');
-      openFilePicker();
     });
   }
 
@@ -376,6 +376,25 @@ function updateDeleteButtonVisibility() {
 // DIALOG
 // =====================
 
+// Store current dialog callback to avoid listener accumulation
+let currentDialogCallback = null;
+let originalDialogButtonsHTML = null;
+
+/**
+ * Handle dialog confirm click (single persistent listener)
+ */
+function handleDialogConfirm() {
+  console.log('✅ Dialog confirm clicked');
+  hideDialog();
+  if (currentDialogCallback) {
+    console.log('🔥 Executing callback');
+    currentDialogCallback();
+    currentDialogCallback = null;
+  } else {
+    console.warn('⚠️  No callback stored');
+  }
+}
+
 /**
  * Load dialog fragment
  */
@@ -389,6 +408,21 @@ function loadDialog() {
     })
     .then((html) => {
       mount.innerHTML = html;
+      
+      // Save original button HTML for restoration
+      const actionsEl = document.querySelector('.dialog-actions');
+      if (actionsEl) {
+        originalDialogButtonsHTML = actionsEl.innerHTML;
+      }
+      
+      // Wire up persistent event listeners once
+      const confirmBtn = document.getElementById('dialogConfirmBtn');
+      const cancelBtn = document.getElementById('dialogCancelBtn');
+      const closeBtn = document.getElementById('dialogCloseBtn');
+      
+      if (confirmBtn) confirmBtn.addEventListener('click', handleDialogConfirm);
+      if (cancelBtn) cancelBtn.addEventListener('click', hideDialog);
+      if (closeBtn) closeBtn.addEventListener('click', hideDialog);
     })
     .catch((err) => {
       console.error('❌ Dialog load failed:', err);
@@ -399,30 +433,35 @@ function loadDialog() {
  * Show confirmation dialog (old callback-based version)
  */
 function showDialogOld(title, message, onConfirm) {
+  console.log('📋 showDialogOld called', { title, hasCallback: !!onConfirm });
+  
   const overlay = document.getElementById('dialogOverlay');
   const titleEl = document.getElementById('dialogTitle');
   const messageEl = document.getElementById('dialogMessage');
-  const confirmBtn = document.getElementById('dialogConfirmBtn');
-  const cancelBtn = document.getElementById('dialogCancelBtn');
+  const actionsEl = document.querySelector('.dialog-actions');
 
-  if (!overlay) return;
+  if (!overlay) {
+    console.error('❌ Dialog overlay not found');
+    return;
+  }
+
+  // Restore original button HTML (in case showDialog modified it)
+  if (actionsEl && originalDialogButtonsHTML) {
+    actionsEl.innerHTML = originalDialogButtonsHTML;
+    
+    // Re-attach listeners to restored buttons
+    const confirmBtn = document.getElementById('dialogConfirmBtn');
+    const cancelBtn = document.getElementById('dialogCancelBtn');
+    if (confirmBtn) confirmBtn.addEventListener('click', handleDialogConfirm);
+    if (cancelBtn) cancelBtn.addEventListener('click', hideDialog);
+  }
 
   titleEl.textContent = title;
   messageEl.textContent = message;
 
-  // Remove old listeners
-  const newConfirmBtn = confirmBtn.cloneNode(true);
-  const newCancelBtn = cancelBtn.cloneNode(true);
-  confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-  cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
-
-  // Add new listeners
-  newConfirmBtn.addEventListener('click', () => {
-    hideDialog();
-    onConfirm();
-  });
-
-  newCancelBtn.addEventListener('click', hideDialog);
+  // Store the callback for the handler to use
+  currentDialogCallback = onConfirm;
+  console.log('✅ Dialog callback stored, showing overlay');
 
   overlay.style.display = 'flex';
 }
@@ -436,6 +475,7 @@ function showDialog(title, message, buttons) {
     const titleEl = document.getElementById('dialogTitle');
     const messageEl = document.getElementById('dialogMessage');
     const actionsEl = overlay.querySelector('.dialog-actions');
+    const closeBtn = document.getElementById('dialogCloseBtn');
 
     if (!overlay) {
       resolve(false);
@@ -453,11 +493,48 @@ function showDialog(title, message, buttons) {
       buttonEl.className = `dialog-button ${btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'}`;
       buttonEl.textContent = btn.text;
       buttonEl.addEventListener('click', () => {
-        hideDialog();
+        cleanup();
         resolve(btn.value);
       });
       actionsEl.appendChild(buttonEl);
     });
+
+    // ESC key handler
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        cleanup();
+        resolve(false);
+      }
+    };
+
+    // Click outside handler
+    const handleClickOutside = (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve(false);
+      }
+    };
+
+    // Cleanup function
+    const cleanup = () => {
+      hideDialog();
+      document.removeEventListener('keydown', handleEscape);
+      overlay.removeEventListener('click', handleClickOutside);
+    };
+
+    // Wire up X button
+    if (closeBtn) {
+      const newCloseBtn = closeBtn.cloneNode(true);
+      closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+      newCloseBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(false);
+      });
+    }
+
+    // Add listeners
+    document.addEventListener('keydown', handleEscape);
+    overlay.addEventListener('click', handleClickOutside);
 
     overlay.style.display = 'flex';
   });
@@ -1774,6 +1851,7 @@ async function deletePhotos(photoIds) {
     }
 
     const result = await response.json();
+    console.log(`🗑️ Delete response:`, result);
     console.log(`🗑️ Deleted ${result.deleted} photos from backend`);
 
     // Clear selection
@@ -2338,9 +2416,9 @@ async function loadUtilitiesMenu() {
     
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
-        console.log('🔧 Switch Library clicked (not yet implemented)');
+        console.log('🔧 Switch Library clicked');
         hideUtilitiesMenu();
-        showToast('Switch library - Coming soon', null, 2000);
+        openSwitchLibraryOverlay();
       });
     }
     
@@ -3242,7 +3320,7 @@ function openRebuildThumbnailsOverlay() {
   const proceedBtn = document.getElementById('rebuildThumbnailsProceedBtn');
   const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
   
-  statusText.innerHTML = 'This will clear all cached thumbnails. They will regenerate automatically as you scroll.<br><br>Ready to delete existing thumbnails?';
+  statusText.innerHTML = '<p>This will clear all cached thumbnails. They will regenerate automatically as you scroll.</p><p>Ready to delete existing thumbnails?</p>';
   cancelBtn.style.display = 'block';
   proceedBtn.style.display = 'block';
   doneBtn.style.display = 'none';
@@ -3274,7 +3352,7 @@ async function executeRebuildThumbnails() {
     console.log('🔧 Starting thumbnail rebuild...');
     
     // Immediately show Phase 2 (spinner)
-    statusText.innerHTML = 'Clearing thumbnails<span class="import-spinner"></span>';
+    statusText.innerHTML = '<p>Clearing thumbnails<span class="import-spinner"></span></p>';
     cancelBtn.disabled = true;
     cancelBtn.style.opacity = '0.5';
     proceedBtn.style.display = 'none';
@@ -3293,7 +3371,7 @@ async function executeRebuildThumbnails() {
     console.log('✅ Thumbnails cleared:', result);
     
     // Show Phase 3 (confirmation)
-    statusText.textContent = "Old thumbnails have been removed. New ones will be created automatically as you scroll.";
+    statusText.innerHTML = '<p>Old thumbnails have been removed. New ones will be created automatically as you scroll.</p>';
     cancelBtn.style.display = 'none';
     doneBtn.style.display = 'block';
     
@@ -3301,6 +3379,569 @@ async function executeRebuildThumbnails() {
     console.error('❌ Failed to rebuild thumbnails:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
     closeRebuildThumbnailsOverlay();
+  }
+}
+
+// =====================
+// SWITCH LIBRARY
+// =====================
+
+/**
+ * Load switch library overlay fragment
+ */
+async function loadSwitchLibraryOverlay() {
+  try {
+    const response = await fetch('/fragments/switchLibraryOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    
+    // Wire up event listeners
+    document.getElementById('switchLibraryCloseBtn')?.addEventListener('click', closeSwitchLibraryOverlay);
+    document.getElementById('switchLibraryCancelBtn')?.addEventListener('click', closeSwitchLibraryOverlay);
+    document.getElementById('switchLibraryBrowseBtn')?.addEventListener('click', browseSwitchLibrary);
+    
+    console.log('✅ Switch library overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load switch library overlay:', error);
+  }
+}
+
+/**
+ * Load create library overlay fragment
+ */
+async function loadCreateLibraryOverlay() {
+  try {
+    const response = await fetch('/fragments/createLibraryOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    
+    // Event listeners wired up when showing overlay
+    
+    console.log('✅ Create library overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load create library overlay:', error);
+  }
+}
+
+/**
+ * Open switch library overlay
+ */
+async function openSwitchLibraryOverlay() {
+  // Load overlay if not already loaded
+  const overlay = document.getElementById('switchLibraryOverlay');
+  if (!overlay) {
+    await loadSwitchLibraryOverlay();
+  }
+  
+  // Get current library path
+  try {
+    const response = await fetch('/api/library/current');
+    const data = await response.json();
+    document.getElementById('currentLibraryPath').textContent = data.library_path;
+  } catch (error) {
+    console.error('Failed to get current library:', error);
+  }
+  
+  document.getElementById('switchLibraryOverlay').style.display = 'block';
+  console.log('📚 Switch library overlay opened');
+}
+
+/**
+ * Close switch library overlay
+ */
+function closeSwitchLibraryOverlay() {
+  const overlay = document.getElementById('switchLibraryOverlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+}
+
+/**
+ * Browse for library (triggers native folder picker)
+ */
+async function browseSwitchLibrary() {
+  try {
+    console.log('🔍 Opening folder picker...');
+    
+    // Show loading state
+    const browseBtn = document.getElementById('switchLibraryBrowseBtn');
+    const originalText = browseBtn.textContent;
+    browseBtn.textContent = 'Browsing...';
+    browseBtn.disabled = true;
+    
+    const response = await fetch('/api/library/browse', {
+      method: 'POST'
+    });
+    
+    const result = await response.json();
+    
+    // Reset button
+    browseBtn.textContent = originalText;
+    browseBtn.disabled = false;
+    
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to browse');
+    }
+    
+    if (result.status === 'cancelled') {
+      console.log('User cancelled folder selection');
+      return;
+    }
+    
+    if (result.status === 'exists') {
+      // Existing library - switch immediately
+      console.log('✅ Found existing library:', result.library_path);
+      await switchToLibrary(result.library_path, result.db_path);
+    } else if (result.status === 'needs_init') {
+      // New library - show confirmation
+      console.log('📦 New library needs initialization:', result.library_path);
+      closeSwitchLibraryOverlay();
+      await showCreateLibraryConfirmation(result.library_path, result.db_path);
+    }
+    
+  } catch (error) {
+    console.error('❌ Failed to browse library:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+/**
+ * Show create library confirmation overlay
+ */
+async function showCreateLibraryConfirmation(libraryPath, dbPath) {
+  // Load overlay if not already loaded
+  let overlay = document.getElementById('createLibraryOverlay');
+  if (!overlay) {
+    await loadCreateLibraryOverlay();
+    overlay = document.getElementById('createLibraryOverlay');
+  }
+  
+  // Set path
+  document.getElementById('newLibraryPath').textContent = libraryPath;
+  
+  // Wire up buttons for this specific confirmation
+  const cancelBtn = document.getElementById('createLibraryCancelBtn');
+  const confirmBtn = document.getElementById('createLibraryConfirmBtn');
+  
+  // Remove old listeners by cloning
+  const newCancelBtn = cancelBtn.cloneNode(true);
+  const newConfirmBtn = confirmBtn.cloneNode(true);
+  cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+  confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+  
+  // Add new listeners
+  newCancelBtn.addEventListener('click', () => {
+    overlay.style.display = 'none';
+  });
+  
+  newConfirmBtn.addEventListener('click', async () => {
+    await createAndSwitchLibrary(libraryPath, dbPath);
+  });
+  
+  overlay.style.display = 'block';
+  console.log('📦 Create library confirmation shown');
+}
+
+/**
+ * Create new library and switch to it
+ */
+async function createAndSwitchLibrary(libraryPath, dbPath) {
+  try {
+    console.log('📦 Creating new library:', libraryPath);
+    
+    // Show loading
+    const confirmBtn = document.getElementById('createLibraryConfirmBtn');
+    confirmBtn.textContent = 'Creating...';
+    confirmBtn.disabled = true;
+    
+    // Create library
+    const createResponse = await fetch('/api/library/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: libraryPath, db_path: dbPath })
+    });
+    
+    const createResult = await createResponse.json();
+    
+    if (!createResponse.ok) {
+      throw new Error(createResult.error || 'Failed to create library');
+    }
+    
+    console.log('✅ Library created');
+    
+    // Close create overlay
+    document.getElementById('createLibraryOverlay').style.display = 'none';
+    
+    // Switch to new library
+    await switchToLibrary(libraryPath, dbPath);
+    
+  } catch (error) {
+    console.error('❌ Failed to create library:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+    
+    // Reset button
+    const confirmBtn = document.getElementById('createLibraryConfirmBtn');
+    confirmBtn.textContent = 'Create & Switch';
+    confirmBtn.disabled = false;
+  }
+}
+
+/**
+ * Switch to a different library
+ */
+async function switchToLibrary(libraryPath, dbPath) {
+  try {
+    console.log('🔄 Switching to library:', libraryPath);
+    
+    const response = await fetch('/api/library/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: libraryPath, db_path: dbPath })
+    });
+    
+    const result = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to switch library');
+    }
+    
+    console.log('✅ Switched to:', result.library_path);
+    showToast('Library switched. Reloading...', null, 2000);
+    
+    // Close overlays
+    closeSwitchLibraryOverlay();
+    const createOverlay = document.getElementById('createLibraryOverlay');
+    if (createOverlay) createOverlay.style.display = 'none';
+    
+    // Reload photos from new library
+    setTimeout(async () => {
+      await loadAndRenderPhotos();
+    }, 500);
+    
+  } catch (error) {
+    console.error('❌ Failed to switch library:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+// =====================
+// IMPORT MEDIA
+// =====================
+
+/**
+ * Trigger import via disambiguation dialog
+ */
+async function triggerImport() {
+  try {
+    console.log('📸 Showing import options...');
+    
+    const choice = await showDialog(
+      'Import media',
+      'Choose what to import:',
+      [
+        { text: 'Import folders', value: 'folders', secondary: true },
+        { text: 'Import files', value: 'files', primary: true }
+      ]
+    );
+    
+    if (!choice) {
+      console.log('User cancelled import');
+      return;
+    }
+    
+    if (choice === 'files') {
+      await importFiles();
+    } else if (choice === 'folders') {
+      await importFolders();
+    }
+    
+  } catch (error) {
+    console.error('❌ Failed to trigger import:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+/**
+ * Import individual files
+ */
+async function importFiles() {
+  try {
+    console.log('📸 Opening file picker...');
+    
+    const script = 'POSIX path of (choose file of type {"public.image", "public.movie"} with prompt "Select photos to import" with multiple selections allowed)';
+    
+    const response = await fetch('/api/import/browse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      if (error.status === 'cancelled') {
+        console.log('User cancelled file selection');
+        return;
+      }
+      throw new Error(error.error || 'Failed to select files');
+    }
+    
+    const result = await response.json();
+    const paths = result.paths || [];
+    
+    if (paths.length === 0) {
+      console.log('No files selected');
+      return;
+    }
+    
+    console.log(`✅ Selected ${paths.length} file(s)`);
+    await scanAndConfirmImport(paths);
+    
+  } catch (error) {
+    console.error('❌ Failed to import files:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+/**
+ * Import folders recursively
+ */
+async function importFolders() {
+  try {
+    console.log('📁 Opening folder picker...');
+    
+    const script = 'POSIX path of (choose folder with prompt "Select folder to import" with multiple selections allowed)';
+    
+    const response = await fetch('/api/import/browse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      if (error.status === 'cancelled') {
+        console.log('User cancelled folder selection');
+        return;
+      }
+      throw new Error(error.error || 'Failed to select folder');
+    }
+    
+    const result = await response.json();
+    const paths = result.paths || [];
+    
+    if (paths.length === 0) {
+      console.log('No folders selected');
+      return;
+    }
+    
+    console.log(`✅ Selected ${paths.length} folder(s)`);
+    await scanAndConfirmImport(paths);
+    
+  } catch (error) {
+    console.error('❌ Failed to import folders:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+/**
+ * Scan selected paths and show confirmation
+ */
+async function scanAndConfirmImport(paths) {
+  try {
+    showToast('Scanning...', null, 0);
+    
+    const response = await fetch('/api/import/scan-paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths })
+    });
+    
+    const result = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to scan paths');
+    }
+    
+    const { files, total_count, files_selected, folders_scanned } = result;
+    
+    if (total_count === 0) {
+      showToast('No media files found', null, 3000);
+      return;
+    }
+    
+    // Show confirmation
+    let message = `Found ${total_count} file${total_count > 1 ? 's' : ''}`;
+    if (files_selected > 0 && folders_scanned > 0) {
+      message += ` (${files_selected} selected + ${total_count - files_selected} in ${folders_scanned} folder${folders_scanned > 1 ? 's' : ''})`;
+    } else if (folders_scanned > 0) {
+      message += ` in ${folders_scanned} folder${folders_scanned > 1 ? 's' : ''}`;
+    }
+    message += '. Start import?';
+    
+    const confirmed = await showDialog(
+      'Import media',
+      message,
+      [
+        { text: 'Cancel', value: false, secondary: true },
+        { text: 'Import', value: true, primary: true }
+      ]
+    );
+    
+    if (!confirmed) {
+      console.log('User cancelled import');
+      return;
+    }
+    
+    // Start import with file list
+    await startImportFromPaths(files);
+    
+  } catch (error) {
+    console.error('❌ Failed to scan paths:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+/**
+ * Start import process from file paths (SSE streaming version)
+ */
+async function startImportFromPaths(filePaths) {
+  try {
+    console.log(`📥 Starting import of ${filePaths.length} files...`);
+    
+    // Load import overlay if not already loaded
+    const overlay = document.getElementById('importOverlay');
+    if (!overlay) {
+      await loadImportOverlay();
+    }
+    
+    // Show overlay
+    showImportOverlay();
+    
+    // Start SSE stream
+    const response = await fetch('/api/photos/import-from-paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: filePaths })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Import request failed');
+    }
+    
+    // Handle SSE stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    
+    let buffer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        const eventMatch = line.match(/^event: (.+)$/m);
+        const dataMatch = line.match(/^data: (.+)$/m);
+        
+        if (eventMatch && dataMatch) {
+          const event = eventMatch[1];
+          const data = JSON.parse(dataMatch[1]);
+          
+          handleImportEvent(event, data);
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Import failed:', error);
+    showToast(`Import failed: ${error.message}`, 'error', 5000);
+    hideImportOverlay();
+  }
+}
+
+/**
+ * Load import overlay fragment
+ */
+async function loadImportOverlay() {
+  try {
+    const response = await fetch('/fragments/importOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    
+    // Wire up close button
+    document.getElementById('importCloseBtn')?.addEventListener('click', hideImportOverlay);
+    document.getElementById('importDoneBtn')?.addEventListener('click', hideImportOverlay);
+    
+    console.log('✅ Import overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load import overlay:', error);
+  }
+}
+
+/**
+ * Show import overlay
+ */
+function showImportOverlay() {
+  const overlay = document.getElementById('importOverlay');
+  if (overlay) {
+    overlay.style.display = 'block';
+  }
+}
+
+/**
+ * Hide import overlay
+ */
+async function hideImportOverlay() {
+  const overlay = document.getElementById('importOverlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+  // Reload photos to show newly imported
+  await loadAndRenderPhotos();
+}
+
+/**
+ * Handle import SSE events
+ */
+function handleImportEvent(event, data) {
+  console.log(`Import event: ${event}`, data);
+  
+  const statusText = document.getElementById('importStatusText');
+  const stats = document.getElementById('importStats');
+  const importedCount = document.getElementById('importedCount');
+  const duplicateCount = document.getElementById('duplicateCount');
+  const errorCount = document.getElementById('errorCount');
+  const doneBtn = document.getElementById('importDoneBtn');
+  
+  if (event === 'start') {
+    statusText.innerHTML = `<p>Importing ${data.total} files<span class="import-spinner"></span></p>`;
+    stats.style.display = 'flex';
+  }
+  
+  if (event === 'progress') {
+    importedCount.textContent = data.imported || 0;
+    duplicateCount.textContent = data.duplicates || 0;
+    errorCount.textContent = data.errors || 0;
+  }
+  
+  if (event === 'complete') {
+    statusText.innerHTML = '<p>Import complete</p>';
+    importedCount.textContent = data.imported || 0;
+    duplicateCount.textContent = data.duplicates || 0;
+    errorCount.textContent = data.errors || 0;
+    doneBtn.style.display = 'block';
+  }
+  
+  if (event === 'error') {
+    statusText.innerHTML = `<p>Import failed: ${data.error}</p>`;
+    doneBtn.style.display = 'block';
   }
 }
 
@@ -3317,7 +3958,29 @@ async function init() {
   await loadDateEditor();
   await loadDialog();
   await loadToast();
-  await loadAndRenderPhotos(); // This now loads ALL photos and sets up lazy loading
+  
+  // Check if library is valid
+  try {
+    const statusResponse = await fetch('/api/library/status');
+    const status = await statusResponse.json();
+    
+    if (!status.valid) {
+      console.log('⚠️ No valid library found - prompting user...');
+      showToast('Please select a photo library', null, 0);
+      
+      // Load and immediately trigger browse
+      await loadSwitchLibraryOverlay();
+      await browseSwitchLibrary(); // Opens native picker immediately
+      
+      // Don't load photos yet - will happen after library selection
+      return;
+    }
+  } catch (error) {
+    console.error('Failed to check library status:', error);
+  }
+  
+  // Library is valid, load photos
+  await loadAndRenderPhotos();
 }
 
 // Start when DOM is ready
