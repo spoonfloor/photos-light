@@ -52,42 +52,59 @@ VIDEO_EXTENSIONS = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.m
 # ============================================================================
 
 # Configure main app logger
-app_log_file = os.path.join(LOG_DIR, 'app.log')
-app_handler = RotatingFileHandler(app_log_file, maxBytes=10*1024*1024, backupCount=10)
-app_handler.setFormatter(logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-))
-app.logger.addHandler(app_handler)
-app.logger.setLevel(logging.INFO)
+try:
+    app_log_file = os.path.join(LOG_DIR, 'app.log')
+    app_handler = RotatingFileHandler(app_log_file, maxBytes=10*1024*1024, backupCount=10)
+    app_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    app.logger.addHandler(app_handler)
+    app.logger.setLevel(logging.INFO)
+    print(f"✅ Logging enabled: {app_log_file}")
+except (PermissionError, OSError) as e:
+    print(f"⚠️  Warning: Could not create log file: {e}")
+    print(f"   Continuing without file logging (console only)")
 
 # Configure import logger (separate concern)
-import_logger = logging.getLogger('import')
-import_handler = RotatingFileHandler(
-    os.path.join(LOG_DIR, f'import_{datetime.now().strftime("%Y%m%d")}.log'),
-    maxBytes=10*1024*1024,
-    backupCount=30
-)
-import_handler.setFormatter(logging.Formatter(
-    '%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-))
-import_logger.addHandler(import_handler)
-import_logger.setLevel(logging.INFO)
+try:
+    import_logger = logging.getLogger('import')
+    import_handler = RotatingFileHandler(
+        os.path.join(LOG_DIR, f'import_{datetime.now().strftime("%Y%m%d")}.log'),
+        maxBytes=10*1024*1024,
+        backupCount=30
+    )
+    import_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    import_logger.addHandler(import_handler)
+    import_logger.setLevel(logging.INFO)
+except (PermissionError, OSError) as e:
+    # Fall back to console logging
+    import_logger = logging.getLogger('import')
+    import_logger.setLevel(logging.INFO)
+    print(f"⚠️  Warning: Import logger using console only")
 
 # Configure error logger (separate concern)
-error_logger = logging.getLogger('errors')
-error_handler = RotatingFileHandler(
-    os.path.join(LOG_DIR, 'errors.log'),
-    maxBytes=10*1024*1024,
-    backupCount=10
-)
-error_handler.setFormatter(logging.Formatter(
-    '%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-))
-error_logger.addHandler(error_handler)
-error_logger.setLevel(logging.WARNING)
+try:
+    error_logger = logging.getLogger('errors')
+    error_handler = RotatingFileHandler(
+        os.path.join(LOG_DIR, 'errors.log'),
+        maxBytes=10*1024*1024,
+        backupCount=10
+    )
+    error_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    error_logger.addHandler(error_handler)
+    error_logger.setLevel(logging.WARNING)
+except (PermissionError, OSError) as e:
+    # Fall back to console logging
+    error_logger = logging.getLogger('errors')
+    error_logger.setLevel(logging.WARNING)
+    print(f"⚠️  Warning: Error logger using console only")
 
 def get_db_connection():
     """Create database connection"""
