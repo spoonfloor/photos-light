@@ -430,6 +430,320 @@ function loadDialog() {
 }
 
 /**
+ * Load critical error modal fragment
+ */
+function loadCriticalErrorModal() {
+  const mount = document.createElement('div');
+  mount.id = 'criticalErrorModalMount';
+  document.body.appendChild(mount);
+
+  return fetch('fragments/criticalErrorModal.html')
+    .then((r) => {
+      if (!r.ok) throw new Error(`Failed to load critical error modal (${r.status})`);
+      return r.text();
+    })
+    .then((html) => {
+      mount.innerHTML = html;
+      console.log('✅ Critical error modal loaded');
+    })
+    .catch((err) => {
+      console.error('❌ Critical error modal load failed:', err);
+    });
+}
+
+/**
+ * Load rebuild database overlay fragment
+ */
+function loadRebuildDatabaseOverlay() {
+  const mount = document.createElement('div');
+  mount.id = 'rebuildDatabaseOverlayMount';
+  document.body.appendChild(mount);
+
+  return fetch('fragments/rebuildDatabaseOverlay.html')
+    .then((r) => {
+      if (!r.ok) throw new Error(`Failed to load rebuild database overlay (${r.status})`);
+      return r.text();
+    })
+    .then((html) => {
+      mount.innerHTML = html;
+      
+      // Wire up event listeners
+      const closeBtn = document.getElementById('rebuildDatabaseCloseBtn');
+      const cancelBtn = document.getElementById('rebuildDatabaseCancelBtn');
+      const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
+      const doneBtn = document.getElementById('rebuildDatabaseDoneBtn');
+      
+      if (closeBtn) closeBtn.addEventListener('click', hideRebuildDatabaseOverlay);
+      if (cancelBtn) cancelBtn.addEventListener('click', hideRebuildDatabaseOverlay);
+      if (proceedBtn) proceedBtn.addEventListener('click', executeRebuildDatabase);
+      if (doneBtn) doneBtn.addEventListener('click', () => {
+        hideRebuildDatabaseOverlay();
+        loadAndRenderPhotos(); // Reload photos after rebuild
+      });
+      
+      console.log('✅ Rebuild database overlay loaded');
+    })
+    .catch((err) => {
+      console.error('❌ Rebuild database overlay load failed:', err);
+    });
+}
+
+function hideRebuildDatabaseOverlay() {
+  const overlay = document.getElementById('rebuildDatabaseOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+// =====================
+// CRITICAL ERROR MODAL
+// =====================
+
+/**
+ * Show critical error modal (blocking)
+ * @param {string} title - Error title
+ * @param {string} message - Error message
+ * @param {Array} buttons - Array of {text, action, primary} button configs
+ */
+function showCriticalError(title, message, buttons) {
+  const overlay = document.getElementById('criticalErrorOverlay');
+  const titleEl = document.getElementById('criticalErrorTitle');
+  const messageEl = document.getElementById('criticalErrorMessage');
+  const actionsEl = document.getElementById('criticalErrorActions');
+
+  if (!overlay) {
+    console.error('❌ Critical error overlay not found');
+    return;
+  }
+
+  titleEl.textContent = title;
+  messageEl.textContent = message;
+
+  // Build button HTML
+  actionsEl.innerHTML = buttons
+    .map(
+      (btn) => `
+    <button class="dialog-button ${btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'}" 
+            data-action="${btn.action}">
+      ${btn.text}
+    </button>
+  `
+    )
+    .join('');
+
+  // Wire up button actions
+  actionsEl.querySelectorAll('button').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const action = button.dataset.action;
+      
+      if (action === 'rebuild_database') {
+        hideCriticalError();
+        await startRebuildDatabase();
+      } else if (action === 'switch_library') {
+        hideCriticalError();
+        await loadSwitchLibraryOverlay();
+        await browseSwitchLibrary();
+      } else if (action === 'retry') {
+        // Check if library is accessible now
+        try {
+          const response = await fetch('/api/library/status');
+          const status = await response.json();
+          if (status.valid) {
+            hideCriticalError();
+            loadAndRenderPhotos();
+          } else {
+            showToast('Library still not accessible', 'error');
+          }
+        } catch (error) {
+          showToast('Connection failed', 'error');
+        }
+      } else if (action === 'close') {
+        window.close();
+      }
+    });
+  });
+
+  overlay.style.display = 'flex';
+}
+
+function hideCriticalError() {
+  const overlay = document.getElementById('criticalErrorOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+/**
+ * Check for critical resource issues
+ * Called on startup and after errors
+ */
+async function checkCriticalResources() {
+  try {
+    // Check if library path exists
+    const statusResponse = await fetch('/api/library/status');
+    const status = await statusResponse.json();
+
+    if (!status.valid) {
+      // Library or DB missing - check which
+      const currentResponse = await fetch('/api/library/current');
+      const current = await currentResponse.json();
+
+      // Try to determine the specific issue
+      // For now, just show the library selection
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Critical resource check failed:', error);
+    
+    // Network error or server down
+    showCriticalError(
+      'Connection error',
+      'Unable to connect to the server. Please check that the application is running.',
+      [
+        { text: 'Retry', action: 'retry', primary: false },
+        { text: 'Close', action: 'close', primary: true }
+      ]
+    );
+    
+    return false;
+  }
+}
+
+// =====================
+// REBUILD DATABASE
+// =====================
+
+/**
+ * Start rebuild database flow (entry point from utilities menu)
+ */
+async function startRebuildDatabase() {
+  try {
+    // Load the overlay if not already loaded
+    if (!document.getElementById('rebuildDatabaseOverlay')) {
+      await loadRebuildDatabaseOverlay();
+    }
+
+    // Pre-scan: count files and get estimate
+    console.log('🔍 Pre-scanning library for rebuild...');
+    
+    const overlay = document.getElementById('rebuildDatabaseOverlay');
+    const statusText = document.getElementById('rebuildDatabaseStatusText');
+    const cancelBtn = document.getElementById('rebuildDatabaseCancelBtn');
+    const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
+    
+    overlay.style.display = 'flex';
+    statusText.innerHTML = 'Scanning library<span class="import-spinner"></span>';
+    cancelBtn.style.display = 'block';
+    proceedBtn.style.display = 'none';
+
+    const response = await fetch('/api/recovery/rebuild-database/scan', {
+      method: 'POST'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Scan failed: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log('📊 Scan results:', data);
+
+    // Show warning if large library
+    if (data.requires_warning) {
+      const confirmed = await showDialog(
+        'Large library detected',
+        `Your library contains ${data.file_count.toLocaleString()} photos.\n\nRebuilding will take an estimated ${data.estimated_display}. Keep the app open until rebuilding is complete.`,
+        'Continue',
+        'Cancel'
+      );
+
+      if (!confirmed) {
+        hideRebuildDatabaseOverlay();
+        return;
+      }
+    }
+
+    // Update UI to show ready state
+    statusText.innerHTML = `<p>Ready to rebuild database.</p><p>Found ${data.file_count.toLocaleString()} files.</p>`;
+    proceedBtn.style.display = 'block';
+
+  } catch (error) {
+    console.error('❌ Rebuild database scan failed:', error);
+    showToast(`Scan failed: ${error.message}`, 'error');
+    hideRebuildDatabaseOverlay();
+  }
+}
+
+/**
+ * Execute rebuild database (after user confirms)
+ */
+async function executeRebuildDatabase() {
+  console.log('🚀 Executing database rebuild...');
+
+  const statusText = document.getElementById('rebuildDatabaseStatusText');
+  const stats = document.getElementById('rebuildDatabaseStats');
+  const indexedCount = document.getElementById('rebuildIndexedCount');
+  const totalCount = document.getElementById('rebuildTotalCount');
+  const cancelBtn = document.getElementById('rebuildDatabaseCancelBtn');
+  const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
+  const doneBtn = document.getElementById('rebuildDatabaseDoneBtn');
+
+  // Hide proceed, show stats
+  proceedBtn.style.display = 'none';
+  cancelBtn.style.display = 'none';
+  stats.style.display = 'flex';
+  statusText.innerHTML = 'Rebuilding database<span class="import-spinner"></span>';
+
+  try {
+    const eventSource = new EventSource('/api/recovery/rebuild-database/execute');
+
+    eventSource.addEventListener('progress', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('📊 Progress:', data);
+
+      if (data.phase === 'adding_untracked') {
+        indexedCount.textContent = data.current.toLocaleString();
+        totalCount.textContent = data.total.toLocaleString();
+        statusText.innerHTML = `Indexing files<span class="import-spinner"></span>`;
+      } else if (data.phase === 'removing_empty') {
+        statusText.innerHTML = `Cleaning up<span class="import-spinner"></span>`;
+      }
+    });
+
+    eventSource.addEventListener('complete', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('✅ Rebuild complete:', data);
+
+      statusText.innerHTML = `<p>✅ Database rebuilt successfully!</p><p>Indexed ${data.stats.untracked_files.toLocaleString()} files.</p>`;
+      doneBtn.style.display = 'block';
+      
+      eventSource.close();
+    });
+
+    eventSource.addEventListener('error', (e) => {
+      console.error('❌ Rebuild failed:', e);
+      
+      let errorMsg = 'Rebuild failed';
+      try {
+        const data = JSON.parse(e.data);
+        errorMsg = data.error || errorMsg;
+      } catch (err) {
+        // Ignore parse errors
+      }
+
+      statusText.innerHTML = `<p>❌ ${errorMsg}</p>`;
+      cancelBtn.textContent = 'Close';
+      cancelBtn.style.display = 'block';
+      
+      eventSource.close();
+    });
+
+  } catch (error) {
+    console.error('❌ Rebuild execution error:', error);
+    statusText.innerHTML = `<p>❌ Rebuild failed: ${error.message}</p>`;
+    cancelBtn.textContent = 'Close';
+    cancelBtn.style.display = 'block';
+  }
+}
+
+/**
  * Show confirmation dialog (old callback-based version)
  */
 function showDialogOld(title, message, onConfirm) {
@@ -2304,6 +2618,15 @@ async function loadUtilitiesMenu() {
       });
     }
 
+    const rebuildDatabaseBtn = document.getElementById('rebuildDatabaseBtn');
+    if (rebuildDatabaseBtn) {
+      rebuildDatabaseBtn.addEventListener('click', () => {
+        console.log('🔧 Rebuild database clicked');
+        hideUtilitiesMenu();
+        startRebuildDatabase();
+      });
+    }
+
     if (rebuildThumbnailsBtn) {
       rebuildThumbnailsBtn.addEventListener('click', () => {
         console.log('🔧 Rebuild Thumbnails clicked');
@@ -3999,6 +4322,7 @@ async function init() {
   await loadDateEditor();
   await loadDialog();
   await loadToast();
+  await loadCriticalErrorModal();
 
   // Check if library is valid
   try {
