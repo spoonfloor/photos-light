@@ -28,7 +28,7 @@ function loadAppBar() {
   const mount = document.getElementById('appBarMount');
 
   // Check session cache first (with version check)
-  const APP_BAR_VERSION = '39'; // Increment this when appBar changes
+  const APP_BAR_VERSION = '41'; // Increment this when appBar changes
   try {
     const cachedVersion = sessionStorage.getItem('photoViewer_appBarVersion');
     const cached = sessionStorage.getItem('photoViewer_appBarShell');
@@ -408,18 +408,18 @@ function loadDialog() {
     })
     .then((html) => {
       mount.innerHTML = html;
-      
+
       // Save original button HTML for restoration
       const actionsEl = document.querySelector('.dialog-actions');
       if (actionsEl) {
         originalDialogButtonsHTML = actionsEl.innerHTML;
       }
-      
+
       // Wire up persistent event listeners once
       const confirmBtn = document.getElementById('dialogConfirmBtn');
       const cancelBtn = document.getElementById('dialogCancelBtn');
       const closeBtn = document.getElementById('dialogCloseBtn');
-      
+
       if (confirmBtn) confirmBtn.addEventListener('click', handleDialogConfirm);
       if (cancelBtn) cancelBtn.addEventListener('click', hideDialog);
       if (closeBtn) closeBtn.addEventListener('click', hideDialog);
@@ -434,7 +434,7 @@ function loadDialog() {
  */
 function showDialogOld(title, message, onConfirm) {
   console.log('📋 showDialogOld called', { title, hasCallback: !!onConfirm });
-  
+
   const overlay = document.getElementById('dialogOverlay');
   const titleEl = document.getElementById('dialogTitle');
   const messageEl = document.getElementById('dialogMessage');
@@ -448,7 +448,7 @@ function showDialogOld(title, message, onConfirm) {
   // Restore original button HTML (in case showDialog modified it)
   if (actionsEl && originalDialogButtonsHTML) {
     actionsEl.innerHTML = originalDialogButtonsHTML;
-    
+
     // Re-attach listeners to restored buttons
     const confirmBtn = document.getElementById('dialogConfirmBtn');
     const cancelBtn = document.getElementById('dialogCancelBtn');
@@ -488,9 +488,11 @@ function showDialog(title, message, buttons) {
     // Clear and rebuild buttons
     actionsEl.innerHTML = '';
 
-    buttons.forEach(btn => {
+    buttons.forEach((btn) => {
       const buttonEl = document.createElement('button');
-      buttonEl.className = `dialog-button ${btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'}`;
+      buttonEl.className = `dialog-button ${
+        btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'
+      }`;
       buttonEl.textContent = btn.text;
       buttonEl.addEventListener('click', () => {
         cleanup();
@@ -1197,8 +1199,9 @@ async function openLightbox(photoIndex) {
   content.innerHTML = '';
 
   // Determine if photo or video - check both file_type field and path extension
-  const isVideo = photo.file_type === 'video' || 
-                  (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
+  const isVideo =
+    photo.file_type === 'video' ||
+    (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
 
   if (isVideo) {
     // Create video element
@@ -1214,7 +1217,9 @@ async function openLightbox(photoIndex) {
     // Create image element
     const img = document.createElement('img');
     img.src = `/api/photo/${photo.id}/file`;
-    const filename = photo.path ? photo.path.split('/').pop() : (photo.filename || `Photo ${photo.id}`);
+    const filename = photo.path
+      ? photo.path.split('/').pop()
+      : photo.filename || `Photo ${photo.id}`;
     img.alt = filename;
 
     // Set aspect ratio if available to prevent layout shift
@@ -1279,7 +1284,9 @@ async function openLightbox(photoIndex) {
     // Wire up click to reveal in Finder
     infoFilename.onclick = async (e) => {
       e.preventDefault();
-      const filename = photo.path ? photo.path.split('/').pop() : (photo.filename || photo.id);
+      const filename = photo.path
+        ? photo.path.split('/').pop()
+        : photo.filename || photo.id;
       console.log('🔍 Attempting to reveal in Finder:', filename);
       try {
         const response = await fetch(`/api/photo/${photo.id}/reveal`, {
@@ -1551,8 +1558,24 @@ function renderPhotoGrid(photos, append = false) {
 
   if (!photos || photos.length === 0) {
     if (!append) {
-      container.innerHTML =
-        '<div style="padding: 2rem; text-align: center; color: var(--text-color);">No photos found</div>';
+      container.innerHTML = `
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
+          <div style="text-align: center;">
+            <div style="font-size: 18px; margin-bottom: 8px;">No photos found</div>
+            <div style="font-size: 14px; color: var(--text-secondary);">Add photos or switch to another library</div>
+          </div>
+          <div style="display: flex; gap: 12px;">
+            <button class="import-btn" onclick="openSwitchLibraryOverlay()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
+              <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
+              <span>Switch library</span>
+            </button>
+            <button class="import-btn import-btn-primary" onclick="triggerImport()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+              <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
+              <span>Add photos</span>
+            </button>
+          </div>
+        </div>
+      `;
     }
     return;
   }
@@ -1962,40 +1985,12 @@ function wireImportOverlay() {
   }
 
   if (doneBtn) {
-    doneBtn.addEventListener('click', async () => {
-      closeImportOverlay();
-
-      // Reload grid to show new photos
-      await loadAndRenderPhotos(false);
-
-      // Scroll to first imported photo based on sort order
-      if (
-        importState.importedPhotoIds.length > 0 &&
-        importState.results.length > 0
-      ) {
-        // Get the date of the first successfully imported photo
-        const firstImported = importState.results.find(
-          (r) => r.status === 'success' && r.photo_id
-        );
-
-        if (firstImported && firstImported.date) {
-          // Extract month from date (YYYY:MM:DD HH:MM:SS -> YYYY-MM)
-          const dateStr = firstImported.date.replace(/:/g, '-');
-          const monthStr = dateStr.substring(0, 7); // YYYY-MM
-
-          console.log(`📍 Scrolling to imported photo month: ${monthStr}`);
-
-          // Wait for grid to render, then scroll to the month section
-          setTimeout(() => {
-            const monthSection = document.getElementById(`month-${monthStr}`);
-            if (monthSection) {
-              const appBarHeight = 60;
-              const targetY = monthSection.offsetTop - appBarHeight - 20;
-              window.scrollTo({ top: targetY, behavior: 'smooth' });
-            }
-          }, 500);
-        }
+    doneBtn.addEventListener('click', () => {
+      // Scroll to first imported photo if we have any
+      if (window.importedPhotoIds && window.importedPhotoIds.length > 0) {
+        scrollToImportedPhoto(window.importedPhotoIds);
       }
+      closeImportOverlay();
     });
   }
 
@@ -2016,202 +2011,8 @@ function wireImportOverlay() {
 }
 
 /**
- * Open file picker for importing photos
- */
-function openFilePicker() {
-  // Create hidden file input
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.multiple = true;
-  input.accept = 'image/*,video/*';
-
-  input.onchange = (e) => {
-    const files = Array.from(e.target.files);
-    if (files.length > 0) {
-      startImport(files);
-    }
-  };
-
-  input.click();
-}
-
-/**
  * Start import process with SSE
  */
-async function startImport(files) {
-  console.log(`📥 Starting import of ${files.length} file(s)`);
-
-  // Reset state
-  importState = {
-    isImporting: true,
-    totalFiles: files.length,
-    importedCount: 0,
-    duplicateCount: 0,
-    errorCount: 0,
-    backupPath: null,
-    importedPhotoIds: [],
-    results: [],
-  };
-
-  // Load and show import overlay
-  await loadImportOverlay();
-  showImportOverlay();
-
-  // Update UI
-  updateImportUI('Preparing import', true);
-
-  // Create FormData
-  const formData = new FormData();
-  files.forEach((file) => formData.append('files', file));
-
-  try {
-    // Start SSE connection
-    const response = await fetch('/api/photos/import', {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Import failed: ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let lastActivityTime = Date.now();
-    const ACTIVITY_TIMEOUT = 60000; // 60 seconds of no data = connection dead
-
-    // Read SSE stream
-    while (true) {
-      // Check for timeout (no data received for 60 seconds)
-      if (Date.now() - lastActivityTime > ACTIVITY_TIMEOUT) {
-        throw new Error('Import connection timed out - no data received for 60 seconds');
-      }
-
-      const { done, value } = await reader.read();
-
-      if (done) {
-        console.log('📭 SSE stream ended');
-        break;
-      }
-
-      lastActivityTime = Date.now(); // Reset activity timer
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // Keep incomplete line in buffer
-
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          const eventType = line.substring(7).trim();
-          continue;
-        }
-
-        if (line.startsWith('data:')) {
-          const data = JSON.parse(line.substring(5).trim());
-
-          // Handle different event types based on data structure
-          if (data.total && !data.filename) {
-            // Start event
-            console.log(`📦 Starting import of ${data.total} files`);
-            importState.totalFiles = data.total;
-            updateImportUI(
-              `Processing ${data.total} item${data.total > 1 ? 's' : ''}`,
-              true
-            );
-          } else if (data.filename) {
-            // Progress event
-            console.log(
-              `📄 ${data.file_index}/${data.total}: ${data.filename} - ${data.status}`
-            );
-
-            // Update counts
-            importState.importedCount = data.imported;
-            importState.duplicateCount = data.duplicates;
-            importState.errorCount = data.errors;
-            
-            // Track this file result (in case completion event never arrives)
-            importState.results.push({
-              filename: data.filename,
-              status: data.status,
-              message: data.status === 'duplicate' ? 'Already in library' : null
-            });
-
-            // Update UI to show animated count changes
-            updateImportUI(
-              `Processing ${data.total} item${data.total > 1 ? 's' : ''}`,
-              true
-            );
-          } else if (data.results) {
-            // Complete event
-            console.log('✅ Import complete:', data);
-
-            importState.importedCount = data.imported;
-            importState.duplicateCount = data.duplicates;
-            importState.errorCount = data.errors;
-            importState.backupPath = data.backup_path;
-            importState.results = data.results;
-
-            // Track imported photo IDs for undo
-            importState.importedPhotoIds = data.results
-              .filter((r) => r.status === 'success' && r.photo_id)
-              .map((r) => r.photo_id);
-
-            // Update UI to complete state
-            const message =
-              data.imported > 0
-                ? `${data.total} item${data.total > 1 ? 's' : ''} processed. ${data.imported} imported.`
-                : `${data.total} item${data.total > 1 ? 's' : ''} processed. None imported.`;
-
-            updateImportUI(message, false);
-            showImportComplete();
-          } else if (data.error) {
-            // Error event
-            throw new Error(data.error);
-          }
-        }
-      }
-    }
-
-    // If we exit the loop without getting a completion event, check if import is done
-    if (importState.isImporting) {
-      console.warn('⚠️ SSE stream ended but no completion event received');
-      console.log('📊 Current state:', importState);
-      
-      // If all files accounted for (imported + duplicates + errors = total), mark as complete
-      const accountedFor = importState.importedCount + importState.duplicateCount + importState.errorCount;
-      if (accountedFor === importState.totalFiles) {
-        console.log('✅ All files accounted for - marking import as complete');
-        
-        const message =
-          importState.importedCount > 0
-            ? `${importState.totalFiles} item${importState.totalFiles > 1 ? 's' : ''} processed. ${importState.importedCount} imported.`
-            : `${importState.totalFiles} item${importState.totalFiles > 1 ? 's' : ''} processed. None imported.`;
-
-        updateImportUI(message, false);
-        showImportComplete();
-      } else {
-        throw new Error(`Import incomplete: ${accountedFor}/${importState.totalFiles} files processed`);
-      }
-    }
-  } catch (error) {
-    console.error('❌ Import error:', error);
-    
-    // Provide more helpful error message
-    let errorMessage = 'Import failed';
-    if (error.message.includes('timeout')) {
-      errorMessage = 'Import connection lost - server may have restarted';
-    } else if (error.message.includes('incomplete')) {
-      errorMessage = error.message;
-    }
-    
-    updateImportUI(errorMessage, false);
-    showToast(errorMessage, null, 5000);
-  } finally {
-    importState.isImporting = false;
-  }
-}
-
 /**
  * Update import UI with progress
  */
@@ -2238,7 +2039,10 @@ function updateImportUI(statusText, showSpinner = false) {
   // Hide actions section during "Preparing" and "Processing" states
   const actionsSection = document.querySelector('.import-actions');
   if (actionsSection) {
-    if (statusText.startsWith('Preparing') || statusText.startsWith('Processing')) {
+    if (
+      statusText.startsWith('Preparing') ||
+      statusText.startsWith('Processing')
+    ) {
       actionsSection.style.display = 'none';
     }
   }
@@ -2276,9 +2080,39 @@ function closeImportOverlay() {
 }
 
 /**
+ * Scroll to first imported photo based on current sort order
+ */
+function scrollToImportedPhoto(photoIds) {
+  if (!photoIds || photoIds.length === 0) return;
+
+  // Find the first imported photo ID that exists in current view
+  // (respects current sort order - newest/oldest)
+  const firstVisibleId = photoIds.find((id) => {
+    const element = document.querySelector(`[data-photo-id="${id}"]`);
+    return element !== null;
+  });
+
+  if (firstVisibleId) {
+    const element = document.querySelector(
+      `[data-photo-id="${firstVisibleId}"]`
+    );
+    if (element) {
+      console.log(`📍 Scrolling to imported photo ID ${firstVisibleId}`);
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Optional: briefly highlight the photo
+      element.style.outline = '3px solid #6366f1';
+      setTimeout(() => {
+        element.style.outline = '';
+      }, 2000);
+    }
+  }
+}
+
+/**
  * Show import complete UI (show details, done, undo buttons)
  */
-function showImportComplete() {
+async function showImportComplete() {
   const cancelBtn = document.getElementById('importCancelBtn');
   const doneBtn = document.getElementById('importDoneBtn');
   const undoBtn = document.getElementById('importUndoBtn');
@@ -2289,12 +2123,44 @@ function showImportComplete() {
   if (doneBtn) doneBtn.style.display = 'block';
   if (undoBtn && importState.importedCount > 0) undoBtn.style.display = 'block';
   if (detailsSection) detailsSection.style.display = 'block';
-  
+
   // Show actions section in results state
   if (actionsSection) actionsSection.style.display = 'flex';
 
   // Populate details list
   populateImportDetails();
+
+  // Reload grid immediately to show new photos
+  await loadAndRenderPhotos(false);
+
+  // Scroll to first imported photo based on sort order
+  if (
+    importState.importedPhotoIds.length > 0 &&
+    importState.results.length > 0
+  ) {
+    // Get the date of the first successfully imported photo
+    const firstImported = importState.results.find(
+      (r) => r.status === 'success' && r.photo_id
+    );
+
+    if (firstImported && firstImported.date) {
+      // Extract month from date (YYYY:MM:DD HH:MM:SS -> YYYY-MM)
+      const dateStr = firstImported.date.replace(/:/g, '-');
+      const monthStr = dateStr.substring(0, 7); // YYYY-MM
+
+      console.log(`📍 Scrolling to imported photo month: ${monthStr}`);
+
+      // Wait for grid to render, then scroll to the month section
+      setTimeout(() => {
+        const monthSection = document.getElementById(`month-${monthStr}`);
+        if (monthSection) {
+          const appBarHeight = 60;
+          const targetY = monthSection.offsetTop - appBarHeight - 20;
+          window.scrollTo({ top: targetY, behavior: 'smooth' });
+        }
+      }, 500);
+    }
+  }
 }
 
 /**
@@ -2398,22 +2264,22 @@ let utilitiesMenuLoaded = false;
  */
 async function loadUtilitiesMenu() {
   if (utilitiesMenuLoaded) return;
-  
+
   try {
     const response = await fetch('fragments/utilitiesMenu.html');
     if (!response.ok) throw new Error('Failed to load utilities menu');
-    
+
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
+
     // Wire up menu items
     const switchLibraryBtn = document.getElementById('switchLibraryBtn');
     const removeDuplicatesBtn = document.getElementById('removeDuplicatesBtn');
-    const verifyIndexBtn = document.getElementById('verifyIndexBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
-    const rebuildThumbnailsBtn = document.getElementById('rebuildThumbnailsBtn');
-    const rebuildIndexBtn = document.getElementById('rebuildIndexBtn');
-    
+    const rebuildThumbnailsBtn = document.getElementById(
+      'rebuildThumbnailsBtn'
+    );
+
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
         console.log('🔧 Switch Library clicked');
@@ -2421,7 +2287,7 @@ async function loadUtilitiesMenu() {
         openSwitchLibraryOverlay();
       });
     }
-    
+
     if (removeDuplicatesBtn) {
       removeDuplicatesBtn.addEventListener('click', () => {
         console.log('🔧 Remove Duplicates clicked');
@@ -2429,23 +2295,15 @@ async function loadUtilitiesMenu() {
         openDuplicatesOverlay();
       });
     }
-    
-    if (verifyIndexBtn) {
-      verifyIndexBtn.addEventListener('click', () => {
-        console.log('🔧 Verify Index clicked (not yet implemented)');
-        hideUtilitiesMenu();
-        showToast('Verify index - Coming soon', null, 2000);
-      });
-    }
-    
+
     if (cleanOrganizeBtn) {
       cleanOrganizeBtn.addEventListener('click', () => {
-        console.log('🔧 Clean & Organize clicked');
+        console.log('🔧 Update library index clicked');
         hideUtilitiesMenu();
         openUpdateIndexOverlay();
       });
     }
-    
+
     if (rebuildThumbnailsBtn) {
       rebuildThumbnailsBtn.addEventListener('click', () => {
         console.log('🔧 Rebuild Thumbnails clicked');
@@ -2453,15 +2311,7 @@ async function loadUtilitiesMenu() {
         rebuildThumbnails();
       });
     }
-    
-    if (rebuildIndexBtn) {
-      rebuildIndexBtn.addEventListener('click', () => {
-        console.log('🔧 Rebuild Index clicked (not yet implemented)');
-        hideUtilitiesMenu();
-        showToast('Rebuild index - Coming soon', null, 2000);
-      });
-    }
-    
+
     // Close menu when clicking outside
     document.addEventListener('click', (e) => {
       const menu = document.getElementById('utilitiesMenu');
@@ -2470,7 +2320,7 @@ async function loadUtilitiesMenu() {
         hideUtilitiesMenu();
       }
     });
-    
+
     utilitiesMenuLoaded = true;
   } catch (error) {
     console.error('❌ Failed to load utilities menu:', error);
@@ -2482,34 +2332,44 @@ async function loadUtilitiesMenu() {
  */
 async function toggleUtilitiesMenu() {
   await loadUtilitiesMenu();
-  
+
   const menu = document.getElementById('utilitiesMenu');
   const utilitiesBtn = document.getElementById('utilitiesBtn');
-  
+
   console.log('🔧 Toggle menu - menu:', menu, 'button:', utilitiesBtn);
-  
+
   if (!menu || !utilitiesBtn) {
     console.warn('⚠️ Menu or button not found');
     return;
   }
-  
+
   const isVisible = menu.style.display === 'block';
-  
+
   console.log('🔧 Menu visible?', isVisible);
-  
+
   if (isVisible) {
     hideUtilitiesMenu();
   } else {
     // Position menu below the button
     const btnRect = utilitiesBtn.getBoundingClientRect();
     console.log('🔧 Button rect:', btnRect);
-    console.log('🔧 Setting menu position - top:', btnRect.bottom + 8, 'right:', window.innerWidth - btnRect.right);
-    
+    console.log(
+      '🔧 Setting menu position - top:',
+      btnRect.bottom + 8,
+      'right:',
+      window.innerWidth - btnRect.right
+    );
+
     menu.style.top = `${btnRect.bottom + 8}px`;
     menu.style.right = `${window.innerWidth - btnRect.right}px`;
     menu.style.display = 'block';
-    
-    console.log('🔧 Menu style after:', menu.style.top, menu.style.right, menu.style.display);
+
+    console.log(
+      '🔧 Menu style after:',
+      menu.style.top,
+      menu.style.right,
+      menu.style.display
+    );
   }
 }
 
@@ -2542,39 +2402,42 @@ async function loadDuplicatesOverlay() {
   if (document.getElementById('duplicatesOverlay')) {
     return;
   }
-  
+
   try {
     const response = await fetch('fragments/duplicatesOverlay.html');
     if (!response.ok) throw new Error('Failed to load duplicates overlay');
-    
+
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
+
     // Wire up buttons
     const closeBtn = document.getElementById('duplicatesCloseBtn');
     const cancelBtn = document.getElementById('duplicatesCancelBtn');
     const removeBtn = document.getElementById('duplicatesRemoveBtn');
     const doneBtn = document.getElementById('duplicatesDoneBtn');
     const detailsToggle = document.getElementById('duplicatesDetailsToggle');
-    
+
     if (closeBtn) closeBtn.addEventListener('click', closeDuplicatesOverlay);
     if (cancelBtn) cancelBtn.addEventListener('click', closeDuplicatesOverlay);
-    if (removeBtn) removeBtn.addEventListener('click', removeSelectedDuplicates);
+    if (removeBtn)
+      removeBtn.addEventListener('click', removeSelectedDuplicates);
     if (doneBtn) doneBtn.addEventListener('click', closeDuplicatesOverlay);
-    
+
     if (detailsToggle) {
       detailsToggle.addEventListener('click', () => {
         const detailsList = document.getElementById('duplicatesDetailsList');
         const icon = detailsToggle.querySelector('.material-symbols-outlined');
-        
+
         if (detailsList.style.display === 'none') {
           detailsList.style.display = 'block';
           icon.textContent = 'expand_less';
-          detailsToggle.querySelector('span:last-child').textContent = 'Hide details';
+          detailsToggle.querySelector('span:last-child').textContent =
+            'Hide details';
         } else {
           detailsList.style.display = 'none';
           icon.textContent = 'expand_more';
-          detailsToggle.querySelector('span:last-child').textContent = 'Show details';
+          detailsToggle.querySelector('span:last-child').textContent =
+            'Show details';
         }
       });
     }
@@ -2593,12 +2456,12 @@ async function openDuplicatesOverlay() {
     console.log('⚠️ Duplicates overlay already open');
     return;
   }
-  
+
   await loadDuplicatesOverlay();
-  
+
   const overlay = document.getElementById('duplicatesOverlay');
   if (!overlay) return;
-  
+
   // Reset state
   duplicatesState = {
     duplicates: [],
@@ -2606,51 +2469,54 @@ async function openDuplicatesOverlay() {
     totalExtraCopies: 0,
     totalWastedSpace: 0,
   };
-  
+
   // Reset UI to initial state
   const statsEl = document.getElementById('duplicatesStats');
   const detailsSection = document.getElementById('duplicatesDetailsSection');
   if (statsEl) statsEl.style.display = 'none';
   if (detailsSection) detailsSection.style.display = 'none';
-  
+
   // Show overlay
   overlay.style.display = 'flex';
-  
+
   // Start scanning
   updateDuplicatesUI('Scanning for duplicates', true);
-  
+
   try {
     const startTime = performance.now();
     console.log('🔍 Starting duplicate scan...');
-    
+
     const response = await fetch('/api/utilities/duplicates');
     if (!response.ok) throw new Error('Failed to fetch duplicates');
-    
+
     const data = await response.json();
     const fetchTime = performance.now() - startTime;
     console.log(`⏱️ Fetch took ${fetchTime.toFixed(0)}ms`);
-    
+
     duplicatesState.duplicates = data.duplicates;
     duplicatesState.totalExtraCopies = data.total_extra_copies;
     duplicatesState.totalWastedSpace = data.total_wasted_space;
-    
+
     console.log(`📋 Found ${data.total_duplicate_sets} duplicate sets`);
-    
+
     // Auto-select duplicates for removal (keep oldest)
-    data.duplicates.forEach(dupSet => {
+    data.duplicates.forEach((dupSet) => {
       // Sort by ID (oldest first), keep first, mark rest for removal
       const sortedFiles = dupSet.files.sort((a, b) => a.id - b.id);
       for (let i = 1; i < sortedFiles.length; i++) {
         duplicatesState.selectedForRemoval.add(sortedFiles[i].id);
       }
     });
-    
+
     // Update UI
     if (data.total_duplicate_sets === 0) {
       updateDuplicatesUI('No duplicates found', false);
       showDuplicatesComplete();
     } else {
-      updateDuplicatesUI(`Found ${data.total_duplicate_sets} items with duplicates`, false);
+      updateDuplicatesUI(
+        `Found ${data.total_duplicate_sets} items with duplicates`,
+        false
+      );
       showDuplicatesStats();
       renderDuplicatesList();
       showDuplicatesActions();
@@ -2667,7 +2533,7 @@ async function openDuplicatesOverlay() {
  */
 function updateDuplicatesUI(statusText, showSpinner = false) {
   const statusTextEl = document.getElementById('duplicatesStatusText');
-  
+
   if (statusTextEl) {
     if (showSpinner) {
       statusTextEl.innerHTML = `${statusText}<span class="import-spinner"></span>`;
@@ -2684,10 +2550,11 @@ function showDuplicatesStats() {
   const statsEl = document.getElementById('duplicatesStats');
   const setsCountEl = document.getElementById('duplicateSetsCount');
   const copiesCountEl = document.getElementById('extraCopiesCount');
-  
+
   if (statsEl) statsEl.style.display = 'flex';
   if (setsCountEl) setsCountEl.textContent = duplicatesState.duplicates.length;
-  if (copiesCountEl) copiesCountEl.textContent = duplicatesState.totalExtraCopies;
+  if (copiesCountEl)
+    copiesCountEl.textContent = duplicatesState.totalExtraCopies;
 }
 
 /**
@@ -2696,31 +2563,33 @@ function showDuplicatesStats() {
 function renderDuplicatesList() {
   const detailsSection = document.getElementById('duplicatesDetailsSection');
   const detailsList = document.getElementById('duplicatesDetailsList');
-  
+
   if (!detailsSection || !detailsList) return;
-  
+
   detailsSection.style.display = 'block';
-  
+
   let html = '';
-  
+
   duplicatesState.duplicates.forEach((dupSet, setIndex) => {
     const sortedFiles = dupSet.files.sort((a, b) => a.id - b.id);
     const baseFilename = sortedFiles[0].path.split('/').pop();
     const numDuplicates = dupSet.count - 1; // Total - 1 canonical = duplicates
-    
+
     html += `
       <div class="duplicate-set">
         <div class="duplicate-set-header">
-          <strong>${baseFilename}</strong> (${numDuplicates} duplicate${numDuplicates > 1 ? 's' : ''})
+          <strong>${baseFilename}</strong> (${numDuplicates} duplicate${
+      numDuplicates > 1 ? 's' : ''
+    })
         </div>
         <div class="duplicate-files">
     `;
-    
+
     sortedFiles.forEach((file, fileIndex) => {
       const isKeep = fileIndex === 0;
       const isSelected = duplicatesState.selectedForRemoval.has(file.id);
       const sizeMB = (file.file_size / (1024 * 1024)).toFixed(2);
-      
+
       html += `
         <div class="duplicate-file">
           <label>
@@ -2738,13 +2607,13 @@ function renderDuplicatesList() {
         </div>
       `;
     });
-    
+
     html += `
         </div>
       </div>
     `;
   });
-  
+
   detailsList.innerHTML = html;
 }
 
@@ -2757,7 +2626,7 @@ function toggleDuplicateSelection(photoId, isChecked) {
   } else {
     duplicatesState.selectedForRemoval.delete(photoId);
   }
-  
+
   // Update button state
   const removeBtn = document.getElementById('duplicatesRemoveBtn');
   if (removeBtn) {
@@ -2771,7 +2640,7 @@ function toggleDuplicateSelection(photoId, isChecked) {
 function showDuplicatesActions() {
   const cancelBtn = document.getElementById('duplicatesCancelBtn');
   const removeBtn = document.getElementById('duplicatesRemoveBtn');
-  
+
   if (cancelBtn) cancelBtn.style.display = 'inline-block';
   if (removeBtn) {
     removeBtn.style.display = 'inline-block';
@@ -2788,11 +2657,11 @@ function showDuplicatesComplete() {
   const doneBtn = document.getElementById('duplicatesDoneBtn');
   const statsEl = document.getElementById('duplicatesStats');
   const detailsSection = document.getElementById('duplicatesDetailsSection');
-  
+
   // Hide all the details/stats
   if (statsEl) statsEl.style.display = 'none';
   if (detailsSection) detailsSection.style.display = 'none';
-  
+
   // Show only Done button
   if (cancelBtn) cancelBtn.style.display = 'none';
   if (removeBtn) removeBtn.style.display = 'none';
@@ -2807,45 +2676,51 @@ async function removeSelectedDuplicates() {
     showToast('No duplicates selected for removal', null, 2000);
     return;
   }
-  
+
   const photoIds = Array.from(duplicatesState.selectedForRemoval);
-  
+
   try {
     console.log(`🗑️ Removing ${photoIds.length} duplicate photos`);
-    
+
     // Show removing state with spinner
-    updateDuplicatesUI(`Removing ${photoIds.length} duplicate${photoIds.length > 1 ? 's' : ''}`, true);
-    
+    updateDuplicatesUI(
+      `Removing ${photoIds.length} duplicate${photoIds.length > 1 ? 's' : ''}`,
+      true
+    );
+
     // Hide action buttons during removal
     const cancelBtn = document.getElementById('duplicatesCancelBtn');
     const removeBtn = document.getElementById('duplicatesRemoveBtn');
     if (cancelBtn) cancelBtn.style.display = 'none';
     if (removeBtn) removeBtn.style.display = 'none';
-    
+
     const response = await fetch('/api/photos/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ photo_ids: photoIds }),
     });
-    
+
     if (!response.ok) {
       throw new Error(`Failed to remove duplicates: ${response.status}`);
     }
-    
+
     const result = await response.json();
     console.log('✅ Duplicates removed:', result);
-    
+
     // Show final confirmation state
-    updateDuplicatesUI(`Removed ${result.deleted} duplicate${result.deleted > 1 ? 's' : ''}`, false);
+    updateDuplicatesUI(
+      `Removed ${result.deleted} duplicate${result.deleted > 1 ? 's' : ''}`,
+      false
+    );
     showDuplicatesComplete();
-    
+
     // Reload grid
     await loadAndRenderPhotos(false);
   } catch (error) {
     console.error('❌ Failed to remove duplicates:', error);
     updateDuplicatesUI('Failed to remove duplicates', false);
     showToast('Failed to remove duplicates', null, 3000);
-    
+
     // Show action buttons again on error
     showDuplicatesActions();
   }
@@ -2865,7 +2740,7 @@ function closeDuplicatesOverlay() {
 window.toggleDuplicateSelection = toggleDuplicateSelection;
 
 // ==========================
-// CLEAN & ORGANIZE OVERLAY
+// UPDATE LIBRARY INDEX OVERLAY
 // ==========================
 
 let updateIndexState = {
@@ -2877,51 +2752,54 @@ let updateIndexState = {
 };
 
 /**
- * Load Clean & Organize overlay fragment
+ * Load Update Library Index overlay fragment
  */
 async function loadUpdateIndexOverlay() {
   // Check if already loaded
   if (document.getElementById('updateIndexOverlay')) {
     return;
   }
-  
+
   try {
     const response = await fetch('fragments/updateIndexOverlay.html');
-    if (!response.ok) throw new Error('Failed to load Clean & Organize overlay');
-    
+    if (!response.ok)
+      throw new Error('Failed to load Update Library Index overlay');
+
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
+
     // Wire up buttons
     const closeBtn = document.getElementById('updateIndexCloseBtn');
     const cancelBtn = document.getElementById('updateIndexCancelBtn');
     const proceedBtn = document.getElementById('updateIndexProceedBtn');
     const doneBtn = document.getElementById('updateIndexDoneBtn');
     const detailsToggle = document.getElementById('updateIndexDetailsToggle');
-    
+
     if (closeBtn) closeBtn.addEventListener('click', closeUpdateIndexOverlay);
     if (cancelBtn) cancelBtn.addEventListener('click', closeUpdateIndexOverlay);
     if (proceedBtn) proceedBtn.addEventListener('click', executeUpdateIndex);
     if (doneBtn) doneBtn.addEventListener('click', closeUpdateIndexOverlay);
-    
+
     if (detailsToggle) {
       detailsToggle.addEventListener('click', () => {
         const detailsList = document.getElementById('updateIndexDetailsList');
         const icon = detailsToggle.querySelector('.material-symbols-outlined');
-        
+
         if (detailsList.style.display === 'none') {
           detailsList.style.display = 'block';
           icon.textContent = 'expand_less';
-          detailsToggle.querySelector('span:last-child').textContent = 'Hide details';
+          detailsToggle.querySelector('span:last-child').textContent =
+            'Hide details';
         } else {
           detailsList.style.display = 'none';
           icon.textContent = 'expand_more';
-          detailsToggle.querySelector('span:last-child').textContent = 'Show details';
+          detailsToggle.querySelector('span:last-child').textContent =
+            'Show details';
         }
       });
     }
   } catch (error) {
-    console.error('❌ Failed to load Clean & Organize overlay:', error);
+    console.error('❌ Failed to load Update Library Index overlay:', error);
   }
 }
 
@@ -2932,15 +2810,15 @@ async function openUpdateIndexOverlay() {
   // Check if already open
   const existingOverlay = document.getElementById('updateIndexOverlay');
   if (existingOverlay && existingOverlay.style.display === 'flex') {
-    console.log('⚠️ Clean & Organize overlay already open');
+    console.log('⚠️ Update library index overlay already open');
     return;
   }
-  
+
   await loadUpdateIndexOverlay();
-  
+
   const overlay = document.getElementById('updateIndexOverlay');
   if (!overlay) return;
-  
+
   // Reset state
   updateIndexState = {
     missingFiles: 0,
@@ -2949,37 +2827,40 @@ async function openUpdateIndexOverlay() {
     emptyFolders: 0,
     details: null,
   };
-  
+
   // Reset UI to initial state
   const statsEl = document.getElementById('updateIndexStats');
   const detailsSection = document.getElementById('updateIndexDetailsSection');
   if (statsEl) statsEl.style.display = 'none';
   if (detailsSection) detailsSection.style.display = 'none';
-  
+
   // Show overlay
   overlay.style.display = 'flex';
-  
+
   // Phase 1: Scanning
   updateUpdateIndexUI('Scanning library', true);
   showUpdateIndexButtons('cancel');
-  
+
   try {
     const response = await fetch('/api/utilities/update-index/scan');
     if (!response.ok) throw new Error('Failed to scan index');
-    
+
     const data = await response.json();
-    
+
     updateIndexState.missingFiles = data.missing_files;
     updateIndexState.untrackedFiles = data.untracked_files;
     updateIndexState.nameUpdates = data.name_updates;
     updateIndexState.emptyFolders = data.empty_folders;
-    
+
     console.log('📋 Scan results:', data);
-    
+
     // Check if any changes are needed
-    const hasChanges = data.missing_files > 0 || data.untracked_files > 0 || 
-                       data.name_updates > 0 || data.empty_folders > 0;
-    
+    const hasChanges =
+      data.missing_files > 0 ||
+      data.untracked_files > 0 ||
+      data.name_updates > 0 ||
+      data.empty_folders > 0;
+
     if (hasChanges) {
       // Phase 2: Review (has changes - show proceed)
       updateUpdateIndexUI('Scan complete. Ready to proceed?', false);
@@ -2990,7 +2871,6 @@ async function openUpdateIndexOverlay() {
       updateUpdateIndexUI('Index is up to date. No changes required.', false);
       showUpdateIndexButtons('done');
     }
-    
   } catch (error) {
     console.error('❌ Failed to scan index:', error);
     updateUpdateIndexUI('Failed to scan', false);
@@ -3002,57 +2882,66 @@ async function openUpdateIndexOverlay() {
  * Phase 3: Execute update (after user clicks Proceed)
  */
 async function executeUpdateIndex() {
-  console.log('🚀 Executing Clean & Organize...');
-  
+  console.log('🚀 Executing update library index...');
+
   // Phase 3: Execution
   updateUpdateIndexUI('Removing missing files', true);
   showUpdateIndexButtons('cancel-disabled');
-  
+
   try {
     const response = await fetch('/api/utilities/update-index/execute', {
       method: 'POST',
     });
-    
+
     if (!response.ok) {
       throw new Error(`Update failed: ${response.status}`);
     }
-    
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    
+
     // Read SSE stream
     while (true) {
       const { done, value } = await reader.read();
-      
+
       if (done) {
         console.log('📡 SSE stream ended');
         break;
       }
-      
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
-      
+
       for (const line of lines) {
         if (!line.trim()) continue;
-        
+
         if (line.startsWith('data:')) {
           const data = JSON.parse(line.substring(5).trim());
-          
+
           // Progress updates
           if (data.phase) {
             if (data.phase === 'removing_deleted') {
-              updateUpdateIndexUI(`Removing missing files... ${data.current}/${data.total}`, true);
+              updateUpdateIndexUI(
+                `Removing missing files... ${data.current}/${data.total}`,
+                true
+              );
             } else if (data.phase === 'adding_untracked') {
-              updateUpdateIndexUI(`Adding untracked files... ${data.current}/${data.total}`, true);
+              updateUpdateIndexUI(
+                `Adding untracked files... ${data.current}/${data.total}`,
+                true
+              );
             } else if (data.phase === 'updating_names') {
               updateUpdateIndexUI('Updating names...', true);
             } else if (data.phase === 'removing_empty') {
-              updateUpdateIndexUI(`Removing empty folders... ${data.current}`, true);
+              updateUpdateIndexUI(
+                `Removing empty folders... ${data.current}`,
+                true
+              );
             }
           }
-          
+
           // Completion data (comes BEFORE event: complete)
           if (data.stats && data.details) {
             // Update final stats
@@ -3061,17 +2950,17 @@ async function executeUpdateIndex() {
             updateIndexState.nameUpdates = data.stats.name_updates;
             updateIndexState.emptyFolders = data.stats.empty_folders;
             updateIndexState.details = data.details;
-            
+
             console.log('✅ Update complete:', data.stats);
             console.log('📋 Details:', data.details);
           }
-          
+
           if (data.error) {
             throw new Error(data.error);
           }
         }
       }
-      
+
       // Check for complete event AFTER processing all data lines
       for (const line of lines) {
         if (line.startsWith('event: complete')) {
@@ -3086,14 +2975,13 @@ async function executeUpdateIndex() {
         }
       }
     }
-    
+
     // Reload grid
     await loadAndRenderPhotos(false);
-    
   } catch (error) {
     console.error('❌ Failed to execute update:', error);
-    updateUpdateIndexUI('Failed to clean & organize', false);
-    showToast('Failed to clean & organize', null, 3000);
+    updateUpdateIndexUI('Failed to update library index', false);
+    showToast('Failed to update library index', null, 3000);
     showUpdateIndexButtons('cancel');
   }
 }
@@ -3103,7 +2991,7 @@ async function executeUpdateIndex() {
  */
 function updateUpdateIndexUI(statusText, showSpinner = false) {
   const statusTextEl = document.getElementById('updateIndexStatusText');
-  
+
   if (statusTextEl) {
     if (showSpinner) {
       statusTextEl.innerHTML = `${statusText}<span class="import-spinner"></span>`;
@@ -3122,12 +3010,13 @@ function showUpdateIndexStats() {
   const untrackedEl = document.getElementById('untrackedFilesCount');
   const nameUpdatesEl = document.getElementById('nameUpdatesCount');
   const emptyFoldersEl = document.getElementById('emptyFoldersCount');
-  
+
   if (statsEl) statsEl.style.display = 'flex';
   if (missingEl) missingEl.textContent = updateIndexState.missingFiles;
   if (untrackedEl) untrackedEl.textContent = updateIndexState.untrackedFiles;
   if (nameUpdatesEl) nameUpdatesEl.textContent = updateIndexState.nameUpdates;
-  if (emptyFoldersEl) emptyFoldersEl.textContent = updateIndexState.emptyFolders;
+  if (emptyFoldersEl)
+    emptyFoldersEl.textContent = updateIndexState.emptyFolders;
 }
 
 /**
@@ -3145,14 +3034,14 @@ function showUpdateIndexButtons(...buttons) {
   const cancelBtn = document.getElementById('updateIndexCancelBtn');
   const proceedBtn = document.getElementById('updateIndexProceedBtn');
   const doneBtn = document.getElementById('updateIndexDoneBtn');
-  
+
   // Hide all first
   if (cancelBtn) cancelBtn.style.display = 'none';
   if (proceedBtn) proceedBtn.style.display = 'none';
   if (doneBtn) doneBtn.style.display = 'none';
-  
+
   // Show requested buttons
-  buttons.forEach(btn => {
+  buttons.forEach((btn) => {
     if (btn === 'cancel' && cancelBtn) {
       cancelBtn.style.display = 'inline-block';
       cancelBtn.disabled = false;
@@ -3173,85 +3062,98 @@ function showUpdateIndexButtons(...buttons) {
 function renderUpdateIndexDetails() {
   console.log('📋 renderUpdateIndexDetails called');
   console.log('📋 updateIndexState.details:', updateIndexState.details);
-  
+
   if (!updateIndexState.details) {
     console.warn('⚠️ No details in state!');
     return;
   }
-  
+
   const detailsSection = document.getElementById('updateIndexDetailsSection');
   const detailsList = document.getElementById('updateIndexDetailsList');
-  
+
   console.log('📋 detailsSection:', detailsSection);
   console.log('📋 detailsList:', detailsList);
-  
+
   if (!detailsSection || !detailsList) {
     console.warn('⚠️ Details elements not found in DOM!');
     return;
   }
-  
+
   const details = updateIndexState.details;
   let html = '';
-  
+
   // Missing Files
   if (details.missing_files && details.missing_files.length > 0) {
-    html += '<div class="update-detail-section"><strong>Missing Files:</strong><ul>';
-    details.missing_files.slice(0, 20).forEach(path => {
+    html +=
+      '<div class="update-detail-section"><strong>Missing Files:</strong><ul>';
+    details.missing_files.slice(0, 20).forEach((path) => {
       html += `<li>${path}</li>`;
     });
     if (details.missing_files.length > 20) {
-      html += `<li><em>... and ${details.missing_files.length - 20} more</em></li>`;
+      html += `<li><em>... and ${
+        details.missing_files.length - 20
+      } more</em></li>`;
     }
     html += '</ul></div>';
   }
-  
+
   // Untracked Files
   if (details.untracked_files && details.untracked_files.length > 0) {
-    html += '<div class="update-detail-section"><strong>Untracked Files:</strong><ul>';
-    details.untracked_files.slice(0, 20).forEach(path => {
+    html +=
+      '<div class="update-detail-section"><strong>Untracked Files:</strong><ul>';
+    details.untracked_files.slice(0, 20).forEach((path) => {
       html += `<li>${path}</li>`;
     });
     if (details.untracked_files.length > 20) {
-      html += `<li><em>... and ${details.untracked_files.length - 20} more</em></li>`;
+      html += `<li><em>... and ${
+        details.untracked_files.length - 20
+      } more</em></li>`;
     }
     html += '</ul></div>';
   }
-  
+
   // Name Updates
   if (details.name_updates && details.name_updates.length > 0) {
-    html += '<div class="update-detail-section"><strong>Name Updates:</strong><ul>';
-    details.name_updates.slice(0, 20).forEach(path => {
+    html +=
+      '<div class="update-detail-section"><strong>Name Updates:</strong><ul>';
+    details.name_updates.slice(0, 20).forEach((path) => {
       html += `<li>${path}</li>`;
     });
     if (details.name_updates.length > 20) {
-      html += `<li><em>... and ${details.name_updates.length - 20} more</em></li>`;
+      html += `<li><em>... and ${
+        details.name_updates.length - 20
+      } more</em></li>`;
     }
     html += '</ul></div>';
   }
-  
+
   // Empty Folders
   if (details.empty_folders && details.empty_folders.length > 0) {
-    html += '<div class="update-detail-section"><strong>Empty Folders:</strong><ul>';
-    details.empty_folders.slice(0, 20).forEach(path => {
+    html +=
+      '<div class="update-detail-section"><strong>Empty Folders:</strong><ul>';
+    details.empty_folders.slice(0, 20).forEach((path) => {
       html += `<li>${path}</li>`;
     });
     if (details.empty_folders.length > 20) {
-      html += `<li><em>... and ${details.empty_folders.length - 20} more</em></li>`;
+      html += `<li><em>... and ${
+        details.empty_folders.length - 20
+      } more</em></li>`;
     }
     html += '</ul></div>';
   }
-  
+
   // Always show details section in Phase 4
   if (html) {
     detailsList.innerHTML = html;
   } else {
-    detailsList.innerHTML = '<div class="update-detail-section"><em>No changes were needed.</em></div>';
+    detailsList.innerHTML =
+      '<div class="update-detail-section"><em>No changes were needed.</em></div>';
   }
   detailsSection.style.display = 'block';
 }
 
 /**
- * Close Clean & Organize overlay
+ * Close Update Library Index overlay
  */
 function closeUpdateIndexOverlay() {
   const overlay = document.getElementById('updateIndexOverlay');
@@ -3273,7 +3175,7 @@ async function rebuildThumbnails() {
   if (!overlay) {
     await loadRebuildThumbnailsOverlay();
   }
-  
+
   openRebuildThumbnailsOverlay();
 }
 
@@ -3285,22 +3187,30 @@ async function loadRebuildThumbnailsOverlay() {
     const response = await fetch('/fragments/rebuildThumbnailsOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
+
     // Wire up event listeners
-    document.getElementById('rebuildThumbnailsCloseBtn')?.addEventListener('click', closeRebuildThumbnailsOverlay);
-    document.getElementById('rebuildThumbnailsCancelBtn')?.addEventListener('click', closeRebuildThumbnailsOverlay);
-    document.getElementById('rebuildThumbnailsProceedBtn')?.addEventListener('click', executeRebuildThumbnails);
-    document.getElementById('rebuildThumbnailsDoneBtn')?.addEventListener('click', async () => {
-      closeRebuildThumbnailsOverlay();
-      // Force thumbnail reload by adding cache-buster
-      const thumbnails = document.querySelectorAll('.photo-thumb');
-      const cacheBuster = Date.now();
-      thumbnails.forEach(img => {
-        const src = img.src.split('?')[0];
-        img.src = `${src}?t=${cacheBuster}`;
+    document
+      .getElementById('rebuildThumbnailsCloseBtn')
+      ?.addEventListener('click', closeRebuildThumbnailsOverlay);
+    document
+      .getElementById('rebuildThumbnailsCancelBtn')
+      ?.addEventListener('click', closeRebuildThumbnailsOverlay);
+    document
+      .getElementById('rebuildThumbnailsProceedBtn')
+      ?.addEventListener('click', executeRebuildThumbnails);
+    document
+      .getElementById('rebuildThumbnailsDoneBtn')
+      ?.addEventListener('click', async () => {
+        closeRebuildThumbnailsOverlay();
+        // Force thumbnail reload by adding cache-buster
+        const thumbnails = document.querySelectorAll('.photo-thumb');
+        const cacheBuster = Date.now();
+        thumbnails.forEach((img) => {
+          const src = img.src.split('?')[0];
+          img.src = `${src}?t=${cacheBuster}`;
+        });
       });
-    });
-    
+
     console.log('✅ Rebuild thumbnails overlay loaded');
   } catch (error) {
     console.error('❌ Failed to load rebuild thumbnails overlay:', error);
@@ -3310,22 +3220,58 @@ async function loadRebuildThumbnailsOverlay() {
 /**
  * Open rebuild thumbnails overlay (Phase 1: Confirmation)
  */
-function openRebuildThumbnailsOverlay() {
+async function openRebuildThumbnailsOverlay() {
   const overlay = document.getElementById('rebuildThumbnailsOverlay');
   if (!overlay) return;
-  
-  // Reset to Phase 1
+
+  // Get UI elements
   const statusText = document.getElementById('rebuildThumbnailsStatusText');
   const cancelBtn = document.getElementById('rebuildThumbnailsCancelBtn');
   const proceedBtn = document.getElementById('rebuildThumbnailsProceedBtn');
   const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
-  
-  statusText.innerHTML = '<p>This will clear all cached thumbnails. They will regenerate automatically as you scroll.</p><p>Ready to delete existing thumbnails?</p>';
-  cancelBtn.style.display = 'block';
-  proceedBtn.style.display = 'block';
+
+  // Show loading state while checking
+  statusText.innerHTML =
+    '<p>Checking thumbnails<span class="import-spinner"></span></p>';
+  cancelBtn.style.display = 'none';
+  proceedBtn.style.display = 'none';
   doneBtn.style.display = 'none';
-  
   overlay.style.display = 'block';
+
+  try {
+    // First, check if there are any thumbnails without deleting
+    const response = await fetch('/api/utilities/check-thumbnails');
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to check thumbnails');
+    }
+
+    console.log('✅ Thumbnail check result:', result);
+
+    // If no thumbnails exist, show info message with Done button only
+    if (result.thumbnail_count === 0) {
+      statusText.innerHTML =
+        '<p>No thumbnails found. Thumbnails will be generated automatically as you scroll.</p>';
+      cancelBtn.style.display = 'none';
+      proceedBtn.style.display = 'none';
+      doneBtn.style.display = 'block';
+    } else {
+      // Thumbnails exist, show confirmation dialog
+      statusText.innerHTML =
+        '<p>This will clear all cached thumbnails. They will regenerate automatically as you scroll.</p><p>Ready to delete existing thumbnails?</p>';
+      cancelBtn.style.display = 'block';
+      proceedBtn.style.display = 'block';
+      doneBtn.style.display = 'none';
+    }
+  } catch (error) {
+    console.error('❌ Failed to check thumbnails:', error);
+    statusText.innerHTML = `<p>Error: ${error.message}</p>`;
+    cancelBtn.style.display = 'none';
+    proceedBtn.style.display = 'none';
+    doneBtn.style.display = 'block';
+  }
+
   console.log('🔧 Rebuild thumbnails overlay opened');
 }
 
@@ -3347,34 +3293,42 @@ async function executeRebuildThumbnails() {
   const cancelBtn = document.getElementById('rebuildThumbnailsCancelBtn');
   const proceedBtn = document.getElementById('rebuildThumbnailsProceedBtn');
   const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
-  
+
   try {
     console.log('🔧 Starting thumbnail rebuild...');
-    
+
     // Immediately show Phase 2 (spinner)
-    statusText.innerHTML = '<p>Clearing thumbnails<span class="import-spinner"></span></p>';
+    statusText.innerHTML =
+      '<p>Clearing thumbnails<span class="import-spinner"></span></p>';
     cancelBtn.disabled = true;
     cancelBtn.style.opacity = '0.5';
     proceedBtn.style.display = 'none';
-    
+
     // Execute rebuild
     const response = await fetch('/api/utilities/rebuild-thumbnails', {
-      method: 'POST'
+      method: 'POST',
     });
-    
+
     const result = await response.json();
-    
+
     if (!response.ok) {
       throw new Error(result.error || 'Failed to rebuild thumbnails');
     }
-    
+
     console.log('✅ Thumbnails cleared:', result);
-    
+
     // Show Phase 3 (confirmation)
-    statusText.innerHTML = '<p>Old thumbnails have been removed. New ones will be created automatically as you scroll.</p>';
+    if (result.cleared_count === 0) {
+      // No thumbnails to rebuild
+      statusText.innerHTML =
+        '<p>No thumbnails found. Thumbnails will be generated automatically as you scroll.</p>';
+    } else {
+      // Thumbnails were cleared
+      statusText.innerHTML =
+        '<p>Old thumbnails have been removed. New ones will be created automatically as you scroll.</p>';
+    }
     cancelBtn.style.display = 'none';
     doneBtn.style.display = 'block';
-    
   } catch (error) {
     console.error('❌ Failed to rebuild thumbnails:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
@@ -3394,12 +3348,18 @@ async function loadSwitchLibraryOverlay() {
     const response = await fetch('/fragments/switchLibraryOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
+
     // Wire up event listeners
-    document.getElementById('switchLibraryCloseBtn')?.addEventListener('click', closeSwitchLibraryOverlay);
-    document.getElementById('switchLibraryCancelBtn')?.addEventListener('click', closeSwitchLibraryOverlay);
-    document.getElementById('switchLibraryBrowseBtn')?.addEventListener('click', browseSwitchLibrary);
-    
+    document
+      .getElementById('switchLibraryCloseBtn')
+      ?.addEventListener('click', closeSwitchLibraryOverlay);
+    document
+      .getElementById('switchLibraryCancelBtn')
+      ?.addEventListener('click', closeSwitchLibraryOverlay);
+    document
+      .getElementById('switchLibraryBrowseBtn')
+      ?.addEventListener('click', browseSwitchLibrary);
+
     console.log('✅ Switch library overlay loaded');
   } catch (error) {
     console.error('❌ Failed to load switch library overlay:', error);
@@ -3414,9 +3374,9 @@ async function loadCreateLibraryOverlay() {
     const response = await fetch('/fragments/createLibraryOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
+
     // Event listeners wired up when showing overlay
-    
+
     console.log('✅ Create library overlay loaded');
   } catch (error) {
     console.error('❌ Failed to load create library overlay:', error);
@@ -3432,16 +3392,17 @@ async function openSwitchLibraryOverlay() {
   if (!overlay) {
     await loadSwitchLibraryOverlay();
   }
-  
+
   // Get current library path
   try {
     const response = await fetch('/api/library/current');
     const data = await response.json();
-    document.getElementById('currentLibraryPath').textContent = data.library_path;
+    document.getElementById('currentLibraryPath').textContent =
+      data.library_path;
   } catch (error) {
     console.error('Failed to get current library:', error);
   }
-  
+
   document.getElementById('switchLibraryOverlay').style.display = 'block';
   console.log('📚 Switch library overlay opened');
 }
@@ -3462,32 +3423,22 @@ function closeSwitchLibraryOverlay() {
 async function browseSwitchLibrary() {
   try {
     console.log('🔍 Opening folder picker...');
-    
-    // Show loading state
-    const browseBtn = document.getElementById('switchLibraryBrowseBtn');
-    const originalText = browseBtn.textContent;
-    browseBtn.textContent = 'Browsing...';
-    browseBtn.disabled = true;
-    
+
     const response = await fetch('/api/library/browse', {
-      method: 'POST'
+      method: 'POST',
     });
-    
+
     const result = await response.json();
-    
-    // Reset button
-    browseBtn.textContent = originalText;
-    browseBtn.disabled = false;
-    
+
     if (!response.ok) {
       throw new Error(result.error || 'Failed to browse');
     }
-    
+
     if (result.status === 'cancelled') {
       console.log('User cancelled folder selection');
       return;
     }
-    
+
     if (result.status === 'exists') {
       // Existing library - switch immediately
       console.log('✅ Found existing library:', result.library_path);
@@ -3498,7 +3449,6 @@ async function browseSwitchLibrary() {
       closeSwitchLibraryOverlay();
       await showCreateLibraryConfirmation(result.library_path, result.db_path);
     }
-    
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
@@ -3515,29 +3465,29 @@ async function showCreateLibraryConfirmation(libraryPath, dbPath) {
     await loadCreateLibraryOverlay();
     overlay = document.getElementById('createLibraryOverlay');
   }
-  
+
   // Set path
   document.getElementById('newLibraryPath').textContent = libraryPath;
-  
+
   // Wire up buttons for this specific confirmation
   const cancelBtn = document.getElementById('createLibraryCancelBtn');
   const confirmBtn = document.getElementById('createLibraryConfirmBtn');
-  
+
   // Remove old listeners by cloning
   const newCancelBtn = cancelBtn.cloneNode(true);
   const newConfirmBtn = confirmBtn.cloneNode(true);
   cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
   confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
-  
+
   // Add new listeners
   newCancelBtn.addEventListener('click', () => {
     overlay.style.display = 'none';
   });
-  
+
   newConfirmBtn.addEventListener('click', async () => {
     await createAndSwitchLibrary(libraryPath, dbPath);
   });
-  
+
   overlay.style.display = 'block';
   console.log('📦 Create library confirmation shown');
 }
@@ -3548,37 +3498,36 @@ async function showCreateLibraryConfirmation(libraryPath, dbPath) {
 async function createAndSwitchLibrary(libraryPath, dbPath) {
   try {
     console.log('📦 Creating new library:', libraryPath);
-    
+
     // Show loading
     const confirmBtn = document.getElementById('createLibraryConfirmBtn');
     confirmBtn.textContent = 'Creating...';
     confirmBtn.disabled = true;
-    
+
     // Create library
     const createResponse = await fetch('/api/library/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_path: libraryPath, db_path: dbPath })
+      body: JSON.stringify({ library_path: libraryPath, db_path: dbPath }),
     });
-    
+
     const createResult = await createResponse.json();
-    
+
     if (!createResponse.ok) {
       throw new Error(createResult.error || 'Failed to create library');
     }
-    
+
     console.log('✅ Library created');
-    
+
     // Close create overlay
     document.getElementById('createLibraryOverlay').style.display = 'none';
-    
+
     // Switch to new library
     await switchToLibrary(libraryPath, dbPath);
-    
   } catch (error) {
     console.error('❌ Failed to create library:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
-    
+
     // Reset button
     const confirmBtn = document.getElementById('createLibraryConfirmBtn');
     confirmBtn.textContent = 'Create & Switch';
@@ -3592,32 +3541,31 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
 async function switchToLibrary(libraryPath, dbPath) {
   try {
     console.log('🔄 Switching to library:', libraryPath);
-    
+
     const response = await fetch('/api/library/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_path: libraryPath, db_path: dbPath })
+      body: JSON.stringify({ library_path: libraryPath, db_path: dbPath }),
     });
-    
+
     const result = await response.json();
-    
+
     if (!response.ok) {
       throw new Error(result.error || 'Failed to switch library');
     }
-    
+
     console.log('✅ Switched to:', result.library_path);
     showToast('Library switched. Reloading...', null, 2000);
-    
+
     // Close overlays
     closeSwitchLibraryOverlay();
     const createOverlay = document.getElementById('createLibraryOverlay');
     if (createOverlay) createOverlay.style.display = 'none';
-    
+
     // Reload photos from new library
     setTimeout(async () => {
       await loadAndRenderPhotos();
     }, 500);
-    
   } catch (error) {
     console.error('❌ Failed to switch library:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
@@ -3634,27 +3582,22 @@ async function switchToLibrary(libraryPath, dbPath) {
 async function triggerImport() {
   try {
     console.log('📸 Showing import options...');
-    
-    const choice = await showDialog(
-      'Import media',
-      'Choose what to import:',
-      [
-        { text: 'Import folders', value: 'folders', secondary: true },
-        { text: 'Import files', value: 'files', primary: true }
-      ]
-    );
-    
+
+    const choice = await showDialog('Import media', 'Choose what to import:', [
+      { text: 'Import folders', value: 'folders', secondary: true },
+      { text: 'Import files', value: 'files', primary: true },
+    ]);
+
     if (!choice) {
       console.log('User cancelled import');
       return;
     }
-    
+
     if (choice === 'files') {
       await importFiles();
     } else if (choice === 'folders') {
       await importFolders();
     }
-    
   } catch (error) {
     console.error('❌ Failed to trigger import:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
@@ -3667,15 +3610,19 @@ async function triggerImport() {
 async function importFiles() {
   try {
     console.log('📸 Opening file picker...');
-    
-    const script = 'POSIX path of (choose file of type {"public.image", "public.movie"} with prompt "Select photos to import" with multiple selections allowed)';
-    
+
+    // Blur browser window to ensure focus shifts to native file picker
+    window.blur();
+
+    const script =
+      'POSIX path of (choose file of type {"public.image", "public.movie"} with prompt "Select photos to import" with multiple selections allowed)';
+
     const response = await fetch('/api/import/browse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script })
+      body: JSON.stringify({ script }),
     });
-    
+
     if (!response.ok) {
       const error = await response.json();
       if (error.status === 'cancelled') {
@@ -3684,18 +3631,17 @@ async function importFiles() {
       }
       throw new Error(error.error || 'Failed to select files');
     }
-    
+
     const result = await response.json();
     const paths = result.paths || [];
-    
+
     if (paths.length === 0) {
       console.log('No files selected');
       return;
     }
-    
+
     console.log(`✅ Selected ${paths.length} file(s)`);
     await scanAndConfirmImport(paths);
-    
   } catch (error) {
     console.error('❌ Failed to import files:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
@@ -3708,15 +3654,19 @@ async function importFiles() {
 async function importFolders() {
   try {
     console.log('📁 Opening folder picker...');
-    
-    const script = 'POSIX path of (choose folder with prompt "Select folder to import" with multiple selections allowed)';
-    
+
+    // Blur browser window to ensure focus shifts to native folder picker
+    window.blur();
+
+    const script =
+      'POSIX path of (choose folder with prompt "Select folder to import" with multiple selections allowed)';
+
     const response = await fetch('/api/import/browse', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script })
+      body: JSON.stringify({ script }),
     });
-    
+
     if (!response.ok) {
       const error = await response.json();
       if (error.status === 'cancelled') {
@@ -3725,18 +3675,17 @@ async function importFolders() {
       }
       throw new Error(error.error || 'Failed to select folder');
     }
-    
+
     const result = await response.json();
     const paths = result.paths || [];
-    
+
     if (paths.length === 0) {
       console.log('No folders selected');
       return;
     }
-    
+
     console.log(`✅ Selected ${paths.length} folder(s)`);
     await scanAndConfirmImport(paths);
-    
   } catch (error) {
     console.error('❌ Failed to import folders:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
@@ -3749,52 +3698,51 @@ async function importFolders() {
 async function scanAndConfirmImport(paths) {
   try {
     showToast('Scanning...', null, 0);
-    
+
     const response = await fetch('/api/import/scan-paths', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths })
+      body: JSON.stringify({ paths }),
     });
-    
+
     const result = await response.json();
-    
+
     if (!response.ok) {
       throw new Error(result.error || 'Failed to scan paths');
     }
-    
+
     const { files, total_count, files_selected, folders_scanned } = result;
-    
+
     if (total_count === 0) {
       showToast('No media files found', null, 3000);
       return;
     }
-    
+
     // Show confirmation
     let message = `Found ${total_count} file${total_count > 1 ? 's' : ''}`;
     if (files_selected > 0 && folders_scanned > 0) {
-      message += ` (${files_selected} selected + ${total_count - files_selected} in ${folders_scanned} folder${folders_scanned > 1 ? 's' : ''})`;
+      message += ` (${files_selected} selected + ${
+        total_count - files_selected
+      } in ${folders_scanned} folder${folders_scanned > 1 ? 's' : ''})`;
     } else if (folders_scanned > 0) {
-      message += ` in ${folders_scanned} folder${folders_scanned > 1 ? 's' : ''}`;
+      message += ` in ${folders_scanned} folder${
+        folders_scanned > 1 ? 's' : ''
+      }`;
     }
     message += '. Start import?';
-    
-    const confirmed = await showDialog(
-      'Import media',
-      message,
-      [
-        { text: 'Cancel', value: false, secondary: true },
-        { text: 'Import', value: true, primary: true }
-      ]
-    );
-    
+
+    const confirmed = await showDialog('Import media', message, [
+      { text: 'Cancel', value: false, secondary: true },
+      { text: 'Import', value: true, primary: true },
+    ]);
+
     if (!confirmed) {
       console.log('User cancelled import');
       return;
     }
-    
+
     // Start import with file list
     await startImportFromPaths(files);
-    
   } catch (error) {
     console.error('❌ Failed to scan paths:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
@@ -3807,58 +3755,57 @@ async function scanAndConfirmImport(paths) {
 async function startImportFromPaths(filePaths) {
   try {
     console.log(`📥 Starting import of ${filePaths.length} files...`);
-    
+
     // Load import overlay if not already loaded
     const overlay = document.getElementById('importOverlay');
     if (!overlay) {
       await loadImportOverlay();
     }
-    
+
     // Show overlay
     showImportOverlay();
-    
+
     // Start SSE stream
     const response = await fetch('/api/photos/import-from-paths', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: filePaths })
+      body: JSON.stringify({ paths: filePaths }),
     });
-    
+
     if (!response.ok) {
       throw new Error('Import request failed');
     }
-    
+
     // Handle SSE stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    
+
     let buffer = '';
-    
+
     while (true) {
       const { done, value } = await reader.read();
-      
+
       if (done) break;
-      
+
       buffer += decoder.decode(value, { stream: true });
-      
+
       const lines = buffer.split('\n\n');
       buffer = lines.pop() || '';
-      
+
       for (const line of lines) {
         if (!line.trim()) continue;
-        
+
         const eventMatch = line.match(/^event: (.+)$/m);
         const dataMatch = line.match(/^data: (.+)$/m);
-        
+
         if (eventMatch && dataMatch) {
           const event = eventMatch[1];
           const data = JSON.parse(dataMatch[1]);
-          
+
           handleImportEvent(event, data);
         }
       }
     }
-    
   } catch (error) {
     console.error('❌ Import failed:', error);
     showToast(`Import failed: ${error.message}`, 'error', 5000);
@@ -3874,11 +3821,15 @@ async function loadImportOverlay() {
     const response = await fetch('/fragments/importOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
+
     // Wire up close button
-    document.getElementById('importCloseBtn')?.addEventListener('click', hideImportOverlay);
-    document.getElementById('importDoneBtn')?.addEventListener('click', hideImportOverlay);
-    
+    document
+      .getElementById('importCloseBtn')
+      ?.addEventListener('click', hideImportOverlay);
+    document
+      .getElementById('importDoneBtn')
+      ?.addEventListener('click', hideImportOverlay);
+
     console.log('✅ Import overlay loaded');
   } catch (error) {
     console.error('❌ Failed to load import overlay:', error);
@@ -3912,33 +3863,120 @@ async function hideImportOverlay() {
  */
 function handleImportEvent(event, data) {
   console.log(`Import event: ${event}`, data);
-  
+
   const statusText = document.getElementById('importStatusText');
   const stats = document.getElementById('importStats');
   const importedCount = document.getElementById('importedCount');
   const duplicateCount = document.getElementById('duplicateCount');
   const errorCount = document.getElementById('errorCount');
   const doneBtn = document.getElementById('importDoneBtn');
-  
+
   if (event === 'start') {
     statusText.innerHTML = `<p>Importing ${data.total} files<span class="import-spinner"></span></p>`;
     stats.style.display = 'flex';
+
+    // Initialize error tracking
+    if (!window.importErrors) {
+      window.importErrors = [];
+    }
+    window.importErrors = [];
+
+    // Initialize photo ID tracking
+    if (!window.importedPhotoIds) {
+      window.importedPhotoIds = [];
+    }
+    window.importedPhotoIds = [];
+
+    // Hide details section initially
+    const detailsSection = document.getElementById('importDetailsSection');
+    if (detailsSection) {
+      detailsSection.style.display = 'none';
+    }
   }
-  
+
   if (event === 'progress') {
     importedCount.textContent = data.imported || 0;
     duplicateCount.textContent = data.duplicates || 0;
     errorCount.textContent = data.errors || 0;
+
+    // Track imported photo ID if provided
+    if (data.photo_id) {
+      if (!window.importedPhotoIds) {
+        window.importedPhotoIds = [];
+      }
+      window.importedPhotoIds.push(data.photo_id);
+    }
+
+    // Track error details if present
+    if (data.error && data.error_file) {
+      if (!window.importErrors) {
+        window.importErrors = [];
+      }
+      window.importErrors.push({
+        file: data.error_file,
+        message: data.error,
+      });
+    }
   }
-  
+
   if (event === 'complete') {
-    statusText.innerHTML = '<p>Import complete</p>';
+    const totalErrors = data.errors || 0;
+    if (totalErrors > 0) {
+      statusText.innerHTML = `<p>Import complete with ${totalErrors} error${
+        totalErrors > 1 ? 's' : ''
+      }</p>`;
+
+      // Show error details if we have them
+      if (window.importErrors && window.importErrors.length > 0) {
+        const detailsSection = document.getElementById('importDetailsSection');
+        const detailsList = document.getElementById('importDetailsList');
+        const toggleBtn = document.getElementById('importDetailsToggle');
+
+        if (detailsSection && detailsList) {
+          detailsSection.style.display = 'block';
+          detailsList.innerHTML = '';
+
+          window.importErrors.forEach((err) => {
+            const item = document.createElement('div');
+            item.className = 'import-detail-item';
+            item.innerHTML = `
+              <span class="material-symbols-outlined import-detail-icon error">error</span>
+              <div class="import-detail-text">
+                <div>${err.file}</div>
+                <div class="import-detail-message">${err.message}</div>
+              </div>
+            `;
+            detailsList.appendChild(item);
+          });
+
+          // Keep list collapsed initially, update toggle button text
+          detailsList.style.display = 'none';
+          if (toggleBtn) {
+            toggleBtn.classList.remove('expanded');
+            toggleBtn.innerHTML = `
+              <span class="material-symbols-outlined">expand_more</span>
+              <span>Show error details</span>
+            `;
+          }
+        }
+      }
+    } else {
+      statusText.innerHTML = '<p>Import complete</p>';
+    }
+
     importedCount.textContent = data.imported || 0;
     duplicateCount.textContent = data.duplicates || 0;
     errorCount.textContent = data.errors || 0;
     doneBtn.style.display = 'block';
+
+    // Reload photos if any were imported
+    const importedPhotos = data.imported || 0;
+    if (importedPhotos > 0) {
+      console.log(`🔄 Reloading ${importedPhotos} newly imported photos...`);
+      loadAndRenderPhotos();
+    }
   }
-  
+
   if (event === 'error') {
     statusText.innerHTML = `<p>Import failed: ${data.error}</p>`;
     doneBtn.style.display = 'block';
@@ -3953,32 +3991,35 @@ function handleImportEvent(event, data) {
  * Initialize app
  */
 async function init() {
+  // Wait for fonts to load to prevent layout shift
+  await document.fonts.ready;
+
   await loadAppBar();
   await loadLightbox();
   await loadDateEditor();
   await loadDialog();
   await loadToast();
-  
+
   // Check if library is valid
   try {
     const statusResponse = await fetch('/api/library/status');
     const status = await statusResponse.json();
-    
+
     if (!status.valid) {
       console.log('⚠️ No valid library found - prompting user...');
       showToast('Please select a photo library', null, 0);
-      
+
       // Load and immediately trigger browse
       await loadSwitchLibraryOverlay();
       await browseSwitchLibrary(); // Opens native picker immediately
-      
+
       // Don't load photos yet - will happen after library selection
       return;
     }
   } catch (error) {
     console.error('Failed to check library status:', error);
   }
-  
+
   // Library is valid, load photos
   await loadAndRenderPhotos();
 }

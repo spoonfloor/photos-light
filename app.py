@@ -17,6 +17,7 @@ from datetime import datetime
 from PIL import Image
 from pillow_heif import register_heif_opener
 from io import BytesIO
+from db_schema import create_database_schema
 
 # Register HEIF/HEIC support for PIL
 register_heif_opener()
@@ -587,6 +588,76 @@ def get_photo_file(photo_id):
         print(f"Error serving photo {photo_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
+def cleanup_empty_folders(file_path, library_root):
+    """
+    Delete folders that contain no media files, working up the directory tree.
+    Non-media files are deleted along with folders (scorched earth approach).
+    Stops at library root or when a folder with media is found.
+    """
+    MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
+                  '.bmp', '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
+                  '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+    
+    # Start at parent directory of deleted file
+    current_dir = os.path.dirname(file_path)
+    library_root_abs = os.path.abspath(library_root)
+    
+    while True:
+        current_dir_abs = os.path.abspath(current_dir)
+        
+        # Safety: never delete library root
+        if current_dir_abs == library_root_abs:
+            break
+            
+        # Safety: don't escape library root
+        if not current_dir_abs.startswith(library_root_abs):
+            break
+        
+        try:
+            # Check if directory still exists (might have been deleted already)
+            if not os.path.exists(current_dir):
+                break
+            
+            # Check if any media files exist
+            entries = os.listdir(current_dir)
+            has_media = False
+            
+            for entry in entries:
+                entry_path = os.path.join(current_dir, entry)
+                
+                # Skip hidden files/dirs
+                if entry.startswith('.'):
+                    continue
+                    
+                # If has subdirectories, keep it (process bottom-up)
+                if os.path.isdir(entry_path):
+                    has_media = True
+                    break
+                
+                # Check if it's a media file
+                if os.path.isfile(entry_path):
+                    ext = os.path.splitext(entry)[1].lower()
+                    if ext in MEDIA_EXTS:
+                        has_media = True
+                        break
+            
+            # If no media (only non-media files or empty), DELETE IT ALL
+            if not has_media:
+                shutil.rmtree(current_dir)
+                rel_path = os.path.relpath(current_dir, library_root)
+                print(f"    ✓ Deleted empty folder: {rel_path}")
+                
+                # Move up to parent and continue
+                current_dir = os.path.dirname(current_dir)
+            else:
+                # Has media or subdirs, stop here
+                break
+                
+        except Exception as e:
+            # Don't fail delete operation if cleanup fails
+            print(f"    ⚠️  Cleanup failed for {os.path.relpath(current_dir, library_root)}: {e}")
+            break
+
 @app.route('/api/photos/delete', methods=['POST'])
 def delete_photos():
     """Delete photos (move to .trash/ and move DB record to deleted_photos table)"""
@@ -604,17 +675,10 @@ def delete_photos():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Create deleted_photos table with correct schema (drop old incompatible table)
-        cursor.execute("DROP TABLE IF EXISTS deleted_photos")
-        cursor.execute("""
-            CREATE TABLE deleted_photos (
-                id INTEGER PRIMARY KEY,
-                original_path TEXT NOT NULL,
-                trash_filename TEXT NOT NULL,
-                deleted_at TEXT NOT NULL,
-                photo_data TEXT NOT NULL
-            )
-        """)        
+        # Ensure deleted_photos table exists (create if missing)
+        from db_schema import DELETED_PHOTOS_TABLE_SCHEMA
+        cursor.execute(DELETED_PHOTOS_TABLE_SCHEMA)
+        
         deleted_count = 0
         errors = []
         trash_dir = TRASH_DIR
@@ -661,6 +725,9 @@ def delete_photos():
                     trash_filename = os.path.basename(trash_path)
                     shutil.move(full_path, trash_path)
                     print(f"    ✓ Moved to: {trash_path}")
+                    
+                    # Cleanup empty folders after successful delete
+                    cleanup_empty_folders(full_path, LIBRARY_PATH)
                 else:
                     print(f"    ⚠️  Original file not found: {full_path}")
                     trash_filename = os.path.basename(full_path)  # Store original name
@@ -1244,219 +1311,6 @@ def scan_import_paths():
         print(f"\n❌ Scan paths failed: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/photos/import', methods=['POST'])
-def import_photos():
-    """
-    Import photos into the library with SSE progress streaming
-    
-    Returns Server-Sent Events with real-time progress:
-    - event: progress (per-file updates)
-    - event: complete (final summary)
-    - event: error (if something goes wrong)
-    """
-    
-    def generate():
-        try:
-            # Get uploaded files
-            if 'files' not in request.files:
-                yield f"event: error\ndata: {json.dumps({'error': 'No files provided'})}\n\n"
-                return
-            
-            files = request.files.getlist('files')
-            if not files:
-                yield f"event: error\ndata: {json.dumps({'error': 'No files provided'})}\n\n"
-                return
-            
-            total_files = len(files)
-            print(f"\n📥 IMPORT REQUEST: {total_files} file(s)")
-            import_logger.info(f"Import session started: {total_files} files")
-            
-            # Send initial status
-            yield f"event: start\ndata: {json.dumps({'total': total_files})}\n\n"
-            
-            # Step 1: Create DB backup (once per session)
-            backup_path = create_db_backup()
-            if not backup_path:
-                error_msg = 'Failed to create database backup'
-                error_logger.error(f"Import aborted: {error_msg}")
-                yield f"event: error\ndata: {json.dumps({'error': error_msg})}\n\n"
-                return
-            
-            # Track results
-            results = []
-            imported_count = 0
-            duplicate_count = 0
-            error_count = 0
-            
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            for file_index, file in enumerate(files, 1):
-                result = {
-                    'filename': file.filename,
-                    'status': 'pending'
-                }
-                temp_path = None  # Initialize to avoid NameError in exception handler
-                
-                try:
-                    # Save to temp location WHILE hashing (single pass - fast!)
-                    temp_path = os.path.join(IMPORT_TEMP_DIR, file.filename)
-                    print(f"\n📄 Processing: {file.filename}")
-                    
-                    # Hash while saving (eliminates double I/O)
-                    content_hash = save_and_hash(file, temp_path)
-                    result['hash'] = content_hash
-                    print(f"  🔢 Hash: {content_hash}")
-                    
-                    # Check for duplicates EARLY (before expensive operations)
-                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
-                    duplicate = cursor.fetchone()
-                    
-                    if duplicate:
-                        print(f"  ⚠️  DUPLICATE found (ID: {duplicate['id']}, Path: {duplicate['current_path']})")
-                        result['status'] = 'duplicate'
-                        result['duplicate_id'] = duplicate['id']
-                        result['message'] = f"Duplicate of existing photo (ID: {duplicate['id']})"
-                        duplicate_count += 1
-                        
-                        # Clean up temp file (no verification needed for duplicates)
-                        os.remove(temp_path)
-                        results.append(result)
-                        
-                        # Send progress event
-                        yield f"event: progress\ndata: {json.dumps({'file_index': file_index, 'total': total_files, 'filename': file.filename, 'status': 'duplicate', 'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
-                        continue
-                    
-                    # NOT a duplicate - verify integrity before proceeding
-                    verified_hash = compute_hash(temp_path)
-                    if verified_hash != content_hash:
-                        print(f"  ❌ File corruption detected during upload")
-                        os.remove(temp_path)
-                        result['status'] = 'error'
-                        result['message'] = 'File corruption during upload'
-                        error_count += 1
-                        results.append(result)
-                        yield f"event: progress\ndata: {json.dumps({'file_index': file_index, 'total': total_files, 'filename': file.filename, 'status': 'error', 'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
-                        continue
-                    
-                    # Extract EXIF date
-                    date_taken = extract_exif_date(temp_path)
-                    result['date'] = date_taken
-                    print(f"  📅 Date: {date_taken}")
-                    
-                    # Skip dimensions during import (can extract lazily later if needed)
-                    # This eliminates the biggest bottleneck (ffprobe on videos)
-                    width, height = None, None
-                    
-                    # Step 6: Determine file type
-                    ext = os.path.splitext(file.filename)[1].lower()
-                    if ext in ['.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg']:
-                        file_type = 'video'
-                    elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.heic', '.heif', '.tif', '.tiff']:
-                        file_type = 'photo'  # Match migration scripts convention (+ GIF support)
-                    else:
-                        raise Exception(f"Unsupported file type: {ext}")
-                    
-                    # Step 7: Determine target path (YYYY-MM-DD/img_YYYYMMDD_hash.ext)
-                    date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
-                    date_dir = date_obj.strftime('%Y-%m-%d')
-                    new_filename = f"img_{date_obj.strftime('%Y%m%d')}_{content_hash}{ext}"
-                    
-                    target_dir = os.path.join(LIBRARY_PATH, date_dir)
-                    target_path = os.path.join(target_dir, new_filename)
-                    relative_path = os.path.join(date_dir, new_filename)
-                    
-                    print(f"  📁 Target: {relative_path}")
-                    
-                    # Step 8: Atomic rename to final location
-                    os.makedirs(target_dir, exist_ok=True)
-                    shutil.move(temp_path, target_path)
-                    print(f"  ✅ File moved to library")
-                    
-                    # Step 9: Insert into DB
-                    file_size = os.path.getsize(target_path)
-                    
-                    cursor.execute("""
-                        INSERT INTO photos (
-                            original_filename,
-                            current_path,
-                            date_taken,
-                            content_hash,
-                            file_size,
-                            file_type,
-                            width,
-                            height
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        file.filename,
-                        relative_path,
-                        date_taken,
-                        content_hash,
-                        file_size,
-                        file_type,
-                        width,
-                        height
-                    ))
-                    
-                    photo_id = cursor.lastrowid
-                    result['photo_id'] = photo_id
-                    print(f"  💾 Added to DB (ID: {photo_id})")
-                    import_logger.info(f"Imported: {file.filename} -> {relative_path} (ID: {photo_id})")
-                    
-                    # Step 10: Thumbnail will be generated lazily on first view
-                    # This keeps import fast and non-blocking (especially for videos)
-                    print(f"  ✅ Import complete (thumbnail will generate on demand)")
-                    
-                    result['status'] = 'success'
-                    result['message'] = 'Successfully imported'
-                    result['photo_id'] = photo_id  # Track for optional background pre-generation
-                    imported_count += 1
-                    
-                except Exception as e:
-                    print(f"  ❌ Error: {e}")
-                    error_logger.error(f"Import failed for {file.filename}: {e}")
-                    result['status'] = 'error'
-                    result['message'] = str(e)
-                    error_count += 1
-                    
-                    # Clean up temp file if it exists
-                    if temp_path and os.path.exists(temp_path):
-                        os.remove(temp_path)
-                
-                results.append(result)
-                
-                # Send progress event after each file
-                yield f"event: progress\ndata: {json.dumps({'file_index': file_index, 'total': total_files, 'filename': file.filename, 'status': result['status'], 'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
-            
-            # Commit all changes
-            conn.commit()
-            conn.close()
-            
-            print(f"\n✅ Import complete:")
-            print(f"   Imported: {imported_count}")
-            print(f"   Duplicates: {duplicate_count}")
-            print(f"   Errors: {error_count}\n")
-            
-            import_logger.info(f"Import session complete: {imported_count} imported, {duplicate_count} duplicates, {error_count} errors")
-            
-            # Send completion event
-            yield f"event: complete\ndata: {json.dumps({'backup_path': os.path.basename(backup_path), 'total': total_files, 'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'results': results})}\n\n"
-            
-            # Start background thumbnail pre-generation for imported photos
-            imported_photo_ids = [r['photo_id'] for r in results if r['status'] == 'success' and 'photo_id' in r]
-            if imported_photo_ids:
-                print(f"🔄 Starting background thumbnail generation for {len(imported_photo_ids)} photos...")
-                import_logger.info(f"Background thumbnail generation started for {len(imported_photo_ids)} photos")
-                start_background_thumbnail_generation(imported_photo_ids)
-            
-        except Exception as e:
-            print(f"❌ Import error: {e}")
-            error_logger.error(f"Import session failed: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-    
-    return Response(stream_with_context(generate()), mimetype='text/event-stream')
-
-
 @app.route('/api/photos/import-from-paths', methods=['POST'])
 def import_from_paths():
     """
@@ -1549,12 +1403,11 @@ def import_from_paths():
                     relative_path = os.path.relpath(target_path, LIBRARY_PATH)
                     file_size = os.path.getsize(source_path)
                     file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'image'
-                    date_added = datetime.now().strftime('%Y:%m:%d %H:%M:%S')
                     
                     cursor.execute('''
-                        INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, date_added, width, height)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, date_added, width, height))
+                        INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, width, height))
                     
                     photo_id = cursor.lastrowid
                     conn.commit()
@@ -1566,7 +1419,7 @@ def import_from_paths():
                     
                     imported_count += 1
                     
-                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files, 'photo_id': photo_id})}\n\n"
                     
                 except Exception as e:
                     error_msg = str(e)
@@ -1736,7 +1589,7 @@ def get_duplicates():
 @app.route('/api/utilities/update-index/scan')
 def scan_index():
     """
-    Clean & Organize: Scan library and database to find what needs updating.
+    Update Library Index: Scan library and database to find what needs updating.
     Returns counts without making any changes.
     
     Returns:
@@ -1750,7 +1603,7 @@ def scan_index():
     try:
         import sys
         sys.stdout.flush()
-        print("\n🔍 CLEAN & ORGANIZE SCAN: Scanning library...", flush=True)
+        print("\n🔍 UPDATE LIBRARY INDEX: Scanning library...", flush=True)
         
         # Scan filesystem for all media files
         filesystem_paths = set()
@@ -1828,14 +1681,14 @@ def scan_index():
         return jsonify(results)
         
     except Exception as e:
-        app.logger.error(f"Error in Clean & Organize scan: {e}")
+        app.logger.error(f"Error in Update Library Index scan: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/utilities/update-index/execute', methods=['POST'])
 def execute_update_index():
     """
-    Clean & Organize: Execute library cleanup with SSE progress streaming.
+    Update Library Index: Execute library cleanup with SSE progress streaming.
     
     Phases:
     1. Remove deleted files (ghosts)
@@ -1846,10 +1699,10 @@ def execute_update_index():
     
     def generate():
         try:
-            import_logger.info("Clean & Organize execute started")
+            import_logger.info("Update Library Index execute started")
             
             # Re-scan to get current state
-            print("\n🔄 CLEAN & ORGANIZE: Re-scanning library...")
+            print("\n🔄 UPDATE LIBRARY INDEX: Re-scanning library...")
             
             filesystem_paths = set()
             photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
@@ -2000,14 +1853,14 @@ def execute_update_index():
                 'empty_folders': len(details['empty_folders'])
             }
             
-            print(f"\n✅ Clean & Organize complete: {stats}")
-            import_logger.info(f"Clean & Organize complete: {stats}")
+            print(f"\n✅ Update Library Index complete: {stats}")
+            import_logger.info(f"Update Library Index complete: {stats}")
             
             yield f"event: complete\ndata: {json.dumps({'stats': stats, 'details': details})}\n\n"
             
         except Exception as e:
-            error_logger.error(f"Clean & Organize execute failed: {e}")
-            print(f"\n❌ Clean & Organize execute failed: {e}")
+            error_logger.error(f"Update Library Index execute failed: {e}")
+            print(f"\n❌ Update Library Index execute failed: {e}")
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
@@ -2043,6 +1896,32 @@ def rebuild_thumbnails():
             'cleared_count': thumb_count,
             'message': 'Thumbnails cleared. They will regenerate as you scroll.'
         })
+
+    except Exception as e:
+        print(f"  ❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/utilities/check-thumbnails', methods=['GET'])
+def check_thumbnails():
+    """
+    Check how many thumbnails exist without deleting them.
+    """
+    try:
+        # Count existing thumbnails
+        thumb_count = 0
+        for root, dirs, files in os.walk(THUMBNAIL_CACHE_DIR):
+            thumb_count += len([f for f in files if f.endswith('.jpg')])
+        
+        return jsonify({
+            'status': 'success',
+            'thumbnail_count': thumb_count
+        })
+
+    except Exception as e:
+        print(f"  ❌ Error checking thumbnails: {e}")
+        return jsonify({'error': str(e)}), 500
         
     except Exception as e:
         error_logger.error(f"Rebuild thumbnails failed: {e}")
@@ -2172,35 +2051,8 @@ def create_library():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Create photos table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS photos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                current_path TEXT NOT NULL UNIQUE,
-                original_filename TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                file_size INTEGER NOT NULL,
-                file_type TEXT NOT NULL,
-                date_taken TEXT,
-                date_added TEXT NOT NULL,
-                import_batch_id TEXT
-            )
-        ''')
-        
-        # Create deleted_photos table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS deleted_photos (
-                id INTEGER PRIMARY KEY,
-                original_path TEXT NOT NULL,
-                deleted_at TEXT NOT NULL,
-                moved_to_trash_path TEXT
-            )
-        ''')
-        
-        # Create indices
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_content_hash ON photos(content_hash)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_date_taken ON photos(date_taken)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_date_added ON photos(date_added)')
+        # Create all tables and indices using centralized schema
+        create_database_schema(cursor)
         
         conn.commit()
         conn.close()
@@ -2221,7 +2073,7 @@ def create_library():
 
 @app.route('/api/library/switch', methods=['POST'])
 def switch_library():
-    """Switch to a different library"""
+    """Switch to a different library with health check"""
     global LIBRARY_VALID
     
     try:
@@ -2232,18 +2084,47 @@ def switch_library():
         if not library_path or not db_path:
             return jsonify({'error': 'Missing library_path or db_path'}), 400
         
-        if not os.path.exists(db_path):
-            return jsonify({'error': 'Database does not exist'}), 400
-        
         print(f"\n🔄 Switching to library: {library_path}")
         
-        # Update global paths
+        # Health check before switching
+        from db_health import check_database_health, DBStatus
+        
+        report = check_database_health(db_path)
+        print(f"  🏥 Health check: {report.status.value}")
+        
+        # Handle different health statuses
+        if report.status == DBStatus.MISSING:
+            return jsonify({
+                'status': 'needs_action',
+                'action': 'create_new',
+                'message': report.get_user_message()
+            }), 400
+        
+        if report.status == DBStatus.CORRUPTED:
+            return jsonify({
+                'status': 'needs_action',
+                'action': 'rebuild',
+                'message': report.get_user_message(),
+                'error': report.error_message
+            }), 400
+        
+        if report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
+            return jsonify({
+                'status': 'needs_migration',
+                'action': 'migrate',
+                'message': report.get_user_message(),
+                'missing_columns': report.missing_columns,
+                'can_continue': report.can_use_anyway
+            }), 400
+        
+        if report.status == DBStatus.EXTRA_COLUMNS:
+            # Extra columns are harmless - warn but allow
+            print(f"  ⚠️  Extra columns found: {', '.join(report.extra_columns)}")
+            print(f"  ➡️  Continuing anyway...")
+        
+        # Healthy or acceptable - proceed with switch
         update_app_paths(library_path, db_path)
-        
-        # Save to config file
         save_config(library_path, db_path)
-        
-        # Mark library as valid
         LIBRARY_VALID = True
         
         print(f"  ✅ Switched to: {library_path}")

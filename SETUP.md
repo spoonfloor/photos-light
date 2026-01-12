@@ -54,21 +54,33 @@ PHOTO_DB_PATH="/path/to/db.db" PHOTO_LIBRARY_PATH="/path/to/photos" python3 app.
 
 ## Database Schema
 
-The database has one main table:
+**⚠️ Single Source of Truth:** The database schema is defined in `db_schema.py`.
 
-```sql
-CREATE TABLE photos (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content_hash TEXT NOT NULL,
-    current_path TEXT NOT NULL,        -- Relative path like "2025/2025-05-01/img_xyz.jpg"
-    original_filename TEXT NOT NULL,
-    date_taken TEXT,                   -- Format: "2025:05:01 14:15:14"
-    file_size INTEGER NOT NULL,
-    file_type TEXT NOT NULL,           -- "image" or "video"
-    width INTEGER,
-    height INTEGER
-);
-```
+All database creation logic uses this centralized schema to ensure consistency across:
+- Initial library creation (`init_db.py`)
+- New library creation via UI (`app.py`)
+- Documentation
+
+### Main Tables
+
+**photos** - Stores all photo/video metadata:
+- `id` - Unique identifier
+- `original_filename` - Original filename when imported
+- `current_path` - Relative path in library (e.g., "2025/2025-01-10/img_xyz.jpg")
+- `date_taken` - Date from EXIF or file modification time
+- `content_hash` - SHA-256 hash for duplicate detection
+- `file_size` - Size in bytes
+- `file_type` - "image" or "video"
+- `width`, `height` - Image/video dimensions
+- `date_added` - When imported to library
+- `import_batch_id` - Groups files from same import
+
+**deleted_photos** - Stores metadata for soft-deleted photos:
+- `id` - Original photo ID
+- `original_path` - Path before deletion
+- `trash_filename` - Filename in `.trash/` directory
+- `deleted_at` - Deletion timestamp
+- `photo_data` - JSON snapshot of photo record
 
 **Key Points:**
 - `current_path` is **relative** to `PHOTO_LIBRARY_PATH`

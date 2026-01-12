@@ -22,7 +22,7 @@
   --app-bar-height: 64px;
   --page-top-gap: 48px;
   --app-bar-title-size: 20px;
-  --app-bar-gap: 8px;
+  --app-bar-gap: 4px;
 
   /* --- Z-index scale --- */
   --z-app-chrome: 1000;
@@ -521,21 +521,50 @@ body {
 .dialog {
   background: var(--app-bar-bg);
   border-radius: 8px;
-  padding: 24px;
+  padding: 0;
   max-width: 400px;
   width: 90%;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 12px 24px;
 }
 
 .dialog-title {
   font-size: 20px;
   font-weight: 500;
-  margin-bottom: 12px;
+  margin: 0;
   color: var(--text-primary);
+}
+
+.dialog-close-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.dialog-close-btn:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+.dialog-close-btn .material-symbols-outlined {
+  font-size: 20px;
 }
 
 .dialog-message {
   font-size: 15px;
   margin-bottom: 24px;
+  padding: 0 24px;
   color: var(--text-secondary);
 }
 
@@ -543,6 +572,7 @@ body {
   display: flex;
   gap: 12px;
   justify-content: flex-end;
+  padding: 0 24px 24px 24px;
 }
 
 .dialog-button {
@@ -565,12 +595,12 @@ body {
 }
 
 .dialog-button-primary {
-  background: #d32f2f;
+  background: var(--accent-color);
   color: white;
 }
 
 .dialog-button-primary:hover {
-  background: #b71c1c;
+  background: var(--accent-hover);
 }
 
 /* --- Date Editor --- */
@@ -953,12 +983,21 @@ body {
 }
 
 .import-progress-section {
-  padding: 8px 20px 20px 20px;
+  padding: 8px 20px 12px 20px;
 }
 
 .import-status-text {
   font-size: 14px;
   color: var(--text-primary);
+  margin-bottom: 0;
+}
+
+.import-status-text p {
+  margin: 0 0 12px 0;
+  line-height: 1.5;
+}
+
+.import-status-text p:last-child {
   margin-bottom: 0;
 }
 

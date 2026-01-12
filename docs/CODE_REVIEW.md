@@ -11,6 +11,7 @@
 Photos Light is a **well-designed personal photo management tool** with impressive performance optimizations for large libraries. The lazy-loading architecture and metadata-first strategy are genuinely good engineering. The UX is polished with comprehensive features (grid, lightbox, bulk operations, date editing).
 
 **However**, the codebase shows signs of organic growth with:
+
 - Configuration fragility (hardcoded paths conflicting with environment variables)
 - No schema management or testing infrastructure
 - Mixed patterns and dead code
@@ -25,37 +26,45 @@ Photos Light is a **well-designed personal photo management tool** with impressi
 ### 1.1 Architecture & Performance ⭐⭐⭐⭐⭐
 
 **Lazy Thumbnail Loading**
+
 ```javascript
 // main.js:1363-1402
 function setupThumbnailLazyLoading() {
-  thumbnailObserver = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
-      if (entry.isIntersecting) {
-        img.src = `/api/photo/${photoId}/thumbnail`;
-        // Load only when visible
-      }
-    });
-  }, { rootMargin: '1000px' });
+  thumbnailObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          img.src = `/api/photo/${photoId}/thumbnail`;
+          // Load only when visible
+        }
+      });
+    },
+    { rootMargin: '1000px' }
+  );
 }
 ```
+
 ✅ Scales to 60k+ photos without performance degradation  
 ✅ 1000px preload buffer provides smooth scrolling
 
 **Metadata-First Strategy**
+
 ```javascript
 // main.js:1327-1353
 async function loadAndRenderPhotos() {
   const response = await fetch(`/api/photos?sort=${state.currentSortOrder}`);
-  state.photos = data.photos;  // Load ALL metadata at once (lightweight)
-  renderPhotoGrid(state.photos, false);  // Render structure immediately
-  setupThumbnailLazyLoading();  // Then lazy-load images
+  state.photos = data.photos; // Load ALL metadata at once (lightweight)
+  renderPhotoGrid(state.photos, false); // Render structure immediately
+  setupThumbnailLazyLoading(); // Then lazy-load images
 }
 ```
+
 ✅ Instant grid structure  
 ✅ Sub-200KB payload for entire library metadata  
 ✅ Progressive image loading
 
 **Efficient Import Pipeline**
+
 ```python
 # app.py:135-151
 def save_and_hash(file_storage, dest_path):
@@ -68,10 +77,12 @@ def save_and_hash(file_storage, dest_path):
             f.write(chunk)
     return sha256.hexdigest()[:7]
 ```
+
 ✅ Eliminates double I/O  
 ✅ Early duplicate detection before expensive ops (EXIF extraction, dimensions)
 
 **Database Backup System**
+
 ```python
 # app.py:175-196
 def create_db_backup():
@@ -79,18 +90,20 @@ def create_db_backup():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     backup_path = os.path.join(DB_BACKUP_DIR, f"photo_library_{timestamp}.db")
     shutil.copy2(DB_PATH, backup_path)
-    
+
     backups = sorted([f for f in os.listdir(DB_BACKUP_DIR) if f.endswith('.db')])
     while len(backups) > 20:
         oldest = backups.pop(0)
         os.remove(os.path.join(DB_BACKUP_DIR, oldest))
 ```
+
 ✅ Automatic safety net  
 ✅ Prevents database bloat
 
 ### 1.2 User Experience ⭐⭐⭐⭐½
 
 **Comprehensive Feature Set**
+
 - ✅ Grid browsing with infinite scroll
 - ✅ Lightbox with keyboard navigation
 - ✅ Bulk operations (select by month, shift-select ranges)
@@ -100,6 +113,7 @@ def create_db_backup():
 - ✅ Month jump navigation
 
 **Smart Selection UX**
+
 ```javascript
 // main.js:1576-1624
 function togglePhotoSelection(card, e) {
@@ -113,10 +127,12 @@ function togglePhotoSelection(card, e) {
   }
 }
 ```
+
 ✅ Intuitive selection model (matches Photos.app)  
 ✅ Month-level selection via circles
 
 **Real-Time Feedback**
+
 - SSE for import progress (no polling!)
 - Toast notifications with undo
 - Braille spinner animation (accessible + aesthetic)
@@ -125,6 +141,7 @@ function togglePhotoSelection(card, e) {
 ### 1.3 Code Organization ⭐⭐⭐½
 
 **Good Separation of Concerns**
+
 ```
 Backend (Flask)     → Database, file operations, thumbnails
 Frontend (Vanilla)  → State management, rendering, interactions
@@ -132,11 +149,13 @@ Fragments (HTML)    → Lazy-loaded UI components
 ```
 
 **Documentation**
+
 - ✅ README, QUICKSTART, SETUP, TROUBLESHOOTING
 - ✅ Technical docs (LAZY_THUMBNAIL_ARCHITECTURE, IMPORT_OPTIMIZATION, LOGGING_SETUP)
 - ✅ Inline comments where needed
 
 **Consistent Patterns**
+
 - All overlays use same structure (overlay → content → actions)
 - State centralized in `state` object
 - Error handling follows similar pattern in most places
@@ -144,6 +163,7 @@ Fragments (HTML)    → Lazy-loaded UI components
 ### 1.4 Format Support ⭐⭐⭐⭐
 
 **HEIC/HEIF Support**
+
 ```python
 # app.py:21-22, 500-517
 from pillow_heif import register_heif_opener
@@ -156,6 +176,7 @@ if ext in ['.heic', '.heif', '.tif', '.tiff']:
         img.save(buffer, format='JPEG', quality=95)
         return send_file(buffer, mimetype='image/jpeg')
 ```
+
 ✅ Transparent HEIC → JPEG conversion  
 ✅ Supports TIFF, PNG, GIF, JPG, MOV, MP4
 
@@ -180,16 +201,18 @@ export PHOTO_LIBRARY_PATH="/Volumes/eric_files/photo_library_test"
 ```
 
 **Impact:**
+
 - ❌ App ignores `run.sh` settings
 - ❌ Can't relocate database without editing code
 - ❌ Confusing for new users/collaborators
 
 **Recommended Fix:**
+
 ```python
 # Option A: Actually use environment variables
-DB_PATH = os.environ.get('PHOTO_DB_PATH', 
+DB_PATH = os.environ.get('PHOTO_DB_PATH',
     os.path.join(BASE_DIR, 'photo_library.db'))
-LIBRARY_PATH = os.environ.get('PHOTO_LIBRARY_PATH', 
+LIBRARY_PATH = os.environ.get('PHOTO_LIBRARY_PATH',
     '/Volumes/eric_files/photo_library_test')
 
 # Option B: Delete run.sh, use config file
@@ -216,33 +239,35 @@ try:
 except Exception as e:
     app.logger.error(f"Error fetching photos: {e}")
     return jsonify({'error': str(e)}), 500
-    
+
     conn.close()  # ❌ NEVER RUNS - after return
-    
+
     return jsonify({  # ❌ NEVER RUNS - after return
         'photos': photos,
         'count': len(photos),
         'offset': offset,
         'limit': limit
     })
-    
+
 except Exception as e:  # ❌ DUPLICATE except block
     return jsonify({'error': str(e)}), 500
 ```
 
 **Impact:**
+
 - ❌ Confusing for maintainers
 - ❌ Connection may not close on error path
 - ❌ Indicates copy-paste refactoring artifact
 
 **Recommended Fix:**
+
 ```python
 try:
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     # ... query logic ...
-    
+
     photos = [...]
     return jsonify({'photos': photos, 'count': len(photos)})
 except Exception as e:
@@ -280,12 +305,14 @@ cursor.execute("""
 ```
 
 **Impact:**
+
 - ❌ No way to evolve schema safely
 - ❌ Manual intervention required for changes
 - ❌ Can't track schema version in database
 - ❌ New installations require running separate script
 
 **Recommended Fix:**
+
 ```python
 # Use Alembic or simple versioned migrations
 # migrations/001_initial_schema.sql
@@ -332,7 +359,7 @@ if limit:
 if sort_order == 'newest':
     query = f"""
         SELECT ...
-        WHERE date_taken IS NOT NULL 
+        WHERE date_taken IS NOT NULL
           AND substr(date_taken, 1, 7) <= ?
         ORDER BY date_taken DESC  # OK - no user input
         LIMIT ?
@@ -340,11 +367,13 @@ if sort_order == 'newest':
 ```
 
 **Impact:**
+
 - ⚠️ Currently safe (order_by is derived from trusted 'newest'/'oldest' check)
 - ❌ Fragile - future changes could introduce injection
 - ❌ No input validation on date strings from client
 
 **Recommended Fix:**
+
 ```python
 # Use whitelist validation
 VALID_SORT_ORDERS = {'newest': 'DESC', 'oldest': 'ASC'}
@@ -381,6 +410,7 @@ import_logger.info(f"Import session started")      # Custom logger
 ```
 
 **Impact:**
+
 - ❌ Inconsistent log format
 - ❌ Some logs go to stdout, some to files
 - ❌ Can't control verbosity uniformly
@@ -401,6 +431,7 @@ def get_db_connection():
 ```
 
 **Impact:**
+
 - ⚠️ Fine for single-user localhost
 - ❌ Won't scale to concurrent requests
 - ❌ Connection overhead on every request
@@ -425,12 +456,14 @@ main.js: 2287 lines
 ```
 
 **Impact:**
+
 - ❌ Hard to navigate
 - ❌ No module boundaries
 - ❌ Can't tree-shake unused code
 - ❌ No unit testing possible
 
 **Recommendation:** Split into ES6 modules when refactoring
+
 ```
 js/
 ├─ main.js          # Entry point
@@ -453,11 +486,13 @@ THUMBNAIL_CACHE_DIR = os.path.join(LIBRARY_PATH, '.thumbnails')
 ```
 
 **Impact:**
+
 - ❌ Network I/O for every thumbnail request
 - ❌ Slower than local disk cache
 - ⚠️ Acceptable for home NAS, not for production
 
 **Recommendation:** Use local cache with size limits
+
 ```python
 LOCAL_CACHE_DIR = os.path.join(BASE_DIR, '.cache', 'thumbnails')
 # With LRU eviction when cache exceeds size limit
@@ -473,11 +508,13 @@ app.run(debug=True, port=5001, host='0.0.0.0')
 ```
 
 **Impact:**
+
 - ❌ Single-threaded (blocks on slow operations)
 - ❌ Debug mode exposes internals
 - ❌ Not production-ready
 
 **Recommendation:** For production, use:
+
 ```bash
 gunicorn -w 4 -b 0.0.0.0:5001 app:app
 # Or
@@ -507,6 +544,7 @@ except Exception as e:
 ```
 
 **Recommendation:** Consistent pattern:
+
 ```python
 try:
     # operation
@@ -520,16 +558,19 @@ except SpecificException as e:
 #### **2.3.2 No Tests**
 
 **Current state:**
+
 - Zero unit tests
 - Zero integration tests
 - Manual testing only
 
 **Impact:**
+
 - ❌ Can't refactor confidently
 - ❌ Regressions go unnoticed
 - ❌ Onboarding new contributors is risky
 
 **Recommendation:** Start with smoke tests
+
 ```python
 # tests/test_api.py
 def test_api_photos_returns_list():
@@ -556,6 +597,7 @@ conn.close()  # What if exception occurs before this?
 ```
 
 **Recommendation:** Use context managers
+
 ```python
 with get_db_connection() as conn:
     cursor = conn.cursor()
@@ -576,11 +618,12 @@ target_height = 400              // Why 400px?
 ```
 
 **Recommendation:** Named constants
+
 ```javascript
 const THUMBNAIL_PRELOAD_DISTANCE = '1000px'; // Load 1000px before visible
-const LIGHTBOX_CLOSE_DELAY = 300;            // Wait for animation
-const IMPORT_TIMEOUT_MS = 60000;             // 1 minute no data = dead connection
-const THUMBNAIL_HEIGHT = 400;                // Standard thumbnail height
+const LIGHTBOX_CLOSE_DELAY = 300; // Wait for animation
+const IMPORT_TIMEOUT_MS = 60000; // 1 minute no data = dead connection
+const THUMBNAIL_HEIGHT = 400; // Standard thumbnail height
 ```
 
 ---
@@ -594,19 +637,20 @@ const ACTIVITY_TIMEOUT = 60000;
 
 // Manual polling
 if (Date.now() - lastActivityTime > ACTIVITY_TIMEOUT) {
-    throw new Error('Import connection timed out');
+  throw new Error('Import connection timed out');
 }
 ```
 
 **Recommendation:** Use proper AbortController
+
 ```javascript
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), 60000);
 
-fetch('/api/photos/import', { 
-    signal: controller.signal,
-    method: 'POST',
-    body: formData 
+fetch('/api/photos/import', {
+  signal: controller.signal,
+  method: 'POST',
+  body: formData,
 });
 ```
 
@@ -619,24 +663,29 @@ fetch('/api/photos/import', {
 **If deploying beyond localhost, address:**
 
 ### 3.1 Authentication & Authorization
+
 - ❌ No user accounts
 - ❌ No API authentication
 - ❌ Anyone on network can delete/import photos
 
 ### 3.2 CSRF Protection
+
 - ❌ No CSRF tokens
 - ❌ POST/DELETE endpoints unprotected
 
 ### 3.3 Input Validation
+
 - ⚠️ Date strings not validated before SQL
 - ⚠️ File uploads not size-limited
 - ⚠️ No file type validation (trusts extension)
 
 ### 3.4 Path Traversal
+
 ```python
 # app.py:356
 full_path = os.path.join(LIBRARY_PATH, row['current_path'])
 ```
+
 ✅ Safe (current_path from DB, not user input)  
 ⚠️ But no explicit check for `..` in path
 
@@ -647,10 +696,12 @@ full_path = os.path.join(LIBRARY_PATH, row['current_path'])
 ### 🔥 Critical (Do First)
 
 1. **Fix configuration system** (Section 2.1.1)
+
    - Make app.py use environment variables OR delete run.sh
    - Document single source of truth for paths
 
 2. **Remove dead code** (Section 2.1.2)
+
    - Clean up unreachable code blocks
    - Add `finally` blocks for resource cleanup
 
@@ -661,10 +712,12 @@ full_path = os.path.join(LIBRARY_PATH, row['current_path'])
 ### ⚠️ Important (Do Soon)
 
 4. **Add basic tests**
+
    - Smoke tests for API endpoints
    - Integration tests for import/delete workflows
 
 5. **Standardize logging**
+
    - Pick one logging method (app.logger)
    - Remove print() statements
    - Add log rotation config
@@ -686,6 +739,7 @@ full_path = os.path.join(LIBRARY_PATH, row['current_path'])
 ## 5. Verdict
 
 ### For Personal Use (Current State)
+
 **Grade: A-**
 
 This is a **production-ready personal tool** with thoughtful UX and solid performance architecture. The lazy-loading strategy is well-implemented and the feature set is comprehensive.
@@ -695,9 +749,11 @@ This is a **production-ready personal tool** with thoughtful UX and solid perfor
 ---
 
 ### For Team Collaboration
+
 **Grade: C+**
 
 **Blockers for team use:**
+
 - Configuration system is confusing (hardcoded vs env vars)
 - No tests (can't refactor safely)
 - No schema management (can't upgrade smoothly)
@@ -708,9 +764,11 @@ This is a **production-ready personal tool** with thoughtful UX and solid perfor
 ---
 
 ### For Public Deployment
+
 **Grade: D**
 
 **Critical gaps:**
+
 - No authentication/authorization
 - Flask debug server
 - Security issues (Section 3)
@@ -735,9 +793,10 @@ This is a **production-ready personal tool** with thoughtful UX and solid perfor
 
 ## 7. Conclusion
 
-This codebase demonstrates **good architectural thinking** (lazy loading, metadata-first) and **solid UX design** (bulk operations, real-time feedback). 
+This codebase demonstrates **good architectural thinking** (lazy loading, metadata-first) and **solid UX design** (bulk operations, real-time feedback).
 
 The issues are typical of projects that grew organically:
+
 - Started simple, then added features
 - Configuration evolved (hardcoded → env vars, but incomplete transition)
 - No formal schema management added when needed

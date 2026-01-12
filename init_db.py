@@ -6,6 +6,7 @@ Initialize the photo library database with the required schema
 import sqlite3
 import os
 import sys
+from db_schema import create_database_schema
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -13,7 +14,7 @@ LIBRARY_PATH = os.environ.get('PHOTO_LIBRARY_PATH', '/Volumes/eric_files/photo_l
 DB_PATH = os.environ.get('PHOTO_DB_PATH', os.path.join(LIBRARY_PATH, 'photo_library.db'))
 
 def init_database():
-    """Create the database schema"""
+    """Create the database schema using the single source of truth"""
     print("🔧 Initializing database schema...")
     print(f"   Database: {DB_PATH}")
     
@@ -32,37 +33,8 @@ def init_database():
         cursor.execute("DROP TABLE IF EXISTS photos")
         cursor.execute("DROP TABLE IF EXISTS deleted_photos")
     
-    # Create photos table
-    cursor.execute("""
-        CREATE TABLE photos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            original_filename TEXT NOT NULL,
-            current_path TEXT NOT NULL UNIQUE,
-            date_taken TEXT,
-            content_hash TEXT NOT NULL UNIQUE,
-            file_size INTEGER NOT NULL,
-            file_type TEXT NOT NULL,
-            width INTEGER,
-            height INTEGER,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Create deleted_photos table
-    cursor.execute("""
-        CREATE TABLE deleted_photos (
-            id INTEGER PRIMARY KEY,
-            original_path TEXT NOT NULL,
-            trash_filename TEXT NOT NULL,
-            deleted_at TEXT NOT NULL,
-            photo_data TEXT NOT NULL
-        )
-    """)
-    
-    # Create indexes for better performance
-    cursor.execute("CREATE INDEX idx_date_taken ON photos(date_taken)")
-    cursor.execute("CREATE INDEX idx_content_hash ON photos(content_hash)")
-    cursor.execute("CREATE INDEX idx_file_type ON photos(file_type)")
+    # Create all tables and indices using centralized schema
+    create_database_schema(cursor)
     
     conn.commit()
     conn.close()

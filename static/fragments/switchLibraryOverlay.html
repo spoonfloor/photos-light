@@ -1,0 +1,44 @@
+<!-- Switch Library Overlay -->
+<div class="import-overlay" id="switchLibraryOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Switch library</span>
+      <button
+        class="import-close-btn"
+        id="switchLibraryCloseBtn"
+        aria-label="Close"
+      >
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Progress Section -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="switchLibraryStatusText">
+        <p>Current library:</p>
+        <p
+          id="currentLibraryPath"
+          style="
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+          "
+        ></p>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="import-actions">
+      <button
+        class="import-btn import-btn-secondary"
+        id="switchLibraryCancelBtn"
+      >
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="switchLibraryBrowseBtn">
+        Switch
+      </button>
+    </div>
+  </div>
+</div>

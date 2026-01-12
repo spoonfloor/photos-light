@@ -1,7 +1,12 @@
 <!-- Confirmation Dialog -->
 <div class="dialog-overlay" id="dialogOverlay" style="display: none;">
   <div class="dialog">
-    <h2 class="dialog-title" id="dialogTitle">Confirm Delete</h2>
+    <div class="dialog-header">
+      <h2 class="dialog-title" id="dialogTitle">Confirm Delete</h2>
+      <button class="dialog-close-btn" id="dialogCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
     <p class="dialog-message" id="dialogMessage">Are you sure?</p>
     <div class="dialog-actions">
       <button class="dialog-button dialog-button-secondary" id="dialogCancelBtn">Cancel</button>
