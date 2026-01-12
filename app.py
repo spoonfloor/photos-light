@@ -18,6 +18,7 @@ from PIL import Image
 from pillow_heif import register_heif_opener
 from io import BytesIO
 from db_schema import create_database_schema
+from library_sync import synchronize_library_generator, count_media_files, estimate_duration
 
 # Register HEIF/HEIC support for PIL
 register_heif_opener()
@@ -1700,167 +1701,96 @@ def execute_update_index():
     def generate():
         try:
             import_logger.info("Update Library Index execute started")
-            
-            # Re-scan to get current state
-            print("\n🔄 UPDATE LIBRARY INDEX: Re-scanning library...")
-            
-            filesystem_paths = set()
-            photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
-            video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
-            all_exts = photo_exts | video_exts
-            
-            for root, dirs, filenames in os.walk(LIBRARY_PATH, followlinks=False):
-                dirs[:] = [d for d in dirs if not d.startswith('.')]
-                for filename in filenames:
-                    if filename.startswith('.'):
-                        continue
-                    ext = os.path.splitext(filename)[1].lower()
-                    if ext not in all_exts:
-                        continue
-                    full_path = os.path.join(root, filename)
-                    try:
-                        rel_path = os.path.relpath(full_path, LIBRARY_PATH)
-                        filesystem_paths.add(rel_path)
-                    except ValueError:
-                        continue
-            
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, current_path FROM photos")
-            db_entries = {row['current_path']: row['id'] for row in cursor.fetchall()}
-            db_paths = set(db_entries.keys())
-            
-            missing_files_list = list(db_paths - filesystem_paths)
-            untracked_files_list = list(filesystem_paths - db_paths)
-            
-            # Track details for final report
-            details = {
-                'missing_files': [],
-                'untracked_files': [],
-                'name_updates': [],
-                'empty_folders': []
-            }
-            
-            # Phase 1: Remove missing files (ghosts)
-            missing_count = len(missing_files_list)
-            if missing_count > 0:
-                print(f"\n🗑️  Removing {missing_count} missing files...")
-                for idx, ghost_path in enumerate(missing_files_list, 1):
-                    yield f"event: progress\ndata: {json.dumps({'phase': 'removing_deleted', 'current': idx, 'total': missing_count})}\n\n"
-                    
-                    photo_id = db_entries[ghost_path]
-                    cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
-                    details['missing_files'].append(ghost_path)
-                
-                conn.commit()
-                print(f"  ✓ Removed {missing_count} missing files")
-            
-            # Phase 2: Add untracked files (moles)
-            # Limit to 50 for demo performance
-            untracked_to_process = untracked_files_list[:50]
-            untracked_count = len(untracked_to_process)
-            
-            if untracked_count > 0:
-                print(f"\n📝 Adding {untracked_count} untracked files...")
-                for idx, mole_path in enumerate(untracked_to_process, 1):
-                    yield f"event: progress\ndata: {json.dumps({'phase': 'adding_untracked', 'current': idx, 'total': untracked_count})}\n\n"
-                    
-                    try:
-                        full_path = os.path.join(LIBRARY_PATH, mole_path)
-                        filename = os.path.basename(mole_path)
-                        ext = os.path.splitext(filename)[1].lower()
-                        file_type = 'photo' if ext in photo_exts else 'video'
-                        file_size = os.path.getsize(full_path)
-                        
-                        # Compute hash
-                        sha256 = hashlib.sha256()
-                        with open(full_path, 'rb') as f:
-                            while chunk := f.read(1024 * 1024):
-                                sha256.update(chunk)
-                        content_hash = sha256.hexdigest()
-                        
-                        cursor.execute("""
-                            INSERT OR IGNORE INTO photos (content_hash, current_path, original_filename, date_taken, file_size, file_type)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (content_hash, mole_path, filename, '', file_size, file_type))
-                        
-                        if cursor.rowcount > 0:
-                            details['untracked_files'].append(mole_path)
-                    except Exception as e:
-                        print(f"  ⚠️  Failed to index {mole_path}: {e}")
-                        continue
-                
-                conn.commit()
-                print(f"  ✓ Added {len(details['untracked_files'])} untracked files")
-            
-            conn.close()
-            
-            # Phase 3: Update names (skipped for now)
-            # yield f"event: progress\ndata: {json.dumps({'phase': 'updating_names'})}\n\n"
-            
-            # Phase 4: Remove empty folders (loop until no more found - domino effect)
-            print(f"\n🗑️  Removing empty folders...")
-            empty_count = 0
-            total_passes = 0
-            
-            while True:
-                total_passes += 1
-                found_this_pass = 0
-                
-                for root, dirs, files in os.walk(LIBRARY_PATH, topdown=False):
-                    if os.path.basename(root).startswith('.') or root == LIBRARY_PATH:
-                        continue
-                    try:
-                        entries = os.listdir(root)
-                        non_hidden = [e for e in entries if not e.startswith('.')]
-                        if len(non_hidden) == 0:
-                            # Remove any hidden files first (like .DS_Store)
-                            for entry in entries:
-                                if entry.startswith('.'):
-                                    try:
-                                        entry_path = os.path.join(root, entry)
-                                        if os.path.isfile(entry_path):
-                                            os.remove(entry_path)
-                                    except:
-                                        pass
-                            
-                            # Now remove the directory
-                            rel_path = os.path.relpath(root, LIBRARY_PATH)
-                            os.rmdir(root)
-                            empty_count += 1
-                            found_this_pass += 1
-                            details['empty_folders'].append(rel_path)
-                            yield f"event: progress\ndata: {json.dumps({'phase': 'removing_empty', 'current': empty_count})}\n\n"
-                    except Exception as e:
-                        continue
-                
-                # If no empties found this pass, we're done
-                if found_this_pass == 0:
-                    break
-                    
-                # Safety: max 10 passes (shouldn't need more than folder depth)
-                if total_passes >= 10:
-                    print(f"  ⚠️  Stopped after 10 passes (safety limit)")
-                    break
-            
-            print(f"  ✓ Removed {empty_count} empty folders in {total_passes} passes")
-            
-            # Send completion with stats and details
-            stats = {
-                'missing_files': len(details['missing_files']),
-                'untracked_files': len(details['untracked_files']),
-                'name_updates': len(details['name_updates']),
-                'empty_folders': len(details['empty_folders'])
-            }
-            
-            print(f"\n✅ Update Library Index complete: {stats}")
-            import_logger.info(f"Update Library Index complete: {stats}")
-            
-            yield f"event: complete\ndata: {json.dumps({'stats': stats, 'details': details})}\n\n"
-            
+            yield from synchronize_library_generator(
+                LIBRARY_PATH, 
+                conn, 
+                extract_exif_date, 
+                get_image_dimensions,
+                mode='incremental'
+            )
+            import_logger.info("Update Library Index execute completed")
         except Exception as e:
             error_logger.error(f"Update Library Index execute failed: {e}")
             print(f"\n❌ Update Library Index execute failed: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+# ============================================================================
+# RECOVERY API
+# ============================================================================
+
+@app.route('/api/recovery/rebuild-database/scan', methods=['POST'])
+def scan_rebuild_database():
+    """
+    Pre-scan for database rebuild: count files and estimate duration.
+    
+    Returns:
+        {
+          "file_count": 62847,
+          "estimated_minutes": 419,
+          "estimated_display": "6-7 hours",
+          "requires_warning": true
+        }
+    """
+    try:
+        print("\n🔍 REBUILD DATABASE: Pre-scanning library...")
+        
+        file_count = count_media_files(LIBRARY_PATH)
+        minutes, display = estimate_duration(file_count)
+        
+        print(f"  Found {file_count} media files")
+        print(f"  Estimated duration: {display}")
+        
+        return jsonify({
+            'file_count': file_count,
+            'estimated_minutes': int(minutes),
+            'estimated_display': display,
+            'requires_warning': file_count >= 1000  # Show warning for 1000+ files
+        })
+    except Exception as e:
+        error_logger.error(f"Rebuild database scan failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/recovery/rebuild-database/execute', methods=['POST'])
+def execute_rebuild_database():
+    """
+    Rebuild database from scratch: Index all media files in library.
+    
+    This is the recovery mode - treats database as empty and indexes everything.
+    """
+    
+    def generate():
+        try:
+            import_logger.info("Rebuild Database execute started")
+            
+            # Ensure database exists, create if missing
+            if not os.path.exists(DB_PATH):
+                print(f"\n📦 Database missing - creating new database at: {DB_PATH}")
+                os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+                conn = sqlite3.connect(DB_PATH)
+                cursor = conn.cursor()
+                create_database_schema(cursor)
+                conn.commit()
+                conn.close()
+                print(f"  ✅ Created new database")
+            
+            conn = get_db_connection()
+            
+            yield from synchronize_library_generator(
+                LIBRARY_PATH,
+                conn,
+                extract_exif_date,
+                get_image_dimensions,
+                mode='full'
+            )
+            import_logger.info("Rebuild Database execute completed")
+        except Exception as e:
+            error_logger.error(f"Rebuild Database execute failed: {e}")
+            print(f"\n❌ Rebuild Database execute failed: {e}")
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
