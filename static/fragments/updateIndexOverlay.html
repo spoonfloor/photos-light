@@ -1,0 +1,63 @@
+<!-- Clean & Organize Overlay -->
+<div class="import-overlay" id="updateIndexOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Clean & Organize</span>
+      <button class="import-close-btn" id="updateIndexCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Progress Section -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="updateIndexStatusText">
+        Scanning library<span class="import-spinner"></span>
+      </div>
+      
+      <div class="import-stats" id="updateIndexStats" style="display: none;">
+        <span class="import-stat">
+          <span class="import-stat-label">Missing Files:</span>
+          <span class="import-stat-value" id="missingFilesCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Untracked Files:</span>
+          <span class="import-stat-value" id="untrackedFilesCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Name Updates:</span>
+          <span class="import-stat-value" id="nameUpdatesCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Empty Folders:</span>
+          <span class="import-stat-value" id="emptyFoldersCount">0</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Details Section (Phase 4 only) -->
+    <div class="import-details-section" id="updateIndexDetailsSection" style="display: none;">
+      <button class="import-details-toggle" id="updateIndexDetailsToggle">
+        <span class="material-symbols-outlined">expand_more</span>
+        <span>Show details</span>
+      </button>
+      
+      <div class="import-details-list" id="updateIndexDetailsList" style="display: none;">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="updateIndexCancelBtn">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="updateIndexProceedBtn" style="display: none;">
+        Proceed
+      </button>
+      <button class="import-btn import-btn-primary" id="updateIndexDoneBtn" style="display: none;">
+        Done
+      </button>
+    </div>
+  </div>
+</div>

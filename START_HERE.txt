@@ -1,0 +1,69 @@
+```
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║                    📸 PHOTOS LIGHT 📸                        ║
+║                                                              ║
+║  Welcome! You've opened a clean, minimal photo viewer app.  ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+👋 FIRST TIME HERE?
+
+  Run this:
+    ./run.sh
+
+  That's it! The app will:
+    ✓ Check your configuration
+    ✓ Start the server
+    ✓ Open at http://localhost:5001
+
+
+🔧 IF SOMETHING BREAKS:
+
+  Read: TROUBLESHOOTING.md
+  
+  It has a debug checklist and fixes for 7 common issues.
+  (Written specifically for AI agents with zero context!)
+
+
+📚 WANT TO UNDERSTAND HOW IT WORKS?
+
+  Read: SETUP.md
+  
+  Shows exactly how database + photo library connect.
+  Includes architecture diagrams and API reference.
+
+
+🎯 KEY FACTS:
+
+  • This app needs 2 things: a SQLite database + a photo library folder
+  • Both paths are configured in run.sh (edit lines 4-5)
+  • Database stores metadata, library has actual files
+  • Thumbnails generate lazily on first view
+  • Built for 65k photos, works with any size
+
+
+📖 DOCUMENTATION:
+
+  README.md           ← You are here (start here)
+  QUICKSTART.md       ← 30-second setup commands
+  SETUP.md            ← Complete architecture guide
+  TROUBLESHOOTING.md  ← Debug reference for agents
+  MIGRATION_SUMMARY.md← What changed from old repo
+
+
+🚀 READY TO START?
+
+  cd ~/Desktop/photos-light
+  ./run.sh
+
+  Then open: http://localhost:5001
+
+
+═══════════════════════════════════════════════════════════════
+
+Questions? Check TROUBLESHOOTING.md or SETUP.md.
+Everything you need is documented.
+
+Good luck! 🎉
+```

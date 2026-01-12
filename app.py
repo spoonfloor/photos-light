@@ -29,8 +29,8 @@ app.config['DRY_RUN_DATE_EDIT'] = False  # REAL UPDATES - using test library
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
-DB_PATH = os.environ.get('PHOTO_DB_PATH', os.path.join(BASE_DIR, 'photo_library.db'))
-LIBRARY_PATH = os.environ.get('PHOTO_LIBRARY_PATH', '/Volumes/eric_files/photo_library_test')
+DB_PATH = os.path.join(BASE_DIR, '..', 'photo-migration-and-script', 'migration', 'databases', 'photo_library_test.db')  # TEST LIBRARY
+LIBRARY_PATH = '/Volumes/eric_files/photo_library_test'  # TEST LIBRARY
 THUMBNAIL_CACHE_DIR = os.path.join(LIBRARY_PATH, '.thumbnails')
 TRASH_DIR = os.path.join(LIBRARY_PATH, '.trash')
 DB_BACKUP_DIR = os.path.join(LIBRARY_PATH, '.db_backups')
@@ -195,31 +195,27 @@ def create_db_backup():
         print(f"❌ Error creating DB backup: {e}")
         return None
 
-def generate_thumbnail_for_file(file_path, photo_id, file_type):
-    """Generate thumbnail for a file"""
+def generate_thumbnail_for_file(file_path, content_hash, file_type):
+    """Generate thumbnail for a file using hash-based sharding"""
     try:
-        # Determine thumbnail path
-        base, ext = os.path.splitext(os.path.basename(file_path))
-        thumbnail_filename = f"{base}_thumb.jpg"
+        # Hash-based sharding: ab/cd/abcd1234....jpg
+        shard_dir = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4])
+        thumbnail_path = os.path.join(shard_dir, f"{content_hash}.jpg")
         
-        # Use date-based directory structure from file path
-        relative_path_parts = file_path.replace(LIBRARY_PATH + '/', '').split('/')
-        if len(relative_path_parts) >= 2:
-            thumbnail_dir = os.path.join(THUMBNAIL_CACHE_DIR, relative_path_parts[0], relative_path_parts[1])
-        else:
-            thumbnail_dir = THUMBNAIL_CACHE_DIR
+        # Skip if already exists
+        if os.path.exists(thumbnail_path):
+            return True
         
-        os.makedirs(thumbnail_dir, exist_ok=True)
-        thumbnail_path = os.path.join(thumbnail_dir, thumbnail_filename)
+        os.makedirs(shard_dir, exist_ok=True)
         
         if file_type == 'video':
-            # Extract video frame
-            temp_frame = os.path.join(IMPORT_TEMP_DIR, f"temp_frame_{photo_id}.jpg")
+            # Extract video frame - get larger size first for better quality
+            temp_frame = os.path.join(IMPORT_TEMP_DIR, f"temp_frame_{content_hash[:16]}.jpg")
             cmd = [
                 'ffmpeg',
                 '-i', file_path,
                 '-vframes', '1',
-                '-vf', 'scale=-1:400',
+                '-vf', 'scale=800:-1',  # Get 800px width first
                 '-y',
                 temp_frame
             ]
@@ -229,12 +225,32 @@ def generate_thumbnail_for_file(file_path, photo_id, file_type):
                 with Image.open(temp_frame) as img:
                     if img.mode != 'RGB':
                         img = img.convert('RGB')
+                    
+                    # Center-crop to 400x400 square
+                    target_size = 400
+                    
+                    # Resize so smallest dimension is 400px
+                    width, height = img.size
+                    if width < height:
+                        new_width = target_size
+                        new_height = int(height * (target_size / width))
+                    else:
+                        new_height = target_size
+                        new_width = int(width * (target_size / height))
+                    
+                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    
+                    # Center crop to square
+                    left = (img.width - target_size) // 2
+                    top = (img.height - target_size) // 2
+                    img = img.crop((left, top, left + target_size, top + target_size))
+                    
                     img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
                 os.remove(temp_frame)
                 return True
             return False
         else:
-            # Generate image thumbnail
+            # Generate image thumbnail - center-crop to 400x400 square
             with Image.open(file_path) as img:
                 from PIL import ImageOps
                 img = ImageOps.exif_transpose(img)
@@ -242,11 +258,24 @@ def generate_thumbnail_for_file(file_path, photo_id, file_type):
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
                 
-                original_width, original_height = img.size
-                target_height = 400
-                target_width = int((original_width / original_height) * target_height)
+                target_size = 400
                 
-                img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                # Resize so smallest dimension is 400px
+                width, height = img.size
+                if width < height:
+                    new_width = target_size
+                    new_height = int(height * (target_size / width))
+                else:
+                    new_height = target_size
+                    new_width = int(width * (target_size / height))
+                
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # Center crop to square
+                left = (img.width - target_size) // 2
+                top = (img.height - target_size) // 2
+                img = img.crop((left, top, left + target_size, top + target_size))
+                
                 img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
                 return True
     except Exception as e:
@@ -374,13 +403,14 @@ def get_photo_thumbnail(photo_id):
     Serve thumbnail for a photo (lazy generation + caching)
     - First request: generate 400px height thumbnail, cache to disk
     - Subsequent requests: serve cached version
+    - Uses hash-based sharding: .thumbnails/{hash[:2]}/{hash[2:4]}/{hash}.jpg
     """
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get photo path
-        cursor.execute("SELECT current_path, file_type FROM photos WHERE id = ?", (photo_id,))
+        # Get photo path and hash
+        cursor.execute("SELECT current_path, file_type, content_hash FROM photos WHERE id = ?", (photo_id,))
         row = cursor.fetchone()
         conn.close()
         
@@ -388,12 +418,11 @@ def get_photo_thumbnail(photo_id):
             return jsonify({'error': 'Photo not found'}), 404
         
         relative_path = row['current_path']
+        content_hash = row['content_hash']
         
-        # Thumbnail mirrors original structure but with _thumb suffix
-        # e.g., img_xyz.jpg -> img_xyz_thumb.jpg
-        base, ext = os.path.splitext(relative_path)
-        thumbnail_relative_path = f"{base}_thumb{ext}"
-        thumbnail_path = os.path.join(THUMBNAIL_CACHE_DIR, thumbnail_relative_path)
+        # Hash-based sharding: ab/cd/abcd1234....jpg
+        shard_dir = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4])
+        thumbnail_path = os.path.join(shard_dir, f"{content_hash}.jpg")
         
         # Serve cached thumbnail if it exists
         if os.path.exists(thumbnail_path):
@@ -405,8 +434,8 @@ def get_photo_thumbnail(photo_id):
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
         
-        # Ensure parent directory exists
-        os.makedirs(os.path.dirname(thumbnail_path), exist_ok=True)
+        # Ensure shard directory exists
+        os.makedirs(shard_dir, exist_ok=True)
         
         # Only generate thumbnails for images (not videos for now)
         if row['file_type'] == 'video':
@@ -414,14 +443,14 @@ def get_photo_thumbnail(photo_id):
             import subprocess
             
             # Create temp path for extracted frame
-            temp_frame = os.path.join(os.path.dirname(thumbnail_path), f"temp_{photo_id}.jpg")
+            temp_frame = os.path.join(shard_dir, f"temp_{photo_id}.jpg")
             
-            # Extract first frame using ffmpeg
+            # Extract first frame using ffmpeg - get larger size first
             cmd = [
                 'ffmpeg',
                 '-i', full_path,
                 '-vframes', '1',
-                '-vf', 'scale=-1:400',  # Fixed height 400px
+                '-vf', 'scale=800:-1',  # Get 800px width
                 '-y',
                 temp_frame
             ]
@@ -431,11 +460,29 @@ def get_photo_thumbnail(photo_id):
             if result.returncode != 0 or not os.path.exists(temp_frame):
                 return jsonify({'error': 'Failed to extract video frame'}), 500
             
-            # Resize and save as final thumbnail
+            # Center-crop to 400x400 square
             with Image.open(temp_frame) as img:
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                # Already at 400px height from ffmpeg, just save
+                
+                target_size = 400
+                
+                # Resize so smallest dimension is 400px
+                width, height = img.size
+                if width < height:
+                    new_width = target_size
+                    new_height = int(height * (target_size / width))
+                else:
+                    new_height = target_size
+                    new_width = int(width * (target_size / height))
+                
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                # Center crop to square
+                left = (img.width - target_size) // 2
+                top = (img.height - target_size) // 2
+                img = img.crop((left, top, left + target_size, top + target_size))
+                
                 img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
             
             # Clean up temp file
@@ -443,7 +490,7 @@ def get_photo_thumbnail(photo_id):
             
             return send_file(thumbnail_path, mimetype='image/jpeg')
         
-        # Generate thumbnail for images
+        # Generate thumbnail for images - center-crop to 400x400 square
         with Image.open(full_path) as img:
             # Apply EXIF orientation (fixes rotation issues)
             img = img.copy()  # Make a copy to avoid modifying original
@@ -458,13 +505,23 @@ def get_photo_thumbnail(photo_id):
             if img.mode != 'RGB':
                 img = img.convert('RGB')
             
-            # Fixed height 400px, width determined by aspect ratio
-            original_width, original_height = img.size
-            target_height = 400
-            target_width = int((original_width / original_height) * target_height)
+            target_size = 400
             
-            # Resize to fixed height
-            img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
+            # Resize so smallest dimension is 400px
+            width, height = img.size
+            if width < height:
+                new_width = target_size
+                new_height = int(height * (target_size / width))
+            else:
+                new_height = target_size
+                new_width = int(width * (target_size / height))
+            
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Center crop to square
+            left = (img.width - target_size) // 2
+            top = (img.height - target_size) // 2
+            img = img.crop((left, top, left + target_size, top + target_size))
             
             # Save to cache
             img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
@@ -601,15 +658,15 @@ def delete_photos():
                     print(f"    ⚠️  Original file not found: {full_path}")
                     trash_filename = os.path.basename(full_path)  # Store original name
                 
-                # Delete thumbnail cache
-                base, ext = os.path.splitext(current_path)
-                thumbnail_filename = f"{os.path.basename(base)}_thumb.jpg"
-                thumbnail_relative_dir = os.path.dirname(current_path)
-                thumbnail_path = os.path.join(THUMBNAIL_CACHE_DIR, thumbnail_relative_dir, thumbnail_filename)
-                
-                if os.path.exists(thumbnail_path):
-                    os.remove(thumbnail_path)
-                    print(f"    ✓ Deleted thumbnail")
+                # Delete thumbnail cache (hash-based)
+                content_hash = photo_data.get('content_hash')
+                if content_hash:
+                    shard_dir = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4])
+                    thumbnail_path = os.path.join(shard_dir, f"{content_hash}.jpg")
+                    
+                    if os.path.exists(thumbnail_path):
+                        os.remove(thumbnail_path)
+                        print(f"    ✓ Deleted thumbnail")
                 
                 # Move DB record to deleted_photos table
                 deleted_at = datetime.now().isoformat()
@@ -1301,10 +1358,10 @@ def start_background_thumbnail_generation(photo_ids):
     def worker():
         for photo_id in photo_ids:
             try:
-                # Fetch photo info
+                # Fetch photo info including hash
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                cursor.execute("SELECT current_path, file_type FROM photos WHERE id = ?", (photo_id,))
+                cursor.execute("SELECT current_path, file_type, content_hash FROM photos WHERE id = ?", (photo_id,))
                 row = cursor.fetchone()
                 conn.close()
                 
@@ -1316,7 +1373,7 @@ def start_background_thumbnail_generation(photo_ids):
                 if os.path.exists(full_path):
                     # Trigger the lazy generation by calling the function directly
                     # The thumbnail endpoint would do this on first request anyway
-                    generate_thumbnail_for_file(full_path, photo_id, row['file_type'])
+                    generate_thumbnail_for_file(full_path, row['content_hash'], row['file_type'])
                     print(f"  🖼️  Background: Generated thumbnail for photo {photo_id}")
             except Exception as e:
                 # Don't let thumbnail failures crash the background thread
@@ -1327,6 +1384,422 @@ def start_background_thumbnail_generation(photo_ids):
     thread = threading.Thread(target=worker, daemon=True, name="ThumbnailGenerator")
     thread.start()
 
+
+# ============================================================================
+# UTILITIES API
+# ============================================================================
+
+@app.route('/api/utilities/duplicates')
+def get_duplicates():
+    """
+    Find duplicate photos (same content_hash)
+    
+    Returns:
+    {
+      "duplicates": [
+        {
+          "hash": "abc123...",
+          "count": 3,
+          "files": [
+            {
+              "id": 123,
+              "path": "2024/2024-01-15/img_20240115_abc1234.jpg",
+              "date_taken": "2024:01:15 14:30:00",
+              "file_size": 2048576
+            },
+            ...
+          ]
+        },
+        ...
+      ],
+      "total_duplicate_sets": 45,
+      "total_extra_copies": 67,
+      "total_wasted_space": 134217728
+    }
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Find hashes that appear more than once
+        cursor.execute("""
+            SELECT content_hash, COUNT(*) as count
+            FROM photos
+            GROUP BY content_hash
+            HAVING count > 1
+            ORDER BY count DESC
+        """)
+        
+        duplicate_hashes = cursor.fetchall()
+        
+        duplicates = []
+        total_extra_copies = 0
+        total_wasted_space = 0
+        
+        for row in duplicate_hashes:
+            content_hash = row['content_hash']
+            count = row['count']
+            
+            # Get all files with this hash
+            cursor.execute("""
+                SELECT id, current_path, date_taken, file_size, file_type
+                FROM photos
+                WHERE content_hash = ?
+                ORDER BY id ASC
+            """, (content_hash,))
+            
+            files = []
+            for file_row in cursor.fetchall():
+                files.append({
+                    'id': file_row['id'],
+                    'path': file_row['current_path'],
+                    'date_taken': file_row['date_taken'],
+                    'file_size': file_row['file_size'],
+                    'file_type': file_row['file_type']
+                })
+            
+            duplicates.append({
+                'hash': content_hash[:16] + '...',  # Truncate for display
+                'count': count,
+                'files': files
+            })
+            
+            # Calculate stats (all copies except one)
+            total_extra_copies += count - 1
+            if files and files[0]['file_size']:
+                total_wasted_space += files[0]['file_size'] * (count - 1)
+        
+        conn.close()
+        
+        print(f"📋 Found {len(duplicates)} duplicate sets ({total_extra_copies} extra copies)")
+        
+        return jsonify({
+            'duplicates': duplicates,
+            'total_duplicate_sets': len(duplicates),
+            'total_extra_copies': total_extra_copies,
+            'total_wasted_space': total_wasted_space
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error finding duplicates: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/utilities/update-index/scan')
+def scan_index():
+    """
+    Clean & Organize: Scan library and database to find what needs updating.
+    Returns counts without making any changes.
+    
+    Returns:
+    {
+      "missing_files": 12,  (ghosts - in DB but not on disk)
+      "untracked_files": 45, (moles - on disk but not in DB)
+      "name_updates": 3,     (non-standard filenames)
+      "empty_folders": 8
+    }
+    """
+    try:
+        import sys
+        sys.stdout.flush()
+        print("\n🔍 CLEAN & ORGANIZE SCAN: Scanning library...", flush=True)
+        
+        # Scan filesystem for all media files
+        filesystem_paths = set()
+        file_count = 0
+        
+        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+        video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+        all_exts = photo_exts | video_exts
+        
+        for root, dirs, filenames in os.walk(LIBRARY_PATH, followlinks=False):
+            # Skip hidden directories
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            
+            for filename in filenames:
+                if filename.startswith('.'):
+                    continue
+                
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in all_exts:
+                    continue
+                
+                file_count += 1
+                full_path = os.path.join(root, filename)
+                
+                try:
+                    rel_path = os.path.relpath(full_path, LIBRARY_PATH)
+                    filesystem_paths.add(rel_path)
+                except ValueError:
+                    continue
+        
+        print(f"  Found {file_count} files on disk")
+        
+        # Load database paths
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT current_path FROM photos")
+        db_paths = {row['current_path'] for row in cursor.fetchall()}
+        conn.close()
+        
+        print(f"  Found {len(db_paths)} entries in database")
+        
+        # Calculate what needs updating
+        missing_files = db_paths - filesystem_paths  # In DB but not on disk
+        untracked_files = filesystem_paths - db_paths  # On disk but not in DB
+        name_updates = 0  # TODO: check for non-standard filenames
+        
+        # Count empty folders
+        empty_folders = 0
+        empty_folder_paths = []
+        for root, dirs, files in os.walk(LIBRARY_PATH, topdown=False):
+            if os.path.basename(root).startswith('.') or root == LIBRARY_PATH:
+                continue
+            try:
+                entries = os.listdir(root)
+                non_hidden = [e for e in entries if not e.startswith('.')]
+                if len(non_hidden) == 0:
+                    empty_folders += 1
+                    rel_path = os.path.relpath(root, LIBRARY_PATH)
+                    empty_folder_paths.append(rel_path)
+            except:
+                continue
+        
+        print(f"  Found {empty_folders} empty folders:", flush=True)
+        for path in empty_folder_paths:
+            print(f"    • {path}", flush=True)
+        
+        results = {
+            'missing_files': len(missing_files),
+            'untracked_files': len(untracked_files),
+            'name_updates': name_updates,
+            'empty_folders': empty_folders
+        }
+        
+        print(f"  Scan results: {results}")
+        return jsonify(results)
+        
+    except Exception as e:
+        app.logger.error(f"Error in Clean & Organize scan: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/utilities/update-index/execute', methods=['POST'])
+def execute_update_index():
+    """
+    Clean & Organize: Execute library cleanup with SSE progress streaming.
+    
+    Phases:
+    1. Remove deleted files (ghosts)
+    2. Add untracked files (moles)
+    3. Update names (non-standard filenames)
+    4. Remove empty folders
+    """
+    
+    def generate():
+        try:
+            import_logger.info("Clean & Organize execute started")
+            
+            # Re-scan to get current state
+            print("\n🔄 CLEAN & ORGANIZE: Re-scanning library...")
+            
+            filesystem_paths = set()
+            photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+            video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+            all_exts = photo_exts | video_exts
+            
+            for root, dirs, filenames in os.walk(LIBRARY_PATH, followlinks=False):
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for filename in filenames:
+                    if filename.startswith('.'):
+                        continue
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext not in all_exts:
+                        continue
+                    full_path = os.path.join(root, filename)
+                    try:
+                        rel_path = os.path.relpath(full_path, LIBRARY_PATH)
+                        filesystem_paths.add(rel_path)
+                    except ValueError:
+                        continue
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, current_path FROM photos")
+            db_entries = {row['current_path']: row['id'] for row in cursor.fetchall()}
+            db_paths = set(db_entries.keys())
+            
+            missing_files_list = list(db_paths - filesystem_paths)
+            untracked_files_list = list(filesystem_paths - db_paths)
+            
+            # Track details for final report
+            details = {
+                'missing_files': [],
+                'untracked_files': [],
+                'name_updates': [],
+                'empty_folders': []
+            }
+            
+            # Phase 1: Remove missing files (ghosts)
+            missing_count = len(missing_files_list)
+            if missing_count > 0:
+                print(f"\n🗑️  Removing {missing_count} missing files...")
+                for idx, ghost_path in enumerate(missing_files_list, 1):
+                    yield f"event: progress\ndata: {json.dumps({'phase': 'removing_deleted', 'current': idx, 'total': missing_count})}\n\n"
+                    
+                    photo_id = db_entries[ghost_path]
+                    cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+                    details['missing_files'].append(ghost_path)
+                
+                conn.commit()
+                print(f"  ✓ Removed {missing_count} missing files")
+            
+            # Phase 2: Add untracked files (moles)
+            # Limit to 50 for demo performance
+            untracked_to_process = untracked_files_list[:50]
+            untracked_count = len(untracked_to_process)
+            
+            if untracked_count > 0:
+                print(f"\n📝 Adding {untracked_count} untracked files...")
+                for idx, mole_path in enumerate(untracked_to_process, 1):
+                    yield f"event: progress\ndata: {json.dumps({'phase': 'adding_untracked', 'current': idx, 'total': untracked_count})}\n\n"
+                    
+                    try:
+                        full_path = os.path.join(LIBRARY_PATH, mole_path)
+                        filename = os.path.basename(mole_path)
+                        ext = os.path.splitext(filename)[1].lower()
+                        file_type = 'photo' if ext in photo_exts else 'video'
+                        file_size = os.path.getsize(full_path)
+                        
+                        # Compute hash
+                        sha256 = hashlib.sha256()
+                        with open(full_path, 'rb') as f:
+                            while chunk := f.read(1024 * 1024):
+                                sha256.update(chunk)
+                        content_hash = sha256.hexdigest()
+                        
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO photos (content_hash, current_path, original_filename, date_taken, file_size, file_type)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (content_hash, mole_path, filename, '', file_size, file_type))
+                        
+                        if cursor.rowcount > 0:
+                            details['untracked_files'].append(mole_path)
+                    except Exception as e:
+                        print(f"  ⚠️  Failed to index {mole_path}: {e}")
+                        continue
+                
+                conn.commit()
+                print(f"  ✓ Added {len(details['untracked_files'])} untracked files")
+            
+            conn.close()
+            
+            # Phase 3: Update names (skipped for now)
+            # yield f"event: progress\ndata: {json.dumps({'phase': 'updating_names'})}\n\n"
+            
+            # Phase 4: Remove empty folders (loop until no more found - domino effect)
+            print(f"\n🗑️  Removing empty folders...")
+            empty_count = 0
+            total_passes = 0
+            
+            while True:
+                total_passes += 1
+                found_this_pass = 0
+                
+                for root, dirs, files in os.walk(LIBRARY_PATH, topdown=False):
+                    if os.path.basename(root).startswith('.') or root == LIBRARY_PATH:
+                        continue
+                    try:
+                        entries = os.listdir(root)
+                        non_hidden = [e for e in entries if not e.startswith('.')]
+                        if len(non_hidden) == 0:
+                            # Remove any hidden files first (like .DS_Store)
+                            for entry in entries:
+                                if entry.startswith('.'):
+                                    try:
+                                        entry_path = os.path.join(root, entry)
+                                        if os.path.isfile(entry_path):
+                                            os.remove(entry_path)
+                                    except:
+                                        pass
+                            
+                            # Now remove the directory
+                            rel_path = os.path.relpath(root, LIBRARY_PATH)
+                            os.rmdir(root)
+                            empty_count += 1
+                            found_this_pass += 1
+                            details['empty_folders'].append(rel_path)
+                            yield f"event: progress\ndata: {json.dumps({'phase': 'removing_empty', 'current': empty_count})}\n\n"
+                    except Exception as e:
+                        continue
+                
+                # If no empties found this pass, we're done
+                if found_this_pass == 0:
+                    break
+                    
+                # Safety: max 10 passes (shouldn't need more than folder depth)
+                if total_passes >= 10:
+                    print(f"  ⚠️  Stopped after 10 passes (safety limit)")
+                    break
+            
+            print(f"  ✓ Removed {empty_count} empty folders in {total_passes} passes")
+            
+            # Send completion with stats and details
+            stats = {
+                'missing_files': len(details['missing_files']),
+                'untracked_files': len(details['untracked_files']),
+                'name_updates': len(details['name_updates']),
+                'empty_folders': len(details['empty_folders'])
+            }
+            
+            print(f"\n✅ Clean & Organize complete: {stats}")
+            import_logger.info(f"Clean & Organize complete: {stats}")
+            
+            yield f"event: complete\ndata: {json.dumps({'stats': stats, 'details': details})}\n\n"
+            
+        except Exception as e:
+            error_logger.error(f"Clean & Organize execute failed: {e}")
+            print(f"\n❌ Clean & Organize execute failed: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+@app.route('/api/utilities/rebuild-thumbnails', methods=['POST'])
+def rebuild_thumbnails():
+    """
+    Rebuild thumbnails: Delete all cached thumbnails.
+    They will regenerate automatically via lazy loading as users scroll.
+    """
+    try:
+        import shutil
+        
+        print("\n🗑️  REBUILD THUMBNAILS: Clearing cache...")
+        
+        # Count existing thumbnails
+        thumb_count = 0
+        for root, dirs, files in os.walk(THUMBNAIL_CACHE_DIR):
+            thumb_count += len([f for f in files if f.endswith('.jpg')])
+        
+        print(f"  Found {thumb_count} cached thumbnails")
+        
+        # Nuke everything
+        shutil.rmtree(THUMBNAIL_CACHE_DIR)
+        os.makedirs(THUMBNAIL_CACHE_DIR, exist_ok=True)
+        
+        print(f"  ✅ Cleared all thumbnails")
+        import_logger.info(f"Rebuild thumbnails: Cleared {thumb_count} thumbnails")
+        
+        return jsonify({
+            'status': 'success',
+            'cleared_count': thumb_count,
+            'message': 'Thumbnails cleared. They will regenerate as you scroll.'
+        })
+        
+    except Exception as e:
+        error_logger.error(f"Rebuild thumbnails failed: {e}")
+        print(f"\n❌ Rebuild thumbnails failed: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

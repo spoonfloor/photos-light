@@ -28,7 +28,7 @@ function loadAppBar() {
   const mount = document.getElementById('appBarMount');
 
   // Check session cache first (with version check)
-  const APP_BAR_VERSION = '32'; // Increment this when appBar changes
+  const APP_BAR_VERSION = '39'; // Increment this when appBar changes
   try {
     const cachedVersion = sessionStorage.getItem('photoViewer_appBarVersion');
     const cached = sessionStorage.getItem('photoViewer_appBarShell');
@@ -73,11 +73,22 @@ function wireAppBar() {
   const sortToggleBtn = document.getElementById('sortToggleBtn');
   const sortIcon = document.getElementById('sortIcon');
   const addPhotoBtn = document.getElementById('addPhotoBtn');
+  const utilitiesBtn = document.getElementById('utilitiesBtn');
 
   if (menuBtn) {
     menuBtn.addEventListener('click', () => {
       console.log('🍔 Menu clicked');
     });
+  }
+
+  if (utilitiesBtn) {
+    utilitiesBtn.addEventListener('click', (e) => {
+      console.log('🔧 Utilities button clicked');
+      e.stopPropagation();
+      toggleUtilitiesMenu();
+    });
+  } else {
+    console.warn('⚠️ Utilities button not found in app bar');
   }
 
   if (deleteBtn) {
@@ -87,7 +98,7 @@ function wireAppBar() {
 
       if (count === 0) return;
 
-      showDialog(
+      showDialogOld(
         'Delete Photos',
         `Are you sure you want to delete ${count} photo${
           count > 1 ? 's' : ''
@@ -385,9 +396,9 @@ function loadDialog() {
 }
 
 /**
- * Show confirmation dialog
+ * Show confirmation dialog (old callback-based version)
  */
-function showDialog(title, message, onConfirm) {
+function showDialogOld(title, message, onConfirm) {
   const overlay = document.getElementById('dialogOverlay');
   const titleEl = document.getElementById('dialogTitle');
   const messageEl = document.getElementById('dialogMessage');
@@ -414,6 +425,42 @@ function showDialog(title, message, onConfirm) {
   newCancelBtn.addEventListener('click', hideDialog);
 
   overlay.style.display = 'flex';
+}
+
+/**
+ * Show confirmation dialog (new promise-based version with custom buttons)
+ */
+function showDialog(title, message, buttons) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('dialogOverlay');
+    const titleEl = document.getElementById('dialogTitle');
+    const messageEl = document.getElementById('dialogMessage');
+    const actionsEl = overlay.querySelector('.dialog-actions');
+
+    if (!overlay) {
+      resolve(false);
+      return;
+    }
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+
+    // Clear and rebuild buttons
+    actionsEl.innerHTML = '';
+
+    buttons.forEach(btn => {
+      const buttonEl = document.createElement('button');
+      buttonEl.className = `dialog-button ${btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'}`;
+      buttonEl.textContent = btn.text;
+      buttonEl.addEventListener('click', () => {
+        hideDialog();
+        resolve(btn.value);
+      });
+      actionsEl.appendChild(buttonEl);
+    });
+
+    overlay.style.display = 'flex';
+  });
 }
 
 /**
@@ -967,7 +1014,7 @@ function wireLightbox() {
 
       if (!photoId) return;
 
-      showDialog(
+      showDialogOld(
         'Delete Photo',
         'Are you sure you want to delete this photo?',
         () => {
@@ -2259,6 +2306,1001 @@ async function undoImport() {
   } catch (error) {
     console.error('❌ Undo error:', error);
     showToast('Undo failed', null, 3000);
+  }
+}
+
+// =====================
+// UTILITIES MENU
+// =====================
+
+let utilitiesMenuLoaded = false;
+
+/**
+ * Load utilities menu fragment
+ */
+async function loadUtilitiesMenu() {
+  if (utilitiesMenuLoaded) return;
+  
+  try {
+    const response = await fetch('fragments/utilitiesMenu.html');
+    if (!response.ok) throw new Error('Failed to load utilities menu');
+    
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    
+    // Wire up menu items
+    const switchLibraryBtn = document.getElementById('switchLibraryBtn');
+    const removeDuplicatesBtn = document.getElementById('removeDuplicatesBtn');
+    const verifyIndexBtn = document.getElementById('verifyIndexBtn');
+    const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
+    const rebuildThumbnailsBtn = document.getElementById('rebuildThumbnailsBtn');
+    const rebuildIndexBtn = document.getElementById('rebuildIndexBtn');
+    
+    if (switchLibraryBtn) {
+      switchLibraryBtn.addEventListener('click', () => {
+        console.log('🔧 Switch Library clicked (not yet implemented)');
+        hideUtilitiesMenu();
+        showToast('Switch library - Coming soon', null, 2000);
+      });
+    }
+    
+    if (removeDuplicatesBtn) {
+      removeDuplicatesBtn.addEventListener('click', () => {
+        console.log('🔧 Remove Duplicates clicked');
+        hideUtilitiesMenu();
+        openDuplicatesOverlay();
+      });
+    }
+    
+    if (verifyIndexBtn) {
+      verifyIndexBtn.addEventListener('click', () => {
+        console.log('🔧 Verify Index clicked (not yet implemented)');
+        hideUtilitiesMenu();
+        showToast('Verify index - Coming soon', null, 2000);
+      });
+    }
+    
+    if (cleanOrganizeBtn) {
+      cleanOrganizeBtn.addEventListener('click', () => {
+        console.log('🔧 Clean & Organize clicked');
+        hideUtilitiesMenu();
+        openUpdateIndexOverlay();
+      });
+    }
+    
+    if (rebuildThumbnailsBtn) {
+      rebuildThumbnailsBtn.addEventListener('click', () => {
+        console.log('🔧 Rebuild Thumbnails clicked');
+        hideUtilitiesMenu();
+        rebuildThumbnails();
+      });
+    }
+    
+    if (rebuildIndexBtn) {
+      rebuildIndexBtn.addEventListener('click', () => {
+        console.log('🔧 Rebuild Index clicked (not yet implemented)');
+        hideUtilitiesMenu();
+        showToast('Rebuild index - Coming soon', null, 2000);
+      });
+    }
+    
+    // Close menu when clicking outside
+    document.addEventListener('click', (e) => {
+      const menu = document.getElementById('utilitiesMenu');
+      const utilitiesBtn = document.getElementById('utilitiesBtn');
+      if (menu && !menu.contains(e.target) && e.target !== utilitiesBtn) {
+        hideUtilitiesMenu();
+      }
+    });
+    
+    utilitiesMenuLoaded = true;
+  } catch (error) {
+    console.error('❌ Failed to load utilities menu:', error);
+  }
+}
+
+/**
+ * Toggle utilities menu
+ */
+async function toggleUtilitiesMenu() {
+  await loadUtilitiesMenu();
+  
+  const menu = document.getElementById('utilitiesMenu');
+  const utilitiesBtn = document.getElementById('utilitiesBtn');
+  
+  console.log('🔧 Toggle menu - menu:', menu, 'button:', utilitiesBtn);
+  
+  if (!menu || !utilitiesBtn) {
+    console.warn('⚠️ Menu or button not found');
+    return;
+  }
+  
+  const isVisible = menu.style.display === 'block';
+  
+  console.log('🔧 Menu visible?', isVisible);
+  
+  if (isVisible) {
+    hideUtilitiesMenu();
+  } else {
+    // Position menu below the button
+    const btnRect = utilitiesBtn.getBoundingClientRect();
+    console.log('🔧 Button rect:', btnRect);
+    console.log('🔧 Setting menu position - top:', btnRect.bottom + 8, 'right:', window.innerWidth - btnRect.right);
+    
+    menu.style.top = `${btnRect.bottom + 8}px`;
+    menu.style.right = `${window.innerWidth - btnRect.right}px`;
+    menu.style.display = 'block';
+    
+    console.log('🔧 Menu style after:', menu.style.top, menu.style.right, menu.style.display);
+  }
+}
+
+/**
+ * Hide utilities menu
+ */
+function hideUtilitiesMenu() {
+  const menu = document.getElementById('utilitiesMenu');
+  if (menu) {
+    menu.style.display = 'none';
+  }
+}
+
+// =====================
+// DUPLICATES OVERLAY
+// =====================
+
+let duplicatesState = {
+  duplicates: [],
+  selectedForRemoval: new Set(), // photo IDs to remove
+  totalExtraCopies: 0,
+  totalWastedSpace: 0,
+};
+
+/**
+ * Load duplicates overlay fragment
+ */
+async function loadDuplicatesOverlay() {
+  // Check if already loaded
+  if (document.getElementById('duplicatesOverlay')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('fragments/duplicatesOverlay.html');
+    if (!response.ok) throw new Error('Failed to load duplicates overlay');
+    
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    
+    // Wire up buttons
+    const closeBtn = document.getElementById('duplicatesCloseBtn');
+    const cancelBtn = document.getElementById('duplicatesCancelBtn');
+    const removeBtn = document.getElementById('duplicatesRemoveBtn');
+    const doneBtn = document.getElementById('duplicatesDoneBtn');
+    const detailsToggle = document.getElementById('duplicatesDetailsToggle');
+    
+    if (closeBtn) closeBtn.addEventListener('click', closeDuplicatesOverlay);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeDuplicatesOverlay);
+    if (removeBtn) removeBtn.addEventListener('click', removeSelectedDuplicates);
+    if (doneBtn) doneBtn.addEventListener('click', closeDuplicatesOverlay);
+    
+    if (detailsToggle) {
+      detailsToggle.addEventListener('click', () => {
+        const detailsList = document.getElementById('duplicatesDetailsList');
+        const icon = detailsToggle.querySelector('.material-symbols-outlined');
+        
+        if (detailsList.style.display === 'none') {
+          detailsList.style.display = 'block';
+          icon.textContent = 'expand_less';
+          detailsToggle.querySelector('span:last-child').textContent = 'Hide details';
+        } else {
+          detailsList.style.display = 'none';
+          icon.textContent = 'expand_more';
+          detailsToggle.querySelector('span:last-child').textContent = 'Show details';
+        }
+      });
+    }
+  } catch (error) {
+    console.error('❌ Failed to load duplicates overlay:', error);
+  }
+}
+
+/**
+ * Open duplicates overlay and scan for duplicates
+ */
+async function openDuplicatesOverlay() {
+  // Check if already open
+  const existingOverlay = document.getElementById('duplicatesOverlay');
+  if (existingOverlay && existingOverlay.style.display === 'flex') {
+    console.log('⚠️ Duplicates overlay already open');
+    return;
+  }
+  
+  await loadDuplicatesOverlay();
+  
+  const overlay = document.getElementById('duplicatesOverlay');
+  if (!overlay) return;
+  
+  // Reset state
+  duplicatesState = {
+    duplicates: [],
+    selectedForRemoval: new Set(),
+    totalExtraCopies: 0,
+    totalWastedSpace: 0,
+  };
+  
+  // Reset UI to initial state
+  const statsEl = document.getElementById('duplicatesStats');
+  const detailsSection = document.getElementById('duplicatesDetailsSection');
+  if (statsEl) statsEl.style.display = 'none';
+  if (detailsSection) detailsSection.style.display = 'none';
+  
+  // Show overlay
+  overlay.style.display = 'flex';
+  
+  // Start scanning
+  updateDuplicatesUI('Scanning for duplicates', true);
+  
+  try {
+    const startTime = performance.now();
+    console.log('🔍 Starting duplicate scan...');
+    
+    const response = await fetch('/api/utilities/duplicates');
+    if (!response.ok) throw new Error('Failed to fetch duplicates');
+    
+    const data = await response.json();
+    const fetchTime = performance.now() - startTime;
+    console.log(`⏱️ Fetch took ${fetchTime.toFixed(0)}ms`);
+    
+    duplicatesState.duplicates = data.duplicates;
+    duplicatesState.totalExtraCopies = data.total_extra_copies;
+    duplicatesState.totalWastedSpace = data.total_wasted_space;
+    
+    console.log(`📋 Found ${data.total_duplicate_sets} duplicate sets`);
+    
+    // Auto-select duplicates for removal (keep oldest)
+    data.duplicates.forEach(dupSet => {
+      // Sort by ID (oldest first), keep first, mark rest for removal
+      const sortedFiles = dupSet.files.sort((a, b) => a.id - b.id);
+      for (let i = 1; i < sortedFiles.length; i++) {
+        duplicatesState.selectedForRemoval.add(sortedFiles[i].id);
+      }
+    });
+    
+    // Update UI
+    if (data.total_duplicate_sets === 0) {
+      updateDuplicatesUI('No duplicates found', false);
+      showDuplicatesComplete();
+    } else {
+      updateDuplicatesUI(`Found ${data.total_duplicate_sets} items with duplicates`, false);
+      showDuplicatesStats();
+      renderDuplicatesList();
+      showDuplicatesActions();
+    }
+  } catch (error) {
+    console.error('❌ Failed to scan for duplicates:', error);
+    updateDuplicatesUI('Failed to scan for duplicates', false);
+    showToast('Failed to scan for duplicates', null, 3000);
+  }
+}
+
+/**
+ * Update duplicates UI
+ */
+function updateDuplicatesUI(statusText, showSpinner = false) {
+  const statusTextEl = document.getElementById('duplicatesStatusText');
+  
+  if (statusTextEl) {
+    if (showSpinner) {
+      statusTextEl.innerHTML = `${statusText}<span class="import-spinner"></span>`;
+    } else {
+      statusTextEl.textContent = statusText;
+    }
+  }
+}
+
+/**
+ * Show duplicates statistics
+ */
+function showDuplicatesStats() {
+  const statsEl = document.getElementById('duplicatesStats');
+  const setsCountEl = document.getElementById('duplicateSetsCount');
+  const copiesCountEl = document.getElementById('extraCopiesCount');
+  
+  if (statsEl) statsEl.style.display = 'flex';
+  if (setsCountEl) setsCountEl.textContent = duplicatesState.duplicates.length;
+  if (copiesCountEl) copiesCountEl.textContent = duplicatesState.totalExtraCopies;
+}
+
+/**
+ * Render duplicates list
+ */
+function renderDuplicatesList() {
+  const detailsSection = document.getElementById('duplicatesDetailsSection');
+  const detailsList = document.getElementById('duplicatesDetailsList');
+  
+  if (!detailsSection || !detailsList) return;
+  
+  detailsSection.style.display = 'block';
+  
+  let html = '';
+  
+  duplicatesState.duplicates.forEach((dupSet, setIndex) => {
+    const sortedFiles = dupSet.files.sort((a, b) => a.id - b.id);
+    const baseFilename = sortedFiles[0].path.split('/').pop();
+    const numDuplicates = dupSet.count - 1; // Total - 1 canonical = duplicates
+    
+    html += `
+      <div class="duplicate-set">
+        <div class="duplicate-set-header">
+          <strong>${baseFilename}</strong> (${numDuplicates} duplicate${numDuplicates > 1 ? 's' : ''})
+        </div>
+        <div class="duplicate-files">
+    `;
+    
+    sortedFiles.forEach((file, fileIndex) => {
+      const isKeep = fileIndex === 0;
+      const isSelected = duplicatesState.selectedForRemoval.has(file.id);
+      const sizeMB = (file.file_size / (1024 * 1024)).toFixed(2);
+      
+      html += `
+        <div class="duplicate-file">
+          <label>
+            <input 
+              type="checkbox" 
+              ${isKeep ? 'disabled' : ''}
+              ${isSelected ? 'checked' : ''}
+              data-photo-id="${file.id}"
+              onchange="toggleDuplicateSelection(${file.id}, this.checked)"
+            />
+            <span class="duplicate-file-path">${file.path}</span>
+            <span class="duplicate-file-size">${sizeMB} MB</span>
+            ${isKeep ? '<span class="duplicate-keep-badge">✓ keep</span>' : ''}
+          </label>
+        </div>
+      `;
+    });
+    
+    html += `
+        </div>
+      </div>
+    `;
+  });
+  
+  detailsList.innerHTML = html;
+}
+
+/**
+ * Toggle duplicate selection
+ */
+function toggleDuplicateSelection(photoId, isChecked) {
+  if (isChecked) {
+    duplicatesState.selectedForRemoval.add(photoId);
+  } else {
+    duplicatesState.selectedForRemoval.delete(photoId);
+  }
+  
+  // Update button state
+  const removeBtn = document.getElementById('duplicatesRemoveBtn');
+  if (removeBtn) {
+    removeBtn.textContent = `Remove Selected (${duplicatesState.selectedForRemoval.size})`;
+  }
+}
+
+/**
+ * Show duplicates actions
+ */
+function showDuplicatesActions() {
+  const cancelBtn = document.getElementById('duplicatesCancelBtn');
+  const removeBtn = document.getElementById('duplicatesRemoveBtn');
+  
+  if (cancelBtn) cancelBtn.style.display = 'inline-block';
+  if (removeBtn) {
+    removeBtn.style.display = 'inline-block';
+    removeBtn.textContent = `Remove Selected (${duplicatesState.selectedForRemoval.size})`;
+  }
+}
+
+/**
+ * Show duplicates complete state
+ */
+function showDuplicatesComplete() {
+  const cancelBtn = document.getElementById('duplicatesCancelBtn');
+  const removeBtn = document.getElementById('duplicatesRemoveBtn');
+  const doneBtn = document.getElementById('duplicatesDoneBtn');
+  const statsEl = document.getElementById('duplicatesStats');
+  const detailsSection = document.getElementById('duplicatesDetailsSection');
+  
+  // Hide all the details/stats
+  if (statsEl) statsEl.style.display = 'none';
+  if (detailsSection) detailsSection.style.display = 'none';
+  
+  // Show only Done button
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  if (removeBtn) removeBtn.style.display = 'none';
+  if (doneBtn) doneBtn.style.display = 'inline-block';
+}
+
+/**
+ * Remove selected duplicates
+ */
+async function removeSelectedDuplicates() {
+  if (duplicatesState.selectedForRemoval.size === 0) {
+    showToast('No duplicates selected for removal', null, 2000);
+    return;
+  }
+  
+  const photoIds = Array.from(duplicatesState.selectedForRemoval);
+  
+  try {
+    console.log(`🗑️ Removing ${photoIds.length} duplicate photos`);
+    
+    // Show removing state with spinner
+    updateDuplicatesUI(`Removing ${photoIds.length} duplicate${photoIds.length > 1 ? 's' : ''}`, true);
+    
+    // Hide action buttons during removal
+    const cancelBtn = document.getElementById('duplicatesCancelBtn');
+    const removeBtn = document.getElementById('duplicatesRemoveBtn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    if (removeBtn) removeBtn.style.display = 'none';
+    
+    const response = await fetch('/api/photos/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photo_ids: photoIds }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to remove duplicates: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    console.log('✅ Duplicates removed:', result);
+    
+    // Show final confirmation state
+    updateDuplicatesUI(`Removed ${result.deleted} duplicate${result.deleted > 1 ? 's' : ''}`, false);
+    showDuplicatesComplete();
+    
+    // Reload grid
+    await loadAndRenderPhotos(false);
+  } catch (error) {
+    console.error('❌ Failed to remove duplicates:', error);
+    updateDuplicatesUI('Failed to remove duplicates', false);
+    showToast('Failed to remove duplicates', null, 3000);
+    
+    // Show action buttons again on error
+    showDuplicatesActions();
+  }
+}
+
+/**
+ * Close duplicates overlay
+ */
+function closeDuplicatesOverlay() {
+  const overlay = document.getElementById('duplicatesOverlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+}
+
+// Make toggleDuplicateSelection available globally for onclick
+window.toggleDuplicateSelection = toggleDuplicateSelection;
+
+// ==========================
+// CLEAN & ORGANIZE OVERLAY
+// ==========================
+
+let updateIndexState = {
+  missingFiles: 0,
+  untrackedFiles: 0,
+  nameUpdates: 0,
+  emptyFolders: 0,
+  details: null,
+};
+
+/**
+ * Load Clean & Organize overlay fragment
+ */
+async function loadUpdateIndexOverlay() {
+  // Check if already loaded
+  if (document.getElementById('updateIndexOverlay')) {
+    return;
+  }
+  
+  try {
+    const response = await fetch('fragments/updateIndexOverlay.html');
+    if (!response.ok) throw new Error('Failed to load Clean & Organize overlay');
+    
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    
+    // Wire up buttons
+    const closeBtn = document.getElementById('updateIndexCloseBtn');
+    const cancelBtn = document.getElementById('updateIndexCancelBtn');
+    const proceedBtn = document.getElementById('updateIndexProceedBtn');
+    const doneBtn = document.getElementById('updateIndexDoneBtn');
+    const detailsToggle = document.getElementById('updateIndexDetailsToggle');
+    
+    if (closeBtn) closeBtn.addEventListener('click', closeUpdateIndexOverlay);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeUpdateIndexOverlay);
+    if (proceedBtn) proceedBtn.addEventListener('click', executeUpdateIndex);
+    if (doneBtn) doneBtn.addEventListener('click', closeUpdateIndexOverlay);
+    
+    if (detailsToggle) {
+      detailsToggle.addEventListener('click', () => {
+        const detailsList = document.getElementById('updateIndexDetailsList');
+        const icon = detailsToggle.querySelector('.material-symbols-outlined');
+        
+        if (detailsList.style.display === 'none') {
+          detailsList.style.display = 'block';
+          icon.textContent = 'expand_less';
+          detailsToggle.querySelector('span:last-child').textContent = 'Hide details';
+        } else {
+          detailsList.style.display = 'none';
+          icon.textContent = 'expand_more';
+          detailsToggle.querySelector('span:last-child').textContent = 'Show details';
+        }
+      });
+    }
+  } catch (error) {
+    console.error('❌ Failed to load Clean & Organize overlay:', error);
+  }
+}
+
+/**
+ * Phase 1: Open overlay and scan
+ */
+async function openUpdateIndexOverlay() {
+  // Check if already open
+  const existingOverlay = document.getElementById('updateIndexOverlay');
+  if (existingOverlay && existingOverlay.style.display === 'flex') {
+    console.log('⚠️ Clean & Organize overlay already open');
+    return;
+  }
+  
+  await loadUpdateIndexOverlay();
+  
+  const overlay = document.getElementById('updateIndexOverlay');
+  if (!overlay) return;
+  
+  // Reset state
+  updateIndexState = {
+    missingFiles: 0,
+    untrackedFiles: 0,
+    nameUpdates: 0,
+    emptyFolders: 0,
+    details: null,
+  };
+  
+  // Reset UI to initial state
+  const statsEl = document.getElementById('updateIndexStats');
+  const detailsSection = document.getElementById('updateIndexDetailsSection');
+  if (statsEl) statsEl.style.display = 'none';
+  if (detailsSection) detailsSection.style.display = 'none';
+  
+  // Show overlay
+  overlay.style.display = 'flex';
+  
+  // Phase 1: Scanning
+  updateUpdateIndexUI('Scanning library', true);
+  showUpdateIndexButtons('cancel');
+  
+  try {
+    const response = await fetch('/api/utilities/update-index/scan');
+    if (!response.ok) throw new Error('Failed to scan index');
+    
+    const data = await response.json();
+    
+    updateIndexState.missingFiles = data.missing_files;
+    updateIndexState.untrackedFiles = data.untracked_files;
+    updateIndexState.nameUpdates = data.name_updates;
+    updateIndexState.emptyFolders = data.empty_folders;
+    
+    console.log('📋 Scan results:', data);
+    
+    // Check if any changes are needed
+    const hasChanges = data.missing_files > 0 || data.untracked_files > 0 || 
+                       data.name_updates > 0 || data.empty_folders > 0;
+    
+    if (hasChanges) {
+      // Phase 2: Review (has changes - show proceed)
+      updateUpdateIndexUI('Scan complete. Ready to proceed?', false);
+      showUpdateIndexStats();
+      showUpdateIndexButtons('cancel', 'proceed');
+    } else {
+      // Phase 2: No changes needed - done immediately
+      updateUpdateIndexUI('Index is up to date. No changes required.', false);
+      showUpdateIndexButtons('done');
+    }
+    
+  } catch (error) {
+    console.error('❌ Failed to scan index:', error);
+    updateUpdateIndexUI('Failed to scan', false);
+    showToast('Failed to scan index', null, 3000);
+  }
+}
+
+/**
+ * Phase 3: Execute update (after user clicks Proceed)
+ */
+async function executeUpdateIndex() {
+  console.log('🚀 Executing Clean & Organize...');
+  
+  // Phase 3: Execution
+  updateUpdateIndexUI('Removing missing files', true);
+  showUpdateIndexButtons('cancel-disabled');
+  
+  try {
+    const response = await fetch('/api/utilities/update-index/execute', {
+      method: 'POST',
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Update failed: ${response.status}`);
+    }
+    
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    
+    // Read SSE stream
+    while (true) {
+      const { done, value } = await reader.read();
+      
+      if (done) {
+        console.log('📡 SSE stream ended');
+        break;
+      }
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        if (line.startsWith('data:')) {
+          const data = JSON.parse(line.substring(5).trim());
+          
+          // Progress updates
+          if (data.phase) {
+            if (data.phase === 'removing_deleted') {
+              updateUpdateIndexUI(`Removing missing files... ${data.current}/${data.total}`, true);
+            } else if (data.phase === 'adding_untracked') {
+              updateUpdateIndexUI(`Adding untracked files... ${data.current}/${data.total}`, true);
+            } else if (data.phase === 'updating_names') {
+              updateUpdateIndexUI('Updating names...', true);
+            } else if (data.phase === 'removing_empty') {
+              updateUpdateIndexUI(`Removing empty folders... ${data.current}`, true);
+            }
+          }
+          
+          // Completion data (comes BEFORE event: complete)
+          if (data.stats && data.details) {
+            // Update final stats
+            updateIndexState.missingFiles = data.stats.missing_files;
+            updateIndexState.untrackedFiles = data.stats.untracked_files;
+            updateIndexState.nameUpdates = data.stats.name_updates;
+            updateIndexState.emptyFolders = data.stats.empty_folders;
+            updateIndexState.details = data.details;
+            
+            console.log('✅ Update complete:', data.stats);
+            console.log('📋 Details:', data.details);
+          }
+          
+          if (data.error) {
+            throw new Error(data.error);
+          }
+        }
+      }
+      
+      // Check for complete event AFTER processing all data lines
+      for (const line of lines) {
+        if (line.startsWith('event: complete')) {
+          // Phase 4: Confirmation (hide stats, show only details)
+          console.log('🎯 Complete event received');
+          updateUpdateIndexUI('Index updated', false);
+          hideUpdateIndexStats();
+          console.log('🎯 About to render details. State:', updateIndexState);
+          renderUpdateIndexDetails();
+          console.log('🎯 After render details');
+          showUpdateIndexButtons('done');
+        }
+      }
+    }
+    
+    // Reload grid
+    await loadAndRenderPhotos(false);
+    
+  } catch (error) {
+    console.error('❌ Failed to execute update:', error);
+    updateUpdateIndexUI('Failed to clean & organize', false);
+    showToast('Failed to clean & organize', null, 3000);
+    showUpdateIndexButtons('cancel');
+  }
+}
+
+/**
+ * Update UI status text
+ */
+function updateUpdateIndexUI(statusText, showSpinner = false) {
+  const statusTextEl = document.getElementById('updateIndexStatusText');
+  
+  if (statusTextEl) {
+    if (showSpinner) {
+      statusTextEl.innerHTML = `${statusText}<span class="import-spinner"></span>`;
+    } else {
+      statusTextEl.textContent = statusText;
+    }
+  }
+}
+
+/**
+ * Show statistics
+ */
+function showUpdateIndexStats() {
+  const statsEl = document.getElementById('updateIndexStats');
+  const missingEl = document.getElementById('missingFilesCount');
+  const untrackedEl = document.getElementById('untrackedFilesCount');
+  const nameUpdatesEl = document.getElementById('nameUpdatesCount');
+  const emptyFoldersEl = document.getElementById('emptyFoldersCount');
+  
+  if (statsEl) statsEl.style.display = 'flex';
+  if (missingEl) missingEl.textContent = updateIndexState.missingFiles;
+  if (untrackedEl) untrackedEl.textContent = updateIndexState.untrackedFiles;
+  if (nameUpdatesEl) nameUpdatesEl.textContent = updateIndexState.nameUpdates;
+  if (emptyFoldersEl) emptyFoldersEl.textContent = updateIndexState.emptyFolders;
+}
+
+/**
+ * Hide statistics (Phase 4)
+ */
+function hideUpdateIndexStats() {
+  const statsEl = document.getElementById('updateIndexStats');
+  if (statsEl) statsEl.style.display = 'none';
+}
+
+/**
+ * Show appropriate buttons for each phase
+ */
+function showUpdateIndexButtons(...buttons) {
+  const cancelBtn = document.getElementById('updateIndexCancelBtn');
+  const proceedBtn = document.getElementById('updateIndexProceedBtn');
+  const doneBtn = document.getElementById('updateIndexDoneBtn');
+  
+  // Hide all first
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  if (proceedBtn) proceedBtn.style.display = 'none';
+  if (doneBtn) doneBtn.style.display = 'none';
+  
+  // Show requested buttons
+  buttons.forEach(btn => {
+    if (btn === 'cancel' && cancelBtn) {
+      cancelBtn.style.display = 'inline-block';
+      cancelBtn.disabled = false;
+    } else if (btn === 'cancel-disabled' && cancelBtn) {
+      cancelBtn.style.display = 'inline-block';
+      cancelBtn.disabled = true;
+    } else if (btn === 'proceed' && proceedBtn) {
+      proceedBtn.style.display = 'inline-block';
+    } else if (btn === 'done' && doneBtn) {
+      doneBtn.style.display = 'inline-block';
+    }
+  });
+}
+
+/**
+ * Render details (Phase 4 only)
+ */
+function renderUpdateIndexDetails() {
+  console.log('📋 renderUpdateIndexDetails called');
+  console.log('📋 updateIndexState.details:', updateIndexState.details);
+  
+  if (!updateIndexState.details) {
+    console.warn('⚠️ No details in state!');
+    return;
+  }
+  
+  const detailsSection = document.getElementById('updateIndexDetailsSection');
+  const detailsList = document.getElementById('updateIndexDetailsList');
+  
+  console.log('📋 detailsSection:', detailsSection);
+  console.log('📋 detailsList:', detailsList);
+  
+  if (!detailsSection || !detailsList) {
+    console.warn('⚠️ Details elements not found in DOM!');
+    return;
+  }
+  
+  const details = updateIndexState.details;
+  let html = '';
+  
+  // Missing Files
+  if (details.missing_files && details.missing_files.length > 0) {
+    html += '<div class="update-detail-section"><strong>Missing Files:</strong><ul>';
+    details.missing_files.slice(0, 20).forEach(path => {
+      html += `<li>${path}</li>`;
+    });
+    if (details.missing_files.length > 20) {
+      html += `<li><em>... and ${details.missing_files.length - 20} more</em></li>`;
+    }
+    html += '</ul></div>';
+  }
+  
+  // Untracked Files
+  if (details.untracked_files && details.untracked_files.length > 0) {
+    html += '<div class="update-detail-section"><strong>Untracked Files:</strong><ul>';
+    details.untracked_files.slice(0, 20).forEach(path => {
+      html += `<li>${path}</li>`;
+    });
+    if (details.untracked_files.length > 20) {
+      html += `<li><em>... and ${details.untracked_files.length - 20} more</em></li>`;
+    }
+    html += '</ul></div>';
+  }
+  
+  // Name Updates
+  if (details.name_updates && details.name_updates.length > 0) {
+    html += '<div class="update-detail-section"><strong>Name Updates:</strong><ul>';
+    details.name_updates.slice(0, 20).forEach(path => {
+      html += `<li>${path}</li>`;
+    });
+    if (details.name_updates.length > 20) {
+      html += `<li><em>... and ${details.name_updates.length - 20} more</em></li>`;
+    }
+    html += '</ul></div>';
+  }
+  
+  // Empty Folders
+  if (details.empty_folders && details.empty_folders.length > 0) {
+    html += '<div class="update-detail-section"><strong>Empty Folders:</strong><ul>';
+    details.empty_folders.slice(0, 20).forEach(path => {
+      html += `<li>${path}</li>`;
+    });
+    if (details.empty_folders.length > 20) {
+      html += `<li><em>... and ${details.empty_folders.length - 20} more</em></li>`;
+    }
+    html += '</ul></div>';
+  }
+  
+  // Always show details section in Phase 4
+  if (html) {
+    detailsList.innerHTML = html;
+  } else {
+    detailsList.innerHTML = '<div class="update-detail-section"><em>No changes were needed.</em></div>';
+  }
+  detailsSection.style.display = 'block';
+}
+
+/**
+ * Close Clean & Organize overlay
+ */
+function closeUpdateIndexOverlay() {
+  const overlay = document.getElementById('updateIndexOverlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+}
+
+// =====================
+// INITIALIZATION
+// =====================
+
+/**
+ * Rebuild thumbnails - 3-phase overlay pattern
+ */
+async function rebuildThumbnails() {
+  // Load overlay if not already loaded
+  const overlay = document.getElementById('rebuildThumbnailsOverlay');
+  if (!overlay) {
+    await loadRebuildThumbnailsOverlay();
+  }
+  
+  openRebuildThumbnailsOverlay();
+}
+
+/**
+ * Load rebuild thumbnails overlay fragment
+ */
+async function loadRebuildThumbnailsOverlay() {
+  try {
+    const response = await fetch('/fragments/rebuildThumbnailsOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    
+    // Wire up event listeners
+    document.getElementById('rebuildThumbnailsCloseBtn')?.addEventListener('click', closeRebuildThumbnailsOverlay);
+    document.getElementById('rebuildThumbnailsCancelBtn')?.addEventListener('click', closeRebuildThumbnailsOverlay);
+    document.getElementById('rebuildThumbnailsProceedBtn')?.addEventListener('click', executeRebuildThumbnails);
+    document.getElementById('rebuildThumbnailsDoneBtn')?.addEventListener('click', async () => {
+      closeRebuildThumbnailsOverlay();
+      // Force thumbnail reload by adding cache-buster
+      const thumbnails = document.querySelectorAll('.photo-thumb');
+      const cacheBuster = Date.now();
+      thumbnails.forEach(img => {
+        const src = img.src.split('?')[0];
+        img.src = `${src}?t=${cacheBuster}`;
+      });
+    });
+    
+    console.log('✅ Rebuild thumbnails overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load rebuild thumbnails overlay:', error);
+  }
+}
+
+/**
+ * Open rebuild thumbnails overlay (Phase 1: Confirmation)
+ */
+function openRebuildThumbnailsOverlay() {
+  const overlay = document.getElementById('rebuildThumbnailsOverlay');
+  if (!overlay) return;
+  
+  // Reset to Phase 1
+  const statusText = document.getElementById('rebuildThumbnailsStatusText');
+  const cancelBtn = document.getElementById('rebuildThumbnailsCancelBtn');
+  const proceedBtn = document.getElementById('rebuildThumbnailsProceedBtn');
+  const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
+  
+  statusText.innerHTML = 'This will clear all cached thumbnails. They will regenerate automatically as you scroll.<br><br>Ready to delete existing thumbnails?';
+  cancelBtn.style.display = 'block';
+  proceedBtn.style.display = 'block';
+  doneBtn.style.display = 'none';
+  
+  overlay.style.display = 'block';
+  console.log('🔧 Rebuild thumbnails overlay opened');
+}
+
+/**
+ * Close rebuild thumbnails overlay
+ */
+function closeRebuildThumbnailsOverlay() {
+  const overlay = document.getElementById('rebuildThumbnailsOverlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+}
+
+/**
+ * Execute thumbnail rebuild (Phase 2 -> 3)
+ */
+async function executeRebuildThumbnails() {
+  const statusText = document.getElementById('rebuildThumbnailsStatusText');
+  const cancelBtn = document.getElementById('rebuildThumbnailsCancelBtn');
+  const proceedBtn = document.getElementById('rebuildThumbnailsProceedBtn');
+  const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
+  
+  try {
+    console.log('🔧 Starting thumbnail rebuild...');
+    
+    // Immediately show Phase 2 (spinner)
+    statusText.innerHTML = 'Clearing thumbnails<span class="import-spinner"></span>';
+    cancelBtn.disabled = true;
+    cancelBtn.style.opacity = '0.5';
+    proceedBtn.style.display = 'none';
+    
+    // Execute rebuild
+    const response = await fetch('/api/utilities/rebuild-thumbnails', {
+      method: 'POST'
+    });
+    
+    const result = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to rebuild thumbnails');
+    }
+    
+    console.log('✅ Thumbnails cleared:', result);
+    
+    // Show Phase 3 (confirmation)
+    statusText.textContent = "Old thumbnails have been removed. New ones will be created automatically as you scroll.";
+    cancelBtn.style.display = 'none';
+    doneBtn.style.display = 'block';
+    
+  } catch (error) {
+    console.error('❌ Failed to rebuild thumbnails:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+    closeRebuildThumbnailsOverlay();
   }
 }
 

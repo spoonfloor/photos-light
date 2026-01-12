@@ -1,0 +1,55 @@
+<!-- Duplicates Overlay (Google Photos style) -->
+<div class="import-overlay" id="duplicatesOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Remove Duplicates</span>
+      <button class="import-close-btn" id="duplicatesCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Progress Section -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="duplicatesStatusText">
+        Scanning for duplicates<span class="import-spinner"></span>
+      </div>
+      
+      <div class="import-stats" id="duplicatesStats" style="display: none;">
+        <span class="import-stat">
+          <span class="import-stat-label">Items with Duplicates:</span>
+          <span class="import-stat-value" id="duplicateSetsCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Total Duplicates:</span>
+          <span class="import-stat-value" id="extraCopiesCount">0</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Details Section (expandable) -->
+    <div class="import-details-section" id="duplicatesDetailsSection" style="display: none;">
+      <button class="import-details-toggle" id="duplicatesDetailsToggle">
+        <span class="material-symbols-outlined">expand_more</span>
+        <span>Show details</span>
+      </button>
+      
+      <div class="import-details-list duplicates-list" id="duplicatesDetailsList" style="display: none;">
+        <!-- Populated dynamically with duplicate sets -->
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="duplicatesCancelBtn">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="duplicatesRemoveBtn" style="display: none;">
+        Remove Selected
+      </button>
+      <button class="import-btn import-btn-primary" id="duplicatesDoneBtn" style="display: none;">
+        Done
+      </button>
+    </div>
+  </div>
+</div>

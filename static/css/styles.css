@@ -22,7 +22,7 @@
   --app-bar-height: 64px;
   --page-top-gap: 48px;
   --app-bar-title-size: 20px;
-  --app-bar-gap: 12px;
+  --app-bar-gap: 8px;
 
   /* --- Z-index scale --- */
   --z-app-chrome: 1000;
@@ -221,6 +221,11 @@ body {
 
 /* Colorize lightning bolt from black to white */
 .app-bar-icon-button img.lightning-icon {
+  filter: brightness(0) invert(1);
+}
+
+/* Colorize camera from black to white */
+.app-bar-icon-button img.camera-icon {
   filter: brightness(0) invert(1);
 }
 
@@ -906,18 +911,6 @@ body {
   bottom: 20px;
   left: 20px;
   z-index: var(--z-import-overlay);
-  animation: slideInUp 0.3s ease;
-}
-
-@keyframes slideInUp {
-  from {
-    transform: translateY(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
 }
 
 .import-card {
@@ -1143,3 +1136,168 @@ body {
   background: var(--hover-bg);
 }
 
+/* ============================================================================
+   UTILITIES MENU
+   ============================================================================ */
+
+.utilities-menu {
+  position: fixed;
+  background: #2a2a2a;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  min-width: 200px;
+  padding: 8px 0;
+  z-index: var(--z-dropdown);
+}
+
+.utilities-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.utilities-menu-item:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+
+.utilities-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.utilities-menu-item .material-symbols-outlined {
+  font-size: 20px;
+  color: var(--text-secondary);
+}
+
+.utilities-menu-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 12px 16px;
+}
+
+.utilities-badge {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--placeholder-bg);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* ============================================================================
+   DUPLICATES OVERLAY
+   ============================================================================ */
+
+.duplicates-list {
+  max-height: 400px;
+}
+
+.duplicate-set {
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 0;
+}
+
+.duplicate-set:last-child {
+  border-bottom: none;
+}
+
+.duplicate-set-header {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.duplicate-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.duplicate-file {
+  font-size: 13px;
+}
+
+.duplicate-file label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.duplicate-file label:hover {
+  color: var(--text-primary);
+}
+
+.duplicate-file input[type="checkbox"] {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.duplicate-file input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.duplicate-file-path {
+  flex: 1;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duplicate-file-size {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.duplicate-keep-badge {
+  color: #4caf50;
+  font-size: 12px;
+  font-weight: 500;
+  margin-left: 8px;
+}
+
+/* ============================================================================
+   UPDATE INDEX DETAILS
+   ============================================================================ */
+
+.update-detail-section {
+  margin-bottom: 16px;
+}
+
+.update-detail-section strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.update-detail-section ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.update-detail-section li {
+  padding: 4px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: monospace;
+}
+
+.update-detail-section li em {
+  font-style: normal;
+  color: var(--text-secondary);
+}
