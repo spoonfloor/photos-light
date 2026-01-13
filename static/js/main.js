@@ -3920,6 +3920,133 @@ async function loadCreateLibraryOverlay() {
 }
 
 /**
+ * Load name library overlay fragment
+ */
+async function loadNameLibraryOverlay() {
+  try {
+    const response = await fetch('/fragments/nameLibraryOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    console.log('✅ Name library overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load name library overlay:', error);
+  }
+}
+
+/**
+ * Show name library dialog and return user's chosen name
+ * @returns {Promise<string|null>} Library name or null if cancelled
+ */
+async function showNameLibraryDialog() {
+  return new Promise(async (resolve) => {
+    // Load overlay if not already loaded
+    let overlay = document.getElementById('nameLibraryOverlay');
+    if (!overlay) {
+      await loadNameLibraryOverlay();
+      overlay = document.getElementById('nameLibraryOverlay');
+    }
+
+    const input = document.getElementById('libraryNameInput');
+    const errorDiv = document.getElementById('libraryNameError');
+    const cancelBtn = document.getElementById('nameLibraryCancelBtn');
+    const confirmBtn = document.getElementById('nameLibraryConfirmBtn');
+    const closeBtn = document.getElementById('nameLibraryCloseBtn');
+
+    // Reset state
+    input.value = 'Photo Library';
+    errorDiv.style.display = 'none';
+    errorDiv.textContent = '';
+
+    // Focus input and select text
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 100);
+
+    // Sanitize folder name
+    function sanitizeFolderName(name) {
+      // Remove invalid characters: / \ : * ? " < > | and leading dots
+      return name
+        .replace(/[\/\\:*?"<>|]/g, '')
+        .replace(/^\.+/, '')
+        .trim();
+    }
+
+    // Validate name
+    function validateName(name) {
+      const sanitized = sanitizeFolderName(name);
+      
+      if (!sanitized) {
+        errorDiv.textContent = 'Please enter a valid name';
+        errorDiv.style.display = 'block';
+        return null;
+      }
+
+      if (sanitized.length > 255) {
+        errorDiv.textContent = 'Name is too long (max 255 characters)';
+        errorDiv.style.display = 'block';
+        return null;
+      }
+
+      return sanitized;
+    }
+
+    // Clean up listeners
+    function cleanup() {
+      overlay.style.display = 'none';
+      // Remove event listeners by cloning (prevents duplicates)
+      const newCancelBtn = cancelBtn.cloneNode(true);
+      const newConfirmBtn = confirmBtn.cloneNode(true);
+      const newCloseBtn = closeBtn.cloneNode(true);
+      const newInput = input.cloneNode(true);
+      
+      cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+      confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+      closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+      input.parentNode.replaceChild(newInput, input);
+    }
+
+    // Handle cancel
+    const handleCancel = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    // Handle confirm
+    const handleConfirm = () => {
+      const validated = validateName(input.value);
+      if (validated) {
+        cleanup();
+        resolve(validated);
+      }
+    };
+
+    // Handle Enter key
+    const handleKeyPress = (e) => {
+      if (e.key === 'Enter') {
+        handleConfirm();
+      } else if (e.key === 'Escape') {
+        handleCancel();
+      }
+    };
+
+    // Wire up listeners
+    cancelBtn.addEventListener('click', handleCancel);
+    closeBtn.addEventListener('click', handleCancel);
+    confirmBtn.addEventListener('click', handleConfirm);
+    input.addEventListener('keydown', handleKeyPress);
+
+    // Clear error on input
+    input.addEventListener('input', () => {
+      errorDiv.style.display = 'none';
+    });
+
+    // Show overlay
+    overlay.style.display = 'block';
+  });
+}
+
+/**
  * Open switch library overlay
  */
 async function openSwitchLibraryOverlay() {
@@ -4006,6 +4133,101 @@ async function browseSwitchLibrary() {
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+/**
+ * Create new library with name prompt (first-run flow)
+ */
+async function createNewLibraryWithName() {
+  try {
+    // Step 1: Get library name from user
+    console.log('📝 Asking for library name...');
+    const libraryName = await showNameLibraryDialog();
+    
+    if (!libraryName) {
+      console.log('User cancelled library naming');
+      return false;
+    }
+
+    console.log('📚 Library name:', libraryName);
+
+    // Step 2: Choose parent location
+    console.log('🔍 Opening folder picker for parent location...');
+    window.blur();
+
+    const script = 'POSIX path of (choose folder with prompt "Choose where to create your library")';
+
+    const response = await fetch('/api/library/browse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      if (error.status === 'cancelled') {
+        console.log('User cancelled folder selection');
+        return false;
+      }
+      throw new Error(error.error || 'Failed to browse');
+    }
+
+    const result = await response.json();
+
+    if (result.status === 'cancelled') {
+      console.log('User cancelled folder selection');
+      return false;
+    }
+
+    // Step 3: Combine parent path with library name
+    const parentPath = result.library_path.replace(/\/+$/, ''); // Remove trailing slashes
+    const fullLibraryPath = `${parentPath}/${libraryName}`;
+    const dbPath = `${fullLibraryPath}/photo_library.db`;
+
+    console.log('📦 Creating library at:', fullLibraryPath);
+
+    // Step 4: Create library immediately (no confirmation)
+    const createResponse = await fetch('/api/library/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
+    });
+
+    const createResult = await createResponse.json();
+
+    if (!createResponse.ok) {
+      throw new Error(createResult.error || 'Failed to create library');
+    }
+
+    console.log('✅ Library created');
+
+    // Step 5: Switch to new library
+    const switchResponse = await fetch('/api/library/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
+    });
+
+    const switchResult = await switchResponse.json();
+
+    if (!switchResponse.ok) {
+      throw new Error(switchResult.error || 'Failed to switch library');
+    }
+
+    console.log('✅ Switched to:', switchResult.library_path);
+
+    // Step 6: Refresh photos (library is now empty)
+    await loadAndRenderPhotos();
+
+    // Step 7: Immediately show import dialog
+    await triggerImport();
+    
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to create library:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+    return false;
   }
 }
 
@@ -4175,35 +4397,20 @@ async function triggerImportWithLibraryCheck() {
 
     if (status.status === 'not_configured') {
       // No library - prompt to create one first
-      console.log('📦 No library configured - prompting to create one');
+      console.log('📦 No library configured - starting library creation flow');
       
-      const choice = await showDialog(
-        'Choose a location for your library',
-        'Select where to store your photo library, then you can add photos.',
-        [
-          { text: 'Cancel', value: false, secondary: true },
-          { text: 'Choose location', value: true, primary: true }
-        ]
-      );
-
-      if (!choice) {
+      // Create new library with naming
+      const created = await createNewLibraryWithName();
+      
+      // If user cancelled at any point, show empty state
+      if (!created) {
         console.log('User cancelled library creation');
         renderFirstRunEmptyState();
         return;
       }
-
-      // Browse for library location
-      const browseResult = await browseSwitchLibrary();
       
-      // If user cancelled the browse dialog, show the empty state again
-      if (browseResult === false) {
-        console.log('User cancelled folder picker - returning to empty state');
-        renderFirstRunEmptyState();
-        return;
-      }
-      
-      // After library is created, trigger import
-      // (browseSwitchLibrary will reload the page or we can continue here)
+      // After library is created, the page will reload automatically
+      // (handled by createAndSwitchLibrary -> switchToLibrary -> reload)
       return;
     }
 
