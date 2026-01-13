@@ -16,15 +16,17 @@
     <!-- Progress Section -->
     <div class="import-progress-section">
       <div class="import-status-text" id="switchLibraryStatusText">
-        <p>Current library:</p>
+        <p style="margin: 0 0 12px 0">Current library:</p>
         <p
           id="currentLibraryPath"
           style="
             font-family: monospace;
             font-size: 12px;
             color: var(--text-secondary);
+            margin: 0 0 12px 0;
           "
         ></p>
+        <p style="margin: 0">Locate a different photo library folder.</p>
       </div>
     </div>
 
@@ -36,8 +38,14 @@
       >
         Cancel
       </button>
+      <button
+        class="import-btn import-btn-secondary"
+        id="switchLibraryResetBtn"
+      >
+        Reset
+      </button>
       <button class="import-btn import-btn-primary" id="switchLibraryBrowseBtn">
-        Switch
+        Choose
       </button>
     </div>
   </div>

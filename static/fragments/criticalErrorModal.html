@@ -1,12 +1,14 @@
 <!-- Critical Error Modal (blocking, for recovery scenarios) -->
 <div class="dialog-overlay" id="criticalErrorOverlay" style="display: none;">
-  <div class="dialog">
-    <div class="dialog-header">
-      <h2 class="dialog-title" id="criticalErrorTitle">Error</h2>
+  <div class="import-card">
+    <div class="import-header">
+      <span class="import-title" id="criticalErrorTitle">Error</span>
       <!-- No close button - user must take action -->
     </div>
-    <p class="dialog-message" id="criticalErrorMessage">An error has occurred.</p>
-    <div class="dialog-actions" id="criticalErrorActions">
+    <div class="import-progress-section">
+      <div class="import-status-text" id="criticalErrorMessage">An error has occurred.</div>
+    </div>
+    <div class="import-actions" id="criticalErrorActions">
       <!-- Populated dynamically based on error type -->
     </div>
   </div>

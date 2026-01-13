@@ -42,7 +42,7 @@ function loadAppBar() {
   }
 
   // Fetch fragment
-  return fetch('fragments/appBar.html?v=14')
+  return fetch('fragments/appBar.html?v=15')
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load app bar (${r.status})`);
       return r.text();
@@ -162,8 +162,7 @@ function wireAppBar() {
     });
   }
 
-  // Populate and wire date picker
-  populateDatePicker();
+  // Wire up date picker change handlers (but don't populate yet - that happens after health check)
   wireDatePicker();
 }
 
@@ -173,7 +172,20 @@ function wireAppBar() {
 async function populateDatePicker() {
   try {
     const response = await fetch('/api/years');
+
+    // If the database is missing or API fails, bail gracefully
+    if (!response.ok) {
+      console.warn('⚠️  Date picker disabled (database not available)');
+      return;
+    }
+
     const data = await response.json();
+
+    // Validate response data
+    if (!data || !Array.isArray(data.years)) {
+      console.warn('⚠️  Date picker disabled (invalid data)');
+      return;
+    }
 
     const yearPicker = document.getElementById('yearPicker');
     if (!yearPicker) return;
@@ -193,7 +205,7 @@ async function populateDatePicker() {
 
     console.log(`📅 Loaded ${data.years.length} years`);
   } catch (error) {
-    console.error('❌ Error loading years:', error);
+    console.warn('⚠️  Date picker disabled:', error.message);
   }
 }
 
@@ -439,7 +451,8 @@ function loadCriticalErrorModal() {
 
   return fetch('fragments/criticalErrorModal.html')
     .then((r) => {
-      if (!r.ok) throw new Error(`Failed to load critical error modal (${r.status})`);
+      if (!r.ok)
+        throw new Error(`Failed to load critical error modal (${r.status})`);
       return r.text();
     })
     .then((html) => {
@@ -461,26 +474,33 @@ function loadRebuildDatabaseOverlay() {
 
   return fetch('fragments/rebuildDatabaseOverlay.html')
     .then((r) => {
-      if (!r.ok) throw new Error(`Failed to load rebuild database overlay (${r.status})`);
+      if (!r.ok)
+        throw new Error(
+          `Failed to load rebuild database overlay (${r.status})`
+        );
       return r.text();
     })
     .then((html) => {
       mount.innerHTML = html;
-      
+
       // Wire up event listeners
       const closeBtn = document.getElementById('rebuildDatabaseCloseBtn');
       const cancelBtn = document.getElementById('rebuildDatabaseCancelBtn');
       const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
       const doneBtn = document.getElementById('rebuildDatabaseDoneBtn');
-      
-      if (closeBtn) closeBtn.addEventListener('click', hideRebuildDatabaseOverlay);
-      if (cancelBtn) cancelBtn.addEventListener('click', hideRebuildDatabaseOverlay);
-      if (proceedBtn) proceedBtn.addEventListener('click', executeRebuildDatabase);
-      if (doneBtn) doneBtn.addEventListener('click', () => {
-        hideRebuildDatabaseOverlay();
-        loadAndRenderPhotos(); // Reload photos after rebuild
-      });
-      
+
+      if (closeBtn)
+        closeBtn.addEventListener('click', hideRebuildDatabaseOverlay);
+      if (cancelBtn)
+        cancelBtn.addEventListener('click', hideRebuildDatabaseOverlay);
+      if (proceedBtn)
+        proceedBtn.addEventListener('click', executeRebuildDatabase);
+      if (doneBtn)
+        doneBtn.addEventListener('click', () => {
+          hideRebuildDatabaseOverlay();
+          loadAndRenderPhotos(); // Reload photos after rebuild
+        });
+
       console.log('✅ Rebuild database overlay loaded');
     })
     .catch((err) => {
@@ -521,7 +541,9 @@ function showCriticalError(title, message, buttons) {
   actionsEl.innerHTML = buttons
     .map(
       (btn) => `
-    <button class="dialog-button ${btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'}" 
+    <button class="dialog-button ${
+      btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'
+    }" 
             data-action="${btn.action}">
       ${btn.text}
     </button>
@@ -533,7 +555,7 @@ function showCriticalError(title, message, buttons) {
   actionsEl.querySelectorAll('button').forEach((button) => {
     button.addEventListener('click', async () => {
       const action = button.dataset.action;
-      
+
       if (action === 'rebuild_database') {
         hideCriticalError();
         await startRebuildDatabase();
@@ -546,14 +568,18 @@ function showCriticalError(title, message, buttons) {
         try {
           const response = await fetch('/api/library/status');
           const status = await response.json();
-          if (status.valid) {
+          if (status.status === 'healthy') {
             hideCriticalError();
             loadAndRenderPhotos();
           } else {
-            showToast('Library still not accessible', 'error');
+            showToast(
+              `Library still not accessible: ${status.message}`,
+              'error',
+              5000
+            );
           }
         } catch (error) {
-          showToast('Connection failed', 'error');
+          showToast('Connection failed', 'error', 5000);
         }
       } else if (action === 'close') {
         window.close();
@@ -567,44 +593,6 @@ function showCriticalError(title, message, buttons) {
 function hideCriticalError() {
   const overlay = document.getElementById('criticalErrorOverlay');
   if (overlay) overlay.style.display = 'none';
-}
-
-/**
- * Check for critical resource issues
- * Called on startup and after errors
- */
-async function checkCriticalResources() {
-  try {
-    // Check if library path exists
-    const statusResponse = await fetch('/api/library/status');
-    const status = await statusResponse.json();
-
-    if (!status.valid) {
-      // Library or DB missing - check which
-      const currentResponse = await fetch('/api/library/current');
-      const current = await currentResponse.json();
-
-      // Try to determine the specific issue
-      // For now, just show the library selection
-      return false;
-    }
-
-    return true;
-  } catch (error) {
-    console.error('Critical resource check failed:', error);
-    
-    // Network error or server down
-    showCriticalError(
-      'Connection error',
-      'Unable to connect to the server. Please check that the application is running.',
-      [
-        { text: 'Retry', action: 'retry', primary: false },
-        { text: 'Close', action: 'close', primary: true }
-      ]
-    );
-    
-    return false;
-  }
 }
 
 // =====================
@@ -623,19 +611,20 @@ async function startRebuildDatabase() {
 
     // Pre-scan: count files and get estimate
     console.log('🔍 Pre-scanning library for rebuild...');
-    
+
     const overlay = document.getElementById('rebuildDatabaseOverlay');
     const statusText = document.getElementById('rebuildDatabaseStatusText');
     const cancelBtn = document.getElementById('rebuildDatabaseCancelBtn');
     const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
-    
+
     overlay.style.display = 'flex';
-    statusText.innerHTML = 'Scanning library<span class="import-spinner"></span>';
+    statusText.innerHTML =
+      'Scanning library<span class="import-spinner"></span>';
     cancelBtn.style.display = 'block';
     proceedBtn.style.display = 'none';
 
     const response = await fetch('/api/recovery/rebuild-database/scan', {
-      method: 'POST'
+      method: 'POST',
     });
 
     if (!response.ok) {
@@ -649,7 +638,9 @@ async function startRebuildDatabase() {
     if (data.requires_warning) {
       const confirmed = await showDialog(
         'Large library detected',
-        `Your library contains ${data.file_count.toLocaleString()} photos.\n\nRebuilding will take an estimated ${data.estimated_display}. Keep the app open until rebuilding is complete.`,
+        `Your library contains ${data.file_count.toLocaleString()} photos.\n\nRebuilding will take an estimated ${
+          data.estimated_display
+        }. Keep the app open until rebuilding is complete.`,
         'Continue',
         'Cancel'
       );
@@ -663,7 +654,6 @@ async function startRebuildDatabase() {
     // Update UI to show ready state
     statusText.innerHTML = `<p>Ready to rebuild database.</p><p>Found ${data.file_count.toLocaleString()} files.</p>`;
     proceedBtn.style.display = 'block';
-
   } catch (error) {
     console.error('❌ Rebuild database scan failed:', error);
     showToast(`Scan failed: ${error.message}`, 'error');
@@ -689,10 +679,13 @@ async function executeRebuildDatabase() {
   proceedBtn.style.display = 'none';
   cancelBtn.style.display = 'none';
   stats.style.display = 'flex';
-  statusText.innerHTML = 'Rebuilding database<span class="import-spinner"></span>';
+  statusText.innerHTML =
+    'Rebuilding database<span class="import-spinner"></span>';
 
   try {
-    const eventSource = new EventSource('/api/recovery/rebuild-database/execute');
+    const eventSource = new EventSource(
+      '/api/recovery/rebuild-database/execute'
+    );
 
     eventSource.addEventListener('progress', (e) => {
       const data = JSON.parse(e.data);
@@ -713,13 +706,23 @@ async function executeRebuildDatabase() {
 
       statusText.innerHTML = `<p>✅ Database rebuilt successfully!</p><p>Indexed ${data.stats.untracked_files.toLocaleString()} files.</p>`;
       doneBtn.style.display = 'block';
-      
+
       eventSource.close();
+
+      // Load photos in background while dialog remains visible
+      console.log('📸 Loading photos in background...');
+      populateDatePicker()
+        .then(() => {
+          loadAndRenderPhotos();
+        })
+        .catch((err) => {
+          console.error('❌ Failed to load photos after rebuild:', err);
+        });
     });
 
     eventSource.addEventListener('error', (e) => {
       console.error('❌ Rebuild failed:', e);
-      
+
       let errorMsg = 'Rebuild failed';
       try {
         const data = JSON.parse(e.data);
@@ -731,10 +734,9 @@ async function executeRebuildDatabase() {
       statusText.innerHTML = `<p>❌ ${errorMsg}</p>`;
       cancelBtn.textContent = 'Close';
       cancelBtn.style.display = 'block';
-      
+
       eventSource.close();
     });
-
   } catch (error) {
     console.error('❌ Rebuild execution error:', error);
     statusText.innerHTML = `<p>❌ Rebuild failed: ${error.message}</p>`;
@@ -1315,6 +1317,121 @@ function hideToast() {
 }
 
 // =====================
+// CRITICAL ERROR MODAL
+// =====================
+
+/**
+ * Load critical error modal fragment
+ */
+async function loadCriticalErrorModal() {
+  const mount = document.getElementById('dialogMount');
+  try {
+    const response = await fetch('fragments/criticalErrorModal.html');
+    if (!response.ok)
+      throw new Error(
+        `Failed to load critical error modal (${response.status})`
+      );
+    mount.insertAdjacentHTML('beforeend', await response.text());
+    console.log('✅ Critical error modal loaded');
+  } catch (error) {
+    console.error('❌ Critical Error Modal load failed:', error);
+  }
+}
+
+/**
+ * Show critical error modal with specific error type
+ */
+function showCriticalErrorModal(type, path = '') {
+  const overlay = document.getElementById('criticalErrorOverlay');
+  const title = document.getElementById('criticalErrorTitle');
+  const message = document.getElementById('criticalErrorMessage');
+  const actions = document.getElementById('criticalErrorActions');
+
+  if (!overlay) {
+    console.error('❌ Critical error modal not loaded');
+    return;
+  }
+
+  // Clear previous buttons
+  actions.innerHTML = '';
+
+  if (type === 'db_missing') {
+    title.textContent = 'Database missing';
+
+    const filename = path.split('/').pop();
+    message.innerHTML = `
+      <p style="margin: 0 0 12px 0;">Can't find database file:</p>
+      <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">${filename}</p>
+      <p style="margin: 0;">Your library is missing the file needed to display and keep track of your photos. To continue, you can rebuild the database or switch to a different library.</p>
+    `;
+
+    // Add buttons
+    const switchBtn = document.createElement('button');
+    switchBtn.className = 'import-btn import-btn-secondary';
+    switchBtn.textContent = 'Switch library';
+    switchBtn.onclick = async () => {
+      hideCriticalErrorModal();
+      await openSwitchLibraryOverlay();
+    };
+
+    const rebuildBtn = document.createElement('button');
+    rebuildBtn.className = 'import-btn import-btn-primary';
+    rebuildBtn.textContent = 'Rebuild database';
+    rebuildBtn.onclick = async () => {
+      hideCriticalErrorModal();
+      await startRebuildDatabase();
+    };
+
+    actions.appendChild(switchBtn);
+    actions.appendChild(rebuildBtn);
+  } else if (type === 'library_not_found') {
+    title.textContent = 'Library folder not found';
+
+    message.innerHTML = `
+      <p style="margin: 0 0 12px 0;">Can't access your library:</p>
+      <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">${path}</p>
+      <p style="margin: 0;">Your library folder is no longer accessible. To continue, you can retry the connection or switch to a different library.</p>
+    `;
+
+    const switchBtn = document.createElement('button');
+    switchBtn.className = 'import-btn import-btn-secondary';
+    switchBtn.textContent = 'Switch library';
+    switchBtn.onclick = async () => {
+      hideCriticalErrorModal();
+      await openSwitchLibraryOverlay();
+    };
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'import-btn import-btn-primary';
+    retryBtn.textContent = 'Retry';
+    retryBtn.onclick = () => {
+      hideCriticalErrorModal();
+      window.location.reload();
+    };
+
+    actions.appendChild(switchBtn);
+    actions.appendChild(retryBtn);
+  } else {
+    title.textContent = 'Error';
+    message.innerHTML = `<p style="margin: 0;">An unexpected error occurred: ${path}</p>`;
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.className = 'import-btn import-btn-primary';
+    reloadBtn.textContent = 'Reload';
+    reloadBtn.onclick = () => window.location.reload();
+
+    actions.appendChild(reloadBtn);
+  }
+
+  overlay.style.display = 'flex';
+}
+
+function hideCriticalErrorModal() {
+  const overlay = document.getElementById('criticalErrorOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+// =====================
 // LIGHTBOX
 // =====================
 
@@ -1860,6 +1977,58 @@ function setupThumbnailLazyLoading() {
 // =====================
 
 /**
+ * Render first-run empty state
+ */
+function renderFirstRunEmptyState() {
+  const container = document.getElementById('photoContainer');
+  if (!container) return;
+  
+  container.innerHTML = `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
+      <div style="text-align: center;">
+        <div style="font-size: 18px; margin-bottom: 8px;">Welcome!</div>
+        <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button class="import-btn" onclick="openSwitchLibraryOverlay()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
+          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
+          <span>Open library</span>
+        </button>
+        <button class="import-btn import-btn-primary" onclick="handleAddPhotosFirstRun()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
+          <span>Add photos</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render first-run empty state (no library configured)
+ */
+function renderFirstRunEmptyState() {
+  const container = document.getElementById('photoContainer');
+  container.innerHTML = `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
+      <div style="text-align: center;">
+        <div style="font-size: 18px; margin-bottom: 8px;">Welcome!</div>
+        <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button class="import-btn" onclick="openSwitchLibraryOverlay()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
+          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
+          <span>Open library</span>
+        </button>
+        <button class="import-btn import-btn-primary" onclick="triggerImportWithLibraryCheck()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
+          <span>Add photos</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Render photo grid with real data
  */
 function renderPhotoGrid(photos, append = false) {
@@ -1876,14 +2045,14 @@ function renderPhotoGrid(photos, append = false) {
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
           <div style="text-align: center;">
             <div style="font-size: 18px; margin-bottom: 8px;">No photos found</div>
-            <div style="font-size: 14px; color: var(--text-secondary);">Add photos or switch to another library</div>
+            <div style="font-size: 14px; color: var(--text-secondary);">Add photos or switch to an existing library.</div>
           </div>
           <div style="display: flex; gap: 12px;">
             <button class="import-btn" onclick="openSwitchLibraryOverlay()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
               <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
               <span>Switch library</span>
             </button>
-            <button class="import-btn import-btn-primary" onclick="triggerImport()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+            <button class="import-btn import-btn-primary" onclick="triggerImportWithLibraryCheck()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
               <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
               <span>Add photos</span>
             </button>
@@ -3659,6 +3828,47 @@ async function executeRebuildThumbnails() {
   }
 }
 
+// =============================
+// REBUILD DATABASE OVERLAY
+// =============================
+
+/**
+ * Load rebuild database overlay fragment
+ */
+async function loadRebuildDatabaseOverlay() {
+  if (document.getElementById('rebuildDatabaseOverlay')) {
+    return;
+  }
+
+  const mount = document.getElementById('importOverlayMount');
+  try {
+    const response = await fetch('fragments/rebuildDatabaseOverlay.html');
+    if (!response.ok)
+      throw new Error(
+        `Failed to load rebuild database overlay (${response.status})`
+      );
+    mount.insertAdjacentHTML('beforeend', await response.text());
+
+    // Wire up event listeners
+    document
+      .getElementById('rebuildDatabaseCloseBtn')
+      .addEventListener('click', hideRebuildDatabaseOverlay);
+    document
+      .getElementById('rebuildDatabaseCancelBtn')
+      .addEventListener('click', hideRebuildDatabaseOverlay);
+    document
+      .getElementById('rebuildDatabaseProceedBtn')
+      .addEventListener('click', executeRebuildDatabase);
+    document
+      .getElementById('rebuildDatabaseDoneBtn')
+      .addEventListener('click', hideRebuildDatabaseOverlay);
+
+    console.log('✅ Rebuild database overlay loaded');
+  } catch (error) {
+    console.error('❌ Rebuild Database Overlay load failed:', error);
+  }
+}
+
 // =====================
 // SWITCH LIBRARY
 // =====================
@@ -3682,6 +3892,9 @@ async function loadSwitchLibraryOverlay() {
     document
       .getElementById('switchLibraryBrowseBtn')
       ?.addEventListener('click', browseSwitchLibrary);
+    document
+      .getElementById('switchLibraryResetBtn')
+      ?.addEventListener('click', resetLibraryConfig);
 
     console.log('✅ Switch library overlay loaded');
   } catch (error) {
@@ -3720,10 +3933,16 @@ async function openSwitchLibraryOverlay() {
   try {
     const response = await fetch('/api/library/current');
     const data = await response.json();
-    document.getElementById('currentLibraryPath').textContent =
-      data.library_path;
+    const pathElement = document.getElementById('currentLibraryPath');
+    if (pathElement) {
+      pathElement.textContent = data.library_path;
+    }
   } catch (error) {
     console.error('Failed to get current library:', error);
+    const pathElement = document.getElementById('currentLibraryPath');
+    if (pathElement) {
+      pathElement.textContent = '(unable to load)';
+    }
   }
 
   document.getElementById('switchLibraryOverlay').style.display = 'block';
@@ -3747,19 +3966,31 @@ async function browseSwitchLibrary() {
   try {
     console.log('🔍 Opening folder picker...');
 
+    // Blur browser window to ensure focus shifts to native folder picker
+    window.blur();
+
+    const script = 'POSIX path of (choose folder with prompt "Select photo library folder" with multiple selections allowed)';
+
     const response = await fetch('/api/library/browse', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script }),
     });
+
+    if (!response.ok) {
+      const error = await response.json();
+      if (error.status === 'cancelled') {
+        console.log('User cancelled folder selection');
+        return false;
+      }
+      throw new Error(error.error || 'Failed to browse');
+    }
 
     const result = await response.json();
 
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to browse');
-    }
-
     if (result.status === 'cancelled') {
       console.log('User cancelled folder selection');
-      return;
+      return false;
     }
 
     if (result.status === 'exists') {
@@ -3775,6 +4006,40 @@ async function browseSwitchLibrary() {
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
+
+/**
+ * Reset library configuration to first-run state (debug)
+ */
+async function resetLibraryConfig() {
+  console.log('🔄 Resetting library configuration...');
+
+  const confirmed = confirm(
+    'Reset library configuration?\n\nThis will clear the current library setting and reload the app to first-run state.'
+  );
+
+  if (!confirmed) {
+    console.log('User cancelled reset');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/library/reset', {
+      method: 'DELETE',
+    });
+
+    const data = await response.json();
+
+    if (data.status === 'success') {
+      console.log('✅ Configuration reset - reloading...');
+      window.location.reload();
+    } else {
+      throw new Error(data.error || 'Reset failed');
+    }
+  } catch (error) {
+    console.error('❌ Failed to reset configuration:', error);
+    showToast(`Reset failed: ${error.message}`, 'error', 5000);
   }
 }
 
@@ -3898,6 +4163,58 @@ async function switchToLibrary(libraryPath, dbPath) {
 // =====================
 // IMPORT MEDIA
 // =====================
+
+/**
+ * Trigger import with library check (creates library if needed)
+ */
+async function triggerImportWithLibraryCheck() {
+  try {
+    // Check if library is configured
+    const response = await fetch('/api/library/status');
+    const status = await response.json();
+
+    if (status.status === 'not_configured') {
+      // No library - prompt to create one first
+      console.log('📦 No library configured - prompting to create one');
+      
+      const choice = await showDialog(
+        'Choose a location for your library',
+        'Select where to store your photo library, then you can add photos.',
+        [
+          { text: 'Cancel', value: false, secondary: true },
+          { text: 'Choose location', value: true, primary: true }
+        ]
+      );
+
+      if (!choice) {
+        console.log('User cancelled library creation');
+        renderFirstRunEmptyState();
+        return;
+      }
+
+      // Browse for library location
+      const browseResult = await browseSwitchLibrary();
+      
+      // If user cancelled the browse dialog, show the empty state again
+      if (browseResult === false) {
+        console.log('User cancelled folder picker - returning to empty state');
+        renderFirstRunEmptyState();
+        return;
+      }
+      
+      // After library is created, trigger import
+      // (browseSwitchLibrary will reload the page or we can continue here)
+      return;
+    }
+
+    // Library exists - proceed with normal import
+    await triggerImport();
+    
+  } catch (error) {
+    console.error('❌ Failed to check library status:', error);
+    showToast(`Error: ${error.message}`, 'error', 5000);
+  }
+}
 
 /**
  * Trigger import via disambiguation dialog
@@ -4317,6 +4634,7 @@ async function init() {
   // Wait for fonts to load to prevent layout shift
   await document.fonts.ready;
 
+  // Load UI fragments first (but don't populate with data yet)
   await loadAppBar();
   await loadLightbox();
   await loadDateEditor();
@@ -4324,28 +4642,49 @@ async function init() {
   await loadToast();
   await loadCriticalErrorModal();
 
-  // Check if library is valid
+  // Check library health before making any data API calls
   try {
-    const statusResponse = await fetch('/api/library/status');
-    const status = await statusResponse.json();
+    const response = await fetch('/api/library/status');
+    const status = await response.json();
 
-    if (!status.valid) {
-      console.log('⚠️ No valid library found - prompting user...');
-      showToast('Please select a photo library', null, 0);
+    console.log('📊 Library status:', status.status);
 
-      // Load and immediately trigger browse
-      await loadSwitchLibraryOverlay();
-      await browseSwitchLibrary(); // Opens native picker immediately
+    switch (status.status) {
+      case 'not_configured':
+        // First-time setup - show empty state
+        console.log('⚠️ No library configured');
+        renderFirstRunEmptyState();
+        return;
 
-      // Don't load photos yet - will happen after library selection
-      return;
+      case 'library_missing':
+      case 'library_inaccessible':
+        console.log('⚠️ Library not accessible:', status.library_path);
+        showCriticalErrorModal('library_not_found', status.library_path);
+        return;
+
+      case 'db_missing':
+      case 'db_inaccessible':
+        console.log('⚠️ Database not accessible:', status.db_path);
+        showCriticalErrorModal('db_missing', status.db_path);
+        return;
+
+      case 'healthy':
+        console.log('✅ Library is healthy');
+        // Now it's safe to populate date picker and load photos
+        await populateDatePicker();
+        await loadAndRenderPhotos();
+        return;
+
+      default:
+        // 'error' or unknown status
+        console.error('❌ Unknown status:', status.status);
+        showCriticalErrorModal('unknown_error', status.message);
+        return;
     }
   } catch (error) {
-    console.error('Failed to check library status:', error);
+    console.error('❌ Failed to check library status:', error);
+    showCriticalErrorModal('unknown_error', error.message);
   }
-
-  // Library is valid, load photos
-  await loadAndRenderPhotos();
 }
 
 // Start when DOM is ready

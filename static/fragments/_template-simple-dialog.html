@@ -1,0 +1,40 @@
+<!-- 
+  TEMPLATE: Simple Confirmation Dialog
+  USE FOR: Yes/No questions, simple prompts, basic confirmations
+  
+  BEFORE USING:
+  1. Copy this file and rename it (e.g., confirmDeleteOverlay.html)
+  2. Replace all [PLACEHOLDERS] with your values
+  3. Read DIALOG_CHECKLIST.md
+  4. Open reference dialog side-by-side while building
+-->
+
+<div class="import-overlay" id="[OVERLAY_ID]">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">[Dialog Title]</span>
+      <button class="import-close-btn" id="[OVERLAY_ID]CloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Content -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="[OVERLAY_ID]StatusText">
+        <p style="margin: 0 0 12px 0;">[Context/current state first]</p>
+        <p style="margin: 0;">[Action/instruction second]</p>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="[OVERLAY_ID]CancelBtn">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="[OVERLAY_ID]ConfirmBtn">
+        Confirm
+      </button>
+    </div>
+  </div>
+</div>

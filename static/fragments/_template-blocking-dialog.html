@@ -1,0 +1,31 @@
+<!-- 
+  TEMPLATE: Blocking Error Dialog
+  USE FOR: Critical errors requiring user action
+  
+  FEATURES:
+  - No close button (user must choose an action)
+  - Typically 1-2 action buttons
+  - Used for recovery scenarios
+-->
+
+<div class="dialog-overlay" id="[OVERLAY_ID]" style="display: none;">
+  <div class="import-card">
+    <!-- Header (no close button) -->
+    <div class="import-header">
+      <span class="import-title" id="[OVERLAY_ID]Title">[Error Title]</span>
+    </div>
+
+    <!-- Content -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="[OVERLAY_ID]Message">
+        <p style="margin: 0 0 12px 0;">[Error description]</p>
+        <p style="margin: 0;">[What user should do]</p>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="import-actions" id="[OVERLAY_ID]Actions">
+      <!-- Buttons populated dynamically based on error type -->
+    </div>
+  </div>
+</div>

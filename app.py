@@ -1623,6 +1623,19 @@ def scan_index():
         sys.stdout.flush()
         print("\n🔍 UPDATE LIBRARY INDEX: Scanning library...", flush=True)
         
+        # Check if database exists
+        if not os.path.exists(DB_PATH):
+            print(f"  ⚠️  Database not found at: {DB_PATH}")
+            # Return that everything needs to be added
+            from library_sync import count_media_files
+            file_count = count_media_files(LIBRARY_PATH)
+            return jsonify({
+                'missing_files': 0,
+                'untracked_files': file_count,
+                'name_updates': 0,
+                'empty_folders': 0
+            })
+        
         # Scan filesystem for all media files
         filesystem_paths = set()
         file_count = 0
@@ -1703,7 +1716,7 @@ def scan_index():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/utilities/update-index/execute', methods=['POST'])
+@app.route('/api/utilities/update-index/execute', methods=['GET', 'POST'])
 def execute_update_index():
     """
     Update Library Index: Execute library cleanup with SSE progress streaming.
@@ -1772,7 +1785,7 @@ def scan_rebuild_database():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/recovery/rebuild-database/execute', methods=['POST'])
+@app.route('/api/recovery/rebuild-database/execute', methods=['GET', 'POST'])
 def execute_rebuild_database():
     """
     Rebuild database from scratch: Index all media files in library.
@@ -1794,6 +1807,14 @@ def execute_rebuild_database():
                 conn.commit()
                 conn.close()
                 print(f"  ✅ Created new database")
+            
+            # Ensure library directory structure exists (Tier 1: silent auto-fix)
+            print(f"📁 Ensuring library directory structure...")
+            for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR]:
+                try:
+                    os.makedirs(directory, exist_ok=True)
+                except (PermissionError, OSError) as e:
+                    print(f"⚠️  Warning: Could not create directory {directory}: {e}")
             
             conn = get_db_connection()
             
@@ -1901,6 +1922,14 @@ def save_config(library_path, db_path):
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=2)
 
+def delete_config():
+    """Delete library configuration file (reset to first-run state)"""
+    if os.path.exists(CONFIG_FILE):
+        os.remove(CONFIG_FILE)
+        print(f"🗑️  Deleted config file: {CONFIG_FILE}")
+        return True
+    return False
+
 def update_app_paths(library_path, db_path):
     """Update all global path variables"""
     global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR
@@ -1913,9 +1942,14 @@ def update_app_paths(library_path, db_path):
     IMPORT_TEMP_DIR = os.path.join(LIBRARY_PATH, '.import_temp')
     LOG_DIR = os.path.join(LIBRARY_PATH, '.logs')
     
-    # Ensure directories exist
+    # Ensure directories exist (Tier 1: silent auto-fix)
     for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR]:
-        os.makedirs(directory, exist_ok=True)
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except (PermissionError, OSError) as e:
+            print(f"⚠️  Warning: Could not create directory {directory}: {e}")
+            print(f"   This may indicate the library is not accessible.")
+
 
 @app.route('/api/library/current', methods=['GET'])
 def get_current_library():
@@ -1927,20 +1961,198 @@ def get_current_library():
 
 @app.route('/api/library/status', methods=['GET'])
 def library_status():
-    """Check if current library is valid"""
-    return jsonify({'valid': LIBRARY_VALID})
+    """
+    Check library health with detailed diagnostics.
+    Returns status, message, and paths for frontend decision-making.
+    """
+    try:
+        # Check if config file exists and is valid
+        config = load_config()
+        if not config:
+            return jsonify({
+                'status': 'not_configured',
+                'message': 'No library configured. Please select a library.',
+                'library_path': None,
+                'db_path': None,
+                'valid': False
+            })
+        
+        # Validate config has required keys
+        library_path = config.get('library_path')
+        db_path = config.get('db_path')
+        
+        if not library_path or not db_path:
+            return jsonify({
+                'status': 'not_configured',
+                'message': 'Library configuration is incomplete.',
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False
+            })
+        
+        # Check filesystem access
+        try:
+            library_exists = os.path.exists(library_path)
+        except (OSError, PermissionError) as e:
+            return jsonify({
+                'status': 'library_inaccessible',
+                'message': f'Cannot check library access: {str(e)}',
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False
+            })
+        
+        try:
+            db_exists = os.path.exists(db_path)
+        except (OSError, PermissionError) as e:
+            return jsonify({
+                'status': 'db_inaccessible',
+                'message': f'Cannot check database access: {str(e)}',
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False
+            })
+        
+        # Determine status
+        if not library_exists:
+            return jsonify({
+                'status': 'library_missing',
+                'message': 'Library folder not found or not accessible.',
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False
+            })
+        
+        if not db_exists:
+            return jsonify({
+                'status': 'db_missing',
+                'message': 'Database file not found.',
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False
+            })
+        
+        # Database file exists - verify it's actually usable
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            # Check if the photos table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='photos'")
+            if not cursor.fetchone():
+                conn.close()
+                return jsonify({
+                    'status': 'db_missing',
+                    'message': 'Database file exists but is not initialized.',
+                    'library_path': library_path,
+                    'db_path': db_path,
+                    'valid': False
+                })
+            conn.close()
+        except sqlite3.DatabaseError:
+            return jsonify({
+                'status': 'db_missing',
+                'message': 'Database file is corrupted or invalid.',
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False
+            })
+        
+        # All checks passed
+        return jsonify({
+            'status': 'healthy',
+            'message': 'Library is ready.',
+            'library_path': library_path,
+            'db_path': db_path,
+            'valid': True
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Unexpected error: {str(e)}',
+            'library_path': None,
+            'db_path': None,
+            'valid': False
+        }), 500
+
+@app.route('/api/library/current', methods=['GET'])
+def library_current():
+    """Get current library and database paths"""
+    return jsonify({
+        'library_path': LIBRARY_PATH,
+        'db_path': DB_PATH
+    })
+
+@app.route('/api/check-path', methods=['GET'])
+def check_path():
+    """Check if a file or directory exists"""
+    path = request.args.get('path')
+    if not path:
+        return jsonify({'error': 'path parameter required'}), 400
+    
+    exists = os.path.exists(path)
+    return jsonify({'exists': exists, 'path': path})
+
+@app.route('/api/library/validate', methods=['POST'])
+def validate_library_path():
+    """Validate a user-provided library path"""
+    try:
+        data = request.json
+        path = data.get('path', '').strip()
+        
+        if not path:
+            return jsonify({'status': 'invalid', 'error': 'No path provided'}), 400
+        
+        # Expand user home directory shorthand
+        path = os.path.expanduser(path)
+        
+        # Resolve to absolute path
+        path = os.path.abspath(path)
+        
+        # Check if path exists and is a directory
+        if not os.path.exists(path):
+            return jsonify({'status': 'invalid', 'error': 'Path does not exist'}), 400
+        
+        if not os.path.isdir(path):
+            return jsonify({'status': 'invalid', 'error': 'Path is not a directory'}), 400
+        
+        # Check if path has a database
+        potential_db_path = os.path.join(path, 'photo_library.db')
+        
+        if os.path.exists(potential_db_path):
+            # Valid existing library
+            return jsonify({
+                'status': 'exists',
+                'library_path': path,
+                'db_path': potential_db_path
+            })
+        else:
+            # New library needs initialization
+            return jsonify({
+                'status': 'needs_init',
+                'library_path': path,
+                'db_path': potential_db_path
+            })
+            
+    except Exception as e:
+        error_logger.error(f"Library path validation failed: {e}")
+        return jsonify({'status': 'invalid', 'error': str(e)}), 500
 
 @app.route('/api/library/browse', methods=['POST'])
 def browse_library():
-    """Open native macOS folder picker"""
+    """Open native macOS folder picker for library selection"""
     try:
-        # Use AppleScript to show native folder picker
-        script = 'POSIX path of (choose folder with prompt "Select photo library folder")'
+        data = request.json
+        script = data.get('script')
+        
+        if not script:
+            return jsonify({'error': 'No script provided'}), 400
+        
         result = subprocess.run(
             ['osascript', '-e', script],
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout for user to choose
+            timeout=300
         )
         
         if result.returncode != 0:
@@ -1948,6 +2160,9 @@ def browse_library():
             return jsonify({'status': 'cancelled'})
         
         selected_path = result.stdout.strip()
+        
+        if not selected_path:
+            return jsonify({'status': 'cancelled'})
         
         # Check if path has a database
         potential_db_path = os.path.join(selected_path, 'photo_library.db')
@@ -2021,8 +2236,6 @@ def create_library():
 @app.route('/api/library/switch', methods=['POST'])
 def switch_library():
     """Switch to a different library with health check"""
-    global LIBRARY_VALID
-    
     try:
         data = request.json
         library_path = data.get('library_path')
@@ -2072,7 +2285,6 @@ def switch_library():
         # Healthy or acceptable - proceed with switch
         update_app_paths(library_path, db_path)
         save_config(library_path, db_path)
-        LIBRARY_VALID = True
         
         print(f"  ✅ Switched to: {library_path}")
         print(f"  💾 Database: {db_path}")
@@ -2089,6 +2301,30 @@ def switch_library():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/library/reset', methods=['DELETE'])
+def reset_library():
+    """Reset library configuration to first-run state (debug feature)"""
+    try:
+        deleted = delete_config()
+        
+        if deleted:
+            print("\n🔄 Library configuration reset - returning to first-run state")
+            return jsonify({
+                'status': 'success',
+                'message': 'Configuration reset. Reload page to start fresh.'
+            })
+        else:
+            return jsonify({
+                'status': 'success',
+                'message': 'No configuration to reset.'
+            })
+            
+    except Exception as e:
+        error_logger.error(f"Reset library failed: {e}")
+        print(f"\n❌ Reset library failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     # Load config on startup
     config = load_config()
@@ -2096,18 +2332,16 @@ if __name__ == '__main__':
         print(f"\n📖 Loading config from {CONFIG_FILE}")
         update_app_paths(config['library_path'], config['db_path'])
     
-    # Validate library
-    LIBRARY_VALID = os.path.exists(LIBRARY_PATH) and os.path.exists(DB_PATH)
-    
+    # Log library status
     print("\n🖼️  Photo Viewer Starting...")
     print(f"📁 Serving from: {STATIC_DIR}")
     print(f"💾 Database: {DB_PATH}")
     print(f"📚 Library: {LIBRARY_PATH}")
     
-    if LIBRARY_VALID:
-        print(f"✅ Library is valid")
+    if config and os.path.exists(config.get('library_path', '')) and os.path.exists(config.get('db_path', '')):
+        print(f"✅ Library configuration found")
     else:
-        print(f"⚠️  Library not found - user will be prompted to select one")
+        print(f"⚠️  Library not configured or not accessible - user will be prompted")
     
     print(f"🌐 Open: http://localhost:5001\n")
     
