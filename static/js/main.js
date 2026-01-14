@@ -3809,15 +3809,33 @@ async function executeRebuildThumbnails() {
 
     console.log('✅ Thumbnails cleared:', result);
 
+    // Visual confirmation: Clear all thumbnail images
+    if (result.cleared_count > 0) {
+      console.log('🎨 Clearing visible thumbnails for visual confirmation...');
+      const allThumbs = document.querySelectorAll('.photo-thumb');
+      allThumbs.forEach(thumb => {
+        thumb.removeAttribute('src');
+        thumb.classList.remove('loading', 'error');
+        thumb.classList.add('loading'); // Show loading state
+      });
+      
+      // Show blank grid for 300ms before reloading
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Reload grid with fresh thumbnails
+      console.log('🔄 Reloading grid with fresh thumbnails...');
+      await loadAndRenderPhotos(false);
+    }
+
     // Show Phase 3 (confirmation)
     if (result.cleared_count === 0) {
       // No thumbnails to rebuild
       statusText.innerHTML =
-        '<p>No thumbnails found. Thumbnails will be generated automatically as you scroll.</p>';
+        '<p>No thumbnails found. Thumbnails are generated automatically as you scroll.</p>';
     } else {
       // Thumbnails were cleared
       statusText.innerHTML =
-        '<p>Old thumbnails have been removed. New ones will be created automatically as you scroll.</p>';
+        '<p>Old thumbnails have been removed. New ones are created automatically as you scroll.</p>';
     }
     cancelBtn.style.display = 'none';
     doneBtn.style.display = 'block';
