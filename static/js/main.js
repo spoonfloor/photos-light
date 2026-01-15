@@ -4720,23 +4720,20 @@ async function triggerImportWithLibraryCheck() {
  */
 async function triggerImport() {
   try {
-    console.log('📸 Showing import options...');
+    console.log('📸 Opening photo picker...');
 
-    const choice = await showDialog('Import media', 'Choose what to import:', [
-      { text: 'Import folders', value: 'folders', secondary: true },
-      { text: 'Import files', value: 'files', primary: true },
-    ]);
+    const selectedPaths = await PhotoPicker.show({
+      title: 'Select photos',
+      subtitle: 'Choose photos and folders to import'
+    });
 
-    if (!choice) {
-      console.log('User cancelled import');
+    if (!selectedPaths || selectedPaths.length === 0) {
+      console.log('User cancelled or no files selected');
       return;
     }
 
-    if (choice === 'files') {
-      await importFiles();
-    } else if (choice === 'folders') {
-      await importFolders();
-    }
+    console.log(`✅ Selected ${selectedPaths.length} item(s)`);
+    await scanAndConfirmImport(selectedPaths);
   } catch (error) {
     console.error('❌ Failed to trigger import:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
