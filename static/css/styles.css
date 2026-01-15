@@ -1521,6 +1521,20 @@ body {
   border-color: #765fff;
 }
 
+.folder-item-db {
+  opacity: 1;
+  cursor: pointer;
+}
+
+.folder-item-db:hover {
+  background: #2a2a2a;
+  border-color: #765fff;
+}
+
+.folder-item-db .folder-name {
+  color: #a8a8a8;
+}
+
 .folder-icon {
   font-size: 20px;
   font-family: 'Material Symbols Outlined';

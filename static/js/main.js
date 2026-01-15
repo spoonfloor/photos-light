@@ -24,6 +24,11 @@ const state = {
 // ============================================================================
 const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
 
+// ============================================================================
+// TOAST DURATION - Default duration for toast messages in milliseconds
+// ============================================================================
+const TOAST_DURATION = 2500;
+
 // =====================
 // APP BAR
 // =====================
@@ -1322,7 +1327,7 @@ function loadToast() {
 /**
  * Show toast with undo option
  */
-function showToast(message, onUndo, duration = 5000) {
+function showToast(message, onUndo, duration = TOAST_DURATION) {
   const toast = document.getElementById('toast');
   const messageEl = document.getElementById('toastMessage');
   const undoBtn = document.getElementById('toastUndoBtn');
@@ -2190,7 +2195,7 @@ function renderFirstRunEmptyState() {
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
-        <button class="import-btn" onclick="openSwitchLibraryOverlay()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
+        <button class="import-btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
           <span>Open library</span>
         </button>
@@ -2215,7 +2220,7 @@ function renderFirstRunEmptyState() {
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
-        <button class="import-btn" onclick="openSwitchLibraryOverlay()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
+        <button class="import-btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
           <span>Open library</span>
         </button>
@@ -4588,7 +4593,10 @@ async function switchToLibrary(libraryPath, dbPath) {
     }
 
     console.log('✅ Switched to:', result.library_path);
-    showToast('Library switched. Reloading...', null, 2000);
+    
+    // Get folder name for toast message
+    const folderName = libraryPath.split('/').filter(Boolean).pop() || 'library';
+    showToast(`Opened ${folderName}`);
 
     // Close overlays
     closeSwitchLibraryOverlay();

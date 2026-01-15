@@ -2167,12 +2167,24 @@ def list_directory():
             return jsonify({'error': 'Permission denied'}), 403
         
         # Filter to only directories, exclude hidden files
+        # Also check for photo_library.db file
         folders = []
+        has_db = False
+        
         for item in items:
-            # Skip hidden files/folders
+            # Skip hidden files/folders (starting with .)
             if item.startswith('.'):
                 continue
             
+            # Skip Time Machine backups
+            if item.startswith('Backups of') or 'time_machine' in item.lower():
+                continue
+
+            # Check if this is the database file
+            if item == 'photo_library.db':
+                has_db = True
+                continue
+
             item_path = os.path.join(path, item)
             try:
                 if os.path.isdir(item_path):
@@ -2186,6 +2198,7 @@ def list_directory():
         
         return jsonify({
             'folders': folders,
+            'has_db': has_db,
             'current_path': path
         })
         

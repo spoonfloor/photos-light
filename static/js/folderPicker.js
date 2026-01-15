@@ -8,7 +8,9 @@ const FolderPicker = (() => {
   const VIRTUAL_ROOT = '__LOCATIONS__';
   let currentPath = VIRTUAL_ROOT;
   let selectedPath = VIRTUAL_ROOT;
+  let currentHasDb = false; // Track if current selected folder has database
   let topLevelLocations = [];
+  let resolveCallback = null; // Store resolve callback for database click handler
   let onSelectCallback = null;
   let onCancelCallback = null;
 
@@ -38,7 +40,10 @@ const FolderPicker = (() => {
     }
 
     const data = await response.json();
-    return data.folders;
+    return {
+      folders: data.folders,
+      has_db: data.has_db || false
+    };
   }
 
   // ===========================================================================
@@ -114,6 +119,9 @@ const FolderPicker = (() => {
 
     // At virtual root, show curated top-level locations
     if (currentPath === VIRTUAL_ROOT) {
+      currentHasDb = false;
+      updateButtonText();
+      
       folderList.innerHTML = topLevelLocations
         .map(
           (loc) => `
@@ -137,14 +145,22 @@ const FolderPicker = (() => {
 
     // Regular filesystem navigation
     try {
-      const folders = await listDirectory(currentPath);
+      const result = await listDirectory(currentPath);
+      const folders = result.folders;
+      currentHasDb = result.has_db;
+      
+      // Update button based on database presence
+      updateButtonText();
 
-      if (folders.length === 0) {
-        folderList.innerHTML = '<div class="empty-state">No subfolders found</div>';
+      if (folders.length === 0 && !currentHasDb) {
+        folderList.innerHTML = '<div class="empty-state">Select \'Create new\' to create a library here</div>';
         return;
       }
 
-      folderList.innerHTML = folders
+      let html = '';
+      
+      // Add folders first
+      html += folders
         .map(
           (folder) => `
         <div class="folder-item" data-folder="${folder}">
@@ -156,16 +172,45 @@ const FolderPicker = (() => {
         )
         .join('');
 
-      // Add click handlers
-      folderList.querySelectorAll('.folder-item').forEach((item) => {
+      // Show database file at bottom if it exists
+      if (currentHasDb) {
+        html += `
+          <div class="folder-item folder-item-db" data-is-db="true">
+            <span class="folder-icon material-symbols-outlined">description</span>
+            <span class="folder-name">photo_library.db</span>
+          </div>
+        `;
+      }
+
+      folderList.innerHTML = html;
+
+      // Add click handlers to folders
+      folderList.querySelectorAll('.folder-item[data-folder]').forEach((item) => {
         item.addEventListener('click', () => {
           const folder = item.dataset.folder;
           const newPath = currentPath + '/' + folder;
           navigateTo(newPath);
         });
       });
+
+      // Add click handler to database file (acts like "Choose" button)
+      const dbItem = folderList.querySelector('.folder-item[data-is-db]');
+      if (dbItem) {
+        dbItem.addEventListener('click', () => {
+          // Same action as clicking "Choose" button
+          if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
+            const overlay = document.getElementById('folderPickerOverlay');
+            if (overlay) {
+              overlay.style.display = 'none';
+            }
+            resolveCallback(currentPath);
+          }
+        });
+      }
     } catch (error) {
       folderList.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
+      currentHasDb = false;
+      updateButtonText();
     }
   }
 
@@ -179,11 +224,22 @@ const FolderPicker = (() => {
     }
   }
 
+  function updateButtonText() {
+    const chooseBtn = document.getElementById('folderPickerChooseBtn');
+    if (chooseBtn) {
+      if (currentHasDb) {
+        chooseBtn.textContent = 'Choose';
+      } else {
+        chooseBtn.textContent = 'Create new';
+      }
+    }
+  }
+
   async function navigateTo(path) {
     currentPath = path || VIRTUAL_ROOT;
     selectedPath = path || VIRTUAL_ROOT;
     updateBreadcrumb();
-    await updateFolderList();
+    await updateFolderList(); // This now updates currentHasDb and button text
     updateSelectedPath();
   }
 
@@ -213,9 +269,32 @@ const FolderPicker = (() => {
         // Load locations
         topLevelLocations = await getLocations();
 
-        // Reset to root
-        currentPath = VIRTUAL_ROOT;
-        selectedPath = VIRTUAL_ROOT;
+        // Try to default to Desktop
+        let initialPath = VIRTUAL_ROOT;
+        
+        // Find user's home directory from locations (it's usually the first one)
+        for (const loc of topLevelLocations) {
+          // Look for home directory by checking if it contains /Users/ or is the first non-Shared location
+          if (loc.path.includes('/Users/') && !loc.path.includes('Shared')) {
+            const desktopPath = loc.path + '/Desktop';
+            // Try to navigate to Desktop
+            try {
+              const desktopCheck = await listDirectory(desktopPath);
+              // Desktop exists, use it as initial path
+              initialPath = desktopPath;
+              console.log('✅ Starting at Desktop:', desktopPath);
+              break;
+            } catch (error) {
+              // Desktop doesn't exist or not accessible, fall back to virtual root
+              console.log('⚠️ Desktop not accessible, using virtual root');
+            }
+          }
+        }
+
+        // Set initial path
+        currentPath = initialPath;
+        selectedPath = initialPath;
+        currentHasDb = false;
 
         // Initialize UI
         updateBreadcrumb();
@@ -232,6 +311,7 @@ const FolderPicker = (() => {
 
         const handleCancel = () => {
           overlay.style.display = 'none';
+          resolveCallback = null;
           resolve(null);
         };
 
@@ -241,8 +321,12 @@ const FolderPicker = (() => {
             return;
           }
           overlay.style.display = 'none';
+          resolveCallback = null;
           resolve(selectedPath);
         };
+
+        // Store resolve callback for database click handler
+        resolveCallback = resolve;
 
         closeBtn.onclick = handleCancel;
         cancelBtn.onclick = handleCancel;
