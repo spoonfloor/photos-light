@@ -231,15 +231,18 @@ const PhotoPicker = (() => {
         const countText = folder.media_count > 0 ? ` (${folder.media_count})` : '';
 
         let iconClass = 'folder'; // unchecked
+        let stateClass = '';
         if (state === 'checked') {
           iconClass = 'check_box';
+          stateClass = 'selected';
         } else if (state === 'indeterminate') {
           iconClass = 'indeterminate_check_box';
+          stateClass = 'selected';
         }
 
         html += `
           <div class="photo-picker-item folder-item" data-folder-path="${folderPath}" data-type="folder">
-            <span class="photo-picker-checkbox material-symbols-outlined" data-path="${folderPath}" data-type="folder">${iconClass}</span>
+            <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${folderPath}" data-type="folder">${iconClass}</span>
             <span class="photo-picker-name">${folder.name}${countText}</span>
             <span class="photo-picker-arrow">→</span>
           </div>
@@ -252,10 +255,11 @@ const PhotoPicker = (() => {
         const checked = isSelected(filePath);
         const baseIcon = file.type === 'video' ? 'movie' : 'image';
         const iconClass = checked ? 'check_box' : baseIcon;
+        const stateClass = checked ? 'selected' : '';
 
         html += `
           <div class="photo-picker-item file-item" data-file-path="${filePath}" data-type="file">
-            <span class="photo-picker-checkbox material-symbols-outlined" data-path="${filePath}" data-type="file">${iconClass}</span>
+            <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${filePath}" data-type="file">${iconClass}</span>
             <span class="photo-picker-name">${file.name}</span>
           </div>
         `;
@@ -282,7 +286,13 @@ const PhotoPicker = (() => {
               toggleFile(path);
               // Update icon directly
               const currentIcon = checkbox.textContent;
-              checkbox.textContent = currentIcon === 'check_box' ? 'image' : 'check_box';
+              if (currentIcon === 'check_box') {
+                checkbox.textContent = 'image'; // or could detect if it was 'movie'
+                checkbox.classList.remove('selected');
+              } else {
+                checkbox.textContent = 'check_box';
+                checkbox.classList.add('selected');
+              }
             }
           });
         }

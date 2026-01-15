@@ -1661,8 +1661,11 @@ body {
   cursor: pointer;
   margin: 0;
   flex-shrink: 0;
-  color: #765fff;
   user-select: none;
+}
+
+.photo-picker-checkbox.selected {
+  color: #765fff;
 }
 
 .photo-picker-icon {
