@@ -4160,7 +4160,7 @@ async function loadNameLibraryOverlay() {
  * Show name library dialog and return user's chosen name
  * @returns {Promise<string|null>} Library name or null if cancelled
  */
-async function showNameLibraryDialog() {
+async function showNameLibraryDialog(options = {}) {
   return new Promise(async (resolve) => {
     // Load overlay if not already loaded
     let overlay = document.getElementById('nameLibraryOverlay');
@@ -4174,10 +4174,26 @@ async function showNameLibraryDialog() {
     const cancelBtn = document.getElementById('nameLibraryCancelBtn');
     const confirmBtn = document.getElementById('nameLibraryConfirmBtn');
     const closeBtn = document.getElementById('nameLibraryCloseBtn');
+    
+    // Update dialog title and subtitle if provided
+    const titleEl = overlay.querySelector('.import-title');
+    const subtitleEl = overlay.querySelector('.import-status-text p');
+    
+    if (titleEl && options.title) {
+      titleEl.textContent = options.title;
+    } else if (titleEl) {
+      titleEl.textContent = 'Create new library';
+    }
+    
+    if (subtitleEl && options.subtitle) {
+      subtitleEl.textContent = options.subtitle;
+    } else if (subtitleEl) {
+      subtitleEl.textContent = 'Your new library needs its own folder. Please give it a name.';
+    }
 
     // Reset state
     input.value = 'Photo Library';
-    errorDiv.style.display = 'none';
+    errorDiv.style.visibility = 'hidden';
     errorDiv.textContent = '';
 
     // Focus input and select text
@@ -4196,21 +4212,51 @@ async function showNameLibraryDialog() {
     }
 
     // Validate name
-    function validateName(name) {
+    async function validateName(name) {
       const sanitized = sanitizeFolderName(name);
 
       if (!sanitized) {
         errorDiv.textContent = 'Please enter a valid name';
-        errorDiv.style.display = 'block';
+        errorDiv.style.visibility = 'visible';
         return null;
       }
 
       if (sanitized.length > 255) {
         errorDiv.textContent = 'Name is too long (max 255 characters)';
-        errorDiv.style.display = 'block';
+        errorDiv.style.visibility = 'visible';
         return null;
       }
 
+      // Check if folder already exists on Desktop
+      try {
+        const homeResponse = await fetch('/api/filesystem/get-locations');
+        const homeData = await homeResponse.json();
+        const homeLocation = homeData.locations.find(loc => loc.path.includes('/Users/') && !loc.path.includes('Shared'));
+        
+        if (homeLocation) {
+          const desktopPath = homeLocation.path + '/Desktop/' + sanitized;
+          
+          // Check if this path exists
+          const checkResponse = await fetch('/api/filesystem/list-directory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: desktopPath }),
+          });
+          
+          // If the request succeeds, the folder exists
+          if (checkResponse.ok) {
+            errorDiv.textContent = 'A folder with this name already exists. Please choose another name.';
+            errorDiv.style.visibility = 'visible';
+            return null;
+          }
+        }
+      } catch (error) {
+        // Folder doesn't exist or error checking - proceed (we'll handle errors later in creation)
+        console.log('Folder check error (proceeding):', error);
+      }
+
+      // All validations passed - hide error
+      errorDiv.style.visibility = 'hidden';
       return sanitized;
     }
 
@@ -4236,8 +4282,8 @@ async function showNameLibraryDialog() {
     };
 
     // Handle confirm
-    const handleConfirm = () => {
-      const validated = validateName(input.value);
+    const handleConfirm = async () => {
+      const validated = await validateName(input.value);
       if (validated) {
         cleanup();
         resolve(validated);
@@ -4253,16 +4299,29 @@ async function showNameLibraryDialog() {
       }
     };
 
+    // Debounced validation on input
+    let debounceTimeout = null;
+    const handleInput = () => {
+      // Clear any pending validation
+      if (debounceTimeout) {
+        clearTimeout(debounceTimeout);
+      }
+      
+      // Hide error immediately while typing
+      errorDiv.style.visibility = 'hidden';
+      
+      // Schedule validation after 150ms of no typing
+      debounceTimeout = setTimeout(async () => {
+        await validateName(input.value);
+      }, 150);
+    };
+
     // Wire up listeners
     cancelBtn.addEventListener('click', handleCancel);
     closeBtn.addEventListener('click', handleCancel);
     confirmBtn.addEventListener('click', handleConfirm);
     input.addEventListener('keydown', handleKeyPress);
-
-    // Clear error on input
-    input.addEventListener('input', () => {
-      errorDiv.style.display = 'none';
-    });
+    input.addEventListener('input', handleInput);
 
     // Show overlay
     overlay.style.display = 'block';
@@ -4382,11 +4441,11 @@ async function browseSwitchLibrary() {
 /**
  * Create new library with name prompt (first-run flow)
  */
-async function createNewLibraryWithName() {
+async function createNewLibraryWithName(dialogOptions = {}) {
   try {
     // Step 1: Get library name from user
     console.log('📝 Asking for library name...');
-    const libraryName = await showNameLibraryDialog();
+    const libraryName = await showNameLibraryDialog(dialogOptions);
 
     if (!libraryName) {
       console.log('User cancelled library naming');
@@ -4630,8 +4689,11 @@ async function triggerImportWithLibraryCheck() {
       // No library - prompt to create one first
       console.log('📦 No library configured - starting library creation flow');
 
-      // Create new library with naming
-      const created = await createNewLibraryWithName();
+      // Create new library with naming (custom copy for Add photos flow)
+      const created = await createNewLibraryWithName({
+        title: 'Add photos',
+        subtitle: "Adding photos will create a new library. Please give your library folder a name."
+      });
 
       // If user cancelled at any point, show empty state
       if (!created) {
