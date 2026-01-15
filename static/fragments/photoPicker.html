@@ -1,0 +1,41 @@
+<!-- Photo Picker Dialog -->
+<div class="picker-overlay" id="photoPickerOverlay">
+  <div class="picker-card">
+    <!-- Header -->
+    <div class="picker-header">
+      <div class="picker-header-top">
+        <span class="picker-title" id="photoPickerTitle">Select photos</span>
+        <button class="picker-close-btn" id="photoPickerCloseBtn" aria-label="Close">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <p class="picker-subtitle" id="photoPickerSubtitle">Choose photos and folders to import</p>
+    </div>
+
+    <!-- Breadcrumb Navigation -->
+    <div class="breadcrumb" id="photoPickerBreadcrumb">
+      <span class="breadcrumb-icon material-symbols-outlined">folder</span>
+      <span class="breadcrumb-item active">…</span>
+    </div>
+
+    <!-- File List (scrollable) -->
+    <div class="photo-picker-list" id="photoPickerFileList">
+      <!-- Dynamic content populated by JavaScript -->
+    </div>
+
+    <!-- Selection Count -->
+    <div class="photo-picker-footer">
+      <span id="photoPickerCount" class="photo-picker-count">No items selected</span>
+    </div>
+
+    <!-- Actions -->
+    <div class="picker-actions">
+      <button class="import-btn import-btn-secondary" id="photoPickerCancelBtn">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="photoPickerContinueBtn" disabled>
+        Continue
+      </button>
+    </div>
+  </div>
+</div>

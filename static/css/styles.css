@@ -1623,3 +1623,108 @@ body {
   background: #444;
 }
 
+/* =============================================================================
+   PHOTO PICKER STYLES
+   ============================================================================= */
+
+.photo-picker-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  background: #232323;
+  min-height: 300px;
+}
+
+.photo-picker-item {
+  padding: 12px 14px;
+  background: #252525;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: all 0.2s;
+  font-size: 14px;
+}
+
+.photo-picker-item:hover {
+  background: #2a2a2a;
+  border-color: #765fff;
+}
+
+.photo-picker-checkbox {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.photo-picker-icon {
+  font-size: 20px;
+  font-family: 'Material Symbols Outlined';
+  font-weight: 200;
+  flex-shrink: 0;
+}
+
+.photo-picker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.photo-picker-arrow {
+  color: #666;
+  font-size: 12px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.photo-picker-footer {
+  padding: 12px 20px;
+  background: #1f1f1f;
+  border-top: 1px solid #2a2a2a;
+  flex-shrink: 0;
+}
+
+.photo-picker-count {
+  font-size: 13px;
+  color: #a8a8a8;
+}
+
+/* File items have clickable row */
+.photo-picker-item.file-item {
+  cursor: pointer;
+}
+
+/* Folder items have split targets */
+.photo-picker-item.folder-item {
+  cursor: default;
+}
+
+.photo-picker-item.folder-item .photo-picker-name,
+.photo-picker-item.folder-item .photo-picker-arrow {
+  cursor: pointer;
+}
+
+/* Photo picker list scrollbar */
+.photo-picker-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.photo-picker-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.photo-picker-list::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+.photo-picker-list::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
