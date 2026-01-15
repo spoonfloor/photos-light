@@ -22,7 +22,7 @@ const state = {
 // ============================================================================
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
 // ============================================================================
-const DEBUG_CLICK_TO_LOAD = true; // Set to false for production
+const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
 
 // =====================
 // APP BAR
@@ -1656,71 +1656,147 @@ function handleLightboxKeyboard(e) {
 }
 
 /**
+ * Helper function to calculate dimensions based on photo AR vs viewport AR
+ */
+function calculateMediaDimensions(photo) {
+  if (!photo.width || !photo.height) {
+    return {
+      width: '100vw',
+      height: '75vw',
+      maxHeight: '100vh'
+    };
+  }
+
+  const photoAR = photo.width / photo.height;
+  const viewportAR = window.innerWidth / window.innerHeight;
+
+  console.log(`📐 Photo ${photo.id}: ${photo.width}x${photo.height} (AR ${photoAR.toFixed(3)}) | Viewport AR: ${viewportAR.toFixed(3)}`);
+
+  if (photoAR > viewportAR) {
+    // Photo is wider than viewport → constrain by width
+    console.log(`  → Fill WIDTH (photo wider than viewport)`);
+    return {
+      width: '100vw',
+      height: `calc(100vw / ${photoAR})`
+    };
+  } else {
+    // Photo is narrower than viewport → constrain by height
+    console.log(`  → Fill HEIGHT (photo narrower than viewport)`);
+    return {
+      height: '100vh',
+      width: `calc(100vh * ${photoAR})`
+    };
+  }
+}
+
+/**
+ * Create placeholder element
+ */
+function createPlaceholder(photo, dims, isDebug = false) {
+  const placeholder = document.createElement('div');
+  placeholder.style.position = 'absolute';
+  
+  if (isDebug) {
+    placeholder.style.backgroundColor = 'rgba(255, 192, 203, 0.3)'; // Pink overlay for debug
+    placeholder.style.zIndex = '10';
+    placeholder.style.pointerEvents = 'none';
+  } else {
+    placeholder.style.backgroundColor = '#2a2a2a'; // Same as grid
+  }
+  
+  if (dims.width) placeholder.style.width = dims.width;
+  if (dims.height) placeholder.style.height = dims.height;
+  if (dims.maxHeight) placeholder.style.maxHeight = dims.maxHeight;
+  
+  return placeholder;
+}
+
+/**
  * Helper function to load media into lightbox content
  */
 function loadMediaIntoContent(content, photo, isVideo) {
-  content.innerHTML = '';
-  content.style.backgroundColor = 'transparent';
-
+  const dims = calculateMediaDimensions(photo);
+  
   if (isVideo) {
-    // Create video element
+    // For video, show placeholder and load
+    const placeholder = createPlaceholder(photo, dims);
+    content.appendChild(placeholder);
+    
     const video = document.createElement('video');
-    // video.src = `/api/photo/${photo.id}/file`; // Commented out to show gray placeholder permanently
+    video.src = `/api/photo/${photo.id}/file`;
     video.controls = true;
     video.autoplay = true;
-    video.style.maxWidth = '100vw';
-    video.style.maxHeight = '100%';
-    video.style.width = 'auto';
-    video.style.height = '100%';
-    video.style.objectFit = 'contain';
-    video.style.backgroundColor = '#2a2a2a'; // Gray placeholder
+    video.style.position = 'absolute';
     
-    // Force aspect ratio in CSS (critical for when video src is missing/loading)
-    if (photo.width && photo.height) {
-      video.style.aspectRatio = `${photo.width} / ${photo.height}`;
-    }
-
-    content.appendChild(video);
-  } else {
-    // Create image element
-    const img = document.createElement('img');
-    // img.src = `/api/photo/${photo.id}/file`; // Commented out to show gray placeholder permanently
-    const filename = photo.path
-      ? photo.path.split('/').pop()
-      : photo.filename || `Photo ${photo.id}`;
-    img.alt = filename;
-
-    // Set HTML width/height attributes for intrinsic dimensions
-    if (photo.width && photo.height) {
-      console.log(
-        '🔍 Photo dimensions:',
-        photo.width,
-        'x',
-        photo.height,
-        '- Aspect ratio:',
-        photo.width / photo.height
-      );
-      img.width = photo.width;
-      img.height = photo.height;
-      // Force aspect ratio in CSS (critical for when img src is missing/loading)
-      img.style.aspectRatio = `${photo.width} / ${photo.height}`;
-      // Override default width: auto to ensure aspect ratio is respected
-      img.style.width = '100%';
-      img.style.height = '100%';
-    }
-
-    // Styling
-    img.style.backgroundColor = '#2a2a2a';
-    img.style.maxWidth = '100%';
-    img.style.maxHeight = '100%';
-    img.style.objectFit = 'contain';
-
-    // Gray background while loading, remove once loaded
-    img.addEventListener('load', () => {
-      img.style.backgroundColor = 'transparent';
+    if (dims.width) video.style.width = dims.width;
+    if (dims.height) video.style.height = dims.height;
+    if (dims.maxHeight) video.style.maxHeight = dims.maxHeight;
+    
+    video.style.objectFit = 'contain';
+    video.style.backgroundColor = '#2a2a2a';
+    
+    video.addEventListener('loadeddata', () => {
+      if (placeholder.parentNode) {
+        content.removeChild(placeholder);
+      }
+      video.style.backgroundColor = 'transparent';
     });
-
-    content.appendChild(img);
+    
+    content.appendChild(video);
+    
+  } else {
+    // For images, preload in memory first
+    const img = new Image();
+    img.src = `/api/photo/${photo.id}/file`;
+    
+    // Check if already cached
+    if (img.complete && img.naturalWidth > 0) {
+      // Already loaded - add directly
+      console.log(`✅ Image ${photo.id} cached, showing immediately`);
+      img.style.position = 'absolute';
+      
+      if (dims.width) img.style.width = dims.width;
+      if (dims.height) img.style.height = dims.height;
+      if (dims.maxHeight) img.style.maxHeight = dims.maxHeight;
+      
+      img.style.objectFit = 'contain';
+      const filename = photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
+      img.alt = filename;
+      
+      content.appendChild(img);
+      
+    } else {
+      // Not cached - show placeholder while loading
+      console.log(`⏳ Image ${photo.id} loading...`);
+      const placeholder = createPlaceholder(photo, dims);
+      content.appendChild(placeholder);
+      
+      img.onload = () => {
+        console.log(`✅ Image ${photo.id} loaded`);
+        // Remove placeholder
+        if (placeholder.parentNode) {
+          content.removeChild(placeholder);
+        }
+        
+        // Add loaded image
+        img.style.position = 'absolute';
+        
+        if (dims.width) img.style.width = dims.width;
+        if (dims.height) img.style.height = dims.height;
+        if (dims.maxHeight) img.style.maxHeight = dims.maxHeight;
+        
+        img.style.objectFit = 'contain';
+        const filename = photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
+        img.alt = filename;
+        
+        content.appendChild(img);
+      };
+      
+      img.onerror = () => {
+        console.error(`❌ Image ${photo.id} failed to load`);
+        // Keep placeholder, optionally show error message
+      };
+    }
   }
 }
 
@@ -1747,41 +1823,15 @@ async function openLightbox(photoIndex) {
     photo.file_type === 'video' ||
     (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
 
-  // DEBUG MODE: Show gray box, require click to load
+  // DEBUG MODE: Show pink overlay to verify sizing
   if (DEBUG_CLICK_TO_LOAD) {
-    const placeholder = document.createElement('div');
-    placeholder.style.backgroundColor = 'pink';
-    placeholder.style.cursor = 'pointer';
+    // Load media normally (with preload logic)
+    loadMediaIntoContent(content, photo, isVideo);
     
-    if (photo.width && photo.height) {
-      const photoAR = photo.width / photo.height;
-      const viewportAR = window.innerWidth / window.innerHeight;
-      
-      console.log(`📐 Photo ${photo.id}: ${photo.width}x${photo.height} (AR ${photoAR.toFixed(3)}) | Viewport AR: ${viewportAR.toFixed(3)}`);
-      
-      if (photoAR > viewportAR) {
-        // Photo is wider than viewport → constrain by width → black bars top/bottom
-        placeholder.style.width = '100vw';
-        placeholder.style.height = `calc(100vw / ${photoAR})`;
-        console.log(`  → Fill WIDTH (photo wider than viewport)`);
-      } else {
-        // Photo is narrower than viewport → constrain by height → black bars left/right
-        placeholder.style.height = '100vh';
-        placeholder.style.width = `calc(100vh * ${photoAR})`;
-        console.log(`  → Fill HEIGHT (photo narrower than viewport)`);
-      }
-    } else {
-      // fallback
-      placeholder.style.width = '100vw';
-      placeholder.style.height = '75vw';
-      placeholder.style.maxHeight = '100vh';
-    }
-
-    placeholder.addEventListener('click', () => {
-      loadMediaIntoContent(content, photo, isVideo);
-    });
-
-    content.appendChild(placeholder);
+    // Add pink debug overlay on top
+    const dims = calculateMediaDimensions(photo);
+    const debugOverlay = createPlaceholder(photo, dims, true);
+    content.appendChild(debugOverlay);
   } else {
     // PRODUCTION MODE: Auto-load media immediately
     loadMediaIntoContent(content, photo, isVideo);
