@@ -19,6 +19,11 @@ const state = {
   navigateToMonth: null, // Month to navigate to after closing lightbox (e.g., '2025-12')
 };
 
+// ============================================================================
+// DEBUG FLAG - Click-to-load lightbox (set to false to restore auto-load)
+// ============================================================================
+const DEBUG_CLICK_TO_LOAD = true; // Set to false for production
+
 // =====================
 // APP BAR
 // =====================
@@ -28,7 +33,7 @@ function loadAppBar() {
   const mount = document.getElementById('appBarMount');
 
   // Check session cache first (with version check)
-  const APP_BAR_VERSION = '41'; // Increment this when appBar changes
+  const APP_BAR_VERSION = '45'; // Increment this when appBar changes
   try {
     const cachedVersion = sessionStorage.getItem('photoViewer_appBarVersion');
     const cached = sessionStorage.getItem('photoViewer_appBarShell');
@@ -42,7 +47,7 @@ function loadAppBar() {
   }
 
   // Fetch fragment
-  return fetch('fragments/appBar.html?v=15')
+  return fetch('fragments/appBar.html?v=19')
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load app bar (${r.status})`);
       return r.text();
@@ -201,12 +206,50 @@ async function populateDatePicker() {
     // Set to most recent year by default
     if (data.years.length > 0) {
       yearPicker.value = data.years[0];
+      
+      // Show the date picker now that we have dates
+      const datePickerContainer = document.querySelector('.date-picker');
+      if (datePickerContainer) {
+        datePickerContainer.style.visibility = 'visible';
+      }
+      
+      // Enable photo-related actions
+      enablePhotoRelatedActions();
     }
 
     console.log(`📅 Loaded ${data.years.length} years`);
   } catch (error) {
     console.warn('⚠️  Date picker disabled:', error.message);
   }
+}
+
+/**
+ * Enable actions that require photos to be present
+ */
+function enablePhotoRelatedActions() {
+  // Enable sort button
+  const sortBtn = document.getElementById('sortToggleBtn');
+  if (sortBtn) {
+    sortBtn.style.opacity = '1';
+    sortBtn.style.pointerEvents = 'auto';
+  }
+  
+  // Enable utility menu items (except Switch library which is always enabled)
+  const utilityItems = [
+    'cleanOrganizeBtn',
+    'rebuildDatabaseBtn', 
+    'removeDuplicatesBtn',
+    'rebuildThumbnailsBtn'
+  ];
+  
+  utilityItems.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) {
+      btn.style.opacity = '1';
+      btn.style.pointerEvents = 'auto';
+      btn.classList.remove('disabled');
+    }
+  });
 }
 
 /**
@@ -1613,6 +1656,50 @@ function handleLightboxKeyboard(e) {
 }
 
 /**
+ * Helper function to load media into lightbox content
+ */
+function loadMediaIntoContent(content, photo, isVideo) {
+  content.innerHTML = '';
+  content.style.backgroundColor = 'transparent';
+
+  if (isVideo) {
+    // Create video element
+    const video = document.createElement('video');
+    video.src = `/api/photo/${photo.id}/file`;
+    video.controls = true;
+    video.autoplay = true;
+    video.style.maxWidth = '100vw';
+    video.style.maxHeight = '100%';
+    video.style.width = 'auto';
+    video.style.height = '100%';
+    video.style.objectFit = 'contain';
+
+    content.appendChild(video);
+  } else {
+    // Create image element
+    const img = document.createElement('img');
+    img.src = `/api/photo/${photo.id}/file`;
+    const filename = photo.path
+      ? photo.path.split('/').pop()
+      : photo.filename || `Photo ${photo.id}`;
+    img.alt = filename;
+
+    img.style.maxWidth = '100vw';
+    img.style.maxHeight = '100%';
+    img.style.width = 'auto';
+    img.style.height = '100%';
+    img.style.objectFit = 'contain';
+
+    // Set aspect ratio if available to prevent layout shift
+    if (photo.width && photo.height) {
+      img.style.aspectRatio = `${photo.width} / ${photo.height}`;
+    }
+
+    content.appendChild(img);
+  }
+}
+
+/**
  * Open lightbox with photo at index
  */
 async function openLightbox(photoIndex) {
@@ -1628,43 +1715,36 @@ async function openLightbox(photoIndex) {
 
   // Clear previous content
   content.innerHTML = '';
+  content.style.backgroundColor = 'transparent';
 
   // Determine if photo or video - check both file_type field and path extension
   const isVideo =
     photo.file_type === 'video' ||
     (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
 
-  if (isVideo) {
-    // Create video element
-    const video = document.createElement('video');
-    video.src = `/api/photo/${photo.id}/file`;
-    video.controls = true;
-    video.autoplay = true;
+  // DEBUG MODE: Show gray box, require click to load
+  if (DEBUG_CLICK_TO_LOAD) {
+    const placeholder = document.createElement('div');
+    placeholder.style.backgroundColor = '#2a2a2a';
+    placeholder.style.cursor = 'pointer';
+    placeholder.style.display = 'flex';
+    placeholder.style.alignItems = 'center';
+    placeholder.style.justifyContent = 'center';
 
-    // Videos self-report dimensions - don't set aspect-ratio
-
-    content.appendChild(video);
-  } else {
-    // Create image element
-    const img = document.createElement('img');
-    img.src = `/api/photo/${photo.id}/file`;
-    const filename = photo.path
-      ? photo.path.split('/').pop()
-      : photo.filename || `Photo ${photo.id}`;
-    img.alt = filename;
-
-    // Set aspect ratio if available to prevent layout shift
     if (photo.width && photo.height) {
-      img.style.aspectRatio = `${photo.width} / ${photo.height}`;
+      placeholder.style.aspectRatio = `${photo.width} / ${photo.height}`;
+      placeholder.style.maxWidth = '100vw';
+      placeholder.style.maxHeight = '100vh';
     }
 
-    // Gray background while loading, remove once loaded
-    img.style.backgroundColor = '#2a2a2a';
-    img.addEventListener('load', () => {
-      img.style.backgroundColor = 'transparent';
+    placeholder.addEventListener('click', () => {
+      loadMediaIntoContent(content, photo, isVideo);
     });
 
-    content.appendChild(img);
+    content.appendChild(placeholder);
+  } else {
+    // PRODUCTION MODE: Auto-load media immediately
+    loadMediaIntoContent(content, photo, isVideo);
   }
 
   overlay.style.display = 'flex';
@@ -2749,7 +2829,7 @@ async function loadUtilitiesMenu() {
   if (utilitiesMenuLoaded) return;
 
   try {
-    const response = await fetch('fragments/utilitiesMenu.html');
+    const response = await fetch('fragments/utilitiesMenu.html?v=2');
     if (!response.ok) throw new Error('Failed to load utilities menu');
 
     const html = await response.text();
