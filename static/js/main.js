@@ -22,7 +22,7 @@ const state = {
 // ============================================================================
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
 // ============================================================================
-const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
+const DEBUG_CLICK_TO_LOAD = true; // Set to false for production
 
 // =====================
 // APP BAR
@@ -1665,7 +1665,7 @@ function loadMediaIntoContent(content, photo, isVideo) {
   if (isVideo) {
     // Create video element
     const video = document.createElement('video');
-    video.src = `/api/photo/${photo.id}/file`;
+    // video.src = `/api/photo/${photo.id}/file`; // Commented out to show gray placeholder permanently
     video.controls = true;
     video.autoplay = true;
     video.style.maxWidth = '100vw';
@@ -1673,30 +1673,49 @@ function loadMediaIntoContent(content, photo, isVideo) {
     video.style.width = 'auto';
     video.style.height = '100%';
     video.style.objectFit = 'contain';
+    video.style.backgroundColor = '#2a2a2a'; // Gray placeholder
+    
+    // Force aspect ratio in CSS (critical for when video src is missing/loading)
+    if (photo.width && photo.height) {
+      video.style.aspectRatio = `${photo.width} / ${photo.height}`;
+    }
 
     content.appendChild(video);
   } else {
     // Create image element
     const img = document.createElement('img');
-    img.src = `/api/photo/${photo.id}/file`;
+    // img.src = `/api/photo/${photo.id}/file`; // Commented out to show gray placeholder permanently
     const filename = photo.path
       ? photo.path.split('/').pop()
       : photo.filename || `Photo ${photo.id}`;
     img.alt = filename;
 
-    img.style.maxWidth = '100vw';
-    img.style.maxHeight = '100%';
-    img.style.width = 'auto';
-    img.style.height = '100%';
-    img.style.objectFit = 'contain';
-
-    // Set aspect ratio if available to prevent layout shift
+    // Set HTML width/height attributes for intrinsic dimensions
     if (photo.width && photo.height) {
+      console.log(
+        '🔍 Photo dimensions:',
+        photo.width,
+        'x',
+        photo.height,
+        '- Aspect ratio:',
+        photo.width / photo.height
+      );
+      img.width = photo.width;
+      img.height = photo.height;
+      // Force aspect ratio in CSS (critical for when img src is missing/loading)
       img.style.aspectRatio = `${photo.width} / ${photo.height}`;
+      // Override default width: auto to ensure aspect ratio is respected
+      img.style.width = '100%';
+      img.style.height = '100%';
     }
 
-    // Gray background while loading, remove once loaded
+    // Styling
     img.style.backgroundColor = '#2a2a2a';
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '100%';
+    img.style.objectFit = 'contain';
+
+    // Gray background while loading, remove once loaded
     img.addEventListener('load', () => {
       img.style.backgroundColor = 'transparent';
     });
@@ -1731,15 +1750,30 @@ async function openLightbox(photoIndex) {
   // DEBUG MODE: Show gray box, require click to load
   if (DEBUG_CLICK_TO_LOAD) {
     const placeholder = document.createElement('div');
-    placeholder.style.backgroundColor = '#2a2a2a';
+    placeholder.style.backgroundColor = 'pink';
     placeholder.style.cursor = 'pointer';
-    placeholder.style.display = 'flex';
-    placeholder.style.alignItems = 'center';
-    placeholder.style.justifyContent = 'center';
-
+    
     if (photo.width && photo.height) {
-      placeholder.style.aspectRatio = `${photo.width} / ${photo.height}`;
-      placeholder.style.maxWidth = '100vw';
+      const photoAR = photo.width / photo.height;
+      const viewportAR = window.innerWidth / window.innerHeight;
+      
+      console.log(`📐 Photo ${photo.id}: ${photo.width}x${photo.height} (AR ${photoAR.toFixed(3)}) | Viewport AR: ${viewportAR.toFixed(3)}`);
+      
+      if (photoAR > viewportAR) {
+        // Photo is wider than viewport → constrain by width → black bars top/bottom
+        placeholder.style.width = '100vw';
+        placeholder.style.height = `calc(100vw / ${photoAR})`;
+        console.log(`  → Fill WIDTH (photo wider than viewport)`);
+      } else {
+        // Photo is narrower than viewport → constrain by height → black bars left/right
+        placeholder.style.height = '100vh';
+        placeholder.style.width = `calc(100vh * ${photoAR})`;
+        console.log(`  → Fill HEIGHT (photo narrower than viewport)`);
+      }
+    } else {
+      // fallback
+      placeholder.style.width = '100vw';
+      placeholder.style.height = '75vw';
       placeholder.style.maxHeight = '100vh';
     }
 
@@ -4221,53 +4255,72 @@ function closeSwitchLibraryOverlay() {
 }
 
 /**
- * Browse for library (triggers native folder picker)
+ * Browse for library (uses custom folder picker)
  */
 async function browseSwitchLibrary() {
   try {
-    console.log('🔍 Opening folder picker...');
+    console.log('🔍 Opening custom folder picker...');
 
-    // Blur browser window to ensure focus shifts to native folder picker
-    window.blur();
-
-    const script =
-      'POSIX path of (choose folder with prompt "Select photo library folder" with multiple selections allowed)';
-
-    const response = await fetch('/api/library/browse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script }),
+    const selectedPath = await FolderPicker.show({
+      title: 'Open library',
+      subtitle: 'Select an existing library folder or choose where to create one'
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      if (error.status === 'cancelled') {
-        console.log('User cancelled folder selection');
-        return false;
-      }
-      throw new Error(error.error || 'Failed to browse');
-    }
-
-    const result = await response.json();
-
-    if (result.status === 'cancelled') {
+    if (!selectedPath) {
       console.log('User cancelled folder selection');
       return false;
     }
 
-    if (result.status === 'exists') {
+    console.log('📂 Selected path:', selectedPath);
+
+    // Check if path has a database
+    const potentialDbPath = selectedPath + '/photo_library.db';
+    
+    // Try to check if library exists via backend
+    const checkResponse = await fetch('/api/library/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: selectedPath }),
+    });
+
+    const checkResult = await checkResponse.json();
+
+    if (checkResult.exists) {
       // Existing library - switch immediately
-      console.log('✅ Found existing library:', result.library_path);
-      await switchToLibrary(result.library_path, result.db_path);
-    } else if (result.status === 'needs_init') {
-      // New library - show confirmation
-      console.log('📦 New library needs initialization:', result.library_path);
+      console.log('✅ Found existing library:', selectedPath);
       closeSwitchLibraryOverlay();
-      await showCreateLibraryConfirmation(result.library_path, result.db_path);
+      await switchToLibrary(selectedPath, potentialDbPath);
+    } else {
+      // No library - create new one and switch
+      console.log('📦 Creating new library at:', selectedPath);
+      closeSwitchLibraryOverlay();
+      
+      // Create library
+      const createResponse = await fetch('/api/library/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          library_path: selectedPath, 
+          db_path: potentialDbPath 
+        }),
+      });
+
+      if (!createResponse.ok) {
+        const error = await createResponse.json();
+        throw new Error(error.error || 'Failed to create library');
+      }
+
+      console.log('✅ Library created');
+
+      // Switch to new library
+      await switchToLibrary(selectedPath, potentialDbPath);
     }
+
+    return true;
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
+    return false;
   }
 }
 
@@ -4287,38 +4340,22 @@ async function createNewLibraryWithName() {
 
     console.log('📚 Library name:', libraryName);
 
-    // Step 2: Choose parent location
-    console.log('🔍 Opening folder picker for parent location...');
-    window.blur();
-
-    const script =
-      'POSIX path of (choose folder with prompt "Choose where to create your library")';
-
-    const response = await fetch('/api/library/browse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script }),
+    // Step 2: Choose parent location using custom folder picker
+    console.log('🔍 Opening custom folder picker for parent location...');
+    
+    const parentPath = await FolderPicker.show({
+      title: 'Library location',
+      subtitle: `Choose where to create "${libraryName}"`
     });
 
-    if (!response.ok) {
-      const error = await response.json();
-      if (error.status === 'cancelled') {
-        console.log('User cancelled folder selection');
-        return false;
-      }
-      throw new Error(error.error || 'Failed to browse');
-    }
-
-    const result = await response.json();
-
-    if (result.status === 'cancelled') {
+    if (!parentPath) {
       console.log('User cancelled folder selection');
       return false;
     }
 
     // Step 3: Combine parent path with library name
-    const parentPath = result.library_path.replace(/\/+$/, ''); // Remove trailing slashes
-    const fullLibraryPath = `${parentPath}/${libraryName}`;
+    const cleanParentPath = parentPath.replace(/\/+$/, ''); // Remove trailing slashes
+    const fullLibraryPath = `${cleanParentPath}/${libraryName}`;
     const dbPath = `${fullLibraryPath}/photo_library.db`;
 
     console.log('📦 Creating library at:', fullLibraryPath);
