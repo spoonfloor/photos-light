@@ -912,6 +912,13 @@ body {
   pointer-events: none;
 }
 
+/* Inactive lightbox nav button */
+.lightbox-nav-btn.inactive {
+  opacity: 0.3;
+  pointer-events: none;
+  cursor: default;
+}
+
 /* Photo thumbnail image */
 .photo-thumb {
   width: 100%;

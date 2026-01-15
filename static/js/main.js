@@ -20,9 +20,9 @@ const state = {
 };
 
 // ============================================================================
-// DEBUG FLAG - Click-to-load lightbox (set to false to restore auto-load)
+// DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
 // ============================================================================
-const DEBUG_CLICK_TO_LOAD = true; // Set to false for production
+const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
 
 // =====================
 // APP BAR
@@ -206,13 +206,13 @@ async function populateDatePicker() {
     // Set to most recent year by default
     if (data.years.length > 0) {
       yearPicker.value = data.years[0];
-      
+
       // Show the date picker now that we have dates
       const datePickerContainer = document.querySelector('.date-picker');
       if (datePickerContainer) {
         datePickerContainer.style.visibility = 'visible';
       }
-      
+
       // Enable photo-related actions
       enablePhotoRelatedActions();
     }
@@ -233,16 +233,16 @@ function enablePhotoRelatedActions() {
     sortBtn.style.opacity = '1';
     sortBtn.style.pointerEvents = 'auto';
   }
-  
+
   // Enable utility menu items (except Switch library which is always enabled)
   const utilityItems = [
     'cleanOrganizeBtn',
-    'rebuildDatabaseBtn', 
+    'rebuildDatabaseBtn',
     'removeDuplicatesBtn',
-    'rebuildThumbnailsBtn'
+    'rebuildThumbnailsBtn',
   ];
-  
-  utilityItems.forEach(id => {
+
+  utilityItems.forEach((id) => {
     const btn = document.getElementById(id);
     if (btn) {
       btn.style.opacity = '1';
@@ -1695,6 +1695,12 @@ function loadMediaIntoContent(content, photo, isVideo) {
       img.style.aspectRatio = `${photo.width} / ${photo.height}`;
     }
 
+    // Gray background while loading, remove once loaded
+    img.style.backgroundColor = '#2a2a2a';
+    img.addEventListener('load', () => {
+      img.style.backgroundColor = 'transparent';
+    });
+
     content.appendChild(img);
   }
 }
@@ -1829,6 +1835,9 @@ async function openLightbox(photoIndex) {
   showLightboxUI();
   resetLightboxUITimeout();
 
+  // Update arrow states based on position
+  updateLightboxArrowStates();
+
   console.log(`🖼️ Opened lightbox for photo ${photo.id} (index ${photoIndex})`);
 }
 
@@ -1921,6 +1930,33 @@ function closeLightbox() {
   }
 
   console.log('✖️ Closed lightbox');
+}
+
+/**
+ * Update lightbox navigation arrow states based on current position
+ */
+function updateLightboxArrowStates() {
+  const prevBtn = document.getElementById('lightboxPrevBtn');
+  const nextBtn = document.getElementById('lightboxNextBtn');
+
+  if (!prevBtn || !nextBtn) return;
+
+  const currentIndex = state.lightboxPhotoIndex;
+  const totalPhotos = state.photos.length;
+
+  // Dim left arrow if at first photo
+  if (currentIndex <= 0) {
+    prevBtn.classList.add('inactive');
+  } else {
+    prevBtn.classList.remove('inactive');
+  }
+
+  // Dim right arrow if at last photo
+  if (currentIndex >= totalPhotos - 1) {
+    nextBtn.classList.add('inactive');
+  } else {
+    nextBtn.classList.remove('inactive');
+  }
 }
 
 /**
@@ -2062,7 +2098,7 @@ function setupThumbnailLazyLoading() {
 function renderFirstRunEmptyState() {
   const container = document.getElementById('photoContainer');
   if (!container) return;
-  
+
   container.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
       <div style="text-align: center;">
@@ -3893,15 +3929,15 @@ async function executeRebuildThumbnails() {
     if (result.cleared_count > 0) {
       console.log('🎨 Clearing visible thumbnails for visual confirmation...');
       const allThumbs = document.querySelectorAll('.photo-thumb');
-      allThumbs.forEach(thumb => {
+      allThumbs.forEach((thumb) => {
         thumb.removeAttribute('src');
         thumb.classList.remove('loading', 'error');
         thumb.classList.add('loading'); // Show loading state
       });
-      
+
       // Show blank grid for 300ms before reloading
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
       // Reload grid with fresh thumbnails
       console.log('🔄 Reloading grid with fresh thumbnails...');
       await loadAndRenderPhotos(false);
@@ -4073,7 +4109,7 @@ async function showNameLibraryDialog() {
     // Validate name
     function validateName(name) {
       const sanitized = sanitizeFolderName(name);
-      
+
       if (!sanitized) {
         errorDiv.textContent = 'Please enter a valid name';
         errorDiv.style.display = 'block';
@@ -4097,7 +4133,7 @@ async function showNameLibraryDialog() {
       const newConfirmBtn = confirmBtn.cloneNode(true);
       const newCloseBtn = closeBtn.cloneNode(true);
       const newInput = input.cloneNode(true);
-      
+
       cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
       confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
       closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
@@ -4194,7 +4230,8 @@ async function browseSwitchLibrary() {
     // Blur browser window to ensure focus shifts to native folder picker
     window.blur();
 
-    const script = 'POSIX path of (choose folder with prompt "Select photo library folder" with multiple selections allowed)';
+    const script =
+      'POSIX path of (choose folder with prompt "Select photo library folder" with multiple selections allowed)';
 
     const response = await fetch('/api/library/browse', {
       method: 'POST',
@@ -4242,7 +4279,7 @@ async function createNewLibraryWithName() {
     // Step 1: Get library name from user
     console.log('📝 Asking for library name...');
     const libraryName = await showNameLibraryDialog();
-    
+
     if (!libraryName) {
       console.log('User cancelled library naming');
       return false;
@@ -4254,7 +4291,8 @@ async function createNewLibraryWithName() {
     console.log('🔍 Opening folder picker for parent location...');
     window.blur();
 
-    const script = 'POSIX path of (choose folder with prompt "Choose where to create your library")';
+    const script =
+      'POSIX path of (choose folder with prompt "Choose where to create your library")';
 
     const response = await fetch('/api/library/browse', {
       method: 'POST',
@@ -4320,7 +4358,7 @@ async function createNewLibraryWithName() {
 
     // Step 7: Immediately show import dialog
     await triggerImport();
-    
+
     return true;
   } catch (error) {
     console.error('❌ Failed to create library:', error);
@@ -4496,17 +4534,17 @@ async function triggerImportWithLibraryCheck() {
     if (status.status === 'not_configured') {
       // No library - prompt to create one first
       console.log('📦 No library configured - starting library creation flow');
-      
+
       // Create new library with naming
       const created = await createNewLibraryWithName();
-      
+
       // If user cancelled at any point, show empty state
       if (!created) {
         console.log('User cancelled library creation');
         renderFirstRunEmptyState();
         return;
       }
-      
+
       // After library is created, the page will reload automatically
       // (handled by createAndSwitchLibrary -> switchToLibrary -> reload)
       return;
@@ -4514,7 +4552,6 @@ async function triggerImportWithLibraryCheck() {
 
     // Library exists - proceed with normal import
     await triggerImport();
-    
   } catch (error) {
     console.error('❌ Failed to check library status:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
