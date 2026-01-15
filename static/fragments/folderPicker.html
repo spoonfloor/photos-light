@@ -1,0 +1,30 @@
+<!-- Custom Folder Picker Dialog -->
+<div class="picker-overlay" id="folderPickerOverlay" style="display: none;">
+  <div class="picker-card">
+    <div class="picker-header">
+      <div class="picker-header-top">
+        <span class="picker-title" id="folderPickerTitle">Library location</span>
+        <button class="picker-close-btn" id="folderPickerCloseBtn" aria-label="Close">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <p class="picker-subtitle" id="folderPickerSubtitle">
+        Choose where you'd like to create your new library
+      </p>
+    </div>
+
+    <div class="breadcrumb" id="folderPickerBreadcrumb"></div>
+
+    <div class="folder-list" id="folderPickerFolderList"></div>
+
+    <div class="selected-path">
+      <p>Selected:</p>
+      <p id="folderPickerSelectedPath">No path selected</p>
+    </div>
+
+    <div class="picker-actions">
+      <button class="import-btn import-btn-secondary" id="folderPickerCancelBtn">Cancel</button>
+      <button class="import-btn import-btn-primary" id="folderPickerChooseBtn">Choose</button>
+    </div>
+  </div>
+</div>

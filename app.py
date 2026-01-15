@@ -331,13 +331,15 @@ def get_photos():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Lightweight query - just id, date, month, file_type, current_path for grid structure
+        # Lightweight query - just id, date, month, file_type, current_path, width, height for grid structure
         query = f"""
             SELECT 
                 id,
                 date_taken,
                 file_type,
-                current_path
+                current_path,
+                width,
+                height
             FROM photos
             WHERE date_taken IS NOT NULL
             ORDER BY date_taken {order_by}
@@ -369,6 +371,8 @@ def get_photos():
                 'month': month,
                 'file_type': row['file_type'],
                 'path': row['current_path'],
+                'width': row['width'],
+                'height': row['height'],
             })
         
         conn.close()
@@ -2138,15 +2142,128 @@ def validate_library_path():
         error_logger.error(f"Library path validation failed: {e}")
         return jsonify({'status': 'invalid', 'error': str(e)}), 500
 
+# ============================================================================
+# FILESYSTEM API - Custom Folder Picker Backend
+# ============================================================================
+
+@app.route('/api/filesystem/list-directory', methods=['POST'])
+def list_directory():
+    """List folders in a directory for custom folder picker"""
+    try:
+        data = request.json
+        path = data.get('path', '/')
+        
+        # Validate path exists and is accessible
+        if not os.path.exists(path):
+            return jsonify({'error': 'Path does not exist'}), 404
+        
+        if not os.path.isdir(path):
+            return jsonify({'error': 'Path is not a directory'}), 400
+        
+        # List directory contents
+        try:
+            items = os.listdir(path)
+        except PermissionError:
+            return jsonify({'error': 'Permission denied'}), 403
+        
+        # Filter to only directories, exclude hidden files
+        folders = []
+        for item in items:
+            # Skip hidden files/folders
+            if item.startswith('.'):
+                continue
+            
+            item_path = os.path.join(path, item)
+            try:
+                if os.path.isdir(item_path):
+                    folders.append(item)
+            except (PermissionError, OSError):
+                # Skip items we can't access
+                continue
+        
+        # Sort alphabetically
+        folders.sort()
+        
+        return jsonify({
+            'folders': folders,
+            'current_path': path
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error listing directory: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/filesystem/get-locations', methods=['GET'])
+def get_locations():
+    """Get curated list of top-level locations for folder picker"""
+    try:
+        locations = []
+        
+        # Add current user
+        home_dir = os.path.expanduser('~')
+        username = os.path.basename(home_dir)
+        locations.append({
+            'name': username,
+            'path': home_dir
+        })
+        
+        # Add Shared folder if exists
+        shared_path = '/Users/Shared'
+        if os.path.exists(shared_path):
+            locations.append({
+                'name': 'Shared',
+                'path': shared_path
+            })
+        
+        # Add mounted volumes
+        volumes_path = '/Volumes'
+        if os.path.exists(volumes_path):
+            try:
+                volumes = os.listdir(volumes_path)
+                for volume in volumes:
+                    # Skip Macintosh HD (boot volume) - it's just /
+                    # Skip hidden volumes
+                    if volume.startswith('.') or volume == 'Macintosh HD':
+                        continue
+                    
+                    volume_path = os.path.join(volumes_path, volume)
+                    if os.path.isdir(volume_path):
+                        locations.append({
+                            'name': volume,
+                            'path': volume_path
+                        })
+            except (PermissionError, OSError):
+                # If we can't read /Volumes, skip it
+                pass
+        
+        return jsonify({'locations': locations})
+        
+    except Exception as e:
+        app.logger.error(f"Error getting locations: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/library/browse', methods=['POST'])
 def browse_library():
     """Open native macOS folder picker for library selection"""
+    # Test comment to trigger reload
     try:
         data = request.json
         script = data.get('script')
         
         if not script:
             return jsonify({'error': 'No script provided'}), 400
+        
+        # Debug: Print environment info
+        import os
+        print(f"\n=== DEBUG INFO ===")
+        print(f"USER: {os.environ.get('USER', 'NOT SET')}")
+        print(f"HOME: {os.environ.get('HOME', 'NOT SET')}")
+        print(f"DISPLAY: {os.environ.get('DISPLAY', 'NOT SET')}")
+        print(f"Running as PID: {os.getpid()}")
+        print(f"Script: {script}")
+        print("==================\n")
         
         result = subprocess.run(
             ['osascript', '-e', script],
@@ -2156,8 +2273,14 @@ def browse_library():
         )
         
         if result.returncode != 0:
-            # User cancelled
-            return jsonify({'status': 'cancelled'})
+            # User cancelled or error
+            # Temporarily return stderr for debugging
+            return jsonify({
+                'status': 'cancelled',
+                'debug_returncode': result.returncode,
+                'debug_stderr': result.stderr,
+                'debug_stdout': result.stdout
+            })
         
         selected_path = result.stdout.strip()
         
@@ -2187,6 +2310,35 @@ def browse_library():
     except Exception as e:
         error_logger.error(f"Browse library failed: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/library/check', methods=['POST'])
+def check_library():
+    """Check if a path contains a valid library"""
+    try:
+        data = request.json
+        library_path = data.get('library_path')
+        
+        if not library_path:
+            return jsonify({'error': 'Missing library_path'}), 400
+        
+        # Check if path exists
+        if not os.path.exists(library_path):
+            return jsonify({'exists': False})
+        
+        # Check if database exists
+        db_path = os.path.join(library_path, 'photo_library.db')
+        exists = os.path.exists(db_path)
+        
+        return jsonify({
+            'exists': exists,
+            'library_path': library_path,
+            'db_path': db_path
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Error checking library: {e}")
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/library/create', methods=['POST'])
 def create_library():
