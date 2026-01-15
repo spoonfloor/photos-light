@@ -46,6 +46,7 @@ for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR
 # Supported media file extensions
 PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
 VIDEO_EXTENSIONS = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+ALL_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 
 # ============================================================================
 # LOGGING CONFIGURATION (Hybrid Approach: print() + persistent logs)
@@ -2148,10 +2149,41 @@ def validate_library_path():
 
 @app.route('/api/filesystem/list-directory', methods=['POST'])
 def list_directory():
-    """List folders in a directory for custom folder picker"""
+    """List folders and files in a directory for custom picker"""
+    
+    def count_media_recursive(dir_path, max_depth=10, current_depth=0):
+        """Recursively count media files in a directory"""
+        if current_depth >= max_depth:
+            return 0
+        
+        count = 0
+        try:
+            items = os.listdir(dir_path)
+            for item in items:
+                # Skip hidden files
+                if item.startswith('.'):
+                    continue
+                
+                item_path = os.path.join(dir_path, item)
+                
+                try:
+                    if os.path.isfile(item_path):
+                        ext = os.path.splitext(item)[1].lower()
+                        if ext in ALL_MEDIA_EXTENSIONS:
+                            count += 1
+                    elif os.path.isdir(item_path):
+                        count += count_media_recursive(item_path, max_depth, current_depth + 1)
+                except (PermissionError, OSError):
+                    continue
+        except (PermissionError, OSError):
+            pass
+        
+        return count
+    
     try:
         data = request.json
         path = data.get('path', '/')
+        include_files = data.get('include_files', False)  # New parameter for photo picker
         
         # Validate path exists and is accessible
         if not os.path.exists(path):
@@ -2166,9 +2198,9 @@ def list_directory():
         except PermissionError:
             return jsonify({'error': 'Permission denied'}), 403
         
-        # Filter to only directories, exclude hidden files
-        # Also check for photo_library.db file
+        # Filter and categorize items
         folders = []
+        files = []
         has_db = False
         
         for item in items:
@@ -2188,19 +2220,47 @@ def list_directory():
             item_path = os.path.join(path, item)
             try:
                 if os.path.isdir(item_path):
-                    folders.append(item)
+                    # Count media files in folder (if photo picker mode)
+                    media_count = 0
+                    if include_files:
+                        media_count = count_media_recursive(item_path)
+                    
+                    folders.append({
+                        'name': item,
+                        'media_count': media_count
+                    })
+                elif os.path.isfile(item_path) and include_files:
+                    # Only include media files
+                    ext = os.path.splitext(item)[1].lower()
+                    if ext in ALL_MEDIA_EXTENSIONS:
+                        file_type = 'video' if ext in VIDEO_EXTENSIONS else 'photo'
+                        files.append({
+                            'name': item,
+                            'type': file_type
+                        })
             except (PermissionError, OSError):
                 # Skip items we can't access
                 continue
         
         # Sort alphabetically
-        folders.sort()
+        folders.sort(key=lambda x: x['name'] if isinstance(x, dict) else x)
+        if include_files:
+            files.sort(key=lambda x: x['name'])
         
-        return jsonify({
-            'folders': folders,
-            'has_db': has_db,
-            'current_path': path
-        })
+        response = {
+            'current_path': path,
+            'has_db': has_db
+        }
+        
+        # Return format depends on mode
+        if include_files:
+            response['folders'] = folders
+            response['files'] = files
+        else:
+            # Legacy format for folder picker (just folder names)
+            response['folders'] = [f['name'] if isinstance(f, dict) else f for f in folders]
+        
+        return jsonify(response)
         
     except Exception as e:
         app.logger.error(f"Error listing directory: {e}")
