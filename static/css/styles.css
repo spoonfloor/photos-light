@@ -1632,7 +1632,6 @@ body {
   overflow-y: auto;
   padding: 16px 20px;
   background: #232323;
-  min-height: 300px;
 }
 
 .photo-picker-item {
@@ -1692,13 +1691,37 @@ body {
 .photo-picker-footer {
   padding: 12px 20px;
   background: #1f1f1f;
-  border-top: 1px solid #2a2a2a;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .photo-picker-count {
   font-size: 13px;
   color: #a8a8a8;
+}
+
+.photo-picker-clear-btn {
+  background: none;
+  border: none;
+  color: #a8a8a8;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.photo-picker-clear-btn:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.photo-picker-clear-btn .material-symbols-outlined {
+  font-size: 16px;
 }
 
 /* File items have clickable row */

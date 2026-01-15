@@ -2151,10 +2151,19 @@ def validate_library_path():
 def list_directory():
     """List folders and files in a directory for custom picker"""
     
-    def count_media_recursive(dir_path, max_depth=10, current_depth=0):
-        """Recursively count media files in a directory"""
+    def count_media_recursive(dir_path, max_depth=3, current_depth=0, start_time=None, timeout_ms=200):
+        """Recursively count media files in a directory with depth limit and timeout"""
         if current_depth >= max_depth:
-            return 0
+            return -1  # -1 indicates limit reached
+        
+        # Check timeout
+        if start_time is not None:
+            elapsed_ms = (time.time() - start_time) * 1000
+            if elapsed_ms > timeout_ms:
+                return -1  # -1 indicates timeout
+        
+        if start_time is None:
+            start_time = time.time()
         
         count = 0
         try:
@@ -2172,7 +2181,10 @@ def list_directory():
                         if ext in ALL_MEDIA_EXTENSIONS:
                             count += 1
                     elif os.path.isdir(item_path):
-                        count += count_media_recursive(item_path, max_depth, current_depth + 1)
+                        result = count_media_recursive(item_path, max_depth, current_depth + 1, start_time, timeout_ms)
+                        if result == -1:
+                            return -1  # Propagate timeout/limit
+                        count += result
                 except (PermissionError, OSError):
                     continue
         except (PermissionError, OSError):
@@ -2222,12 +2234,18 @@ def list_directory():
                 if os.path.isdir(item_path):
                     # Count media files in folder (if photo picker mode)
                     media_count = 0
+                    count_display = ""
                     if include_files:
                         media_count = count_media_recursive(item_path)
+                        if media_count > 0:
+                            count_display = f" ({media_count})"
+                        elif media_count == -1:
+                            count_display = " (many)"
                     
                     folders.append({
                         'name': item,
-                        'media_count': media_count
+                        'media_count': media_count,
+                        'count_display': count_display
                     })
                 elif os.path.isfile(item_path) and include_files:
                     # Only include media files

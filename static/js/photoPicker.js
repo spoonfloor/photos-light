@@ -228,7 +228,6 @@ const PhotoPicker = (() => {
       folders.forEach((folder) => {
         const folderPath = currentPath + '/' + folder.name;
         const state = getFolderState(folderPath);
-        const countText = folder.media_count > 0 ? ` (${folder.media_count})` : '';
 
         let iconClass = 'folder'; // unchecked
         let stateClass = '';
@@ -243,7 +242,7 @@ const PhotoPicker = (() => {
         html += `
           <div class="photo-picker-item folder-item" data-folder-path="${folderPath}" data-type="folder">
             <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${folderPath}" data-type="folder">${iconClass}</span>
-            <span class="photo-picker-name">${folder.name}${countText}</span>
+            <span class="photo-picker-name">${folder.name}</span>
             <span class="photo-picker-arrow">→</span>
           </div>
         `;
@@ -325,12 +324,14 @@ const PhotoPicker = (() => {
   function updateSelectionCount() {
     const countEl = document.getElementById('photoPickerCount');
     const continueBtn = document.getElementById('photoPickerContinueBtn');
+    const clearBtn = document.getElementById('photoPickerClearBtn');
     
     const count = selectedPaths.size;
     
     if (count === 0) {
       countEl.textContent = 'No items selected';
       if (continueBtn) continueBtn.disabled = true;
+      if (clearBtn) clearBtn.style.visibility = 'hidden';
     } else {
       // Count folders vs files
       let folderCount = 0;
@@ -351,7 +352,14 @@ const PhotoPicker = (() => {
       
       countEl.textContent = parts.join(', ') + ' selected';
       if (continueBtn) continueBtn.disabled = false;
+      if (clearBtn) clearBtn.style.visibility = 'visible';
     }
+  }
+
+  function clearSelection() {
+    selectedPaths.clear();
+    updateFileList();
+    updateSelectionCount();
   }
 
   async function navigateTo(path) {
@@ -420,6 +428,7 @@ const PhotoPicker = (() => {
         const closeBtn = document.getElementById('photoPickerCloseBtn');
         const cancelBtn = document.getElementById('photoPickerCancelBtn');
         const continueBtn = document.getElementById('photoPickerContinueBtn');
+        const clearBtn = document.getElementById('photoPickerClearBtn');
 
         const handleCancel = () => {
           overlay.style.display = 'none';
@@ -434,12 +443,17 @@ const PhotoPicker = (() => {
           resolve(Array.from(selectedPaths));
         };
 
+        const handleClear = () => {
+          clearSelection();
+        };
+
         // Store resolve callback
         resolveCallback = resolve;
 
         closeBtn.onclick = handleCancel;
         cancelBtn.onclick = handleCancel;
         continueBtn.onclick = handleContinue;
+        clearBtn.onclick = handleClear;
       } catch (error) {
         console.error('Failed to show photo picker:', error);
         reject(error);
