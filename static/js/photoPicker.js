@@ -230,10 +230,16 @@ const PhotoPicker = (() => {
         const state = getFolderState(folderPath);
         const countText = folder.media_count > 0 ? ` (${folder.media_count})` : '';
 
+        let iconClass = 'folder'; // unchecked
+        if (state === 'checked') {
+          iconClass = 'check_box';
+        } else if (state === 'indeterminate') {
+          iconClass = 'indeterminate_check_box';
+        }
+
         html += `
-          <div class="photo-picker-item folder-item" data-folder-path="${folderPath}">
-            <input type="checkbox" class="photo-picker-checkbox" ${state === 'checked' ? 'checked' : ''} data-path="${folderPath}" data-type="folder">
-            <span class="photo-picker-icon material-symbols-outlined">folder</span>
+          <div class="photo-picker-item folder-item" data-folder-path="${folderPath}" data-type="folder">
+            <span class="photo-picker-checkbox material-symbols-outlined" data-path="${folderPath}" data-type="folder">${iconClass}</span>
             <span class="photo-picker-name">${folder.name}${countText}</span>
             <span class="photo-picker-arrow">→</span>
           </div>
@@ -244,12 +250,12 @@ const PhotoPicker = (() => {
       files.forEach((file) => {
         const filePath = currentPath + '/' + file.name;
         const checked = isSelected(filePath);
-        const icon = file.type === 'video' ? 'movie' : 'image';
+        const baseIcon = file.type === 'video' ? 'movie' : 'image';
+        const iconClass = checked ? 'check_box' : baseIcon;
 
         html += `
-          <div class="photo-picker-item file-item" data-file-path="${filePath}">
-            <input type="checkbox" class="photo-picker-checkbox" ${checked ? 'checked' : ''} data-path="${filePath}" data-type="file">
-            <span class="photo-picker-icon material-symbols-outlined">${icon}</span>
+          <div class="photo-picker-item file-item" data-file-path="${filePath}" data-type="file">
+            <span class="photo-picker-checkbox material-symbols-outlined" data-path="${filePath}" data-type="file">${iconClass}</span>
             <span class="photo-picker-name">${file.name}</span>
           </div>
         `;
@@ -270,10 +276,13 @@ const PhotoPicker = (() => {
             e.stopPropagation();
             if (type === 'folder') {
               await toggleFolder(path);
-              // Re-render to update indeterminate states
+              // Re-render to update icon states
               await updateFileList();
             } else {
               toggleFile(path);
+              // Update icon directly
+              const currentIcon = checkbox.textContent;
+              checkbox.textContent = currentIcon === 'check_box' ? 'image' : 'check_box';
             }
           });
         }
@@ -294,15 +303,8 @@ const PhotoPicker = (() => {
           // For files, entire row toggles selection
           item.addEventListener('click', (e) => {
             if (e.target === checkbox) return;
-            checkbox.checked = !checkbox.checked;
-            toggleFile(path);
+            checkbox.click();
           });
-        }
-
-        // Set indeterminate state for folders
-        if (type === 'folder' && checkbox) {
-          const state = getFolderState(path);
-          checkbox.indeterminate = (state === 'indeterminate');
         }
       });
     } catch (error) {

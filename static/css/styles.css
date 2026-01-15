@@ -1655,11 +1655,14 @@ body {
 }
 
 .photo-picker-checkbox {
-  width: 18px;
-  height: 18px;
+  font-size: 20px;
+  font-family: 'Material Symbols Outlined';
+  font-weight: 200;
   cursor: pointer;
   margin: 0;
   flex-shrink: 0;
+  color: #765fff;
+  user-select: none;
 }
 
 .photo-picker-icon {
