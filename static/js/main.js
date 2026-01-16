@@ -4464,29 +4464,22 @@ async function browseSwitchLibrary() {
       closeSwitchLibraryOverlay();
       await switchToLibrary(selectedPath, potentialDbPath);
     } else {
-      // No library - create new one and switch
-      console.log('📦 Creating new library at:', selectedPath);
+      // No library found - go to first-run flow (reset config and reload)
+      console.log('📦 No library found - redirecting to first-run flow...');
       closeSwitchLibraryOverlay();
       
-      // Create library
-      const createResponse = await fetch('/api/library/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          library_path: selectedPath, 
-          db_path: potentialDbPath 
-        }),
+      const response = await fetch('/api/library/reset', {
+        method: 'DELETE',
       });
 
-      if (!createResponse.ok) {
-        const error = await createResponse.json();
-        throw new Error(error.error || 'Failed to create library');
+      const data = await response.json();
+
+      if (data.status === 'success') {
+        console.log('✅ Configuration reset - reloading to first-run state...');
+        window.location.reload();
+      } else {
+        throw new Error(data.error || 'Reset failed');
       }
-
-      console.log('✅ Library created');
-
-      // Switch to new library
-      await switchToLibrary(selectedPath, potentialDbPath);
     }
 
     return true;
@@ -4590,16 +4583,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
  * Reset library configuration to first-run state (debug)
  */
 async function resetLibraryConfig() {
-  console.log('🔄 Resetting library configuration...');
-
-  const confirmed = confirm(
-    'Reset library configuration?\n\nThis will clear the current library setting and reload the app to first-run state.'
-  );
-
-  if (!confirmed) {
-    console.log('User cancelled reset');
-    return;
-  }
+  console.log('🔄 Resetting library configuration to create new library...');
 
   try {
     const response = await fetch('/api/library/reset', {
@@ -4609,7 +4593,7 @@ async function resetLibraryConfig() {
     const data = await response.json();
 
     if (data.status === 'success') {
-      console.log('✅ Configuration reset - reloading...');
+      console.log('✅ Configuration reset - reloading to first-run state...');
       window.location.reload();
     } else {
       throw new Error(data.error || 'Reset failed');
@@ -4923,17 +4907,7 @@ async function scanAndConfirmImport(paths) {
     }
 
     // Show confirmation
-    let message = `Found ${total_count} file${total_count > 1 ? 's' : ''}`;
-    if (files_selected > 0 && folders_scanned > 0) {
-      message += ` (${files_selected} selected + ${
-        total_count - files_selected
-      } in ${folders_scanned} folder${folders_scanned > 1 ? 's' : ''})`;
-    } else if (folders_scanned > 0) {
-      message += ` in ${folders_scanned} folder${
-        folders_scanned > 1 ? 's' : ''
-      }`;
-    }
-    message += '. Start import?';
+    const message = `Found ${total_count} total file${total_count > 1 ? 's' : ''}. Start import?`;
 
     const confirmed = await showDialog('Import media', message, [
       { text: 'Cancel', value: false, secondary: true },
