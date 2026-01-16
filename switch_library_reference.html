@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Switch Library Dialog - Reference</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,200,0,0" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e8e8e8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .import-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .import-card {
+      background: #1f1f1f;
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      width: 400px;
+      max-width: calc(100vw - 40px);
+      overflow: hidden;
+    }
+
+    .import-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px 12px 20px;
+      border-bottom: 1px solid #2a2a2a;
+    }
+
+    .import-title {
+      font-size: 16px;
+      font-weight: 500;
+      color: #e8e8e8;
+    }
+
+    .import-close-btn {
+      background: none;
+      border: none;
+      color: #b3b3b3;
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .import-close-btn:hover {
+      background: #2a2a2a;
+    }
+
+    .import-progress-section {
+      padding: 8px 20px 12px 20px;
+    }
+
+    .import-status-text {
+      font-size: 14px;
+      color: #e8e8e8;
+    }
+
+    .import-status-text p {
+      margin: 0 0 12px 0;
+      line-height: 1.5;
+    }
+
+    .import-status-text p:last-child {
+      margin-bottom: 0;
+    }
+
+    .import-actions {
+      display: flex;
+      gap: 12px;
+      padding: 16px 20px;
+      border-top: 1px solid #2a2a2a;
+      justify-content: flex-end;
+    }
+
+    .import-btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s;
+    }
+
+    .import-btn-primary {
+      background: #6d49ff;
+      color: white;
+    }
+
+    .import-btn-primary:hover {
+      background: #5a3ad6;
+    }
+
+    .import-btn-secondary {
+      background: #2a2a2a;
+      color: #e8e8e8;
+    }
+
+    .import-btn-secondary:hover {
+      background: #333;
+    }
+
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined';
+      font-weight: 200;
+      font-size: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="import-overlay">
+    <div class="import-card">
+      <div class="import-header">
+        <span class="import-title">Switch library</span>
+        <button class="import-close-btn">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <div class="import-progress-section">
+        <div class="import-status-text">
+          <p style="margin: 0 0 12px 0">Current library:</p>
+          <p style="font-family: monospace; font-size: 12px; color: #b3b3b3; margin: 0 0 12px 0;">/Users/erichenry/Desktop/Photo Library</p>
+          <p style="margin: 0">Locate a different photo library folder.</p>
+        </div>
+      </div>
+
+      <div class="import-actions">
+        <button class="import-btn import-btn-secondary">Reset</button>
+        <button class="import-btn import-btn-secondary">Cancel</button>
+        <button class="import-btn import-btn-primary">Browse</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

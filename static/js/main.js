@@ -387,6 +387,7 @@ function wireDatePicker() {
  */
 function deselectAllPhotos() {
   state.selectedPhotos.clear();
+  state.lastClickedIndex = null; // Reset shift-select anchor
   const selectedCards = document.querySelectorAll('.photo-card.selected');
   selectedCards.forEach((card) => {
     card.classList.remove('selected');
@@ -2109,6 +2110,11 @@ async function loadAndRenderPhotos(append = false) {
     state.hasDatabase = true; // Database exists if we successfully loaded photos
     console.log(`✅ Loaded ${state.photos.length.toLocaleString()} photos`);
 
+    // Reset shift-select anchor when reloading (indices may have changed)
+    if (!append) {
+      state.lastClickedIndex = null;
+    }
+
     // Render entire grid structure immediately (placeholders)
     renderPhotoGrid(state.photos, false);
 
@@ -2424,21 +2430,45 @@ function togglePhotoSelection(card, e) {
     const start = Math.min(state.lastClickedIndex, index);
     const end = Math.max(state.lastClickedIndex, index);
 
-    // Select all cards in range
-    for (let i = start; i <= end; i++) {
-      const rangeCard = document.querySelector(`[data-index="${i}"]`);
-      if (rangeCard) {
-        const rangeId = parseInt(rangeCard.dataset.id);
-        rangeCard.classList.add('selected');
-        state.selectedPhotos.add(rangeId);
+    console.log(`🔍 Shift-select: clicking index ${index}, last was ${state.lastClickedIndex}`);
+    console.log(`🔍 Range: ${start} to ${end} (${end - start + 1} photos expected)`);
+    
+    // Get all photo cards in the DOM
+    const allCards = Array.from(document.querySelectorAll('.photo-card'));
+    console.log(`📊 Total cards in DOM: ${allCards.length}`);
+    
+    // Debug: show sample of indices
+    const sampleIndices = allCards.slice(0, 10).map(c => parseInt(c.dataset.index));
+    console.log(`📊 Sample indices (first 10 cards): ${sampleIndices.join(', ')}`);
+    
+    // Filter to cards within the range
+    const cardsInRange = allCards.filter(c => {
+      const cardIndex = parseInt(c.dataset.index);
+      return cardIndex >= start && cardIndex <= end;
+    });
+    
+    console.log(`📋 Cards in range: ${cardsInRange.length}`);
+    
+    // Debug: if we found fewer than expected, show what's missing
+    if (cardsInRange.length < (end - start + 1)) {
+      const foundIndices = new Set(cardsInRange.map(c => parseInt(c.dataset.index)));
+      const missing = [];
+      for (let i = start; i <= end && missing.length < 10; i++) {
+        if (!foundIndices.has(i)) missing.push(i);
       }
+      console.warn(`⚠️ Missing ${(end - start + 1) - cardsInRange.length} cards. First missing indices: ${missing.join(', ')}`);
     }
+    
+    // Select all cards in range
+    cardsInRange.forEach(rangeCard => {
+      const rangeId = parseInt(rangeCard.dataset.id);
+      rangeCard.classList.add('selected');
+      state.selectedPhotos.add(rangeId);
+    });
 
     updateDeleteButtonVisibility();
     console.log(
-      `📷 Shift-selected ${end - start + 1} photos (${
-        state.selectedPhotos.size
-      } total selected)`
+      `📷 Shift-selected ${cardsInRange.length} photos (${state.selectedPhotos.size} total selected)`
     );
   }
   // NORMAL CLICK: Toggle single
@@ -2447,13 +2477,13 @@ function togglePhotoSelection(card, e) {
       card.classList.remove('selected');
       state.selectedPhotos.delete(id);
       console.log(
-        `📷 Deselected photo ${id} (${state.selectedPhotos.size} selected)`
+        `📷 Deselected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`
       );
     } else {
       card.classList.add('selected');
       state.selectedPhotos.add(id);
       console.log(
-        `📷 Selected photo ${id} (${state.selectedPhotos.size} selected)`
+        `📷 Selected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`
       );
     }
 
@@ -2571,8 +2601,9 @@ async function deletePhotos(photoIds) {
     console.log(`🗑️ Delete response:`, result);
     console.log(`🗑️ Deleted ${result.deleted} photos from backend`);
 
-    // Clear selection
+    // Clear selection and shift-select anchor
     state.selectedPhotos.clear();
+    state.lastClickedIndex = null;
     updateDeleteButtonVisibility();
 
     // Close lightbox if open

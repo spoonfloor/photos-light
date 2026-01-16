@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Folder Picker Mockup</title>
+
+    <!-- Material Symbols Outlined -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,200,0,0"
+    />
+
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+          sans-serif;
+        background: #0a0a0a;
+        color: #e7e7e7;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 20px;
+      }
+
+      .picker-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      .picker-card {
+        background: #1f1f1f;
+        border-radius: 12px;
+        width: 600px;
+        max-width: calc(100vw - 40px);
+        height: 550px;
+        max-height: calc(100vh - 40px);
+        min-width: 400px;
+        min-height: 400px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .picker-header {
+        padding: 18px 20px 12px 20px;
+        flex-shrink: 0;
+      }
+
+      .picker-header-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 22px; /* Baseline-to-baseline spacing: adjust to dial in 92px from title to subtitle baseline */
+      }
+
+      .picker-title {
+        font-size: 16px;
+        font-weight: 500;
+        color: #e7e7e7;
+        margin-bottom: 0;
+      }
+
+      .picker-close-btn {
+        background: none;
+        border: none;
+        padding: 4px;
+        cursor: pointer;
+        color: #b3b3b3;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+      }
+
+      .picker-close-btn:hover {
+        background: #333;
+      }
+
+      .picker-close-btn .material-symbols-outlined {
+        font-size: 20px;
+      }
+
+      .picker-subtitle {
+        font-size: 14px;
+        color: #e7e7e7;
+        margin: 0;
+        line-height: 1.5;
+      }
+
+      .breadcrumb {
+        padding: 8px 20px 12px 20px;
+        background: #1f1f1f;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      .breadcrumb-root {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+        transition: color 0.2s;
+        flex-shrink: 0;
+      }
+
+      .breadcrumb-root.at-root {
+        cursor: default;
+      }
+
+      .breadcrumb-root:hover .breadcrumb-icon,
+      .breadcrumb-root:hover .breadcrumb-item {
+        color: #6d49ff;
+      }
+
+      .breadcrumb-root.at-root:hover .breadcrumb-icon,
+      .breadcrumb-root.at-root:hover .breadcrumb-item {
+        color: #b3b3b3;
+      }
+
+      .breadcrumb-icon {
+        font-size: 20px;
+        font-family: 'Material Symbols Outlined';
+        font-weight: 200;
+        color: #b3b3b3;
+        flex-shrink: 0;
+        transition: color 0.2s;
+      }
+
+      .breadcrumb-item {
+        color: #b3b3b3;
+        cursor: pointer;
+        transition: color 0.2s;
+        flex-shrink: 0;
+        font-size: 12px;
+        font-family: monospace;
+      }
+
+      .breadcrumb-root.at-root .breadcrumb-item {
+        cursor: default;
+      }
+
+      .breadcrumb-item:hover {
+        color: #6d49ff;
+      }
+
+      .breadcrumb-item.active {
+        color: #b3b3b3;
+      }
+
+      .breadcrumb-separator {
+        color: #444;
+        flex-shrink: 0;
+      }
+
+      .parent-button {
+        display: none !important;
+      }
+
+      .folder-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 24px;
+        background: #232323;
+      }
+
+      .folder-item {
+        padding: 14px 16px;
+        background: #252525;
+        border: 1px solid #2a2a2a;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        transition: all 0.2s;
+        font-size: 14px;
+      }
+
+      .folder-item:hover {
+        background: #2a2a2a;
+        border-color: #765fff;
+      }
+
+      .folder-item.selected {
+        background: rgba(118, 95, 255, 0.1);
+        border-color: #765fff;
+      }
+
+      .folder-icon {
+        font-size: 20px;
+        font-family: 'Material Symbols Outlined';
+        font-weight: 200;
+      }
+
+      .folder-name {
+        flex: 1;
+      }
+
+      .folder-arrow {
+        color: #666;
+        font-size: 12px;
+      }
+
+      .selected-path {
+        padding: 16px 20px 12px 20px;
+        background: #1f1f1f;
+        flex-shrink: 0;
+      }
+
+      .selected-path p {
+        margin: 0 0 12px 0;
+        font-size: 14px;
+        color: #e7e7e7;
+        line-height: 1.5;
+      }
+
+      .selected-path p:last-child {
+        margin: 0;
+        font-family: monospace;
+        font-size: 12px;
+        color: #b3b3b3;
+      }
+
+      .picker-actions {
+        padding: 16px 20px;
+        display: flex;
+        gap: 12px;
+        justify-content: flex-end;
+        flex-shrink: 0;
+      }
+
+      .import-btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        border: none;
+      }
+
+      .import-btn-primary {
+        background: #6d49ff;
+        color: white;
+      }
+
+      .import-btn-primary:hover {
+        background: #5a3ad6;
+      }
+
+      .import-btn-secondary {
+        background: transparent;
+        color: #b3b3b3;
+        border: 1px solid transparent;
+      }
+
+      .import-btn-secondary:hover {
+        color: #e7e7e7;
+        background: #333;
+      }
+
+      .import-btn-primary:disabled {
+        background: #444;
+        color: #666;
+        cursor: not-allowed;
+      }
+
+      .empty-state {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #666;
+        font-size: 14px;
+      }
+
+      /* Breadcrumb scrollbar */
+      .breadcrumb::-webkit-scrollbar {
+        height: 6px;
+      }
+
+      .breadcrumb::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .breadcrumb::-webkit-scrollbar-thumb {
+        background: #333;
+        border-radius: 3px;
+      }
+
+      .breadcrumb::-webkit-scrollbar-thumb:hover {
+        background: #444;
+      }
+
+      /* Folder list scrollbar */
+      .folder-list::-webkit-scrollbar {
+        width: 8px;
+      }
+
+      .folder-list::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .folder-list::-webkit-scrollbar-thumb {
+        background: #333;
+        border-radius: 4px;
+      }
+
+      .folder-list::-webkit-scrollbar-thumb:hover {
+        background: #444;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="picker-overlay">
+      <div class="picker-card">
+        <div class="picker-header">
+          <div class="picker-header-top">
+            <span class="picker-title">Library location</span>
+            <button class="picker-close-btn" aria-label="Close">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+          <p class="picker-subtitle">
+            Choose where you'd like to create your new library
+          </p>
+        </div>
+
+        <div class="breadcrumb" id="breadcrumb"></div>
+
+        <button class="parent-button" id="parentBtn" style="display: none">
+          <span>⬆️</span>
+          <span>Parent Folder</span>
+        </button>
+
+        <button class="parent-button" id="parentBtn" style="display: none">
+          <span>⬆️</span>
+          <span>Parent Folder</span>
+        </button>
+
+        <div class="folder-list" id="folderList"></div>
+
+        <div class="selected-path">
+          <p>Selected:</p>
+          <p id="selectedPath">/Users/erichenry</p>
+        </div>
+
+        <div class="picker-actions">
+          <button class="import-btn import-btn-secondary">Cancel</button>
+          <button class="import-btn import-btn-primary" id="selectBtn">
+            Choose
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Mock filesystem data
+      const mockFilesystem = {
+        '/Users/erichenry': [
+          'Desktop',
+          'Documents',
+          'Downloads',
+          'Pictures',
+          'Movies',
+          'Music',
+          'Library',
+          'Applications',
+        ],
+        '/Users/Shared': ['Public', 'Dropbox'],
+        '/Users/erichenry/Desktop': [
+          'photos-light',
+          'Cookie Socks',
+          'db-sandbox',
+          'photo-migration-and-script',
+          'Screenshot 2025-12-28.png',
+        ],
+        '/Users/erichenry/Documents': ['Work', 'Personal', 'Archives'],
+        '/Users/erichenry/Downloads': ['Recent Files', 'Old Downloads'],
+        '/Users/erichenry/Pictures': [
+          'Family Photos',
+          'Vacation 2024',
+          'Screenshots',
+        ],
+        '/Users/erichenry/Desktop/photos-light': [
+          'static',
+          'docs',
+          'app.py',
+          'README.md',
+        ],
+        '/Volumes/NAS': ['photo_library', 'backups', 'media'],
+        '/Volumes/NAS/photo_library': ['2024', '2025', 'imports'],
+      };
+
+      // Virtual root for curated locations
+      const VIRTUAL_ROOT = '__LOCATIONS__';
+
+      // Top-level locations (display name → real path)
+      const topLevelLocations = [
+        { name: 'erichenry', path: '/Users/erichenry' },
+        { name: 'Shared', path: '/Users/Shared' },
+        { name: 'NAS', path: '/Volumes/NAS' },
+      ];
+
+      let currentPath = VIRTUAL_ROOT;
+      let selectedPath = VIRTUAL_ROOT;
+
+      function updateBreadcrumb() {
+        const breadcrumb = document.getElementById('breadcrumb');
+
+        // At virtual root, show just icon + ellipsis with trailing slash
+        if (currentPath === VIRTUAL_ROOT) {
+          breadcrumb.innerHTML = `
+            <span class="breadcrumb-root at-root">
+              <span class="breadcrumb-icon material-symbols-outlined">folder</span>
+              <span class="breadcrumb-item active">…</span>
+            </span>
+            <span class="breadcrumb-separator">/</span>
+          `;
+          // No click handler needed - already at root
+          return;
+        }
+
+        // Build breadcrumb for real paths
+        const parts = currentPath.split('/').filter((p) => p);
+
+        let html = `
+          <span class="breadcrumb-root">
+            <span class="breadcrumb-icon material-symbols-outlined">folder</span>
+            <span class="breadcrumb-item" data-path="${VIRTUAL_ROOT}">…</span>
+          </span>
+        `;
+
+        // Find which top-level location we're under
+        const topLevel = topLevelLocations.find((loc) =>
+          currentPath.startsWith(loc.path)
+        );
+        if (topLevel) {
+          html += '<span class="breadcrumb-separator">/</span>';
+          html += `<span class="breadcrumb-item" data-path="${topLevel.path}">${topLevel.name}</span>`;
+
+          // Add remaining path parts after the top-level location
+          const relativePath = currentPath.substring(topLevel.path.length);
+          const relativeParts = relativePath.split('/').filter((p) => p);
+
+          let buildPath = topLevel.path;
+          relativeParts.forEach((part, index) => {
+            buildPath += '/' + part;
+            const isLast = index === relativeParts.length - 1;
+            html += '<span class="breadcrumb-separator">/</span>';
+            html += `<span class="breadcrumb-item ${
+              isLast ? 'active' : ''
+            }" data-path="${buildPath}">${part}</span>`;
+          });
+        }
+
+        breadcrumb.innerHTML = html;
+
+        // Add click handler to root wrapper
+        const rootElement = breadcrumb.querySelector('.breadcrumb-root');
+        if (rootElement) {
+          rootElement.addEventListener('click', () => {
+            navigateTo(VIRTUAL_ROOT);
+          });
+        }
+
+        // Add click handlers to other breadcrumb items
+        breadcrumb.querySelectorAll('.breadcrumb-item').forEach((item) => {
+          if (item.dataset.path && !item.closest('.breadcrumb-root')) {
+            item.addEventListener('click', () => {
+              navigateTo(item.dataset.path);
+            });
+          }
+        });
+      }
+
+      function updateFolderList() {
+        const folderList = document.getElementById('folderList');
+
+        // At virtual root, show curated top-level locations
+        if (currentPath === VIRTUAL_ROOT) {
+          folderList.innerHTML = topLevelLocations
+            .map(
+              (loc) => `
+            <div class="folder-item" data-real-path="${loc.path}">
+              <span class="folder-icon material-symbols-outlined">folder</span>
+              <span class="folder-name">${loc.name}</span>
+              <span class="folder-arrow">→</span>
+            </div>
+          `
+            )
+            .join('');
+
+          // Add click handlers
+          folderList.querySelectorAll('.folder-item').forEach((item) => {
+            item.addEventListener('click', () => {
+              navigateTo(item.dataset.realPath);
+            });
+          });
+          return;
+        }
+
+        // Regular filesystem navigation
+        let folders = mockFilesystem[currentPath] || [];
+
+        // Filter folders
+        folders = folders.filter((name) => {
+          // Hide dotfiles
+          if (name.startsWith('.')) return false;
+          // Hide files with extensions
+          if (name.includes('.')) return false;
+          return true;
+        });
+
+        if (folders.length === 0) {
+          folderList.innerHTML =
+            '<div class="empty-state">No subfolders found</div>';
+          return;
+        }
+
+        folderList.innerHTML = folders
+          .map(
+            (folder) => `
+        <div class="folder-item" data-folder="${folder}">
+          <span class="folder-icon material-symbols-outlined">folder</span>
+          <span class="folder-name">${folder}</span>
+          <span class="folder-arrow">→</span>
+        </div>
+      `
+          )
+          .join('');
+
+        // Add click handlers
+        folderList.querySelectorAll('.folder-item').forEach((item) => {
+          item.addEventListener('click', () => {
+            const folder = item.dataset.folder;
+            const newPath = currentPath + '/' + folder;
+            navigateTo(newPath);
+          });
+        });
+      }
+
+      function updateParentButton() {
+        // Parent button removed - breadcrumb provides navigation
+      }
+
+      function updateSelectedPath() {
+        const pathDisplay = document.getElementById('selectedPath');
+        // Show real path (not virtual root)
+        if (selectedPath === VIRTUAL_ROOT) {
+          pathDisplay.textContent = 'No path selected';
+        } else {
+          pathDisplay.textContent = selectedPath;
+        }
+      }
+
+      // Close button handler
+      document
+        .querySelector('.picker-close-btn')
+        .addEventListener('click', () => {
+          alert('Dialog would close');
+        });
+
+      function navigateTo(path) {
+        currentPath = path || VIRTUAL_ROOT;
+        selectedPath = path || VIRTUAL_ROOT;
+        updateBreadcrumb();
+        updateFolderList();
+        updateParentButton();
+        updateSelectedPath();
+      }
+
+      // Select button handler
+      document.getElementById('selectBtn').addEventListener('click', () => {
+        alert(
+          `Selected folder: ${selectedPath}\n\nThis would proceed with library creation.`
+        );
+      });
+
+      // Initialize
+      navigateTo(currentPath);
+    </script>
+  </body>
+</html>
