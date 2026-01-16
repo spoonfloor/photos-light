@@ -331,7 +331,7 @@ const PhotoPicker = (() => {
     if (count === 0) {
       countEl.textContent = 'No items selected';
       if (continueBtn) continueBtn.disabled = true;
-      if (clearBtn) clearBtn.style.display = 'none';
+      if (clearBtn) clearBtn.style.visibility = 'hidden';
     } else {
       // Count folders vs files
       let folderCount = 0;
@@ -352,7 +352,7 @@ const PhotoPicker = (() => {
       
       countEl.textContent = parts.join(', ') + ' selected';
       if (continueBtn) continueBtn.disabled = false;
-      if (clearBtn) clearBtn.style.display = 'inline-block';
+      if (clearBtn) clearBtn.style.visibility = 'visible';
     }
   }
 
