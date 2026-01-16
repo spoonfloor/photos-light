@@ -403,14 +403,27 @@ const PhotoPicker = (() => {
         for (const loc of topLevelLocations) {
           if (loc.path.includes('/Users/') && !loc.path.includes('Shared')) {
             const desktopPath = loc.path + '/Desktop';
+            console.log(`🔍 Trying Desktop path: ${desktopPath}`);
             try {
               await listDirectory(desktopPath);
               initialPath = desktopPath;
               console.log('✅ Starting at Desktop:', desktopPath);
               break;
             } catch (error) {
-              console.log('⚠️ Desktop not accessible');
+              console.log(`⚠️ Desktop check failed: ${error.message}`);
+              console.log(`📁 Falling back to home folder: ${loc.path}`);
+              initialPath = loc.path;
+              break;
             }
+          }
+        }
+        
+        // If still at virtual root, force to first non-Shared location
+        if (initialPath === VIRTUAL_ROOT && topLevelLocations.length > 0) {
+          const firstLocation = topLevelLocations.find(loc => !loc.path.includes('Shared'));
+          if (firstLocation) {
+            initialPath = firstLocation.path;
+            console.log(`📁 Using first location: ${initialPath}`);
           }
         }
 

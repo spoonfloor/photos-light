@@ -31,17 +31,15 @@ app.config['DRY_RUN_DATE_EDIT'] = False  # REAL UPDATES - using test library
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, 'static')
-DB_PATH = os.path.join(BASE_DIR, '..', 'photo-migration-and-script', 'migration', 'databases', 'photo_library_test.db')  # TEST LIBRARY
-LIBRARY_PATH = '/Volumes/eric_files/photo_library_test'  # TEST LIBRARY
-THUMBNAIL_CACHE_DIR = os.path.join(LIBRARY_PATH, '.thumbnails')
-TRASH_DIR = os.path.join(LIBRARY_PATH, '.trash')
-DB_BACKUP_DIR = os.path.join(LIBRARY_PATH, '.db_backups')
-IMPORT_TEMP_DIR = os.path.join(LIBRARY_PATH, '.import_temp')
-LOG_DIR = os.path.join(LIBRARY_PATH, '.logs')
 
-# Ensure directories exist
-for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR]:
-    os.makedirs(directory, exist_ok=True)
+# Library paths - initialized from .config.json on startup
+DB_PATH = None
+LIBRARY_PATH = None
+THUMBNAIL_CACHE_DIR = None
+TRASH_DIR = None
+DB_BACKUP_DIR = None
+IMPORT_TEMP_DIR = None
+LOG_DIR = None
 
 # Supported media file extensions
 PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
@@ -52,60 +50,15 @@ ALL_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 # LOGGING CONFIGURATION (Hybrid Approach: print() + persistent logs)
 # ============================================================================
 
-# Configure main app logger
-try:
-    app_log_file = os.path.join(LOG_DIR, 'app.log')
-    app_handler = RotatingFileHandler(app_log_file, maxBytes=10*1024*1024, backupCount=10)
-    app_handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-    app.logger.addHandler(app_handler)
-    app.logger.setLevel(logging.INFO)
-    print(f"✅ Logging enabled: {app_log_file}")
-except (PermissionError, OSError) as e:
-    print(f"⚠️  Warning: Could not create log file: {e}")
-    print(f"   Continuing without file logging (console only)")
+# Loggers will be configured after library path is loaded
+app.logger.setLevel(logging.INFO)
 
-# Configure import logger (separate concern)
-try:
-    import_logger = logging.getLogger('import')
-    import_handler = RotatingFileHandler(
-        os.path.join(LOG_DIR, f'import_{datetime.now().strftime("%Y%m%d")}.log'),
-        maxBytes=10*1024*1024,
-        backupCount=30
-    )
-    import_handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-    import_logger.addHandler(import_handler)
-    import_logger.setLevel(logging.INFO)
-except (PermissionError, OSError) as e:
-    # Fall back to console logging
-    import_logger = logging.getLogger('import')
-    import_logger.setLevel(logging.INFO)
-    print(f"⚠️  Warning: Import logger using console only")
+# Create console-only loggers as fallback
+import_logger = logging.getLogger('import')
+import_logger.setLevel(logging.INFO)
 
-# Configure error logger (separate concern)
-try:
-    error_logger = logging.getLogger('errors')
-    error_handler = RotatingFileHandler(
-        os.path.join(LOG_DIR, 'errors.log'),
-        maxBytes=10*1024*1024,
-        backupCount=10
-    )
-    error_handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-    error_logger.addHandler(error_handler)
-    error_logger.setLevel(logging.WARNING)
-except (PermissionError, OSError) as e:
-    # Fall back to console logging
-    error_logger = logging.getLogger('errors')
-    error_logger.setLevel(logging.WARNING)
-    print(f"⚠️  Warning: Error logger using console only")
+error_logger = logging.getLogger('errors')
+error_logger.setLevel(logging.WARNING)
 
 def get_db_connection():
     """Create database connection"""
@@ -2018,22 +1971,15 @@ def library_status():
                 'valid': False
             })
         
-        # Determine status
-        if not library_exists:
+        # Determine status - treat missing library/db as not_configured (first run)
+        if not library_exists or not db_exists:
+            # Library or database is gone - treat as first run
+            delete_config()  # Clean up stale config
             return jsonify({
-                'status': 'library_missing',
-                'message': 'Library folder not found or not accessible.',
-                'library_path': library_path,
-                'db_path': db_path,
-                'valid': False
-            })
-        
-        if not db_exists:
-            return jsonify({
-                'status': 'db_missing',
-                'message': 'Database file not found.',
-                'library_path': library_path,
-                'db_path': db_path,
+                'status': 'not_configured',
+                'message': 'Library not found. Please select or create a library.',
+                'library_path': None,
+                'db_path': None,
                 'valid': False
             })
         
@@ -2444,8 +2390,16 @@ def create_library():
         
         print(f"\n📦 Creating new library at: {library_path}")
         
+        # Check if library already exists
+        if os.path.exists(library_path):
+            return jsonify({'error': f'A folder already exists at this location. Please choose a different name or location.'}), 400
+        
         # Create directory structure
-        os.makedirs(library_path, exist_ok=True)
+        # Let OS errors pass through with accurate error messages
+        os.makedirs(library_path, exist_ok=False)
+        print(f"  ✅ Created: {library_path}")
+        
+        # Create subdirectories
         os.makedirs(os.path.join(library_path, '.thumbnails'), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.trash'), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.db_backups'), exist_ok=True)
@@ -2569,22 +2523,24 @@ def reset_library():
 
 
 if __name__ == '__main__':
+    print("\n🖼️  Photos Light Starting...")
+    print(f"📁 Static files: {STATIC_DIR}")
+    
     # Load config on startup
     config = load_config()
     if config:
-        print(f"\n📖 Loading config from {CONFIG_FILE}")
-        update_app_paths(config['library_path'], config['db_path'])
-    
-    # Log library status
-    print("\n🖼️  Photo Viewer Starting...")
-    print(f"📁 Serving from: {STATIC_DIR}")
-    print(f"💾 Database: {DB_PATH}")
-    print(f"📚 Library: {LIBRARY_PATH}")
-    
-    if config and os.path.exists(config.get('library_path', '')) and os.path.exists(config.get('db_path', '')):
-        print(f"✅ Library configuration found")
+        library_path = config.get('library_path')
+        db_path = config.get('db_path')
+        
+        # Validate paths still exist
+        if library_path and db_path and os.path.exists(library_path) and os.path.exists(db_path):
+            print(f"✅ Loading library: {library_path}")
+            update_app_paths(library_path, db_path)
+        else:
+            print(f"⚠️  Saved library not found - user will be prompted")
+            delete_config()  # Clean up stale config
     else:
-        print(f"⚠️  Library not configured or not accessible - user will be prompted")
+        print(f"⚠️  No library configured - user will be prompted")
     
     print(f"🌐 Open: http://localhost:5001\n")
     

@@ -277,6 +277,7 @@ const FolderPicker = (() => {
           // Look for home directory by checking if it contains /Users/ or is the first non-Shared location
           if (loc.path.includes('/Users/') && !loc.path.includes('Shared')) {
             const desktopPath = loc.path + '/Desktop';
+            console.log(`🔍 Trying Desktop path: ${desktopPath}`);
             // Try to navigate to Desktop
             try {
               const desktopCheck = await listDirectory(desktopPath);
@@ -285,9 +286,21 @@ const FolderPicker = (() => {
               console.log('✅ Starting at Desktop:', desktopPath);
               break;
             } catch (error) {
-              // Desktop doesn't exist or not accessible, fall back to virtual root
-              console.log('⚠️ Desktop not accessible, using virtual root');
+              // Desktop doesn't exist or not accessible, try home folder as fallback
+              console.log(`⚠️ Desktop check failed: ${error.message}`);
+              console.log(`📁 Using home folder instead (safer for permissions): ${loc.path}`);
+              initialPath = loc.path;
+              break;
             }
+          }
+        }
+        
+        // If still at virtual root, force to first non-Shared location
+        if (initialPath === VIRTUAL_ROOT && topLevelLocations.length > 0) {
+          const firstLocation = topLevelLocations.find(loc => !loc.path.includes('Shared'));
+          if (firstLocation) {
+            initialPath = firstLocation.path;
+            console.log(`📁 Using first location: ${initialPath}`);
           }
         }
 

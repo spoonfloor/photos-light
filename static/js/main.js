@@ -17,6 +17,7 @@ const state = {
   hasMore: true, // For infinite scroll
   currentOffset: 0, // Current pagination offset
   navigateToMonth: null, // Month to navigate to after closing lightbox (e.g., '2025-12')
+  hasDatabase: false, // Track whether database exists and is healthy
 };
 
 // ============================================================================
@@ -2105,6 +2106,7 @@ async function loadAndRenderPhotos(append = false) {
     const data = await response.json();
 
     state.photos = data.photos;
+    state.hasDatabase = true; // Database exists if we successfully loaded photos
     console.log(`✅ Loaded ${state.photos.length.toLocaleString()} photos`);
 
     // Render entire grid structure immediately (placeholders)
@@ -2112,8 +2114,12 @@ async function loadAndRenderPhotos(append = false) {
 
     // Setup lazy loading for thumbnails
     setupThumbnailLazyLoading();
+
+    // Update utility menu availability after loading photos
+    updateUtilityMenuAvailability();
   } catch (error) {
     console.error('❌ Error loading photos:', error);
+    state.hasDatabase = false; // Mark database as unavailable on error
   } finally {
     state.loading = false;
   }
@@ -3019,6 +3025,9 @@ async function loadUtilitiesMenu() {
     });
 
     utilitiesMenuLoaded = true;
+
+    // Update menu item availability
+    updateUtilityMenuAvailability();
   } catch (error) {
     console.error('❌ Failed to load utilities menu:', error);
   }
@@ -3047,6 +3056,9 @@ async function toggleUtilitiesMenu() {
   if (isVisible) {
     hideUtilitiesMenu();
   } else {
+    // Update menu availability before showing
+    updateUtilityMenuAvailability();
+
     // Position menu below the button
     const btnRect = utilitiesBtn.getBoundingClientRect();
     console.log('🔧 Button rect:', btnRect);
@@ -3077,6 +3089,56 @@ function hideUtilitiesMenu() {
   const menu = document.getElementById('utilitiesMenu');
   if (menu) {
     menu.style.display = 'none';
+  }
+}
+
+/**
+ * Update utility menu item availability based on current state
+ * 
+ * Requirements:
+ * - Switch library: ALWAYS available
+ * - Update library index: requires database (doesn't need photos)
+ * - Rebuild database: requires database
+ * - Remove duplicates: requires database AND 1+ photos
+ * - Rebuild thumbnails: requires database AND 1+ photos
+ */
+function updateUtilityMenuAvailability() {
+  const hasDatabase = state.hasDatabase;
+  const hasPhotos = state.photos && state.photos.length > 0;
+
+  console.log('🔧 Updating menu availability - DB:', hasDatabase, 'Photos:', hasPhotos ? state.photos.length : 0);
+
+  // Switch library - ALWAYS available (never disabled)
+  enableMenuItem('switchLibraryBtn', true);
+
+  // Update library index - requires database (doesn't need photos)
+  enableMenuItem('cleanOrganizeBtn', hasDatabase);
+
+  // Rebuild database - requires database
+  enableMenuItem('rebuildDatabaseBtn', hasDatabase);
+
+  // Remove duplicates - requires database AND 1+ photos
+  enableMenuItem('removeDuplicatesBtn', hasDatabase && hasPhotos);
+
+  // Rebuild thumbnails - requires database AND 1+ photos
+  enableMenuItem('rebuildThumbnailsBtn', hasDatabase && hasPhotos);
+}
+
+/**
+ * Enable or disable a menu item
+ */
+function enableMenuItem(buttonId, enabled) {
+  const btn = document.getElementById(buttonId);
+  if (!btn) return;
+
+  if (enabled) {
+    btn.classList.remove('disabled');
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+  } else {
+    btn.classList.add('disabled');
+    btn.style.opacity = '0.3';
+    btn.style.pointerEvents = 'none';
   }
 }
 
@@ -4227,33 +4289,10 @@ async function showNameLibraryDialog(options = {}) {
         return null;
       }
 
-      // Check if folder already exists on Desktop
-      try {
-        const homeResponse = await fetch('/api/filesystem/get-locations');
-        const homeData = await homeResponse.json();
-        const homeLocation = homeData.locations.find(loc => loc.path.includes('/Users/') && !loc.path.includes('Shared'));
-        
-        if (homeLocation) {
-          const desktopPath = homeLocation.path + '/Desktop/' + sanitized;
-          
-          // Check if this path exists
-          const checkResponse = await fetch('/api/filesystem/list-directory', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: desktopPath }),
-          });
-          
-          // If the request succeeds, the folder exists
-          if (checkResponse.ok) {
-            errorDiv.textContent = 'A folder with this name already exists. Please choose another name.';
-            errorDiv.style.visibility = 'visible';
-            return null;
-          }
-        }
-      } catch (error) {
-        // Folder doesn't exist or error checking - proceed (we'll handle errors later in creation)
-        console.log('Folder check error (proceeding):', error);
-      }
+      // Note: We skip folder existence check here because:
+      // 1. The user will choose the parent location next
+      // 2. We'll handle any conflicts during actual creation
+      // 3. This keeps the UI responsive
 
       // All validations passed - hide error
       errorDiv.style.visibility = 'hidden';
@@ -5149,23 +5188,27 @@ async function init() {
       case 'not_configured':
         // First-time setup - show empty state
         console.log('⚠️ No library configured');
+        state.hasDatabase = false;
         renderFirstRunEmptyState();
         return;
 
       case 'library_missing':
       case 'library_inaccessible':
         console.log('⚠️ Library not accessible:', status.library_path);
+        state.hasDatabase = false;
         showCriticalErrorModal('library_not_found', status.library_path);
         return;
 
       case 'db_missing':
       case 'db_inaccessible':
         console.log('⚠️ Database not accessible:', status.db_path);
+        state.hasDatabase = false;
         showCriticalErrorModal('db_missing', status.db_path);
         return;
 
       case 'healthy':
         console.log('✅ Library is healthy');
+        state.hasDatabase = true;
         // Now it's safe to populate date picker and load photos
         await populateDatePicker();
         await loadAndRenderPhotos();
@@ -5174,11 +5217,13 @@ async function init() {
       default:
         // 'error' or unknown status
         console.error('❌ Unknown status:', status.status);
+        state.hasDatabase = false;
         showCriticalErrorModal('unknown_error', status.message);
         return;
     }
   } catch (error) {
     console.error('❌ Failed to check library status:', error);
+    state.hasDatabase = false;
     showCriticalErrorModal('unknown_error', error.message);
   }
 }
