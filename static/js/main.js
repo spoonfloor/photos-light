@@ -753,7 +753,7 @@ async function executeRebuildDatabase() {
       const data = JSON.parse(e.data);
       console.log('✅ Rebuild complete:', data);
 
-      statusText.innerHTML = `<p>✅ Database rebuilt successfully!</p><p>Indexed ${data.stats.untracked_files.toLocaleString()} files.</p>`;
+      statusText.innerHTML = `<p>Database rebuilt successfully</p><p>Indexed ${data.stats.untracked_files.toLocaleString()} files.</p>`;
       doneBtn.style.display = 'block';
 
       eventSource.close();
