@@ -2506,7 +2506,49 @@ function wireMonthSelectors() {
 
     circle.addEventListener('click', (e) => {
       e.stopPropagation();
-      toggleMonthSelection(month);
+      e.preventDefault(); // Prevent text selection on shift-click
+      
+      // Get all photos in this month
+      const monthPhotoCards = monthSection.querySelectorAll('.photo-card');
+      if (monthPhotoCards.length === 0) return;
+      
+      // Use first photo as anchor for normal clicks, last photo for shift-clicks
+      const firstPhotoIndex = parseInt(monthPhotoCards[0].dataset.index);
+      const lastPhotoIndex = parseInt(monthPhotoCards[monthPhotoCards.length - 1].dataset.index);
+      
+      if (e.shiftKey && state.lastClickedIndex !== null) {
+        // SHIFT-SELECT: Select range from last clicked to this month's LAST photo
+        const start = Math.min(state.lastClickedIndex, lastPhotoIndex);
+        const end = Math.max(state.lastClickedIndex, lastPhotoIndex);
+        
+        console.log(`🔍 Month shift-select: range ${start} to ${end}`);
+        
+        // Get all photo cards and select those in range
+        const allCards = Array.from(document.querySelectorAll('.photo-card'));
+        const cardsInRange = allCards.filter(c => {
+          const cardIndex = parseInt(c.dataset.index);
+          return cardIndex >= start && cardIndex <= end;
+        });
+        
+        cardsInRange.forEach(card => {
+          const cardId = parseInt(card.dataset.id);
+          card.classList.add('selected');
+          state.selectedPhotos.add(cardId);
+        });
+        
+        console.log(`📷 Selected ${cardsInRange.length} photos via month shift-select`);
+        
+        // Update anchor to this month's last photo
+        state.lastClickedIndex = lastPhotoIndex;
+        updateDeleteButtonVisibility();
+        updateMonthCircleStates();
+      } else {
+        // NORMAL CLICK: Toggle entire month
+        toggleMonthSelection(month);
+        
+        // Update anchor to this month's last photo for next shift-select
+        state.lastClickedIndex = lastPhotoIndex;
+      }
     });
   });
 }
