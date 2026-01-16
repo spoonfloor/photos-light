@@ -331,7 +331,7 @@ const PhotoPicker = (() => {
     if (count === 0) {
       countEl.textContent = 'No items selected';
       if (continueBtn) continueBtn.disabled = true;
-      if (clearBtn) clearBtn.style.visibility = 'hidden';
+      if (clearBtn) clearBtn.style.display = 'none';
     } else {
       // Count folders vs files
       let folderCount = 0;
@@ -352,14 +352,14 @@ const PhotoPicker = (() => {
       
       countEl.textContent = parts.join(', ') + ' selected';
       if (continueBtn) continueBtn.disabled = false;
-      if (clearBtn) clearBtn.style.visibility = 'visible';
+      if (clearBtn) clearBtn.style.display = 'inline-block';
     }
   }
 
   function clearSelection() {
     selectedPaths.clear();
-    updateFileList();
     updateSelectionCount();
+    updateFileList();
   }
 
   async function navigateTo(path) {
@@ -466,7 +466,7 @@ const PhotoPicker = (() => {
         closeBtn.onclick = handleCancel;
         cancelBtn.onclick = handleCancel;
         continueBtn.onclick = handleContinue;
-        clearBtn.onclick = handleClear;
+        clearBtn.onclick = clearSelection;
       } catch (error) {
         console.error('Failed to show photo picker:', error);
         reject(error);
