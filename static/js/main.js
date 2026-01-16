@@ -4289,10 +4289,30 @@ async function showNameLibraryDialog(options = {}) {
         return null;
       }
 
-      // Note: We skip folder existence check here because:
-      // 1. The user will choose the parent location next
-      // 2. We'll handle any conflicts during actual creation
-      // 3. This keeps the UI responsive
+      // Check if folder exists at parent location (if parentPath provided)
+      if (options.parentPath) {
+        try {
+          const response = await fetch('/api/filesystem/list-directory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: options.parentPath }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            const existingFolders = data.folders.map(f => typeof f === 'string' ? f : f.name);
+            
+            if (existingFolders.includes(sanitized)) {
+              errorDiv.textContent = `A folder named "${sanitized}" already exists here`;
+              errorDiv.style.visibility = 'visible';
+              return null;
+            }
+          }
+        } catch (error) {
+          // If validation fails, allow it (don't block user)
+          console.warn('Failed to validate folder name:', error);
+        }
+      }
 
       // All validations passed - hide error
       errorDiv.style.visibility = 'hidden';
@@ -4363,7 +4383,7 @@ async function showNameLibraryDialog(options = {}) {
     input.addEventListener('input', handleInput);
 
     // Show overlay
-    overlay.style.display = 'block';
+    overlay.style.display = 'flex';
   });
 }
 
@@ -4482,74 +4502,83 @@ async function browseSwitchLibrary() {
  */
 async function createNewLibraryWithName(dialogOptions = {}) {
   try {
-    // Step 1: Get library name from user
-    console.log('📝 Asking for library name...');
-    const libraryName = await showNameLibraryDialog(dialogOptions);
+    // Loop to allow user to go back and change location
+    while (true) {
+      // Step 1: Choose parent location using custom folder picker
+      console.log('🔍 Opening custom folder picker for parent location...');
+      
+      const parentPath = await FolderPicker.show({
+        title: 'Library location',
+        subtitle: "Choose where you'd like to create your new library"
+      });
 
-    if (!libraryName) {
-      console.log('User cancelled library naming');
-      return false;
+      if (!parentPath) {
+        console.log('User cancelled folder selection');
+        return false;
+      }
+
+      console.log('📂 Parent location:', parentPath);
+
+      // Step 2: Get library name from user (with validation against parent path)
+      console.log('📝 Asking for library name...');
+      const libraryName = await showNameLibraryDialog({
+        ...dialogOptions,
+        parentPath: parentPath
+      });
+
+      if (!libraryName) {
+        console.log('User cancelled library naming - going back to folder picker');
+        // null means cancelled - loop back to folder picker
+        continue;
+      }
+
+      console.log('📚 Library name:', libraryName);
+
+      // Step 3: Combine parent path with library name
+      const cleanParentPath = parentPath.replace(/\/+$/, ''); // Remove trailing slashes
+      const fullLibraryPath = `${cleanParentPath}/${libraryName}`;
+      const dbPath = `${fullLibraryPath}/photo_library.db`;
+
+      console.log('📦 Creating library at:', fullLibraryPath);
+
+      // Step 4: Create library
+      const createResponse = await fetch('/api/library/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
+      });
+
+      const createResult = await createResponse.json();
+
+      if (!createResponse.ok) {
+        throw new Error(createResult.error || 'Failed to create library');
+      }
+
+      console.log('✅ Library created');
+
+      // Step 5: Switch to new library
+      const switchResponse = await fetch('/api/library/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
+      });
+
+      const switchResult = await switchResponse.json();
+
+      if (!switchResponse.ok) {
+        throw new Error(switchResult.error || 'Failed to switch library');
+      }
+
+      console.log('✅ Switched to:', switchResult.library_path);
+
+      // Step 6: Refresh photos (library is now empty)
+      await loadAndRenderPhotos();
+
+      // Step 7: Immediately show import dialog
+      await triggerImport();
+
+      return true;
     }
-
-    console.log('📚 Library name:', libraryName);
-
-    // Step 2: Choose parent location using custom folder picker
-    console.log('🔍 Opening custom folder picker for parent location...');
-    
-    const parentPath = await FolderPicker.show({
-      title: 'Library location',
-      subtitle: `Choose where to create "${libraryName}"`
-    });
-
-    if (!parentPath) {
-      console.log('User cancelled folder selection');
-      return false;
-    }
-
-    // Step 3: Combine parent path with library name
-    const cleanParentPath = parentPath.replace(/\/+$/, ''); // Remove trailing slashes
-    const fullLibraryPath = `${cleanParentPath}/${libraryName}`;
-    const dbPath = `${fullLibraryPath}/photo_library.db`;
-
-    console.log('📦 Creating library at:', fullLibraryPath);
-
-    // Step 4: Create library immediately (no confirmation)
-    const createResponse = await fetch('/api/library/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
-    });
-
-    const createResult = await createResponse.json();
-
-    if (!createResponse.ok) {
-      throw new Error(createResult.error || 'Failed to create library');
-    }
-
-    console.log('✅ Library created');
-
-    // Step 5: Switch to new library
-    const switchResponse = await fetch('/api/library/switch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
-    });
-
-    const switchResult = await switchResponse.json();
-
-    if (!switchResponse.ok) {
-      throw new Error(switchResult.error || 'Failed to switch library');
-    }
-
-    console.log('✅ Switched to:', switchResult.library_path);
-
-    // Step 6: Refresh photos (library is now empty)
-    await loadAndRenderPhotos();
-
-    // Step 7: Immediately show import dialog
-    await triggerImport();
-
-    return true;
   } catch (error) {
     console.error('❌ Failed to create library:', error);
     showToast(`Error: ${error.message}`, 'error', 5000);
