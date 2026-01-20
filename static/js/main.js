@@ -691,8 +691,10 @@ async function startRebuildDatabase() {
         `Your library contains ${data.file_count.toLocaleString()} photos.\n\nRebuilding will take an estimated ${
           data.estimated_display
         }. Keep the app open until rebuilding is complete.`,
-        'Continue',
-        'Cancel'
+        [
+          { text: 'Cancel', value: false, primary: false },
+          { text: 'Continue', value: true, primary: true }
+        ]
       );
 
       if (!confirmed) {
@@ -702,7 +704,8 @@ async function startRebuildDatabase() {
     }
 
     // Update UI to show ready state
-    statusText.innerHTML = `<p>Ready to rebuild database.</p><p>Found ${data.file_count.toLocaleString()} files.</p>`;
+    const estimateText = data.estimated_display ? `<p>Estimated time: ${data.estimated_display}</p>` : '';
+    statusText.innerHTML = `<p>Ready to rebuild database.</p><p>Found ${data.file_count.toLocaleString()} files.</p>${estimateText}`;
     proceedBtn.style.display = 'block';
   } catch (error) {
     console.error('❌ Rebuild database scan failed:', error);
@@ -754,7 +757,9 @@ async function executeRebuildDatabase() {
       const data = JSON.parse(e.data);
       console.log('✅ Rebuild complete:', data);
 
-      statusText.innerHTML = `<p>Database rebuilt successfully</p><p>Indexed ${data.stats.untracked_files.toLocaleString()} files.</p>`;
+      // Use the total count from the stats display (which shows the actual indexed count)
+      const totalIndexed = totalCount.textContent || data.stats.untracked_files.toLocaleString();
+      statusText.innerHTML = `<p>Database rebuilt successfully</p><p>Indexed ${totalIndexed} files.</p>`;
       doneBtn.style.display = 'block';
 
       eventSource.close();
@@ -992,6 +997,42 @@ function wireDateEditor() {
     daySelect.appendChild(option);
   }
 
+  // Function to update day options based on selected month/year
+  window.updateDateEditorDayOptions = () => {
+    const yearSelect = document.getElementById('dateEditorYear');
+    const monthSelect = document.getElementById('dateEditorMonth');
+    const daySelect = document.getElementById('dateEditorDay');
+    
+    if (!yearSelect || !monthSelect || !daySelect) return;
+    
+    const year = parseInt(yearSelect.value);
+    const month = parseInt(monthSelect.value);
+    const currentDay = parseInt(daySelect.value);
+    
+    // Get days in month
+    const daysInMonth = new Date(year, month, 0).getDate();
+    
+    // Clear and repopulate day options
+    daySelect.innerHTML = '';
+    for (let day = 1; day <= daysInMonth; day++) {
+      const option = document.createElement('option');
+      option.value = day;
+      option.textContent = day;
+      daySelect.appendChild(option);
+    }
+    
+    // Restore selected day if still valid, otherwise set to last day of month
+    if (currentDay <= daysInMonth) {
+      daySelect.value = currentDay;
+    } else {
+      daySelect.value = daysInMonth;
+    }
+  };
+  
+  // Add listeners to month/year to update valid days
+  document.getElementById('dateEditorYear').addEventListener('change', window.updateDateEditorDayOptions);
+  document.getElementById('dateEditorMonth').addEventListener('change', window.updateDateEditorDayOptions);
+
   // Populate hour options (1-12)
   const hourSelect = document.getElementById('dateEditorHour');
   for (let hour = 1; hour <= 12; hour++) {
@@ -1071,6 +1112,12 @@ function openDateEditor(photoIdOrIds) {
   // Populate fields
   document.getElementById('dateEditorYear').value = date.getFullYear();
   document.getElementById('dateEditorMonth').value = date.getMonth() + 1;
+  
+  // Update day options based on selected month/year before setting day
+  if (window.updateDateEditorDayOptions) {
+    window.updateDateEditorDayOptions();
+  }
+  
   document.getElementById('dateEditorDay').value = date.getDate();
 
   let hours = date.getHours();

@@ -644,6 +644,14 @@ def delete_photos():
         if not photo_ids:
             return jsonify({'error': 'No photo IDs provided'}), 400
         
+        # Create backup before deleting photos
+        print(f"\n💾 Creating database backup before delete...")
+        backup_path = create_db_backup()
+        if backup_path:
+            print(f"  ✅ Backup created: {os.path.basename(backup_path)}")
+        else:
+            print(f"  ⚠️  Backup failed, but continuing with delete")
+        
         print(f"\n🗑️  DELETE REQUEST: {len(photo_ids)} photos", flush=True)
         print(f"    Photo IDs: {photo_ids}", flush=True)
         app.logger.info(f"Delete request: {len(photo_ids)} photos (IDs: {photo_ids})")
@@ -1689,6 +1697,15 @@ def execute_update_index():
     def generate():
         try:
             import_logger.info("Update Library Index execute started")
+            
+            # Create backup before modifying database
+            print(f"\n💾 Creating database backup before index update...")
+            backup_path = create_db_backup()
+            if backup_path:
+                print(f"  ✅ Backup created: {os.path.basename(backup_path)}")
+            else:
+                print(f"  ⚠️  Backup failed, but continuing with index update")
+            
             conn = get_db_connection()
             yield from synchronize_library_generator(
                 LIBRARY_PATH, 
@@ -1754,6 +1771,15 @@ def execute_rebuild_database():
     def generate():
         try:
             import_logger.info("Rebuild Database execute started")
+            
+            # Create backup before rebuilding (if database exists)
+            if os.path.exists(DB_PATH):
+                print(f"\n💾 Creating database backup before rebuild...")
+                backup_path = create_db_backup()
+                if backup_path:
+                    print(f"  ✅ Backup created: {os.path.basename(backup_path)}")
+                else:
+                    print(f"  ⚠️  Backup failed, but continuing with rebuild")
             
             # Ensure database exists, create if missing
             if not os.path.exists(DB_PATH):
