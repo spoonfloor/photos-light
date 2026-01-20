@@ -57,3 +57,36 @@ Issues that have been fixed and verified.
 - Day auto-adjustment works correctly
 
 ---
+
+### Lazy Loading & Thumbnail Issues
+**Fixed:** Done button corrupting unloaded image src attributes  
+**Documentation:** FIX_LAZY_LOADING.md
+
+**Issues resolved:**
+- ✅ **Broken images after thumbnail purge** - Images below fold now load correctly after "Rebuild Thumbnails"
+- ✅ **Done button bug** - Fixed cachebuster code corrupting unloaded images
+- ✅ **IntersectionObserver setup** - Disconnects and recreates observer on grid reload
+
+**Root cause:**
+- "Rebuild Thumbnails" dialog's Done button added cachebuster to ALL images
+- For unloaded images (no src attribute), `img.src` returns `""` (empty string)
+- `"".split('?')[0]` returns `""`  
+- Set `img.src = "?t=timestamp"` (invalid URL)
+- When user scrolled, IntersectionObserver check `!img.src` failed (src was truthy but invalid)
+- Images never loaded proper thumbnail URLs
+
+**The fix:**
+```javascript
+// Only add cachebuster to images with valid thumbnail URLs
+if (img.src && img.src.includes('/api/photo/')) {
+  const src = img.src.split('?')[0];
+  img.src = `${src}?t=${cacheBuster}`;
+}
+```
+
+**Testing verified:**
+- Small library (1,100 photos): All images load correctly after thumbnail rebuild
+- Scroll through entire grid: No broken images
+- Done button only modifies loaded images
+
+---

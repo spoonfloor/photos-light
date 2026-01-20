@@ -6,23 +6,8 @@ Last updated: In progress session
 
 ## TIER 1: CRITICAL UX (Next Priority)
 
-### Lazy Loading & Thumbnail Issues
-**Priority:** 🔴 HIGH - Core viewing experience  
-**Status:** NOT STARTED
-
-**Issue:** Lazy-load thumbnails on scroll (hash-based cache)
-- In Opbfrwgeiu library, purging thumbnails causes broken images on media below the fold
-- Rebuilding index restores images
-- Affects daily use of the app
-
-**Impact:** Users see broken images when scrolling - unacceptable UX
-
----
-
-## TIER 2: NAVIGATION & DATA INTEGRITY
-
 ### Date Picker Issues (Duplicate Years)
-**Priority:** 🟡 MEDIUM-HIGH - Frequent operation  
+**Priority:** 🔴 HIGH - Frequent operation  
 **Status:** NOT STARTED
 
 **Issue 1:** Jump to specific month/year (date picker)
@@ -54,7 +39,7 @@ Last updated: In progress session
 
 ---
 
-## TIER 3: FEATURE WORK (When Ready)
+## TIER 2: FEATURE WORK (When Ready)
 
 ### Import Duplicate Detection + Migration Infrastructure
 **Priority:** 🟢 LOW - Feature enhancement, not blocking  
@@ -211,15 +196,26 @@ Last updated: In progress session
 
 ---
 
+## BUGS YET TO BE TRIAGED
+
+### Error Message Wording - 'Large library detected'
+**Priority:** TBD  
+**Status:** NOT STARTED
+
+**Issue:** Error warning with title 'Large library detected' sounds robotic
+- Should be reworded to: 'Rebuilding large library'
+
+---
+
 ## SUMMARY
 
-**Next up:** Lazy Loading & Thumbnail Issues (🔴 Core UX problem)
+**Next up:** Date Picker duplicate years (🔴 Critical navigation annoyance)
 
-**After that:** Date Picker duplicate years (🟡 Navigation annoyance)
+**After that:** Database Rebuild empty grid (🟡 Data integrity issue)
 
 **Total remaining:** 
-- Critical: 1
-- Medium: 2  
+- Critical: 2
 - Feature work: 1 (deferred)
 - Polish: 7
 - Backlog UX: ~15 items
+- Needs triage: 1

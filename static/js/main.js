@@ -1,4 +1,6 @@
 // Photo Viewer - Main Entry Point
+const MAIN_JS_VERSION = 'v84-FIX';
+console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
 // STATE MANAGEMENT
@@ -2184,48 +2186,51 @@ async function loadAndRenderPhotos(append = false) {
 let thumbnailObserver = null;
 
 function setupThumbnailLazyLoading() {
-  // Create observer if it doesn't exist
-  if (!thumbnailObserver) {
-    thumbnailObserver = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            const img = entry.target;
-            const photoId = img.dataset.photoId;
-
-            if (photoId && !img.src) {
-              // Load thumbnail
-              img.src = `/api/photo/${photoId}/thumbnail`;
-              img.classList.add('loading');
-
-              img.onload = () => {
-                img.classList.remove('loading');
-                // Inject select circle now that image is loaded
-                const photoCard = img.closest('.photo-card');
-                if (photoCard && !photoCard.querySelector('.select-circle')) {
-                  const circle = document.createElement('div');
-                  circle.className = 'select-circle';
-                  photoCard.insertBefore(circle, photoCard.firstChild);
-                  photoCard.classList.add('loaded');
-                }
-              };
-
-              img.onerror = () => {
-                img.classList.remove('loading');
-                img.classList.add('error');
-              };
-
-              // Stop observing once loaded
-              thumbnailObserver.unobserve(img);
-            }
-          }
-        });
-      },
-      {
-        rootMargin: '1000px', // Load 1000px before entering viewport for smoother experience
-      }
-    );
+  // Disconnect existing observer to clear stale references
+  if (thumbnailObserver) {
+    thumbnailObserver.disconnect();
   }
+
+  // Create fresh observer
+  thumbnailObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          const img = entry.target;
+          const photoId = img.dataset.photoId;
+
+          if (photoId && !img.src) {
+            // Load thumbnail
+            img.src = `/api/photo/${photoId}/thumbnail`;
+            img.classList.add('loading');
+
+            img.onload = () => {
+              img.classList.remove('loading');
+              // Inject select circle now that image is loaded
+              const photoCard = img.closest('.photo-card');
+              if (photoCard && !photoCard.querySelector('.select-circle')) {
+                const circle = document.createElement('div');
+                circle.className = 'select-circle';
+                photoCard.insertBefore(circle, photoCard.firstChild);
+                photoCard.classList.add('loaded');
+              }
+            };
+
+            img.onerror = () => {
+              img.classList.remove('loading');
+              img.classList.add('error');
+            };
+
+            // Stop observing once loaded
+            thumbnailObserver.unobserve(img);
+          }
+        }
+      });
+    },
+    {
+      rootMargin: '1000px', // Load 1000px before entering viewport for smoother experience
+    }
+  );
 
   // Observe all thumbnail images that don't have src yet
   const thumbnails = document.querySelectorAll('.photo-thumb:not([src])');
@@ -4081,12 +4086,15 @@ async function loadRebuildThumbnailsOverlay() {
       .getElementById('rebuildThumbnailsDoneBtn')
       ?.addEventListener('click', async () => {
         closeRebuildThumbnailsOverlay();
-        // Force thumbnail reload by adding cache-buster
+        // Force thumbnail reload by adding cache-buster (only to loaded images)
         const thumbnails = document.querySelectorAll('.photo-thumb');
         const cacheBuster = Date.now();
         thumbnails.forEach((img) => {
-          const src = img.src.split('?')[0];
-          img.src = `${src}?t=${cacheBuster}`;
+          // Only add cachebuster to images that have valid thumbnail URLs
+          if (img.src && img.src.includes('/api/photo/')) {
+            const src = img.src.split('?')[0];
+            img.src = `${src}?t=${cacheBuster}`;
+          }
         });
       });
 
@@ -4199,12 +4207,12 @@ async function executeRebuildThumbnails() {
     // Visual confirmation: Clear all thumbnail images
     if (result.cleared_count > 0) {
       console.log('🎨 Clearing visible thumbnails for visual confirmation...');
-      const allThumbs = document.querySelectorAll('.photo-thumb');
-      allThumbs.forEach((thumb) => {
-        thumb.removeAttribute('src');
-        thumb.classList.remove('loading', 'error');
-        thumb.classList.add('loading'); // Show loading state
-      });
+      
+      // Clear the grid to show user that purge happened
+      const container = document.getElementById('photoContainer');
+      if (container) {
+        container.innerHTML = '';
+      }
 
       // Show blank grid for 300ms before reloading
       await new Promise((resolve) => setTimeout(resolve, 300));
