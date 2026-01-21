@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v110';
+const MAIN_JS_VERSION = 'v116';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -596,7 +596,9 @@ function loadRebuildDatabaseOverlay() {
 
 function hideRebuildDatabaseOverlay() {
   const overlay = document.getElementById('rebuildDatabaseOverlay');
-  if (overlay) overlay.style.display = 'none';
+  if (overlay) {
+    overlay.remove(); // Destroy overlay, will be recreated fresh on next open
+  }
 }
 
 // =====================
@@ -763,6 +765,8 @@ async function executeRebuildDatabase() {
     closeLightbox();
   }
 
+  const overlay = document.getElementById('rebuildDatabaseOverlay');
+  const title = overlay.querySelector('.import-title');
   const statusText = document.getElementById('rebuildDatabaseStatusText');
   const stats = document.getElementById('rebuildDatabaseStats');
   const indexedCount = document.getElementById('rebuildIndexedCount');
@@ -771,12 +775,12 @@ async function executeRebuildDatabase() {
   const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
   const doneBtn = document.getElementById('rebuildDatabaseDoneBtn');
 
-  // Hide proceed, show stats
+  // Update title and show stats (State 3)
+  title.textContent = 'Rebuilding database';
   proceedBtn.style.display = 'none';
   cancelBtn.style.display = 'none';
   stats.style.display = 'flex';
-  statusText.innerHTML =
-    'Rebuilding database<span class="import-spinner"></span>';
+  statusText.textContent = 'Rebuilding database';
 
   try {
     const eventSource = new EventSource(
@@ -790,9 +794,9 @@ async function executeRebuildDatabase() {
       if (data.phase === 'adding_untracked') {
         indexedCount.textContent = data.current.toLocaleString();
         totalCount.textContent = data.total.toLocaleString();
-        statusText.innerHTML = `Indexing files<span class="import-spinner"></span>`;
+        statusText.textContent = 'Indexing files...';
       } else if (data.phase === 'removing_empty') {
-        statusText.innerHTML = `Cleaning up<span class="import-spinner"></span>`;
+        statusText.textContent = 'Cleaning up';
       }
     });
 
@@ -800,9 +804,10 @@ async function executeRebuildDatabase() {
       const data = JSON.parse(e.data);
       console.log('✅ Rebuild complete:', data);
 
-      // Use the total count from the stats display (which shows the actual indexed count)
+      // Update title and status (State 4)
+      title.textContent = 'Database rebuilt';
       const totalIndexed = totalCount.textContent || data.stats.untracked_files.toLocaleString();
-      statusText.innerHTML = `<p>Database rebuilt successfully</p><p>Indexed ${totalIndexed} files.</p>`;
+      statusText.innerHTML = `<p>Database rebuilt successfully.</p><p>Indexed ${totalIndexed} files.</p>`;
       doneBtn.style.display = 'block';
 
       eventSource.close();

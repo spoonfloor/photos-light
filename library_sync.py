@@ -52,7 +52,14 @@ def estimate_duration(file_count):
     if minutes < 1:
         return (minutes, "less than a minute")
     elif minutes < 60:
-        return (minutes, f"{int(minutes)}-{int(minutes * 1.2)} minutes")
+        lower = int(minutes)
+        upper = int(minutes * 1.2)
+        # Handle case where lower == upper (e.g., 1-1 becomes "1 minute")
+        if lower == upper:
+            unit = "minute" if lower == 1 else "minutes"
+            return (minutes, f"{lower} {unit}")
+        else:
+            return (minutes, f"{lower}-{upper} minutes")
     else:
         hours = minutes / 60
         return (minutes, f"{int(hours)}-{int(hours * 1.3)} hours")

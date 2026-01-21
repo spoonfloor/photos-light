@@ -309,9 +309,9 @@ checkLibraryHealthAndInit()
 
 ---
 
-### Corrupted DB Detection During Operations
-**Fixed:** Database corruption now detected during normal operations  
-**Version:** v101-v110
+### Corrupted DB Detection During Operations + Rebuild UI Polish
+**Fixed:** Database corruption now detected during normal operations with polished rebuild dialog  
+**Version:** v101-v116
 
 **Issues resolved:**
 - ✅ Backend detects SQLite corruption errors in all database routes
@@ -322,12 +322,18 @@ checkLibraryHealthAndInit()
 - ✅ Rebuild dialog appears above lightbox (z-index fix)
 - ✅ Lightbox closes when rebuild proceeds (shows grid during rebuild)
 - ✅ Unified corruption/missing dialog messaging
+- ✅ Fixed estimate display (e.g., "1-1 minutes" → "1 minute")
+- ✅ Polished rebuild dialog state titles and text
+- ✅ Removed Braille spinners from progress states
+- ✅ Fixed stale state when reopening rebuild dialog
 
 **Root causes:**
 1. Backend routes had individual try/catch blocks that returned generic errors
 2. Frontend corruption detection looked for wrong error format
 3. Lightbox and rebuild overlay at same z-index (20000) - rebuild hidden
 4. Lightbox stayed open during rebuild, blocking view of progress
+5. Estimate calculation produced "1-1 minutes" when lower == upper bound
+6. Rebuild overlay just hidden (not destroyed), showed stale state on reopen
 
 **The fix:**
 ```python
@@ -358,13 +364,32 @@ if (errorMsg.includes('not a database') ||
 if (lightbox && lightbox.style.display !== 'none') {
   closeLightbox(); // Show grid during rebuild
 }
+
+// Destroy overlay on close (recreated fresh on next open)
+function hideRebuildDatabaseOverlay() {
+  if (overlay) overlay.remove();
+}
 ```
 
-**Dialog flow:**
-1. **State 1:** Corruption detected → "Database missing" modal (over lightbox)
-2. **State 2:** User clicks "Rebuild database" → Scan results shown (over lightbox)
-3. **State 3:** User clicks "Proceed" → Lightbox closes, grid appears → Rebuild progress shown
-4. **State 4:** Complete → "Done" button → Grid with fresh photos
+```python
+# Fix estimate display for edge cases
+if lower == upper:
+    unit = "minute" if lower == 1 else "minutes"
+    return (minutes, f"{lower} {unit}")
+```
+```
+
+**Dialog flow now works correctly:**
+1. Corruption detected in lightbox → modal appears (visible above lightbox)
+2. User clicks "Rebuild database" → scan shows (visible above lightbox)  
+3. User clicks "Proceed" → lightbox closes, grid appears, rebuild progresses
+4. Complete → grid with fresh photos
+
+**Rebuild dialog states (polished):**
+- **State 1:** "Database missing" modal with unified messaging
+- **State 2:** "Rebuild database" - scan results with estimate (e.g., "1 minute" not "1-1 minutes")
+- **State 3:** "Rebuilding database" - "Indexing files..." progress (no spinners)
+- **State 4:** "Database rebuilt" - "Database rebuilt successfully." with file count
 
 **Testing verified:**
 - Corrupt database → click photo → immediate rebuild dialog appears
@@ -374,5 +399,7 @@ if (lightbox && lightbox.style.display !== 'none') {
 - Grid loading with corrupted DB → rebuild dialog  
 - Date picker with corrupted DB → rebuild dialog
 - No silent failures, clear user feedback at every step
+- Utilities menu → rebuild after corruption flow → clean UI (no stale state)
+- Estimate displays correctly for all file counts
 
 ---
