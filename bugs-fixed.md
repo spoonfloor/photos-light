@@ -308,3 +308,71 @@ checkLibraryHealthAndInit()
 - All API endpoints work correctly
 
 ---
+
+### Corrupted DB Detection During Operations
+**Fixed:** Database corruption now detected during normal operations  
+**Version:** v101-v110
+
+**Issues resolved:**
+- ✅ Backend detects SQLite corruption errors in all database routes
+- ✅ Returns specific JSON error for corruption keywords
+- ✅ Frontend checks for corruption and shows rebuild dialog
+- ✅ Works during any operation (lightbox, grid, date picker, etc.)
+- ✅ No more silent failures with console errors
+- ✅ Rebuild dialog appears above lightbox (z-index fix)
+- ✅ Lightbox closes when rebuild proceeds (shows grid during rebuild)
+- ✅ Unified corruption/missing dialog messaging
+
+**Root causes:**
+1. Backend routes had individual try/catch blocks that returned generic errors
+2. Frontend corruption detection looked for wrong error format
+3. Lightbox and rebuild overlay at same z-index (20000) - rebuild hidden
+4. Lightbox stayed open during rebuild, blocking view of progress
+
+**The fix:**
+```python
+# Backend: Catch corruption in route exception handlers
+except sqlite3.DatabaseError as e:
+    error_str = str(e).lower()
+    if 'not a database' in error_str or 'malformed' in error_str or 'corrupt' in error_str:
+        return jsonify({'error': 'file is not a database'}), 500
+```
+
+```javascript
+// Frontend: Check for corruption keywords
+if (errorMsg.includes('not a database') || 
+    errorMsg.includes('malformed') || 
+    errorMsg.includes('corrupt')) {
+  showCriticalErrorModal('db_corrupted');
+}
+```
+
+```css
+/* Z-index fix: Rebuild overlay above lightbox */
+--z-import-overlay: 20001; /* was 5000 */
+--z-dialog: 20000; /* lightbox */
+```
+
+```javascript
+// Close lightbox when rebuild proceeds
+if (lightbox && lightbox.style.display !== 'none') {
+  closeLightbox(); // Show grid during rebuild
+}
+```
+
+**Dialog flow:**
+1. **State 1:** Corruption detected → "Database missing" modal (over lightbox)
+2. **State 2:** User clicks "Rebuild database" → Scan results shown (over lightbox)
+3. **State 3:** User clicks "Proceed" → Lightbox closes, grid appears → Rebuild progress shown
+4. **State 4:** Complete → "Done" button → Grid with fresh photos
+
+**Testing verified:**
+- Corrupt database → click photo → immediate rebuild dialog appears
+- Dialog visible above lightbox (not hidden behind)
+- Click "Rebuild database" → scan completes → "Proceed" button visible
+- Click "Proceed" → lightbox closes, grid appears, rebuild progresses over grid
+- Grid loading with corrupted DB → rebuild dialog  
+- Date picker with corrupted DB → rebuild dialog
+- No silent failures, clear user feedback at every step
+
+---

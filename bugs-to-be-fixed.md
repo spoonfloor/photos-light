@@ -1,39 +1,12 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: January 20, 2026
+Last updated: January 21, 2026
 
-**Status:** 5 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild), 7 remaining bugs + 1 deferred feature
+**Status:** 7 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2), 6 remaining bugs + 1 deferred feature
 
 ---
 
 ## 🔴 TIER 1: CRITICAL - MUST FIX (High Impact, Core Workflows)
-
-### Corrupted DB Detection During Operations
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 1-2 hours  
-**Status:** NOT STARTED
-
-**Issue:** Corrupted database not detected during normal operations - fails silently
-- User has corrupted DB but doesn't know it
-- Click photo → lightbox fails to load (no error dialog)
-- Errors logged to console only (user doesn't see them)
-- No rebuild dialog prompt
-- User thinks app is broken, not the database
-
-**Desired behavior:**
-- Detect database corruption during ANY operation (not just on app load)
-- Show user-friendly error dialog: "Database appears corrupted. Rebuild database?"
-- Offer immediate rebuild option
-- Don't fail silently with console errors
-
-**Rationale:** Data integrity issue, poor error handling, confusing UX when DB corrupted
-
-**Fix approach:** 
-- Add database error detection wrapper around API calls
-- Catch SQLite corruption errors and trigger rebuild prompt
-- Show error dialog instead of silent failure
-
----
 
 ### Photo Picker - NAS Navigation Issues
 **Priority:** 🔴 CRITICAL  
@@ -182,20 +155,22 @@ Based on impact, frequency, and effort:
 2. ✅ **Date Editor - Year Dropdown Missing New Year** (DONE - v86)
 3. ✅ **Error Message Wording** (DONE - v88)
 4. ✅ **Toast Timing + Date Edit Undo** (DONE - v89-v94)
-5. 🔴 **Photo Picker - NAS Navigation Issues** (2 hrs, high impact but complex)
-6. 🔴 **Database Rebuild - Empty Grid** (1 hr, data integrity)
-7. 🟡 **Month Dividers During Scroll** (30 min, polish)
-8. 🟢 **Video Format Support** (30 min, edge case)
-9. 🟢 **Import Count Issues** (2 hrs, low impact)
-10. 🟢 **Manual Restore & Rebuild** (1 hr, edge case)
-11. 🟢 **Database Missing Prompt** (30 min, can't reproduce)
-12. 🔵 **Import Duplicate Detection** (deferred feature work)
+5. ✅ **Database Rebuild - Empty Grid** (DONE - v99-v100)
+6. ✅ **Corrupted DB Detection During Operations** (DONE - v101-v110)
+7. 🔴 **Photo Picker - NAS Navigation Issues** (2 hrs, high impact but complex)
+8. 🟡 **Month Dividers During Scroll** (30 min, polish)
+9. 🟢 **Video Format Support** (30 min, edge case)
+10. 🟢 **Import Count Issues** (2 hrs, low impact)
+11. 🟢 **Manual Restore & Rebuild** (1 hr, edge case)
+12. 🟢 **Database Missing Prompt** (30 min, can't reproduce)
+13. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Rationale:**
-- **Quick wins first (#2-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
-- **Then complex high-impact (#5-6):** Core functionality bugs requiring deeper investigation
-- **Then polish (#7-11):** Visual glitches and edge cases after critical issues resolved
-- **Deferred (#12):** Feature work, not bug fixes - save for dedicated feature development
+- **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
+- **Data integrity (#5-6):** Database rebuild and corruption detection - ALL DONE ✅
+- **Then complex high-impact (#7):** Core functionality bugs requiring deeper investigation
+- **Then polish (#8-12):** Visual glitches and edge cases after critical issues resolved
+- **Deferred (#13):** Feature work, not bug fixes - save for dedicated feature development
 
 ---
 
@@ -203,14 +178,13 @@ Based on impact, frequency, and effort:
 
 **Next up:** Photo Picker NAS Navigation Issues - Complex but critical
 
-**Total remaining:** 6 bugs + 1 deferred feature 
-**Total remaining:** 7 bugs + 1 deferred feature
-- 🔴 Critical: 2 bugs (Corrupted DB Detection, Photo Picker)
+**Total remaining:** 6 bugs + 1 deferred feature
+- 🔴 Critical: 1 bug (Photo Picker)
 - 🟡 Polish: 1 bug (Month Dividers)
 - 🟢 Edge cases: 4 bugs (Video Format, Import Counts, Manual Restore, DB Missing)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~8-10 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~6-8 hours for remaining bugs (excluding deferred feature)
 
 ---
 

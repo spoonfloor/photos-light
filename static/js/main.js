@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v100';
+const MAIN_JS_VERSION = 'v110';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -26,6 +26,31 @@ const state = {
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
 // ============================================================================
 const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
+
+// ============================================================================
+// DATABASE CORRUPTION DETECTION
+// ============================================================================
+
+/**
+ * Check if API response indicates database corruption
+ * Show rebuild dialog if detected
+ */
+function checkForDatabaseCorruption(responseData) {
+  if (responseData && responseData.error) {
+    const errorMsg = responseData.error.toLowerCase();
+    // Check for corruption keywords in error message
+    if (errorMsg.includes('database_corrupted') || 
+        errorMsg.includes('not a database') ||
+        errorMsg.includes('malformed') ||
+        errorMsg.includes('corrupt')) {
+      console.error('🚨 Database corruption detected:', responseData.error);
+      // Show rebuild dialog using existing critical error modal
+      showCriticalErrorModal('db_corrupted', responseData.message || 'Database appears corrupted');
+      return true;
+    }
+  }
+  return false;
+}
 
 // ============================================================================
 // TOAST DURATION - Default duration for toast messages in milliseconds
@@ -194,6 +219,11 @@ async function populateDatePicker() {
     }
 
     const data = await response.json();
+
+    // Check for database corruption
+    if (checkForDatabaseCorruption(data)) {
+      return;
+    }
 
     // Validate response data
     if (!data || !Array.isArray(data.years)) {
@@ -725,6 +755,13 @@ async function startRebuildDatabase() {
  */
 async function executeRebuildDatabase() {
   console.log('🚀 Executing database rebuild...');
+
+  // Close lightbox if open (user should see grid during rebuild)
+  const lightbox = document.getElementById('lightboxOverlay');
+  if (lightbox && lightbox.style.display !== 'none') {
+    console.log('🔄 Closing lightbox to show grid');
+    closeLightbox();
+  }
 
   const statusText = document.getElementById('rebuildDatabaseStatusText');
   const stats = document.getElementById('rebuildDatabaseStats');
@@ -1484,15 +1521,10 @@ function showCriticalErrorModal(type, path = '') {
   // Clear previous buttons
   actions.innerHTML = '';
 
-  if (type === 'db_missing') {
+  if (type === 'db_missing' || type === 'db_corrupted') {
     title.textContent = 'Database missing';
 
-    const filename = path.split('/').pop();
-    message.innerHTML = `
-      <p style="margin: 0 0 12px 0;">Can't find database file:</p>
-      <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">${filename}</p>
-      <p style="margin: 0;">Your library is missing the file needed to display and keep track of your photos. To continue, you can rebuild the database or switch to a different library.</p>
-    `;
+    message.innerHTML = `<p style="margin: 0;">The file your library needs to display and keep track of your photos is missing or corrupted. To continue, you can rebuild the database or switch to a different library.</p>`;
 
     // Add buttons
     const switchBtn = document.createElement('button');
@@ -1878,9 +1910,33 @@ function loadMediaIntoContent(content, photo, isVideo) {
         content.appendChild(img);
       };
       
-      img.onerror = () => {
+      img.onerror = async () => {
         console.error(`❌ Image ${photo.id} failed to load`);
-        // Keep placeholder, optionally show error message
+        
+        // Check if failure was due to database corruption
+        try {
+          const response = await fetch(`/api/photo/${photo.id}/file`);
+          console.log(`🔍 Corruption check - Status: ${response.status}, OK: ${response.ok}`);
+          
+          if (!response.ok) {
+            const contentType = response.headers.get('content-type');
+            console.log(`🔍 Content-Type: ${contentType}`);
+            
+            if (contentType && contentType.includes('application/json')) {
+              const data = await response.json();
+              console.log(`🔍 Response data:`, data);
+              
+              if (checkForDatabaseCorruption(data)) {
+                return; // Corruption dialog shown, stop here
+              }
+            }
+          }
+        } catch (e) {
+          console.error('🔍 Error checking for corruption:', e);
+          // Ignore fetch errors, keep placeholder
+        }
+        
+        // Keep placeholder, show error state
       };
     }
   }
@@ -2184,6 +2240,12 @@ async function loadAndRenderPhotos(append = false) {
     // Fetch ALL photos (no limit) - just id, date, month, file_type
     const response = await fetch(`/api/photos?sort=${state.currentSortOrder}`);
     const data = await response.json();
+
+    // Check for database corruption
+    if (checkForDatabaseCorruption(data)) {
+      state.loading = false;
+      return;
+    }
 
     state.photos = data.photos;
     state.hasDatabase = true; // Database exists if we successfully loaded photos

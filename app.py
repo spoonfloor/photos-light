@@ -5,6 +5,33 @@ Photo Viewer - Flask Server with Database API
 
 from flask import Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
 import sqlite3
+from functools import wraps
+
+def handle_db_corruption(f):
+    """
+    Decorator to catch database corruption errors and return specific error response.
+    
+    Catches sqlite3.DatabaseError and checks if it's due to corruption.
+    Returns {'error': 'database_corrupted'} for frontend to show rebuild dialog.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except sqlite3.DatabaseError as e:
+            error_str = str(e).lower()
+            # Check for specific corruption indicators
+            if ('not a database' in error_str or 
+                'malformed' in error_str or 
+                'corrupt' in error_str):
+                app.logger.error(f"Database corruption detected: {e}")
+                return jsonify({
+                    'error': 'database_corrupted',
+                    'message': 'Database appears corrupted. Please rebuild.'
+                }), 500
+            # Re-raise if not corruption (permission error, etc.)
+            raise
+    return decorated_function
 import os
 import subprocess
 import shutil
@@ -266,6 +293,7 @@ def index():
     return send_from_directory(STATIC_DIR, 'index.html')
 
 @app.route('/api/photos')
+@handle_db_corruption
 def get_photos():
     """
     Get photos from database
@@ -348,6 +376,7 @@ def get_photos():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photo/<int:photo_id>/dimensions')
+@handle_db_corruption
 def get_photo_dimensions(photo_id):
     """Get dimensions for a specific photo"""
     try:
@@ -379,6 +408,7 @@ def get_photo_dimensions(photo_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photo/<int:photo_id>/thumbnail')
+@handle_db_corruption
 def get_photo_thumbnail(photo_id):
     """
     Serve thumbnail for a photo (lazy generation + caching)
@@ -515,6 +545,7 @@ def get_photo_thumbnail(photo_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photo/<int:photo_id>/file')
+@handle_db_corruption
 def get_photo_file(photo_id):
     """Serve the actual photo/video file (convert HEIC to JPEG on-the-fly)"""
     try:
@@ -635,6 +666,7 @@ def cleanup_empty_folders(file_path, library_root):
             break
 
 @app.route('/api/photos/delete', methods=['POST'])
+@handle_db_corruption
 def delete_photos():
     """Delete photos (move to .trash/ and move DB record to deleted_photos table)"""
     try:
@@ -768,6 +800,7 @@ def static_files(path):
     return send_from_directory(STATIC_DIR, path)
 
 @app.route('/api/photo/<int:photo_id>/reveal', methods=['POST'])
+@handle_db_corruption
 def reveal_in_finder(photo_id):
     """Reveal photo in Finder"""
     try:
@@ -795,6 +828,7 @@ def reveal_in_finder(photo_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photo/update_date', methods=['POST'])
+@handle_db_corruption
 def update_photo_date():
     """Update photo date"""
     try:
@@ -823,6 +857,7 @@ def update_photo_date():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photos/bulk_update_date', methods=['POST'])
+@handle_db_corruption
 def bulk_update_photo_dates():
     """Bulk update photo dates"""
     try:
@@ -923,6 +958,7 @@ def bulk_update_photo_dates():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photos/restore', methods=['POST'])
+@handle_db_corruption
 def restore_photos():
     """Restore photos from trash back to library"""
     try:
@@ -1020,6 +1056,7 @@ def restore_photos():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/years')
+@handle_db_corruption
 def get_years():
     """Get list of all years that have photos"""
     try:
@@ -1046,6 +1083,7 @@ def get_years():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photos/nearest_month')
+@handle_db_corruption
 def get_nearest_month():
     """
     Find the nearest month with photos to a target month.
@@ -1112,6 +1150,7 @@ def get_nearest_month():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photos/jump')
+@handle_db_corruption
 def jump_to_date():
     """Get photos starting from a specific year-month"""
     try:
@@ -1235,6 +1274,7 @@ def browse_import():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/import/scan-paths', methods=['POST'])
+@handle_db_corruption
 def scan_import_paths():
     """
     Scan selected paths (files and/or folders) and return list of media files
@@ -1475,6 +1515,7 @@ def start_background_thumbnail_generation(photo_ids):
 # ============================================================================
 
 @app.route('/api/utilities/duplicates')
+@handle_db_corruption
 def get_duplicates():
     """
     Find duplicate photos (same content_hash)
@@ -1571,6 +1612,7 @@ def get_duplicates():
 
 
 @app.route('/api/utilities/update-index/scan')
+@handle_db_corruption
 def scan_index():
     """
     Update Library Index: Scan library and database to find what needs updating.

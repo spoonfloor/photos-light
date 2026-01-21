@@ -26,7 +26,7 @@
 
   /* --- Z-index scale --- */
   --z-app-chrome: 1000;
-  --z-import-overlay: 5000;
+  --z-import-overlay: 20001;
   --z-dropdown: 10000;
   --z-dialog: 20000;
   --z-toast: 21000;
