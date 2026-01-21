@@ -6,22 +6,6 @@ Last updated: In progress session
 
 ## TIER 1: CRITICAL UX (Next Priority)
 
-### Date Picker Issues (Duplicate Years)
-**Priority:** 🔴 HIGH - Frequent operation  
-**Status:** NOT STARTED
-
-**Issue 1:** Jump to specific month/year (date picker)
-- Same year can appear multiple times (bad)
-
-**Issue 2:** Date picker shows only years with photos
-- Same year can appear multiple times (bad)
-
-**Impact:** Annoying every time user navigates by date
-
-**Likely fix:** SQL DISTINCT or GROUP BY issue
-
----
-
 ### Database Rebuild - Empty Grid After Corrupted DB
 **Priority:** 🟡 MEDIUM - Reproducible data integrity issue  
 **Status:** NOT STARTED
@@ -196,26 +180,50 @@ Last updated: In progress session
 
 ---
 
-## BUGS YET TO BE TRIAGED
-
-### Error Message Wording - 'Large library detected'
+### Photo Picker - NAS Navigation Issues
 **Priority:** TBD  
 **Status:** NOT STARTED
 
-**Issue:** Error warning with title 'Large library detected' sounds robotic
-- Should be reworded to: 'Rebuilding large library'
+**Issue:** Problems adding files from photo_library on NAS
+
+**Sub-issues:**
+1. **Partial selection state on open:** Add photos icon in top menu bar → navigate to eric_files → photo_library shows partial selection (bad); selection should be blank slate on invoking add
+2. **Breadcrumb mismatch:** Picker can show eric_files in breadcrumbs while showing folders inside photo_library (e.g., 1900, 1950, etc.) (bad)
+3. **Incorrect selection tally:** Selection tally shows e.g., "162 folders, 1235 files" where none are selected
+4. **Performance:** Checking/unchecking is painfully slow
+
+---
+
+### Index Rebuild - No Resume Capability
+**Priority:** TBD  
+**Status:** NOT STARTED
+
+**Issue:** Need a way to resume index rebuilding if it fails
+
+**Impact:** If rebuild process fails or is interrupted, must start over from scratch
+
+---
+
+### Library Creation - Better New Library Flow
+**Priority:** TBD  
+**Status:** NOT STARTED
+
+**Issue:** Need a better way to create a new library
+
+**Desired flow:**
+- Switch library → Create new (change to Sentence case) → folder/location selection flow → empty library state (NOT first run state)
+
+**Current problem:** New library points to first run state instead of empty library state
 
 ---
 
 ## SUMMARY
 
-**Next up:** Date Picker duplicate years (🔴 Critical navigation annoyance)
-
-**After that:** Database Rebuild empty grid (🟡 Data integrity issue)
+**Next up:** Error Message Wording (2 min) or Photo Picker NAS Issues (2 hrs)
 
 **Total remaining:** 
-- Critical: 2
+- Critical: 1 (DB Rebuild)
 - Feature work: 1 (deferred)
 - Polish: 7
 - Backlog UX: ~15 items
-- Needs triage: 1
+- Needs triage: 4

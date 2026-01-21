@@ -90,3 +90,183 @@ if (img.src && img.src.includes('/api/photo/')) {
 - Done button only modifies loaded images
 
 ---
+
+### Date Picker Duplicate Years
+**Fixed:** Year dropdown showing duplicate years  
+**Documentation:** FIX_DATE_PICKER_DUPLICATES.md  
+**Version:** v85
+
+**Issues resolved:**
+- ✅ Same year no longer appears multiple times in year picker dropdown
+- ✅ Function now clears existing options before repopulating
+- ✅ Works correctly after database rebuild
+- ✅ Works correctly after switching libraries
+
+**Root cause:**
+- `populateDatePicker()` was called multiple times (after rebuild, after health check)
+- Function appended new options without clearing existing ones
+- Duplicate years accumulated in the dropdown
+
+**The fix:**
+```javascript
+// Clear existing options before populating (prevents duplicates)
+yearPicker.innerHTML = '';
+```
+
+**Testing verified:**
+- Each year appears exactly once in dropdown
+- Years remain sorted newest to oldest
+- No duplicates after database operations
+- Tested with database rebuild flow
+
+---
+
+### Date Editor - Year Dropdown Missing New Year
+**Fixed:** Date picker dropdown not updating after editing to new year  
+**Version:** v86
+
+**Issues resolved:**
+- ✅ Year dropdown now refreshes immediately after date edit saves
+- ✅ Works for single photo edits
+- ✅ Works for bulk photo edits (all modes: same, shift, sequence)
+- ✅ New years appear in dropdown right away
+
+**Root cause:**
+- After date edit saved successfully, code reloaded grid (`loadAndRenderPhotos()`)
+- But it didn't refresh the date picker dropdown (`populateDatePicker()`)
+- If user edited photos to a new year, dropdown was stale
+- Navigation dropdown became unusable (couldn't jump to new year)
+
+**The fix:**
+```javascript
+// After both single and bulk date edits:
+setTimeout(() => {
+  loadAndRenderPhotos(false);
+  populateDatePicker(); // Refresh year dropdown to include new years
+}, 300);
+```
+
+Added `populateDatePicker()` call in two locations:
+- After single photo date edit (line ~1349)
+- After bulk photo date edit (line ~1281)
+
+**Testing verified:**
+- Library with only 2016 photos
+- Edited photo to 2025
+- Year dropdown immediately updated to show both 2016 and 2025
+- Can now navigate to newly created years
+
+---
+
+### Error Message Wording - Large Library Dialog
+**Fixed:** Improved dialog title for large library rebuilds  
+**Version:** v88
+
+**Issues resolved:**
+- ✅ Changed 'Large library detected' to 'Large library'
+- ✅ More concise, less robotic language
+- ✅ Better first impression for rebuild warnings
+
+**The fix:**
+```javascript
+// Before: 'Large library detected'
+// After:  'Large library'
+showDialog('Large library', `Your library contains ${count} photos...`)
+```
+
+**Testing verified:**
+- Rebuild database with 1000+ files
+- Warning dialog shows "Large library" title
+- Clean, simple wording
+
+---
+
+### Toast Timing + Date Edit Undo
+**Fixed:** Centralized toast durations and added undo to date edits  
+**Version:** v89-v94
+
+**Issues resolved:**
+- ✅ Centralized toast durations (3s for info, 7s with undo)
+- ✅ Auto-selects duration based on whether undo is provided
+- ✅ Added undo to single photo date edits
+- ✅ Added undo to bulk photo date edits (all modes: same, shift, sequence)
+- ✅ Removed emoji from all toast messages
+- ✅ Fixed undo button showing when it shouldn't
+- ✅ Improved "Restored" message to show count
+
+**Root cause:**
+- Toast durations were hardcoded inconsistently throughout codebase
+- No undo capability for date edits (destructive operation)
+- Undo button always visible even when no undo callback
+
+**The fix:**
+```javascript
+// Centralized constants
+const TOAST_DURATION = 3000; // 3s for info/error
+const TOAST_DURATION_WITH_UNDO = 7000; // 7s with undo
+
+// Auto-select duration in showToast()
+if (duration === undefined) {
+  duration = onUndo ? TOAST_DURATION_WITH_UNDO : TOAST_DURATION;
+}
+
+// Show/hide undo button
+if (onUndo) {
+  newUndoBtn.style.display = 'block';
+  newUndoBtn.addEventListener('click', () => {
+    hideToast();
+    onUndo();
+  });
+} else {
+  newUndoBtn.style.display = 'none';
+}
+
+// Capture original dates before edit
+const originalDates = photoIds.map(id => {
+  const photo = state.photos.find(p => p.id === id);
+  return { id: id, originalDate: photo.date };
+});
+
+// Pass undo callback to toast
+showToast('Date updated', () => undoDateEdit(originalDates));
+```
+
+**Testing verified:**
+- Info toasts display for 3 seconds
+- Delete and date edit toasts display for 7 seconds with undo
+- Undo button only appears when undo callback provided
+- Single photo date edit undo works correctly
+- Bulk photo date edit undo works correctly (all modes)
+- Original dates restored correctly (ID-mapped, no confusion)
+- "Restored 1 photo" / "Restored 2 photos" messaging
+- No emoji in toast messages
+
+---
+
+### Date Picker Duplicate Years
+**Fixed:** Year dropdown showing duplicate years  
+**Documentation:** FIX_DATE_PICKER_DUPLICATES.md
+
+**Issues resolved:**
+- ✅ Same year no longer appears multiple times in year picker dropdown
+- ✅ Function now clears existing options before repopulating
+- ✅ Works correctly after database rebuild
+- ✅ Works correctly after switching libraries
+
+**Root cause:**
+- `populateDatePicker()` was called multiple times (after rebuild, after health check)
+- Function appended new options without clearing existing ones
+- Duplicate years accumulated in the dropdown
+
+**The fix:**
+```javascript
+// Clear existing options before populating (prevents duplicates)
+yearPicker.innerHTML = '';
+```
+
+**Testing verified:**
+- Each year appears exactly once in dropdown
+- Years remain sorted newest to oldest
+- No duplicates after database operations
+
+---

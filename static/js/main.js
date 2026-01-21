@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v84-FIX';
+const MAIN_JS_VERSION = 'v94';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -30,7 +30,8 @@ const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
 // ============================================================================
 // TOAST DURATION - Default duration for toast messages in milliseconds
 // ============================================================================
-const TOAST_DURATION = 2500;
+const TOAST_DURATION = 3000; // 3s for info/error toasts
+const TOAST_DURATION_WITH_UNDO = 7000; // 7s for toasts with undo action
 
 // =====================
 // APP BAR
@@ -202,6 +203,9 @@ async function populateDatePicker() {
 
     const yearPicker = document.getElementById('yearPicker');
     if (!yearPicker) return;
+
+    // Clear existing options before populating (prevents duplicates)
+    yearPicker.innerHTML = '';
 
     // Populate years
     data.years.forEach((year) => {
@@ -631,7 +635,7 @@ function showCriticalError(title, message, buttons) {
             );
           }
         } catch (error) {
-          showToast('Connection failed', 'error', 5000);
+          showToast('Connection failed', 'error');
         }
       } else if (action === 'close') {
         window.close();
@@ -689,7 +693,7 @@ async function startRebuildDatabase() {
     // Show warning if large library
     if (data.requires_warning) {
       const confirmed = await showDialog(
-        'Large library detected',
+        'Large library',
         `Your library contains ${data.file_count.toLocaleString()} photos.\n\nRebuilding will take an estimated ${
           data.estimated_display
         }. Keep the app open until rebuilding is complete.`,
@@ -1229,6 +1233,15 @@ async function saveDateEdit() {
         'input[name="dateEditorMode"]:checked'
       ).value;
 
+      // Capture original dates BEFORE edit (mapped by ID)
+      const originalDates = photoIds.map(id => {
+        const photo = state.photos.find(p => p.id === id);
+        return { 
+          id: id, 
+          originalDate: photo.date 
+        };
+      });
+
       // Build request body
       const requestBody = {
         photo_ids: photoIds,
@@ -1264,25 +1277,30 @@ async function saveDateEdit() {
         // Clear selection state
         deselectAllPhotos();
 
-        // Show toast
+        // Show toast with undo
         showToast(
-          `✅ Updated ${photoIds.length} photo${
+          `Updated ${photoIds.length} photo${
             photoIds.length > 1 ? 's' : ''
           }`,
-          null
+          () => undoDateEdit(originalDates)
         );
 
         // Reload grid
         setTimeout(() => {
           loadAndRenderPhotos(false);
+          populateDatePicker(); // Refresh year dropdown to include new years
         }, 300);
       } else {
         console.error('❌ Failed to update dates:', result.error);
-        showToast('❌ Failed to update dates', null);
+        showToast('Failed to update dates', null);
       }
     } else {
       // Single photo edit
       const photoId = photoIds[0];
+
+      // Capture original date BEFORE edit
+      const photo = state.photos.find(p => p.id === photoId);
+      const originalDate = photo.date;
 
       const response = await fetch('/api/photo/update_date', {
         method: 'POST',
@@ -1295,7 +1313,7 @@ async function saveDateEdit() {
       if (response.ok) {
         if (result.dry_run) {
           console.log('🔍 DRY RUN - Date would be updated to:', newDate);
-          showToast('✅ Date updated (DRY RUN)', null);
+          showToast('Date updated (DRY RUN)', null);
           closeDateEditor();
         } else {
           console.log('✅ Date updated successfully');
@@ -1334,8 +1352,8 @@ async function saveDateEdit() {
           // Close date editor first
           closeDateEditor();
 
-          // Show toast
-          showToast('✅ Date updated', null);
+          // Show toast with undo
+          showToast('Date updated', () => undoDateEdit([{id: photoId, originalDate: originalDate}]));
 
           // Close lightbox to show updated grid
           closeLightbox();
@@ -1343,16 +1361,17 @@ async function saveDateEdit() {
           // Reload the entire grid to reflect new sort order
           setTimeout(() => {
             loadAndRenderPhotos(false); // false = reset from beginning
+            populateDatePicker(); // Refresh year dropdown to include new years
           }, 300); // Longer delay to ensure lightbox is fully closed
         }
       } else {
         console.error('❌ Failed to update date:', result.error);
-        showToast('❌ Failed to update date', null);
+        showToast('Failed to update date', null);
       }
     }
   } catch (error) {
     console.error('❌ Error updating date:', error);
-    showToast('❌ Error updating date', null);
+    showToast('Error updating date', null);
   }
 }
 
@@ -1378,7 +1397,7 @@ function loadToast() {
 /**
  * Show toast with undo option
  */
-function showToast(message, onUndo, duration = TOAST_DURATION) {
+function showToast(message, onUndo, duration) {
   const toast = document.getElementById('toast');
   const messageEl = document.getElementById('toastMessage');
   const undoBtn = document.getElementById('toastUndoBtn');
@@ -1387,15 +1406,29 @@ function showToast(message, onUndo, duration = TOAST_DURATION) {
 
   messageEl.textContent = message;
 
-  // Remove old listener
+  // Auto-select duration based on whether undo is provided
+  if (duration === undefined) {
+    duration = onUndo ? TOAST_DURATION_WITH_UNDO : TOAST_DURATION;
+  }
+
+  // Log actual duration being used
+  console.log(`🍞 Toast: "${message}" (${duration}ms, undo: ${!!onUndo})`);
+
+  // Show/hide undo button based on whether undo callback exists
   const newUndoBtn = undoBtn.cloneNode(true);
   undoBtn.parentNode.replaceChild(newUndoBtn, undoBtn);
 
-  // Add new listener
-  newUndoBtn.addEventListener('click', () => {
-    hideToast();
-    onUndo();
-  });
+  if (onUndo) {
+    // Show undo button and add listener
+    newUndoBtn.style.display = 'block';
+    newUndoBtn.addEventListener('click', () => {
+      hideToast();
+      onUndo();
+    });
+  } else {
+    // Hide undo button
+    newUndoBtn.style.display = 'none';
+  }
 
   toast.style.display = 'flex';
 
@@ -2712,14 +2745,51 @@ async function deletePhotos(photoIds) {
     const count = result.deleted;
     showToast(
       `Deleted ${count} photo${count > 1 ? 's' : ''}`,
-      () => undoDelete(photoIds),
-      5000
+      () => undoDelete(photoIds)
     );
   } catch (error) {
     console.error('❌ Delete error:', error);
-    showToast('Delete failed', null, 3000);
+    showToast('Delete failed', null);
   } finally {
     state.deleteInProgress = false;
+  }
+}
+
+/**
+ * Undo date edit by restoring original dates
+ */
+async function undoDateEdit(originalDates) {
+  try {
+    console.log('↩️ Undoing date edit for', originalDates.length, 'photos');
+    
+    // Restore each photo to its original date
+    const promises = originalDates.map(({id, originalDate}) => 
+      fetch('/api/photo/update_date', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photo_id: id, new_date: originalDate }),
+      })
+    );
+
+    const responses = await Promise.all(promises);
+    
+    // Check if all succeeded
+    const allSucceeded = responses.every(r => r.ok);
+    
+    if (allSucceeded) {
+      console.log('✅ Date edit undone successfully');
+      
+      // Reload grid to reflect restored dates
+      await loadAndRenderPhotos(false);
+      await populateDatePicker();
+      
+      showToast('Date change undone', null);
+    } else {
+      throw new Error('Some updates failed');
+    }
+  } catch (error) {
+    console.error('❌ Undo date edit error:', error);
+    showToast('Undo failed', null);
   }
 }
 
@@ -2744,10 +2814,11 @@ async function undoDelete(photoIds) {
     // Reload grid to show restored photos
     await loadAndRenderPhotos(false);
 
-    showToast('Restored', null, 2000);
+    const count = result.restored;
+    showToast(`Restored ${count} photo${count > 1 ? 's' : ''}`, null);
   } catch (error) {
     console.error('❌ Restore error:', error);
-    showToast('Restore failed', null, 3000);
+    showToast('Restore failed', null);
   }
 }
 
@@ -3030,7 +3101,7 @@ function populateImportDetails() {
  */
 function cancelImport() {
   console.log('⚠️ Cancel import requested');
-  showToast('Cannot cancel import in progress', null, 2000);
+  showToast('Cannot cancel import in progress', null);
 }
 
 /**
@@ -3038,7 +3109,7 @@ function cancelImport() {
  */
 async function undoImport() {
   if (importState.importedPhotoIds.length === 0) {
-    showToast('Nothing to undo', null, 2000);
+    showToast('Nothing to undo', null);
     return;
   }
 
@@ -3061,14 +3132,14 @@ async function undoImport() {
     const result = await response.json();
     console.log('✅ Undo complete:', result);
 
-    showToast(`Undid import of ${result.deleted} photos`, null, 3000);
+    showToast(`Undid import of ${result.deleted} photos`, null);
     closeImportOverlay();
 
     // Reload grid
     await loadAndRenderPhotos(false);
   } catch (error) {
     console.error('❌ Undo error:', error);
-    showToast('Undo failed', null, 3000);
+    showToast('Undo failed', null);
   }
 }
 
@@ -3408,7 +3479,7 @@ async function openDuplicatesOverlay() {
   } catch (error) {
     console.error('❌ Failed to scan for duplicates:', error);
     updateDuplicatesUI('Failed to scan for duplicates', false);
-    showToast('Failed to scan for duplicates', null, 3000);
+    showToast('Failed to scan for duplicates', null);
   }
 }
 
@@ -3557,7 +3628,7 @@ function showDuplicatesComplete() {
  */
 async function removeSelectedDuplicates() {
   if (duplicatesState.selectedForRemoval.size === 0) {
-    showToast('No duplicates selected for removal', null, 2000);
+    showToast('No duplicates selected for removal', null);
     return;
   }
 
@@ -3603,7 +3674,7 @@ async function removeSelectedDuplicates() {
   } catch (error) {
     console.error('❌ Failed to remove duplicates:', error);
     updateDuplicatesUI('Failed to remove duplicates', false);
-    showToast('Failed to remove duplicates', null, 3000);
+    showToast('Failed to remove duplicates', null);
 
     // Show action buttons again on error
     showDuplicatesActions();
@@ -3758,7 +3829,7 @@ async function openUpdateIndexOverlay() {
   } catch (error) {
     console.error('❌ Failed to scan index:', error);
     updateUpdateIndexUI('Failed to scan', false);
-    showToast('Failed to scan index', null, 3000);
+    showToast('Failed to scan index', null);
   }
 }
 
@@ -3865,7 +3936,7 @@ async function executeUpdateIndex() {
   } catch (error) {
     console.error('❌ Failed to execute update:', error);
     updateUpdateIndexUI('Failed to update library index', false);
-    showToast('Failed to update library index', null, 3000);
+    showToast('Failed to update library index', null);
     showUpdateIndexButtons('cancel');
   }
 }
@@ -4236,7 +4307,7 @@ async function executeRebuildThumbnails() {
     doneBtn.style.display = 'block';
   } catch (error) {
     console.error('❌ Failed to rebuild thumbnails:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
     closeRebuildThumbnailsOverlay();
   }
 }
@@ -4613,7 +4684,7 @@ async function browseSwitchLibrary() {
     return true;
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
     return false;
   }
 }
@@ -4702,7 +4773,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
     }
   } catch (error) {
     console.error('❌ Failed to create library:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
     return false;
   }
 }
@@ -4728,7 +4799,7 @@ async function resetLibraryConfig() {
     }
   } catch (error) {
     console.error('❌ Failed to reset configuration:', error);
-    showToast(`Reset failed: ${error.message}`, 'error', 5000);
+    showToast(`Reset failed: ${error.message}`, 'error');
   }
 }
 
@@ -4803,7 +4874,7 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
     await switchToLibrary(libraryPath, dbPath);
   } catch (error) {
     console.error('❌ Failed to create library:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
 
     // Reset button
     const confirmBtn = document.getElementById('createLibraryConfirmBtn');
@@ -4848,7 +4919,7 @@ async function switchToLibrary(libraryPath, dbPath) {
     }, 500);
   } catch (error) {
     console.error('❌ Failed to switch library:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
   }
 }
 
@@ -4891,7 +4962,7 @@ async function triggerImportWithLibraryCheck() {
     await triggerImport();
   } catch (error) {
     console.error('❌ Failed to check library status:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
   }
 }
 
@@ -4916,7 +4987,7 @@ async function triggerImport() {
     await scanAndConfirmImport(selectedPaths);
   } catch (error) {
     console.error('❌ Failed to trigger import:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
   }
 }
 
@@ -4960,7 +5031,7 @@ async function importFiles() {
     await scanAndConfirmImport(paths);
   } catch (error) {
     console.error('❌ Failed to import files:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
   }
 }
 
@@ -5004,7 +5075,7 @@ async function importFolders() {
     await scanAndConfirmImport(paths);
   } catch (error) {
     console.error('❌ Failed to import folders:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
   }
 }
 
@@ -5030,7 +5101,7 @@ async function scanAndConfirmImport(paths) {
     const { files, total_count, files_selected, folders_scanned } = result;
 
     if (total_count === 0) {
-      showToast('No media files found', null, 3000);
+      showToast('No media files found', null);
       return;
     }
 
@@ -5051,7 +5122,7 @@ async function scanAndConfirmImport(paths) {
     await startImportFromPaths(files);
   } catch (error) {
     console.error('❌ Failed to scan paths:', error);
-    showToast(`Error: ${error.message}`, 'error', 5000);
+    showToast(`Error: ${error.message}`, 'error');
   }
 }
 
@@ -5114,7 +5185,7 @@ async function startImportFromPaths(filePaths) {
     }
   } catch (error) {
     console.error('❌ Import failed:', error);
-    showToast(`Import failed: ${error.message}`, 'error', 5000);
+    showToast(`Import failed: ${error.message}`, 'error');
     hideImportOverlay();
   }
 }
