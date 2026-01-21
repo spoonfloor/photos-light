@@ -1781,16 +1781,20 @@ def execute_rebuild_database():
                 else:
                     print(f"  ⚠️  Backup failed, but continuing with rebuild")
             
-            # Ensure database exists, create if missing
-            if not os.path.exists(DB_PATH):
-                print(f"\n📦 Database missing - creating new database at: {DB_PATH}")
-                os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
-                create_database_schema(cursor)
-                conn.commit()
-                conn.close()
-                print(f"  ✅ Created new database")
+            # Remove old database (even if corrupted) and create fresh one
+            print(f"\n🗑️  Removing old database...")
+            if os.path.exists(DB_PATH):
+                os.remove(DB_PATH)
+                print(f"  ✅ Removed old database file")
+            
+            print(f"\n📦 Creating fresh database at: {DB_PATH}")
+            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            create_database_schema(cursor)
+            conn.commit()
+            conn.close()
+            print(f"  ✅ Created fresh database with schema")
             
             # Ensure library directory structure exists (Tier 1: silent auto-fix)
             print(f"📁 Ensuring library directory structure...")
@@ -2123,47 +2127,6 @@ def validate_library_path():
 def list_directory():
     """List folders and files in a directory for custom picker"""
     
-    def count_media_recursive(dir_path, max_depth=3, current_depth=0, start_time=None, timeout_ms=200):
-        """Recursively count media files in a directory with depth limit and timeout"""
-        if current_depth >= max_depth:
-            return -1  # -1 indicates limit reached
-        
-        # Check timeout
-        if start_time is not None:
-            elapsed_ms = (time.time() - start_time) * 1000
-            if elapsed_ms > timeout_ms:
-                return -1  # -1 indicates timeout
-        
-        if start_time is None:
-            start_time = time.time()
-        
-        count = 0
-        try:
-            items = os.listdir(dir_path)
-            for item in items:
-                # Skip hidden files
-                if item.startswith('.'):
-                    continue
-                
-                item_path = os.path.join(dir_path, item)
-                
-                try:
-                    if os.path.isfile(item_path):
-                        ext = os.path.splitext(item)[1].lower()
-                        if ext in ALL_MEDIA_EXTENSIONS:
-                            count += 1
-                    elif os.path.isdir(item_path):
-                        result = count_media_recursive(item_path, max_depth, current_depth + 1, start_time, timeout_ms)
-                        if result == -1:
-                            return -1  # Propagate timeout/limit
-                        count += result
-                except (PermissionError, OSError):
-                    continue
-        except (PermissionError, OSError):
-            pass
-        
-        return count
-    
     try:
         data = request.json
         path = data.get('path', '/')
@@ -2204,20 +2167,9 @@ def list_directory():
             item_path = os.path.join(path, item)
             try:
                 if os.path.isdir(item_path):
-                    # Count media files in folder (if photo picker mode)
-                    media_count = 0
-                    count_display = ""
-                    if include_files:
-                        media_count = count_media_recursive(item_path)
-                        if media_count > 0:
-                            count_display = f" ({media_count})"
-                        elif media_count == -1:
-                            count_display = " (many)"
-                    
+                    # Just return folder info, no counting (picker handles selection counting)
                     folders.append({
-                        'name': item,
-                        'media_count': media_count,
-                        'count_display': count_display
+                        'name': item
                     })
                 elif os.path.isfile(item_path) and include_files:
                     # Only include media files

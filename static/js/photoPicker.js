@@ -6,9 +6,12 @@ const PhotoPicker = (() => {
   // State
   const VIRTUAL_ROOT = '__LOCATIONS__';
   let currentPath = VIRTUAL_ROOT;
-  let selectedPaths = new Set(); // Full paths of selected files/folders
+  let selectedPaths = new Map(); // Full paths → { type: 'file' | 'folder' }
+  let folderStateCache = new Map(); // folder path → 'checked' | 'unchecked' | 'indeterminate'
   let topLevelLocations = [];
   let resolveCallback = null;
+  let isCountingInBackground = false;
+  let countingAborted = false; // Flag to abort ongoing counting operations
 
   // ===========================================================================
   // API Calls
@@ -54,8 +57,9 @@ const PhotoPicker = (() => {
     if (selectedPaths.has(filePath)) {
       selectedPaths.delete(filePath);
     } else {
-      selectedPaths.add(filePath);
+      selectedPaths.set(filePath, { type: 'file' });
     }
+    folderStateCache.clear(); // Invalidate cache
     updateSelectionCount();
   }
 
@@ -63,15 +67,21 @@ const PhotoPicker = (() => {
     if (selectedPaths.has(folderPath)) {
       // Uncheck - remove folder and all its contents
       await unselectFolderRecursive(folderPath);
+      folderStateCache.clear();
+      updateSelectionCount();
     } else {
-      // Check - add folder and all its contents
-      await selectFolderRecursive(folderPath);
+      // Check - OPTIMISTIC UI: mark as selected immediately
+      selectedPaths.set(folderPath, { type: 'folder' });
+      folderStateCache.clear();
+      updateSelectionCount();
+      
+      // Start background counting
+      selectFolderRecursiveBackground(folderPath);
     }
-    updateSelectionCount();
   }
 
   async function selectFolderRecursive(folderPath) {
-    selectedPaths.add(folderPath);
+    selectedPaths.set(folderPath, { type: 'folder' });
     
     try {
       const { folders, files } = await listDirectory(folderPath);
@@ -79,7 +89,7 @@ const PhotoPicker = (() => {
       // Add all files
       for (const file of files) {
         const filePath = folderPath + '/' + file.name;
-        selectedPaths.add(filePath);
+        selectedPaths.set(filePath, { type: 'file' });
       }
       
       // Recursively add all subfolders
@@ -92,31 +102,119 @@ const PhotoPicker = (() => {
     }
   }
 
+  // Background recursive selection with progress updates
+  async function selectFolderRecursiveBackground(folderPath) {
+    const startTime = Date.now();
+    let lastUpdateTime = startTime;
+    let filesDiscoveredSinceUpdate = 0;
+    const UPDATE_INTERVAL_MS = 1000;
+    const UPDATE_FILE_THRESHOLD = 50;
+    
+    isCountingInBackground = true;
+    
+    async function recursiveSelect(path) {
+      // Check if counting was aborted
+      if (countingAborted) {
+        return;
+      }
+      
+      try {
+        const { folders, files } = await listDirectory(path);
+        
+        // Check abort again after async operation
+        if (countingAborted) {
+          return;
+        }
+        
+        // Add all files
+        for (const file of files) {
+          if (countingAborted) return; // Check during loop
+          
+          const filePath = path + '/' + file.name;
+          if (!selectedPaths.has(filePath)) {
+            selectedPaths.set(filePath, { type: 'file' });
+            filesDiscoveredSinceUpdate++;
+          }
+        }
+        
+        // Check if we should update UI
+        const now = Date.now();
+        const timeSinceUpdate = now - lastUpdateTime;
+        
+        if (filesDiscoveredSinceUpdate >= UPDATE_FILE_THRESHOLD || 
+            timeSinceUpdate >= UPDATE_INTERVAL_MS) {
+          if (!countingAborted) {
+            updateSelectionCount();
+            lastUpdateTime = now;
+            filesDiscoveredSinceUpdate = 0;
+          }
+        }
+        
+        // Recursively process subfolders
+        for (const folder of folders) {
+          if (countingAborted) return; // Check during loop
+          
+          const subFolderPath = path + '/' + folder.name;
+          if (!selectedPaths.has(subFolderPath)) {
+            selectedPaths.set(subFolderPath, { type: 'folder' });
+          }
+          await recursiveSelect(subFolderPath);
+        }
+      } catch (error) {
+        console.error('Error selecting folder:', error);
+      }
+    }
+    
+    await recursiveSelect(folderPath);
+    
+    // Only finish if not aborted
+    if (!countingAborted) {
+      const totalTime = Date.now() - startTime;
+      isCountingInBackground = false;
+      
+      // Only show counting state if it took > 300ms
+      if (totalTime > 300) {
+        folderStateCache.clear();
+        updateSelectionCount();
+      }
+    }
+  }
+
   async function unselectFolderRecursive(folderPath) {
     // Remove all paths that start with this folder path
-    const toRemove = Array.from(selectedPaths).filter(path => 
+    const toRemove = Array.from(selectedPaths.keys()).filter(path => 
       path === folderPath || path.startsWith(folderPath + '/')
     );
     
     toRemove.forEach(path => selectedPaths.delete(path));
   }
 
-  // Calculate folder checkbox state (checked, unchecked, indeterminate)
+  // Calculate folder checkbox state (checked, unchecked, indeterminate) with caching
   function getFolderState(folderPath) {
+    // Check cache first
+    if (folderStateCache.has(folderPath)) {
+      return folderStateCache.get(folderPath);
+    }
+    
     const isChecked = selectedPaths.has(folderPath);
     
     // Check if any descendant is selected
-    const hasSelectedDescendant = Array.from(selectedPaths).some(path => 
+    const hasSelectedDescendant = Array.from(selectedPaths.keys()).some(path => 
       path.startsWith(folderPath + '/')
     );
     
+    let state;
     if (isChecked) {
-      return 'checked';
+      state = 'checked';
     } else if (hasSelectedDescendant) {
-      return 'indeterminate';
+      state = 'indeterminate';
     } else {
-      return 'unchecked';
+      state = 'unchecked';
     }
+    
+    // Cache the result
+    folderStateCache.set(folderPath, state);
+    return state;
   }
 
   // ===========================================================================
@@ -266,54 +364,62 @@ const PhotoPicker = (() => {
 
       fileList.innerHTML = html;
 
-      // Wire up checkbox and navigation handlers
-      fileList.querySelectorAll('.photo-picker-item').forEach((item) => {
+      // Wire up handlers using EVENT DELEGATION (single listener on parent)
+      fileList.addEventListener('click', async (e) => {
+        const item = e.target.closest('.photo-picker-item');
+        if (!item) return;
+
         const checkbox = item.querySelector('.photo-picker-checkbox');
         const arrow = item.querySelector('.photo-picker-arrow');
         const path = checkbox?.dataset.path;
         const type = checkbox?.dataset.type;
 
-        if (checkbox) {
-          // Checkbox click
-          checkbox.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            if (type === 'folder') {
-              await toggleFolder(path);
-              // Re-render to update icon states
-              await updateFileList();
+        // Checkbox clicked
+        if (e.target.classList.contains('photo-picker-checkbox')) {
+          e.stopPropagation();
+          if (type === 'folder') {
+            await toggleFolder(path);
+            // Update checkbox icon directly (no re-fetch needed)
+            const newState = getFolderState(path);
+            if (newState === 'checked') {
+              checkbox.textContent = 'check_box';
+              checkbox.classList.add('selected');
+            } else if (newState === 'unchecked') {
+              checkbox.textContent = 'folder';
+              checkbox.classList.remove('selected');
             } else {
-              toggleFile(path);
-              // Update icon directly
-              const currentIcon = checkbox.textContent;
-              if (currentIcon === 'check_box') {
-                checkbox.textContent = 'image'; // or could detect if it was 'movie'
-                checkbox.classList.remove('selected');
-              } else {
-                checkbox.textContent = 'check_box';
-                checkbox.classList.add('selected');
-              }
+              checkbox.textContent = 'indeterminate_check_box';
+              checkbox.classList.add('selected');
             }
-          });
+          } else {
+            toggleFile(path);
+            // Update icon directly (optimistic)
+            const currentIcon = checkbox.textContent;
+            if (currentIcon === 'check_box') {
+              checkbox.textContent = 'image';
+              checkbox.classList.remove('selected');
+            } else {
+              checkbox.textContent = 'check_box';
+              checkbox.classList.add('selected');
+            }
+          }
+          return;
         }
 
-        if (arrow && type === 'folder') {
-          // Arrow click - navigate
-          arrow.addEventListener('click', (e) => {
-            e.stopPropagation();
-            navigateTo(path);
-          });
-          
-          // Also make the rest of the row (excluding checkbox) navigate
-          item.addEventListener('click', (e) => {
-            if (e.target === checkbox) return;
-            navigateTo(path);
-          });
+        // Arrow clicked - navigate
+        if (e.target.classList.contains('photo-picker-arrow') && type === 'folder') {
+          e.stopPropagation();
+          navigateTo(path);
+          return;
+        }
+
+        // Row clicked
+        if (type === 'folder' && arrow) {
+          // Folder row (not checkbox) - navigate
+          navigateTo(path);
         } else if (type === 'file') {
-          // For files, entire row toggles selection
-          item.addEventListener('click', (e) => {
-            if (e.target === checkbox) return;
-            checkbox.click();
-          });
+          // File row - toggle selection
+          checkbox.click();
         }
       });
     } catch (error) {
@@ -332,32 +438,42 @@ const PhotoPicker = (() => {
       countEl.textContent = 'No items selected';
       if (continueBtn) continueBtn.disabled = true;
       if (clearBtn) clearBtn.style.visibility = 'hidden';
-    } else {
-      // Count folders vs files
-      let folderCount = 0;
-      let fileCount = 0;
-      
-      selectedPaths.forEach(path => {
-        // Simple heuristic: if path has extension, it's a file
-        if (path.match(/\.[a-z0-9]+$/i)) {
-          fileCount++;
-        } else {
-          folderCount++;
-        }
-      });
-      
-      const parts = [];
-      if (folderCount > 0) parts.push(`${folderCount} folder${folderCount !== 1 ? 's' : ''}`);
-      if (fileCount > 0) parts.push(`${fileCount} file${fileCount !== 1 ? 's' : ''}`);
-      
-      countEl.textContent = parts.join(', ') + ' selected';
-      if (continueBtn) continueBtn.disabled = false;
-      if (clearBtn) clearBtn.style.visibility = 'visible';
+      return;
     }
+    
+    // Count folders vs files using stored type (no regex!)
+    let folderCount = 0;
+    let fileCount = 0;
+    
+    selectedPaths.forEach((value) => {
+      if (value.type === 'folder') {
+        folderCount++;
+      } else {
+        fileCount++;
+      }
+    });
+    
+    // Build count text
+    const parts = [];
+    if (folderCount > 0) parts.push(`${folderCount} folder${folderCount !== 1 ? 's' : ''}`);
+    if (fileCount > 0) parts.push(`${fileCount} file${fileCount !== 1 ? 's' : ''}`);
+    
+    // Show counting state or final count
+    if (isCountingInBackground) {
+      countEl.textContent = `Counting files... ${fileCount}+`;
+    } else {
+      countEl.textContent = parts.join(', ') + ' selected';
+    }
+    
+    if (continueBtn) continueBtn.disabled = false;
+    if (clearBtn) clearBtn.style.visibility = 'visible';
   }
 
   function clearSelection() {
+    countingAborted = true; // Abort any ongoing counting
     selectedPaths.clear();
+    folderStateCache.clear();
+    isCountingInBackground = false;
     updateSelectionCount();
     updateFileList();
   }
@@ -396,7 +512,10 @@ const PhotoPicker = (() => {
 
         // Reset state
         currentPath = VIRTUAL_ROOT;
-        selectedPaths = new Set();
+        selectedPaths = new Map();
+        folderStateCache = new Map();
+        isCountingInBackground = false;
+        countingAborted = false; // Reset abort flag for new session
 
         // Try to default to Desktop
         let initialPath = VIRTUAL_ROOT;
@@ -444,6 +563,7 @@ const PhotoPicker = (() => {
         const clearBtn = document.getElementById('photoPickerClearBtn');
 
         const handleCancel = () => {
+          countingAborted = true; // Abort any ongoing counting
           overlay.style.display = 'none';
           resolveCallback = null;
           resolve(null);
@@ -453,7 +573,8 @@ const PhotoPicker = (() => {
           if (selectedPaths.size === 0) return;
           overlay.style.display = 'none';
           resolveCallback = null;
-          resolve(Array.from(selectedPaths));
+          // Return array of paths (not the Map values)
+          resolve(Array.from(selectedPaths.keys()));
         };
 
         const handleClear = () => {

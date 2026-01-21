@@ -1,32 +1,147 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: In progress session
+Last updated: January 20, 2026
+
+**Status:** 5 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild), 7 remaining bugs + 1 deferred feature
 
 ---
 
-## TIER 1: CRITICAL UX (Next Priority)
+## 🔴 TIER 1: CRITICAL - MUST FIX (High Impact, Core Workflows)
 
-### Database Rebuild - Empty Grid After Corrupted DB
-**Priority:** 🟡 MEDIUM - Reproducible data integrity issue  
+### Corrupted DB Detection During Operations
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 1-2 hours  
 **Status:** NOT STARTED
 
-**Issue:** Database corrupted → prompt to rebuild
-- Prompts to rebuild, but photos don't appear on rebuild complete
-- Dialog gives way to blank grid (app UI visible but no photos)
-- Can reproduce by manually corrupting DB
+**Issue:** Corrupted database not detected during normal operations - fails silently
+- User has corrupted DB but doesn't know it
+- Click photo → lightbox fails to load (no error dialog)
+- Errors logged to console only (user doesn't see them)
+- No rebuild dialog prompt
+- User thinks app is broken, not the database
 
 **Desired behavior:**
-- Dialog: "Database corrupted. Rebuild?" with Confirm/Cancel
-- After rebuild, photos should appear in grid
+- Detect database corruption during ANY operation (not just on app load)
+- Show user-friendly error dialog: "Database appears corrupted. Rebuild database?"
+- Offer immediate rebuild option
+- Don't fail silently with console errors
 
-**May reveal:** Issues with other rebuild scenarios
+**Rationale:** Data integrity issue, poor error handling, confusing UX when DB corrupted
+
+**Fix approach:** 
+- Add database error detection wrapper around API calls
+- Catch SQLite corruption errors and trigger rebuild prompt
+- Show error dialog instead of silent failure
 
 ---
 
-## TIER 2: FEATURE WORK (When Ready)
+### Photo Picker - NAS Navigation Issues
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
+
+**Issue:** Multiple systemic issues when adding files from NAS photo_library
+
+**Sub-issues:**
+1. **Partial selection state on open:** Add photos icon → navigate to folders → shows partial selection (should be blank slate)
+2. **Breadcrumb mismatch:** Picker shows eric_files in breadcrumbs while showing folders inside photo_library (1900, 1950, etc.)
+3. **Incorrect selection tally:** Shows "162 folders, 1235 files" when none are selected
+4. **Performance:** Checking/unchecking is painfully slow
+
+**Rationale:** Core import operation affecting network storage users; likely systemic state management issue
+
+**Fix approach:** Debug picker state management, reset selection state on open, investigate performance bottleneck
+
+---
+
+## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
+
+### Month Dividers During Scroll
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 30 minutes  
+**Status:** NOT STARTED
+
+**Issue:** Month dividers update as you scroll, causing flashes of other dates
+- Visual polish issue during frequent operation
+- Likely throttling/debouncing issue with scroll handler
+
+**Fix approach:** Debounce month divider updates during scroll
+
+---
+
+## 🟢 TIER 3: NICE TO HAVE (Low Impact, Edge Cases)
+
+### Video Format Support (MPG/MPEG)
+**Priority:** 🟢 LOW  
+**Estimated effort:** 30 minutes  
+**Status:** NOT STARTED
+
+**Issue:** MOV, MP4, M4V work fine, but MPG/MPEG won't play in lightbox
+- Format-specific issue
+- Likely browser codec support issue
+- May need server-side transcoding (more complex)
+- Users can convert files manually as workaround
+
+**Fix approach:** Check if browser supports format, consider transcoding or better error message
+
+---
+
+### Import Count Issues
+**Priority:** 🟢 LOW  
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
+
+**Issue 1:** Import scoreboard count bounces around
+- Counter resets/restarts (1,2,3,4,1,2,3,1) instead of smooth progression
+- Happens when importing from NAS
+- Import completes successfully despite visual bug
+- Likely async/threading issue with SSE progress updates
+
+**Issue 2:** Import shows double file count
+- Shows 2x actual files at scan/import/completion stages (needs verification)
+
+**Impact:** Confusing but doesn't prevent successful import
+
+**Fix approach:** Debug SSE progress updates, ensure atomic counter updates
+
+---
+
+### Manual Restore & Rebuild
+**Priority:** 🟢 LOW  
+**Estimated effort:** 1 hour  
+**Status:** NOT STARTED
+
+**Issue:** Manually restore deleted photo to root level (no date folder) → rebuild database → photo reappears (good) but still at root level (bad)
+- Files should be organized into date folders during rebuild
+- Very specific edge case requiring intentional user action
+- Manual workaround exists
+
+**Fix approach:** During rebuild, move files to proper date folders
+
+---
+
+### Database Missing Prompt
+**Priority:** 🟢 LOW  
+**Estimated effort:** 30 minutes  
+**Status:** NOT STARTED
+
+**Issue:** Database missing → should prompt to rebuild, but no prompt appears
+- Can't reliably reproduce (possibly deleted .db manually)
+- May already be handled by existing first-run flow
+- Need to verify if this is actually a bug
+
+**Desired behavior:**
+- Dialog: "No database found. Create new library here?" with Confirm/Cancel
+
+**Fix approach:** Test various missing DB scenarios, ensure prompts appear
+
+---
+
+## 🔵 TIER 4: DEFERRED FEATURE WORK (Not Bugs)
 
 ### Import Duplicate Detection + Migration Infrastructure
-**Priority:** 🟢 LOW - Feature enhancement, not blocking  
+**Priority:** 🔵 DEFERRED  
+**Estimated effort:** 4-6 hours  
 **Status:** SCHEMA DESIGNED, REVERTED (60% complete)
 
 **Decision made:**
@@ -47,90 +162,61 @@ Last updated: In progress session
 - ❌ "Show Duplicates" utility update (keep as informational, move to bottom of menu)
 
 **Defer because:**
+- Not a bug - current functionality works
 - Not blocking current functionality
-- Migration is complex, needs dedicated time
+- Migration is complex, needs dedicated time as feature work
 - Other bugs have higher UX impact
 
 **Sub-issues from original bug bash:**
 - Import dupe counts don't reflect reality - Will work with new definition
-- Import count bounces around - Separate issue (see Tier 4)
+- Import count bounces around - Separate issue (see Tier 3, #8)
 - Duplicates utility shows zero - Will be fixed by schema change
 
 ---
 
-## TIER 4: POLISH & MINOR ISSUES
+## 📋 RECOMMENDED FIX ORDER
 
-### Manual Restore & Rebuild
-**Priority:** 🟢 LOW - Edge case  
-**Status:** NOT STARTED
+Based on impact, frequency, and effort:
 
-**Issue:** Manually restore deleted photo so it sits at root level (no date folder) → rebuild database → photo reappears in grid (good) → photo still at root level (bad)
-- Files should be organized into date folders during rebuild
+1. ✅ **Date Picker Duplicate Years** (DONE - v85)
+2. ✅ **Date Editor - Year Dropdown Missing New Year** (DONE - v86)
+3. ✅ **Error Message Wording** (DONE - v88)
+4. ✅ **Toast Timing + Date Edit Undo** (DONE - v89-v94)
+5. 🔴 **Photo Picker - NAS Navigation Issues** (2 hrs, high impact but complex)
+6. 🔴 **Database Rebuild - Empty Grid** (1 hr, data integrity)
+7. 🟡 **Month Dividers During Scroll** (30 min, polish)
+8. 🟢 **Video Format Support** (30 min, edge case)
+9. 🟢 **Import Count Issues** (2 hrs, low impact)
+10. 🟢 **Manual Restore & Rebuild** (1 hr, edge case)
+11. 🟢 **Database Missing Prompt** (30 min, can't reproduce)
+12. 🔵 **Import Duplicate Detection** (deferred feature work)
 
----
-
-### Import Count Issues
-**Priority:** 🟢 LOW - Visual bug, doesn't block functionality  
-**Status:** NOT STARTED
-
-**Issue 1:** Import scoreboard count bounces around
-- Counter resets/restarts (1,2,3,4,1,2,3,1) instead of smooth progression
-- Happens when importing from NAS
-- Import completes successfully despite visual bug
-- Likely async/threading issue with SSE progress updates
-
-**Issue 2:** Import shows double file count
-- Shows 2x actual files at scan/import/completion stages (needs verification)
-
-**Impact:** Confusing but doesn't prevent successful import
+**Rationale:**
+- **Quick wins first (#2-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
+- **Then complex high-impact (#5-6):** Core functionality bugs requiring deeper investigation
+- **Then polish (#7-11):** Visual glitches and edge cases after critical issues resolved
+- **Deferred (#12):** Feature work, not bug fixes - save for dedicated feature development
 
 ---
 
-### Toast Timing
-**Priority:** 🟢 LOW - Quick constant fix  
-**Status:** NOT STARTED
+## SUMMARY
 
-**Issue:** Toast shows for 8 seconds with undo option
-- 8 seconds is not the value nor should it be
-- Need to verify or create a central variable to elect a canonical value
+**Next up:** Photo Picker NAS Navigation Issues - Complex but critical
 
-**Note:** Current code has `TOAST_DURATION = 2500` (2.5 seconds) in main.js
+**Total remaining:** 6 bugs + 1 deferred feature 
+**Total remaining:** 7 bugs + 1 deferred feature
+- 🔴 Critical: 2 bugs (Corrupted DB Detection, Photo Picker)
+- 🟡 Polish: 1 bug (Month Dividers)
+- 🟢 Edge cases: 4 bugs (Video Format, Import Counts, Manual Restore, DB Missing)
+- 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
----
-
-### Month Dividers During Scroll
-**Priority:** 🟢 LOW - Visual glitch  
-**Status:** NOT STARTED
-
-**Issue:** Month dividers update as you scroll
-- Flashes of other dates appear on scroll
+**Estimated total effort:** ~8-10 hours for remaining bugs (excluding deferred feature)
 
 ---
 
-### Video Format Support (MPG/MPEG)
-**Priority:** 🟢 LOW - Format support  
-**Status:** NOT STARTED
+## 📝 BACKLOG: UX IMPROVEMENTS (Not Bugs, Future Enhancements)
 
-**Issue:** MOV, MP4, M4V, MPG, MPEG
-- MPG/MPEG won't play in lightbox
-- Other formats work fine
-
----
-
-### Database Missing Prompt
-**Priority:** 🟢 LOW - Can't reproduce reliably  
-**Status:** NOT STARTED
-
-**Issue:** Database missing → prompt to rebuild
-- No such prompt appears
-- Can't reliably reproduce (possibly deleted .db manually)
-
-**Desired behavior:**
-- Dialog: "No database found. Create new library here?" with Confirm/Cancel
-
----
-
-## BACKLOG: PASSES WITH NOTES (UX Improvements)
+These are enhancement ideas, not bugs. To be considered for future feature work.
 
 ### Library Management
 - Hide Time Machine BU folders from list
@@ -154,9 +240,19 @@ Last updated: In progress session
 - Full frame icon → spacebar → closes full frame (bad)
 - Video thumbnail shows first frame (bad UX when frame is black)
 
+### Library Creation - Better New Library Flow
+- Switch library → Create new (change to Sentence case) → folder/location selection flow → empty library state (NOT first run state)
+- Current problem: New library points to first run state instead of empty library state
+
+### Index Rebuild - No Resume Capability
+- Need a way to resume index rebuilding if it fails
+- Impact: If rebuild process fails or is interrupted, must start over from scratch
+
 ---
 
-## DEFERRED: CAN'T ASSESS / NEED CLARIFICATION
+## ⏸️ DEFERRED: CAN'T ASSESS / NEED CLARIFICATION
+
+These issues need more information or test cases before they can be prioritized.
 
 ### Navigation & Sorting Edge Cases
 - Year-aware landing (prefers staying in target year) - Don't understand; need script to test
@@ -177,53 +273,3 @@ Last updated: In progress session
 - Execute rebuild SSE progress
 - File format conversions (HEIC/TIF → JPEG)
 - Error handling for import/runtime issues
-
----
-
-### Photo Picker - NAS Navigation Issues
-**Priority:** TBD  
-**Status:** NOT STARTED
-
-**Issue:** Problems adding files from photo_library on NAS
-
-**Sub-issues:**
-1. **Partial selection state on open:** Add photos icon in top menu bar → navigate to eric_files → photo_library shows partial selection (bad); selection should be blank slate on invoking add
-2. **Breadcrumb mismatch:** Picker can show eric_files in breadcrumbs while showing folders inside photo_library (e.g., 1900, 1950, etc.) (bad)
-3. **Incorrect selection tally:** Selection tally shows e.g., "162 folders, 1235 files" where none are selected
-4. **Performance:** Checking/unchecking is painfully slow
-
----
-
-### Index Rebuild - No Resume Capability
-**Priority:** TBD  
-**Status:** NOT STARTED
-
-**Issue:** Need a way to resume index rebuilding if it fails
-
-**Impact:** If rebuild process fails or is interrupted, must start over from scratch
-
----
-
-### Library Creation - Better New Library Flow
-**Priority:** TBD  
-**Status:** NOT STARTED
-
-**Issue:** Need a better way to create a new library
-
-**Desired flow:**
-- Switch library → Create new (change to Sentence case) → folder/location selection flow → empty library state (NOT first run state)
-
-**Current problem:** New library points to first run state instead of empty library state
-
----
-
-## SUMMARY
-
-**Next up:** Error Message Wording (2 min) or Photo Picker NAS Issues (2 hrs)
-
-**Total remaining:** 
-- Critical: 1 (DB Rebuild)
-- Feature work: 1 (deferred)
-- Polish: 7
-- Backlog UX: ~15 items
-- Needs triage: 4

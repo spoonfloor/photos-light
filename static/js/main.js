@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v94';
+const MAIN_JS_VERSION = 'v100';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -770,14 +770,11 @@ async function executeRebuildDatabase() {
 
       eventSource.close();
 
-      // Load photos in background while dialog remains visible
-      console.log('📸 Loading photos in background...');
-      populateDatePicker()
-        .then(() => {
-          loadAndRenderPhotos();
-        })
+      // Check library health and reload photos
+      console.log('🔄 Refreshing library status after rebuild...');
+      checkLibraryHealthAndInit()
         .catch((err) => {
-          console.error('❌ Failed to load photos after rebuild:', err);
+          console.error('❌ Failed to reload after rebuild:', err);
         });
     });
 
@@ -5365,21 +5362,9 @@ function handleImportEvent(event, data) {
 // =====================
 
 /**
- * Initialize app
+ * Check library health and initialize app state
  */
-async function init() {
-  // Wait for fonts to load to prevent layout shift
-  await document.fonts.ready;
-
-  // Load UI fragments first (but don't populate with data yet)
-  await loadAppBar();
-  await loadLightbox();
-  await loadDateEditor();
-  await loadDialog();
-  await loadToast();
-  await loadCriticalErrorModal();
-
-  // Check library health before making any data API calls
+async function checkLibraryHealthAndInit() {
   try {
     const response = await fetch('/api/library/status');
     const status = await response.json();
@@ -5428,6 +5413,25 @@ async function init() {
     state.hasDatabase = false;
     showCriticalErrorModal('unknown_error', error.message);
   }
+}
+
+/**
+ * Initialize app
+ */
+async function init() {
+  // Wait for fonts to load to prevent layout shift
+  await document.fonts.ready;
+
+  // Load UI fragments first (but don't populate with data yet)
+  await loadAppBar();
+  await loadLightbox();
+  await loadDateEditor();
+  await loadDialog();
+  await loadToast();
+  await loadCriticalErrorModal();
+
+  // Check library health before making any data API calls
+  await checkLibraryHealthAndInit();
 }
 
 // Start when DOM is ready

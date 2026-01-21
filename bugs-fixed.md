@@ -270,3 +270,41 @@ yearPicker.innerHTML = '';
 - No duplicates after database operations
 
 ---
+
+## Session 2: January 21, 2026
+
+### Database Rebuild - Empty Grid After Corrupted DB
+**Fixed:** Database rebuild now properly handles corrupted databases  
+**Version:** v99-v100
+
+**Issues resolved:**
+- ✅ Rebuild now always creates fresh database (deletes corrupted file first)
+- ✅ Backend health check called after rebuild completes
+- ✅ Photos appear in grid after rebuild completes
+- ✅ Date picker populated correctly after rebuild
+
+**Root causes:**
+1. Backend only created new DB if file didn't exist - skipped creation if corrupted file present
+2. Frontend didn't call library status check after rebuild - backend thought DB still missing
+
+**The fix:**
+```python
+# Backend: Always delete old DB before creating fresh one
+if os.path.exists(DB_PATH):
+    os.remove(DB_PATH)
+conn = sqlite3.connect(DB_PATH)
+create_database_schema(cursor)
+```
+
+```javascript
+// Frontend: Call health check after rebuild completes
+checkLibraryHealthAndInit()
+```
+
+**Testing verified:**
+- Corrupt database with garbage text → trigger rebuild
+- Rebuild completes successfully with fresh database
+- Photos appear in grid immediately
+- All API endpoints work correctly
+
+---
