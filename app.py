@@ -2197,8 +2197,10 @@ def list_directory():
             if item.startswith('.'):
                 continue
             
-            # Skip Time Machine backups
-            if item.startswith('Backups of') or 'time_machine' in item.lower():
+            # Skip backup and archive folders
+            item_lower = item.lower()
+            backup_patterns = ['backup', 'backups', 'archive', 'archives', 'time machine', 'time_machine']
+            if any(pattern in item_lower for pattern in backup_patterns):
                 continue
 
             # Check if this is the database file
@@ -2279,12 +2281,25 @@ def get_locations():
             try:
                 volumes = os.listdir(volumes_path)
                 for volume in volumes:
-                    # Skip Macintosh HD (boot volume) - it's just /
                     # Skip hidden volumes
-                    if volume.startswith('.') or volume == 'Macintosh HD':
+                    if volume.startswith('.'):
+                        continue
+                    
+                    # Skip system volumes
+                    system_volumes = ['Macintosh HD', 'Macintosh SSD', 'Data', 'Preboot', 'Recovery', 'VM']
+                    if volume in system_volumes:
+                        continue
+                    
+                    # Skip backup volumes
+                    volume_lower = volume.lower()
+                    if volume.startswith('Backups of') or 'backup' in volume_lower or 'time machine' in volume_lower:
                         continue
                     
                     volume_path = os.path.join(volumes_path, volume)
+                    # Skip symlinks (like Macintosh HD -> /)
+                    if os.path.islink(volume_path):
+                        continue
+                    
                     if os.path.isdir(volume_path):
                         locations.append({
                             'name': volume,

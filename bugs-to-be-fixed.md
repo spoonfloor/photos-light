@@ -193,7 +193,7 @@ Based on impact, frequency, and effort:
 These are enhancement ideas, not bugs. To be considered for future feature work.
 
 ### Library Management
-- Hide Time Machine BU folders from list
+- ~~Hide Time Machine BU folders from list~~ ✅ FIXED v117 (also hides backup/archive folders and system volumes)
 - Add rescan button to folder picker
 - Make last-used path sticky
 - Add keyboard shortcut for desktop (command-shift D)

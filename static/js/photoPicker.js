@@ -378,7 +378,7 @@ const PhotoPicker = (() => {
         if (e.target.classList.contains('photo-picker-checkbox')) {
           e.stopPropagation();
           if (type === 'folder') {
-            await toggleFolder(path);
+            toggleFolder(path);
             // Update checkbox icon directly (no re-fetch needed)
             const newState = getFolderState(path);
             if (newState === 'checked') {

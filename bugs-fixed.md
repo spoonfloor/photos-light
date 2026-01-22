@@ -403,3 +403,50 @@ if lower == upper:
 - Estimate displays correctly for all file counts
 
 ---
+
+### Folder Picker - Backup/System Volume Filtering
+**Fixed:** Folder picker now filters out backup and system volumes  
+**Version:** v117
+
+**Issues resolved:**
+- ✅ Time Machine backup volumes filtered from top-level locations (`Backups of...`)
+- ✅ System volumes filtered (`Macintosh HD`, `Data`, `Preboot`, `Recovery`, `VM`)
+- ✅ Backup/archive folders filtered during browsing
+- ✅ Symlinks to system locations filtered
+- ✅ Only shows user directories, Shared, and legitimate external drives
+
+**Root cause:**
+- Top-level locations list (`/api/filesystem/get-locations`) showed all volumes in `/Volumes`
+- Only filtered `Macintosh HD` and hidden volumes
+- Time Machine backups and other system volumes visible
+- Directory listing showed backup/archive folders when browsing
+
+**The fix:**
+```python
+# Top-level locations: Enhanced volume filtering
+system_volumes = ['Macintosh HD', 'Macintosh SSD', 'Data', 'Preboot', 'Recovery', 'VM']
+if volume in system_volumes:
+    continue
+
+volume_lower = volume.lower()
+if volume.startswith('Backups of') or 'backup' in volume_lower or 'time machine' in volume_lower:
+    continue
+
+if os.path.islink(volume_path):
+    continue
+
+# Directory browsing: Enhanced backup folder filtering
+backup_patterns = ['backup', 'backups', 'archive', 'archives', 'time machine', 'time_machine']
+if any(pattern in item_lower for pattern in backup_patterns):
+    continue
+```
+
+**Testing verified:**
+- `/Volumes` shows only legitimate external drives (e.g., `eric_files`)
+- `Backups of Eric's MacBook Pro` volumes hidden (3 volumes filtered)
+- `Macintosh HD` symlink hidden
+- System volumes hidden (`Data`, etc.)
+- Browsing directories: `Backups`, `Archive` folders hidden
+- User home, Shared, and external drives still visible
+
+---
