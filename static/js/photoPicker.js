@@ -473,6 +473,38 @@ const PhotoPicker = (() => {
   }
 
   // ===========================================================================
+  // Helper Functions
+  // ===========================================================================
+
+  /**
+   * Filter selectedPaths to only root-level selections
+   * (items explicitly checked by user, not auto-expanded children)
+   * 
+   * Logic: A path is a root selection if NO other selected path is its parent
+   */
+  function getRootSelections() {
+    const allPaths = Array.from(selectedPaths.keys());
+    const rootPaths = [];
+    
+    for (const path of allPaths) {
+      // Check if any OTHER path is a parent of this path
+      const hasParentInSelection = allPaths.some(otherPath => {
+        if (otherPath === path) return false; // Skip self
+        // Check if otherPath is a parent directory of path
+        return path.startsWith(otherPath + '/');
+      });
+      
+      // If no parent found in selection, this is a root selection
+      if (!hasParentInSelection) {
+        rootPaths.push(path);
+      }
+    }
+    
+    console.log(`📦 Filtered ${allPaths.length} selected paths → ${rootPaths.length} root selections`);
+    return rootPaths;
+  }
+
+  // ===========================================================================
   // Public API
   // ===========================================================================
 
@@ -573,8 +605,12 @@ const PhotoPicker = (() => {
           
           overlay.style.display = 'none';
           resolveCallback = null;
-          // Return array of paths (not the Map values)
-          resolve(Array.from(selectedPaths.keys()));
+          
+          // Return only root selections (folders/files user checked)
+          // Backend will scan folders recursively - no need to send expanded children
+          const rootSelections = getRootSelections();
+          console.log('📤 Sending root selections to backend:', rootSelections);
+          resolve(rootSelections);
         };
 
         const handleClear = () => {

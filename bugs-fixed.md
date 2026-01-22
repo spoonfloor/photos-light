@@ -740,3 +740,81 @@ await scanAndImport(selectedPaths); // Instead of scanAndConfirmImport()
 - Import completes successfully
 
 ---
+
+## Session 4: January 22, 2026
+
+### Import Counting - Duplicate File Path Bug
+**Fixed:** Import scan now reports accurate file counts  
+**Version:** v128
+
+**Issues resolved:**
+- ✅ Photo picker now sends only root selections to backend (not expanded file lists)
+- ✅ Import scan counts each file once (not multiple times)
+- ✅ Duplicate count now accurate (reflects actual content duplicates)
+- ✅ Preserves UX showing full recursive file count in picker
+
+**Root cause:**
+- Photo picker recursively expanded folders into individual file paths
+- When user selected a folder, it sent BOTH the folder AND all individual files to backend
+- Backend scanned the folder (adding all files), then added individual files again
+- Files in nested folders counted 3+ times (once per parent folder + once individually)
+- Example: Selecting folder with 265 files sent 267 paths (2 folders + 265 files)
+- Backend counted: 250 root files × 2 + 15 subfolder files × 3 = 545 files (should be 265)
+- Duplicate count was wrong: 545 - 250 = 295 duplicates (should be 15)
+
+**The fix:**
+```javascript
+// photoPicker.js: New function to filter expanded paths
+function getRootSelections() {
+  const allPaths = Array.from(selectedPaths.keys());
+  const rootPaths = [];
+  
+  for (const path of allPaths) {
+    // Check if any OTHER path is a parent of this path
+    const hasParentInSelection = allPaths.some(otherPath => {
+      if (otherPath === path) return false; // Skip self
+      return path.startsWith(otherPath + '/');
+    });
+    
+    // If no parent found in selection, this is a root selection
+    if (!hasParentInSelection) {
+      rootPaths.push(path);
+    }
+  }
+  
+  return rootPaths;
+}
+
+// Send only root selections (folders user checked)
+const rootSelections = getRootSelections();
+resolve(rootSelections);
+```
+
+**Data flow (before fix):**
+1. User checks folder `import-test` (contains 250 files + `dupes` subfolder with 15 files)
+2. Picker expands: adds folder + all 265 files individually → 267 paths
+3. Backend scans folder (265 files) + processes 265 individual files → 545 file paths
+4. Import: 250 unique → imported, 295 remaining → marked as duplicates
+
+**Data flow (after fix):**
+1. User checks folder `import-test`
+2. Picker shows: "2 folders, 265 files selected" (UX preserved)
+3. Picker sends: Only root selections `["/import-test", "/import-test/dupes"]` → 2 paths
+4. Backend scans both folders → 265 unique file paths
+5. Import: 250 unique → imported, 15 actual duplicates → rejected
+
+**Architecture improvement:**
+- **Separation of concerns:** Frontend handles UI/display, backend handles filesystem scanning
+- **Single source of truth:** Backend is authoritative for file discovery
+- **Clean data contract:** "Here are folders to scan" vs "here's a messy mix of folders AND files"
+- **No hacks:** Fixed root cause instead of adding defensive deduplication
+
+**Testing verified:**
+- Folder with 265 files (250 unique + 15 duplicates)
+- Picker displays: "2 folders, 265 files selected" ✓
+- Import reports: "Importing 265 files" ✓ (was 545)
+- Import completes: "250 imported, 15 duplicates" ✓ (was 250 imported, 295 duplicates)
+- Database contains: 250 unique photos with 250 unique hashes ✓
+- No duplicate file paths sent to backend ✓
+
+---
