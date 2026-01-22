@@ -603,3 +603,84 @@ if (currentPath !== VIRTUAL_ROOT) {
 - Both pickers fall back to Desktop if saved path no longer exists
 
 ---
+
+## Session 3: January 22, 2026
+
+### Photo Picker - Count Display
+**Fixed:** Count readout now shows both folder and file counts  
+**Version:** v125
+
+**Issues resolved:**
+- ✅ Count readout always shows both folders and files (e.g., "1 folder, 0 files selected")
+- ✅ Works with empty folders ("1 folder, 0 files selected")
+- ✅ Works with folders containing files ("7 folders, 1,824 files selected")
+- ✅ Shows proper pluralization for both counts
+- ✅ Displays progress state correctly during background counting
+
+**Root cause:**
+- Old logic only showed counts that were greater than zero
+- User expected both counts always visible for clarity
+- Counting state didn't show folder count clearly
+
+**The fix:**
+```javascript
+// ALWAYS show both folder and file counts
+const folderText = `${folderCount} folder${folderCount !== 1 ? 's' : ''}`;
+const fileText = `${fileCount.toLocaleString()} file${fileCount !== 1 ? 's' : ''}`;
+
+// Show counting state or final count
+if (isCountingInBackground) {
+  countEl.textContent = `Counting files... ${folderText}, ${fileCount.toLocaleString()}+ files selected`;
+} else {
+  countEl.textContent = `${folderText}, ${fileText} selected`;
+}
+```
+
+**Testing verified:**
+- Empty folder: "1 folder, 0 files selected"
+- Folder with files: Correct file count displayed
+- Multiple folders: Proper folder and file counts
+- Background counting: "Counting files... 1 folder, 100+ files selected" format
+- Proper pluralization for singular/plural
+
+---
+
+### Photo Picker - Background Counting Completion
+**Fixed:** Folder file count now always resolves to final count  
+**Version:** v126
+
+**Issues resolved:**
+- ✅ "Counting files... 1100+" now resolves to final count
+- ✅ Final count always displayed after recursive folder scan completes
+- ✅ Works regardless of how long counting takes
+- ✅ No more hanging "X+" readouts
+
+**Root cause:**
+- `selectFolderRecursiveBackground()` had conditional logic for final UI update
+- Only called `updateSelectionCount()` if counting took > 300ms
+- Fast counting operations (< 300ms) never updated UI with final count
+- Folder named "1100" on Desktop matched the "1100+" counting display format, making bug obvious
+
+**The fix:**
+```javascript
+// ALWAYS update UI with final count after counting completes
+if (!countingAborted) {
+  const totalTime = Date.now() - startTime;
+  isCountingInBackground = false;
+
+  // Removed conditional check (was: if (totalTime > 300))
+  folderStateCache.clear();
+  updateSelectionCount(); // Always show final count
+
+  console.log(`✅ Folder counting complete in ${totalTime}ms`);
+}
+```
+
+**Testing verified:**
+- Select folder "1100" on Desktop → count resolves correctly
+- Fast counting (< 300ms): Shows final count
+- Slow counting (> 300ms): Shows final count
+- Multiple folders: Each resolves properly
+- No hanging "X+" readouts
+
+---

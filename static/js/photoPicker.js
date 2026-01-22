@@ -173,11 +173,11 @@ const PhotoPicker = (() => {
       const totalTime = Date.now() - startTime;
       isCountingInBackground = false;
       
-      // Only show counting state if it took > 300ms
-      if (totalTime > 300) {
-        folderStateCache.clear();
-        updateSelectionCount();
-      }
+      // ALWAYS update UI with final count after counting completes
+      folderStateCache.clear();
+      updateSelectionCount();
+      
+      console.log(`✅ Folder counting complete in ${totalTime}ms`);
     }
   }
 
@@ -442,16 +442,15 @@ const PhotoPicker = (() => {
       }
     });
     
-    // Build count text
-    const parts = [];
-    if (folderCount > 0) parts.push(`${folderCount} folder${folderCount !== 1 ? 's' : ''}`);
-    if (fileCount > 0) parts.push(`${fileCount} file${fileCount !== 1 ? 's' : ''}`);
+    // Build count text - ALWAYS show both folder and file counts
+    const folderText = `${folderCount} folder${folderCount !== 1 ? 's' : ''}`;
+    const fileText = `${fileCount.toLocaleString()} file${fileCount !== 1 ? 's' : ''}`;
     
     // Show counting state or final count
     if (isCountingInBackground) {
-      countEl.textContent = `Counting files... ${fileCount}+`;
+      countEl.textContent = `Counting files... ${folderText}, ${fileCount.toLocaleString()}+ files selected`;
     } else {
-      countEl.textContent = parts.join(', ') + ' selected';
+      countEl.textContent = `${folderText}, ${fileText} selected`;
     }
     
     if (continueBtn) continueBtn.disabled = false;

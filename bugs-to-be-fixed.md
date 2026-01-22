@@ -2,7 +2,7 @@
 
 Last updated: January 21, 2026
 
-**Status:** 8 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle), 5 remaining bugs + 1 deferred feature
+**Status:** 10 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting), 3 remaining bugs + 1 deferred feature
 
 ---
 
@@ -11,31 +11,21 @@ Last updated: January 21, 2026
 ### ✅ Photo Picker - Checkbox Toggle Bug (FIXED v123-v124)
 **Priority:** 🔴 CRITICAL  
 **Estimated effort:** 1 hour  
-**Status:** ✅ FIXED
+**Status:** ✅ FIXED - See bugs-fixed.md
 
-**Issue:** Folder checkboxes don't toggle off properly
-- Click folder checkbox → checkmark appears but count stays "No items selected"
-- Click again → checkmark stays on, doesn't toggle off
-- Affects both empty folders and folders with contents
-- Continue button enabled when nothing selected (clicking it does nothing)
+---
 
-**Root cause:** Duplicate event listeners on file list element
-- `updateFileList()` added new click handler every time it was called
-- Each click fired multiple handlers in sequence
-- Folder was added to selection, then immediately removed by second handler
-- Checkbox icon updated on first execution but selection state ended empty
+### ✅ Photo Picker - Count Display (FIXED v125)
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 30 minutes  
+**Status:** ✅ FIXED - See bugs-fixed.md
 
-**The fix:**
-1. Store handler reference in module-level variable: `fileListClickHandler`
-2. Remove old listener before adding new one: `removeEventListener()`
-3. Simplify icon update: Re-render entire file list after toggle instead of manual DOM updates
+---
 
-**Testing verified:**
-- Click folder checkbox → shows "1 folder selected" ✓
-- Click again → shows "No items selected" ✓
-- Checkbox icon toggles on/off correctly ✓
-- Continue button only enabled when items selected ✓
-- Works with empty folders and folders with contents ✓
+### ✅ Photo Picker - Background Counting Completion (FIXED v126)
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 30 minutes  
+**Status:** ✅ FIXED - See bugs-fixed.md
 
 ---
 
@@ -94,31 +84,28 @@ Last updated: January 21, 2026
 ### Manual Restore & Rebuild
 **Priority:** 🟢 LOW  
 **Estimated effort:** 1 hour  
-**Status:** NOT STARTED
+**Status:** ✅ CANNOT REPRODUCE - Photo organizes correctly during rebuild
 
 **Issue:** Manually restore deleted photo to root level (no date folder) → rebuild database → photo reappears (good) but still at root level (bad)
 - Files should be organized into date folders during rebuild
 - Very specific edge case requiring intentional user action
 - Manual workaround exists
 
-**Fix approach:** During rebuild, move files to proper date folders
+**Testing notes:** Cannot reproduce issue. Photos automatically organize into date folders during rebuild as expected.
 
 ---
 
 ### Database Missing Prompt
 **Priority:** 🟢 LOW  
 **Estimated effort:** 30 minutes  
-**Status:** NOT STARTED
+**Status:** ✅ CANNOT REPRODUCE - First-run flow handles missing DB
 
 **Issue:** Database missing → should prompt to rebuild, but no prompt appears
 - Can't reliably reproduce (possibly deleted .db manually)
 - May already be handled by existing first-run flow
 - Need to verify if this is actually a bug
 
-**Desired behavior:**
-- Dialog: "No database found. Create new library here?" with Confirm/Cancel
-
-**Fix approach:** Test various missing DB scenarios, ensure prompts appear
+**Testing notes:** First-run and library switching flows properly handle missing database. Cannot reproduce missing prompt scenario.
 
 ---
 
@@ -190,13 +177,13 @@ Based on impact, frequency, and effort:
 
 **Next up:** Month Dividers During Scroll - Polish issue
 
-**Total remaining:** 5 bugs + 1 deferred feature
-- 🔴 Critical: 0 bugs (Photo Picker checkbox toggle FIXED ✅)
+**Total remaining:** 3 bugs + 1 deferred feature
+- 🔴 Critical: 0 bugs (Photo Picker bugs FIXED ✅)
 - 🟡 Polish: 1 bug (Month Dividers)
-- 🟢 Edge cases: 4 bugs (Video Format, Import Counts, Manual Restore, DB Missing)
+- 🟢 Edge cases: 2 bugs (Video Format, Import Counts)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~5-7 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~3-4 hours for remaining bugs (excluding deferred feature)
 
 ---
 
