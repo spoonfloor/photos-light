@@ -1175,6 +1175,13 @@ body {
   background: var(--accent-hover);
 }
 
+.import-btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: var(--accent-color);
+}
+
 .import-btn-secondary {
   background: transparent;
   color: var(--text-secondary);
@@ -1184,6 +1191,12 @@ body {
 .import-btn-secondary:hover {
   color: var(--text-primary);
   background: var(--hover-bg);
+}
+
+.import-btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 /* ============================================================================
