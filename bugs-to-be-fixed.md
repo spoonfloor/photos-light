@@ -194,8 +194,8 @@ These are enhancement ideas, not bugs. To be considered for future feature work.
 
 ### Library Management
 - ~~Hide Time Machine BU folders from list~~ ✅ FIXED v117 (also hides backup/archive folders and system volumes)
+- ~~Make last-used path sticky~~ ✅ FIXED v118 (persists across sessions via localStorage)
 - Add rescan button to folder picker
-- Make last-used path sticky
 - Add keyboard shortcut for desktop (command-shift D)
 - Photo picker is a bit sluggish
 - 'Select this location' should read 'Open' and be disabled for folders without DB

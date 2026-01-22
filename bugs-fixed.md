@@ -450,3 +450,53 @@ if any(pattern in item_lower for pattern in backup_patterns):
 - User home, Shared, and external drives still visible
 
 ---
+
+### Folder Picker - Sticky Last Directory
+**Fixed:** Folder picker now remembers last selected location across sessions  
+**Version:** v118
+
+**Issues resolved:**
+- ✅ Last selected path saved to localStorage
+- ✅ Picker opens to last location on subsequent uses (across page reloads)
+- ✅ Validates saved path exists and is accessible before using it
+- ✅ Falls back to Desktop if saved path no longer exists or is inaccessible
+- ✅ Works with both "Choose" button and clicking database file
+
+**Root cause:**
+- Picker had in-memory persistence within a session (`currentPath` variable)
+- No persistence across page reloads or app restarts
+- Always defaulted to Desktop on fresh load
+
+**The fix:**
+```javascript
+// Save path when user selects it
+localStorage.setItem('folderPicker.lastPath', selectedPath);
+
+// Load saved path on picker open (before defaulting to Desktop)
+const savedPath = localStorage.getItem('folderPicker.lastPath');
+if (savedPath) {
+  try {
+    await listDirectory(savedPath); // Validate it exists
+    initialPath = savedPath;
+  } catch (error) {
+    // Path no longer accessible, fall through to Desktop
+  }
+}
+```
+
+**Path resolution order:**
+1. `options.initialPath` (if explicitly provided)
+2. `currentPath` (in-memory, same session)
+3. `localStorage.getItem('folderPicker.lastPath')` (persisted across sessions) ← NEW
+4. Desktop (fallback)
+5. Home folder (if Desktop fails)
+6. First location (if all else fails)
+
+**Testing verified:**
+- Navigate to `/Volumes/eric_files` → choose → reload page → picker opens to `eric_files`
+- Navigate to external drive → unmount drive → reload → picker falls back to Desktop
+- Works with "Choose" button selection
+- Works with clicking database file shortcut
+- Saved path validated before use (handles deleted/unmounted paths gracefully)
+
+---
