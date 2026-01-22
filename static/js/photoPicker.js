@@ -418,14 +418,14 @@ const PhotoPicker = (() => {
 
   function updateSelectionCount() {
     const countEl = document.getElementById('photoPickerCount');
-    const continueBtn = document.getElementById('photoPickerContinueBtn');
+    const importBtn = document.getElementById('photoPickerImportBtn');
     const clearBtn = document.getElementById('photoPickerClearBtn');
     
     const count = selectedPaths.size;
     
     if (count === 0) {
       countEl.textContent = 'No items selected';
-      if (continueBtn) continueBtn.disabled = true;
+      if (importBtn) importBtn.disabled = true;
       if (clearBtn) clearBtn.style.visibility = 'hidden';
       return;
     }
@@ -453,7 +453,7 @@ const PhotoPicker = (() => {
       countEl.textContent = `${folderText}, ${fileText} selected`;
     }
     
-    if (continueBtn) continueBtn.disabled = false;
+    if (importBtn) importBtn.disabled = false;
     if (clearBtn) clearBtn.style.visibility = 'visible';
   }
 
@@ -547,7 +547,7 @@ const PhotoPicker = (() => {
         // Wire up buttons
         const closeBtn = document.getElementById('photoPickerCloseBtn');
         const cancelBtn = document.getElementById('photoPickerCancelBtn');
-        const continueBtn = document.getElementById('photoPickerContinueBtn');
+        const importBtn = document.getElementById('photoPickerImportBtn');
         const clearBtn = document.getElementById('photoPickerClearBtn');
 
         const handleCancel = () => {
@@ -564,7 +564,7 @@ const PhotoPicker = (() => {
           resolve(null);
         };
 
-        const handleContinue = () => {
+        const handleImport = () => {
           if (selectedPaths.size === 0) return;
           
           // Save current path to localStorage for next session
@@ -586,7 +586,7 @@ const PhotoPicker = (() => {
 
         closeBtn.onclick = handleCancel;
         cancelBtn.onclick = handleCancel;
-        continueBtn.onclick = handleContinue;
+        importBtn.onclick = handleImport;
         clearBtn.onclick = clearSelection;
       } catch (error) {
         console.error('Failed to show photo picker:', error);

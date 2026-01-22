@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v126';
+const MAIN_JS_VERSION = 'v127';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5051,7 +5051,9 @@ async function triggerImport() {
     }
 
     console.log(`✅ Selected ${selectedPaths.length} item(s)`);
-    await scanAndConfirmImport(selectedPaths);
+    
+    // Scan paths to expand folders into file list (without confirmation dialog)
+    await scanAndImport(selectedPaths);
   } catch (error) {
     console.error('❌ Failed to trigger import:', error);
     showToast(`Error: ${error.message}`, 'error');
@@ -5142,6 +5144,40 @@ async function importFolders() {
     await scanAndConfirmImport(paths);
   } catch (error) {
     console.error('❌ Failed to import folders:', error);
+    showToast(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Scan paths and import directly (no confirmation dialog)
+ */
+async function scanAndImport(paths) {
+  try {
+    showToast('Scanning...', null, 0);
+
+    const response = await fetch('/api/import/scan-paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to scan paths');
+    }
+
+    const { files, total_count } = result;
+
+    if (total_count === 0) {
+      showToast('No media files found', null);
+      return;
+    }
+
+    // Start import directly (no confirmation dialog)
+    await startImportFromPaths(files);
+  } catch (error) {
+    console.error('❌ Failed to scan paths:', error);
     showToast(`Error: ${error.message}`, 'error');
   }
 }

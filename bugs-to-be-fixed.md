@@ -2,7 +2,7 @@
 
 Last updated: January 21, 2026
 
-**Status:** 10 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting), 3 remaining bugs + 1 deferred feature
+**Status:** 12 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal), 1 remaining bug + 1 deferred feature
 
 ---
 
@@ -29,6 +29,13 @@ Last updated: January 21, 2026
 
 ---
 
+### ✅ Photo Picker - Button Rename & Confirmation Dialog (FIXED v127)
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 1 hour  
+**Status:** ✅ FIXED - See bugs-fixed.md
+
+---
+
 ## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
 
 ### Month Dividers During Scroll
@@ -46,38 +53,7 @@ Last updated: January 21, 2026
 
 ## 🟢 TIER 3: NICE TO HAVE (Low Impact, Edge Cases)
 
-### Video Format Support (MPG/MPEG)
-**Priority:** 🟢 LOW  
-**Estimated effort:** 30 minutes  
-**Status:** NOT STARTED
-
-**Issue:** MOV, MP4, M4V work fine, but MPG/MPEG won't play in lightbox
-- Format-specific issue
-- Likely browser codec support issue
-- May need server-side transcoding (more complex)
-- Users can convert files manually as workaround
-
-**Fix approach:** Check if browser supports format, consider transcoding or better error message
-
----
-
-### Import Count Issues
-**Priority:** 🟢 LOW  
-**Estimated effort:** 1-2 hours  
-**Status:** NOT STARTED
-
-**Issue 1:** Import scoreboard count bounces around
-- Counter resets/restarts (1,2,3,4,1,2,3,1) instead of smooth progression
-- Happens when importing from NAS
-- Import completes successfully despite visual bug
-- Likely async/threading issue with SSE progress updates
-
-**Issue 2:** Import shows double file count
-- Shows 2x actual files at scan/import/completion stages (needs verification)
-
-**Impact:** Confusing but doesn't prevent successful import
-
-**Fix approach:** Debug SSE progress updates, ensure atomic counter updates
+All edge case bugs resolved or moved to backlog.
 
 ---
 
@@ -177,13 +153,13 @@ Based on impact, frequency, and effort:
 
 **Next up:** Month Dividers During Scroll - Polish issue
 
-**Total remaining:** 3 bugs + 1 deferred feature
-- 🔴 Critical: 0 bugs (Photo Picker bugs FIXED ✅)
+**Total remaining:** 1 bug + 1 deferred feature
+- 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
 - 🟡 Polish: 1 bug (Month Dividers)
-- 🟢 Edge cases: 2 bugs (Video Format, Import Counts)
+- 🟢 Edge cases: 0 bugs (Video Format and Import Counts removed - cannot reproduce or low priority)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~3-4 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~30 minutes for remaining bug (excluding deferred feature)
 
 ---
 

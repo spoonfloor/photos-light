@@ -684,3 +684,59 @@ if (!countingAborted) {
 - No hanging "X+" readouts
 
 ---
+
+### Photo Picker - Button Rename & Confirmation Dialog Removal
+**Fixed:** Import button renamed and redundant dialog removed  
+**Version:** v127
+
+**Issues resolved:**
+- ✅ Button text changed from "Continue" to "Import"
+- ✅ Button ID updated from `photoPickerContinueBtn` to `photoPickerImportBtn`
+- ✅ Confirmation dialog removed from import flow
+- ✅ Import starts immediately after clicking [Import]
+- ✅ Streamlined UX - one less click to import
+
+**Root cause:**
+- UX feedback indicated confirmation dialog was redundant
+- User already made explicit selection in photo picker
+- Extra "Found X files. Start import?" dialog added unnecessary friction
+
+**The fix:**
+```javascript
+// Created new scanAndImport() function (no confirmation dialog)
+async function scanAndImport(paths) {
+  // ... scan paths to expand folders into files ...
+  
+  if (total_count === 0) {
+    showToast('No media files found', null);
+    return;
+  }
+
+  // Start import directly (no confirmation dialog)
+  await startImportFromPaths(files);
+}
+
+// Modified triggerImport() to use new function
+await scanAndImport(selectedPaths); // Instead of scanAndConfirmImport()
+```
+
+**HTML changes:**
+- Button text: "Continue" → "Import"
+- Button ID: `photoPickerContinueBtn` → `photoPickerImportBtn`
+
+**JavaScript changes:**
+- All variable references updated: `continueBtn` → `importBtn`
+- Handler renamed: `handleContinue()` → `handleImport()`
+
+**Flow comparison:**
+- **Old:** Select → [Continue] → Dialog "Found X files. Start import?" → [Import] → Import starts
+- **New:** Select → [Import] → Import starts ✓
+
+**Testing verified:**
+- Button shows "Import" text
+- Button disabled when no selection
+- Click [Import] → scanning toast → import starts immediately
+- No confirmation dialog appears
+- Import completes successfully
+
+---
