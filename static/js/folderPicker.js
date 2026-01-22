@@ -200,7 +200,7 @@ const FolderPicker = (() => {
           // Same action as clicking "Choose" button
           if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
             // Save selected path to localStorage for next session
-            localStorage.setItem('folderPicker.lastPath', currentPath);
+            localStorage.setItem('picker.lastPath', currentPath);
             console.log('💾 Saved path for next session:', currentPath);
             
             const overlay = document.getElementById('folderPickerOverlay');
@@ -283,7 +283,7 @@ const FolderPicker = (() => {
         }
         // Otherwise try to use last saved path from localStorage
         else if (initialPath === VIRTUAL_ROOT) {
-          const savedPath = localStorage.getItem('folderPicker.lastPath');
+          const savedPath = localStorage.getItem('picker.lastPath');
           if (savedPath) {
             console.log(`🔍 Trying saved path: ${savedPath}`);
             try {
@@ -297,39 +297,9 @@ const FolderPicker = (() => {
             }
           }
           
-          // If still at virtual root, try to default to Desktop
+          // If still at virtual root, use shared utility to get default path
           if (initialPath === VIRTUAL_ROOT) {
-            // Find user's home directory from locations (it's usually the first one)
-            for (const loc of topLevelLocations) {
-              // Look for home directory by checking if it contains /Users/ or is the first non-Shared location
-              if (loc.path.includes('/Users/') && !loc.path.includes('Shared')) {
-                const desktopPath = loc.path + '/Desktop';
-                console.log(`🔍 Trying Desktop path: ${desktopPath}`);
-                // Try to navigate to Desktop
-                try {
-                  const desktopCheck = await listDirectory(desktopPath);
-                  // Desktop exists, use it as initial path
-                  initialPath = desktopPath;
-                  console.log('✅ Starting at Desktop:', desktopPath);
-                  break;
-                } catch (error) {
-                  // Desktop doesn't exist or not accessible, try home folder as fallback
-                  console.log(`⚠️ Desktop check failed: ${error.message}`);
-                  console.log(`📁 Using home folder instead (safer for permissions): ${loc.path}`);
-                  initialPath = loc.path;
-                  break;
-                }
-              }
-            }
-            
-            // If still at virtual root, force to first non-Shared location
-            if (initialPath === VIRTUAL_ROOT && topLevelLocations.length > 0) {
-              const firstLocation = topLevelLocations.find(loc => !loc.path.includes('Shared'));
-              if (firstLocation) {
-                initialPath = firstLocation.path;
-                console.log(`📁 Using first location: ${initialPath}`);
-              }
-            }
+            initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
           }
         }
 
@@ -364,7 +334,7 @@ const FolderPicker = (() => {
           }
           
           // Save selected path to localStorage for next session
-          localStorage.setItem('folderPicker.lastPath', selectedPath);
+          localStorage.setItem('picker.lastPath', selectedPath);
           console.log('💾 Saved path for next session:', selectedPath);
           
           overlay.style.display = 'none';

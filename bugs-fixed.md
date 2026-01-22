@@ -500,3 +500,54 @@ if (savedPath) {
 - Saved path validated before use (handles deleted/unmounted paths gracefully)
 
 ---
+
+### Picker Improvements - Shared Path Logic & Cancel Behavior
+**Fixed:** Extracted shared default path logic and improved picker UX  
+**Version:** v119-v122
+
+**Issues resolved:**
+- ✅ PhotoPicker now has sticky last directory (persists across sessions)
+- ✅ Extracted default path logic to shared `pickerUtils.js` utility
+- ✅ Single place to change default folder (Desktop → Pictures, etc.)
+- ✅ Both pickers use shared localStorage key (`picker.lastPath`)
+- ✅ Navigate in PhotoPicker → FolderPicker starts at same location
+- ✅ Switch Library dialog hidden before FolderPicker opens (visibility bug)
+- ✅ PhotoPicker saves path on cancel (not just on continue)
+
+**Root causes:**
+- PhotoPicker reset `currentPath` on every open (no persistence)
+- Default path logic duplicated in both pickers (~80 lines)
+- Separate localStorage keys prevented cross-picker memory
+- Switch Library dialog stayed visible behind FolderPicker
+- PhotoPicker only saved path on "Continue", not "Cancel"
+
+**The fix:**
+```javascript
+// v119: PhotoPicker sticky path (same pattern as FolderPicker)
+// Preserve currentPath between opens, check localStorage, save on continue
+
+// v120: Shared utility for default path
+// pickerUtils.js: getDefaultPath(topLevelLocations, listDirectory)
+// Both pickers call PickerUtils.getDefaultPath()
+
+// v121: Shared localStorage key
+// Changed: folderPicker.lastPath / photoPicker.lastPath
+// To: picker.lastPath (shared)
+// Also: Close Switch Library dialog before opening FolderPicker
+
+// v122: Save on cancel
+if (currentPath !== VIRTUAL_ROOT) {
+  localStorage.setItem('picker.lastPath', currentPath);
+}
+```
+
+**Testing verified:**
+- PhotoPicker: Navigate → cancel → reopen → remembers location
+- PhotoPicker: Navigate → continue → refresh → reopen → remembers location
+- FolderPicker: Navigate → cancel → reopen → remembers location
+- FolderPicker: Navigate → choose → refresh → reopen → remembers location
+- Cross-picker: Navigate in PhotoPicker → open FolderPicker → starts at same location
+- Switch Library: Dialog hides cleanly when FolderPicker opens
+- Both pickers fall back to Desktop if saved path no longer exists
+
+---

@@ -510,39 +510,39 @@ const PhotoPicker = (() => {
         // Load locations
         topLevelLocations = await getLocations();
 
-        // Reset state
-        currentPath = VIRTUAL_ROOT;
+        // Reset selection state (but preserve currentPath if navigating within same session)
         selectedPaths = new Map();
         folderStateCache = new Map();
         isCountingInBackground = false;
         countingAborted = false; // Reset abort flag for new session
 
-        // Try to default to Desktop
+        // Determine initial path
         let initialPath = VIRTUAL_ROOT;
-        for (const loc of topLevelLocations) {
-          if (loc.path.includes('/Users/') && !loc.path.includes('Shared')) {
-            const desktopPath = loc.path + '/Desktop';
-            console.log(`🔍 Trying Desktop path: ${desktopPath}`);
+        
+        // If currentPath is set from previous navigation, use it
+        if (currentPath !== VIRTUAL_ROOT) {
+          initialPath = currentPath;
+          console.log('📍 Resuming at previous location:', initialPath);
+        }
+        // Otherwise try to use last saved path from localStorage
+        else {
+          const savedPath = localStorage.getItem('picker.lastPath');
+          if (savedPath) {
+            console.log(`🔍 Trying saved path: ${savedPath}`);
             try {
-              await listDirectory(desktopPath);
-              initialPath = desktopPath;
-              console.log('✅ Starting at Desktop:', desktopPath);
-              break;
+              // Validate saved path exists and is accessible
+              await listDirectory(savedPath);
+              initialPath = savedPath;
+              console.log('✅ Using saved path:', savedPath);
             } catch (error) {
-              console.log(`⚠️ Desktop check failed: ${error.message}`);
-              console.log(`📁 Falling back to home folder: ${loc.path}`);
-              initialPath = loc.path;
-              break;
+              console.log(`⚠️ Saved path not accessible: ${error.message}`);
+              // Fall through to Desktop default
             }
           }
-        }
-        
-        // If still at virtual root, force to first non-Shared location
-        if (initialPath === VIRTUAL_ROOT && topLevelLocations.length > 0) {
-          const firstLocation = topLevelLocations.find(loc => !loc.path.includes('Shared'));
-          if (firstLocation) {
-            initialPath = firstLocation.path;
-            console.log(`📁 Using first location: ${initialPath}`);
+          
+          // If still at virtual root, use shared utility to get default path
+          if (initialPath === VIRTUAL_ROOT) {
+            initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
           }
         }
 
@@ -564,6 +564,13 @@ const PhotoPicker = (() => {
 
         const handleCancel = () => {
           countingAborted = true; // Abort any ongoing counting
+          
+          // Save current path even on cancel (for next session)
+          if (currentPath !== VIRTUAL_ROOT) {
+            localStorage.setItem('picker.lastPath', currentPath);
+            console.log('💾 Saved path on cancel:', currentPath);
+          }
+          
           overlay.style.display = 'none';
           resolveCallback = null;
           resolve(null);
@@ -571,6 +578,11 @@ const PhotoPicker = (() => {
 
         const handleContinue = () => {
           if (selectedPaths.size === 0) return;
+          
+          // Save current path to localStorage for next session
+          localStorage.setItem('picker.lastPath', currentPath);
+          console.log('💾 Saved path for next session:', currentPath);
+          
           overlay.style.display = 'none';
           resolveCallback = null;
           // Return array of paths (not the Map values)

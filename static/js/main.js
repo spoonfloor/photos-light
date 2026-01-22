@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v118';
+const MAIN_JS_VERSION = 'v122';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -4696,6 +4696,9 @@ function closeSwitchLibraryOverlay() {
 async function browseSwitchLibrary() {
   try {
     console.log('🔍 Opening custom folder picker...');
+
+    // Hide Switch Library overlay before showing FolderPicker
+    closeSwitchLibraryOverlay();
 
     const selectedPath = await FolderPicker.show({
       title: 'Open library',
