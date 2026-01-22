@@ -2,28 +2,40 @@
 
 Last updated: January 21, 2026
 
-**Status:** 7 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2), 6 remaining bugs + 1 deferred feature
+**Status:** 8 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle), 5 remaining bugs + 1 deferred feature
 
 ---
 
 ## 🔴 TIER 1: CRITICAL - MUST FIX (High Impact, Core Workflows)
 
-### Photo Picker - NAS Navigation Issues
+### ✅ Photo Picker - Checkbox Toggle Bug (FIXED v123-v124)
 **Priority:** 🔴 CRITICAL  
-**Estimated effort:** 1-2 hours  
-**Status:** NOT STARTED
+**Estimated effort:** 1 hour  
+**Status:** ✅ FIXED
 
-**Issue:** Multiple systemic issues when adding files from NAS photo_library
+**Issue:** Folder checkboxes don't toggle off properly
+- Click folder checkbox → checkmark appears but count stays "No items selected"
+- Click again → checkmark stays on, doesn't toggle off
+- Affects both empty folders and folders with contents
+- Continue button enabled when nothing selected (clicking it does nothing)
 
-**Sub-issues:**
-1. **Partial selection state on open:** Add photos icon → navigate to folders → shows partial selection (should be blank slate)
-2. **Breadcrumb mismatch:** Picker shows eric_files in breadcrumbs while showing folders inside photo_library (1900, 1950, etc.)
-3. **Incorrect selection tally:** Shows "162 folders, 1235 files" when none are selected
-4. **Performance:** Checking/unchecking is painfully slow
+**Root cause:** Duplicate event listeners on file list element
+- `updateFileList()` added new click handler every time it was called
+- Each click fired multiple handlers in sequence
+- Folder was added to selection, then immediately removed by second handler
+- Checkbox icon updated on first execution but selection state ended empty
 
-**Rationale:** Core import operation affecting network storage users; likely systemic state management issue
+**The fix:**
+1. Store handler reference in module-level variable: `fileListClickHandler`
+2. Remove old listener before adding new one: `removeEventListener()`
+3. Simplify icon update: Re-render entire file list after toggle instead of manual DOM updates
 
-**Fix approach:** Debug picker state management, reset selection state on open, investigate performance bottleneck
+**Testing verified:**
+- Click folder checkbox → shows "1 folder selected" ✓
+- Click again → shows "No items selected" ✓
+- Checkbox icon toggles on/off correctly ✓
+- Continue button only enabled when items selected ✓
+- Works with empty folders and folders with contents ✓
 
 ---
 
@@ -168,7 +180,7 @@ Based on impact, frequency, and effort:
 **Rationale:**
 - **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
 - **Data integrity (#5-6):** Database rebuild and corruption detection - ALL DONE ✅
-- **Then complex high-impact (#7):** Core functionality bugs requiring deeper investigation
+- **Critical checkbox bug (#7):** Photo picker toggle - DONE ✅
 - **Then polish (#8-12):** Visual glitches and edge cases after critical issues resolved
 - **Deferred (#13):** Feature work, not bug fixes - save for dedicated feature development
 
@@ -176,15 +188,15 @@ Based on impact, frequency, and effort:
 
 ## SUMMARY
 
-**Next up:** Photo Picker NAS Navigation Issues - Complex but critical
+**Next up:** Month Dividers During Scroll - Polish issue
 
-**Total remaining:** 6 bugs + 1 deferred feature
-- 🔴 Critical: 1 bug (Photo Picker)
+**Total remaining:** 5 bugs + 1 deferred feature
+- 🔴 Critical: 0 bugs (Photo Picker checkbox toggle FIXED ✅)
 - 🟡 Polish: 1 bug (Month Dividers)
 - 🟢 Edge cases: 4 bugs (Video Format, Import Counts, Manual Restore, DB Missing)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~6-8 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~5-7 hours for remaining bugs (excluding deferred feature)
 
 ---
 

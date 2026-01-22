@@ -12,6 +12,7 @@ const PhotoPicker = (() => {
   let resolveCallback = null;
   let isCountingInBackground = false;
   let countingAborted = false; // Flag to abort ongoing counting operations
+  let fileListClickHandler = null; // Store reference to event handler for cleanup
 
   // ===========================================================================
   // API Calls
@@ -364,8 +365,13 @@ const PhotoPicker = (() => {
 
       fileList.innerHTML = html;
 
+      // Remove old event listener if it exists to prevent duplicate handlers
+      if (fileListClickHandler) {
+        fileList.removeEventListener('click', fileListClickHandler);
+      }
+
       // Wire up handlers using EVENT DELEGATION (single listener on parent)
-      fileList.addEventListener('click', async (e) => {
+      fileListClickHandler = async (e) => {
         const item = e.target.closest('.photo-picker-item');
         if (!item) return;
 
@@ -378,30 +384,11 @@ const PhotoPicker = (() => {
         if (e.target.classList.contains('photo-picker-checkbox')) {
           e.stopPropagation();
           if (type === 'folder') {
-            toggleFolder(path);
-            // Update checkbox icon directly (no re-fetch needed)
-            const newState = getFolderState(path);
-            if (newState === 'checked') {
-              checkbox.textContent = 'check_box';
-              checkbox.classList.add('selected');
-            } else if (newState === 'unchecked') {
-              checkbox.textContent = 'folder';
-              checkbox.classList.remove('selected');
-            } else {
-              checkbox.textContent = 'indeterminate_check_box';
-              checkbox.classList.add('selected');
-            }
+            await toggleFolder(path);
+            await updateFileList(); // Re-render to get correct state
           } else {
             toggleFile(path);
-            // Update icon directly (optimistic)
-            const currentIcon = checkbox.textContent;
-            if (currentIcon === 'check_box') {
-              checkbox.textContent = 'image';
-              checkbox.classList.remove('selected');
-            } else {
-              checkbox.textContent = 'check_box';
-              checkbox.classList.add('selected');
-            }
+            await updateFileList(); // Re-render to get correct state
           }
           return;
         }
@@ -421,7 +408,9 @@ const PhotoPicker = (() => {
           // File row - toggle selection
           checkbox.click();
         }
-      });
+      };
+      
+      fileList.addEventListener('click', fileListClickHandler);
     } catch (error) {
       fileList.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
     }

@@ -451,6 +451,58 @@ if any(pattern in item_lower for pattern in backup_patterns):
 
 ---
 
+### Photo Picker - Checkbox Toggle Bug
+**Fixed:** Checkboxes now toggle on/off correctly  
+**Version:** v123-v124
+
+**Issues resolved:**
+- ✅ Folder checkboxes toggle properly (check → uncheck → check)
+- ✅ Selection count updates correctly ("1 folder selected" ↔ "No items selected")
+- ✅ Continue button only enabled when items actually selected
+- ✅ Works with empty folders and folders with contents
+- ✅ No more duplicate click handlers firing
+
+**Root cause:**
+- `updateFileList()` was called multiple times during navigation
+- Each call added a NEW click event listener to the file list element
+- Listeners accumulated, causing multiple handlers to fire for single click
+- First handler: Added folder to selection → count updated → icon updated
+- Second handler: Removed folder from selection → count updated → icon NOT updated
+- Result: Checkbox appeared checked but selection was empty
+
+**The fix:**
+```javascript
+// Store handler reference at module level
+let fileListClickHandler = null;
+
+// Remove old listener before adding new one
+if (fileListClickHandler) {
+  fileList.removeEventListener('click', fileListClickHandler);
+}
+
+// Create and store new handler
+fileListClickHandler = async (e) => { /* handler logic */ };
+fileList.addEventListener('click', fileListClickHandler);
+
+// Simplified icon update: Re-render instead of manual DOM manipulation
+if (type === 'folder') {
+  await toggleFolder(path);
+  await updateFileList(); // Re-render to get correct state
+} else {
+  toggleFile(path);
+  await updateFileList(); // Re-render to get correct state
+}
+```
+
+**Testing verified:**
+- Empty folder: Click checkbox → "1 folder selected" → click again → "No items selected"
+- Folder with files: Same behavior, recursive counting works
+- Multiple folders: Each toggles independently
+- Continue button: Enabled only when count > 0
+- No console errors, clean state management
+
+---
+
 ### Folder Picker - Sticky Last Directory
 **Fixed:** Folder picker now remembers last selected location across sessions  
 **Version:** v118
