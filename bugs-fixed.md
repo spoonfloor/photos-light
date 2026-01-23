@@ -741,6 +741,191 @@ await scanAndImport(selectedPaths); // Instead of scanAndConfirmImport()
 
 ---
 
+---
+
+---
+
+## Session 5: January 23, 2026
+
+### Month Dividers During Scroll - Date Picker Flashing
+**Fixed:** IntersectionObserver logic for date picker scroll updates  
+**Version:** v129
+
+**Issues resolved:**
+- ✅ Date picker no longer flashes between months during slow scroll
+- ✅ Picker switches instantly at exact boundary when month leaves viewport
+- ✅ Rock back/forth over boundary → crisp, instant switches
+- ✅ No oscillation or visual glitches
+
+**Root cause:**
+- IntersectionObserver compared sections by intersection ratio to find "most visible"
+- Used 11 threshold points `[0, 0.1, 0.2, ... 1.0]` causing excessive callbacks
+- `entries` array only contained sections that crossed thresholds, not all visible sections
+- When scrolling near boundaries, wrong section could temporarily "win" the ratio comparison
+- Example: March 55% visible, Feb enters at 12% and crosses 0.1 threshold
+  - `entries = [Feb]` (only Feb crossed threshold)
+  - Code compared only entries, Feb "won" with 12%
+  - Picker flashed to February even though March had 55%
+- Next frame: March crosses 0.5 threshold
+  - `entries = [March]`, picker switches back to March
+  - Result: Flash between Feb and March
+
+**The fix:**
+```javascript
+// OLD (buggy): Compared only sections that crossed thresholds
+const observer = new IntersectionObserver(
+  (entries) => {
+    let mostVisible = null;
+    let maxRatio = 0;
+    
+    entries.forEach((entry) => {  // ⚠️ Only changed sections
+      if (entry.intersectionRatio > maxRatio) {
+        maxRatio = entry.intersectionRatio;
+        mostVisible = entry.target;
+      }
+    });
+    // ...
+  },
+  { threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] }
+);
+
+// NEW (fixed): Tracks ALL visible sections, picks topmost in DOM order
+const sectionVisibility = new Map();
+
+const observer = new IntersectionObserver(
+  (entries) => {
+    // Maintain visibility state for all sections
+    entries.forEach((entry) => {
+      const monthId = entry.target.dataset.month;
+      if (monthId) {
+        if (entry.intersectionRatio > 0) {
+          sectionVisibility.set(monthId, entry.target);
+        } else {
+          sectionVisibility.delete(monthId);
+        }
+      }
+    });
+
+    // Get topmost visible section in actual DOM order
+    const allSections = document.querySelectorAll('.month-section');
+    const topmostVisibleSection = Array.from(allSections).find(section => 
+      sectionVisibility.has(section.dataset.month)
+    );
+    
+    if (!topmostVisibleSection) return;
+    
+    // Update picker to topmost visible section
+    const monthId = topmostVisibleSection.dataset.month;
+    // ... update pickers
+  },
+  { threshold: [0] }  // Single threshold - just detect ANY visibility
+);
+```
+
+**Key improvements:**
+1. **Map tracks all visible sections** - Persists state between callbacks
+2. **Single threshold `[0]`** - Only fires when sections enter/leave viewport (not at 10 intermediate points)
+3. **Topmost visible logic** - Query DOM in order, pick first visible section (not "most visible by ratio")
+4. **Newspaper reading model** - "As long as any part of article is showing, you're reading it"
+
+**Behavior:**
+- **Before:** March 55%, Feb 30% → Picker could flash to Feb during scroll
+- **After:** March visible (any amount) → Shows "March 2026" ✓
+- **Before:** Oscillated between months at boundaries
+- **After:** Switches instantly when last pixel of month scrolls above fold ✓
+
+**Testing verified:**
+- Slow scroll through months with 12 images (2 rows)
+- First row scrolls above fold → picker stays on current month
+- Last row scrolls above fold → instant switch to next month
+- Rock back/forth over boundary → crisp, reliable switches
+- No flashing, no oscillation, no visual glitches
+
+---
+
+## Session 5: January 23, 2026
+
+### Month Dividers During Scroll - Date Picker Flashing
+**Fixed:** Date picker scroll update logic  
+**Version:** v129
+
+**Issues resolved:**
+- ✅ Date picker no longer flashes between months during scroll
+- ✅ Picker switches instantly when month boundary crossed
+- ✅ Rock back/forth test passes - crisp, instant switches
+- ✅ No oscillation or visual glitches
+
+**Root cause:**
+The IntersectionObserver callback only received `entries` for sections that crossed thresholds since the last callback, not all visible sections. With 11 thresholds `[0, 0.1, 0.2, ... 1.0]`, sections crossing different thresholds could temporarily "win" the visibility comparison even when another section had higher overall visibility.
+
+Example bug scenario:
+- March at 55% visible (stable, no threshold crossed)
+- Feb enters viewport, crosses 0.1 threshold
+- `entries = [Feb]` (only Feb in array)
+- Code finds "most visible" in entries → Feb wins with 12%
+- Picker flashes to "February" even though March had 55%
+- Next frame: March crosses 0.5 threshold → picker switches back
+
+**The fix:**
+```javascript
+// OLD: Compared only sections that crossed thresholds
+const observer = new IntersectionObserver((entries) => {
+  let mostVisible = null;
+  let maxRatio = 0;
+  
+  entries.forEach((entry) => {  // ⚠️ Only changed sections
+    if (entry.intersectionRatio > maxRatio) {
+      maxRatio = entry.intersectionRatio;
+      mostVisible = entry.target;
+    }
+  });
+}, {
+  threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+});
+
+// NEW: Tracks all visible sections, picks topmost in DOM order
+const sectionVisibility = new Map();
+
+const observer = new IntersectionObserver((entries) => {
+  // Maintain visibility state for all sections
+  entries.forEach((entry) => {
+    const monthId = entry.target.dataset.month;
+    if (monthId) {
+      if (entry.intersectionRatio > 0) {
+        sectionVisibility.set(monthId, entry.target);
+      } else {
+        sectionVisibility.delete(monthId);
+      }
+    }
+  });
+
+  // Get topmost visible section in actual DOM order
+  const allSections = document.querySelectorAll('.month-section');
+  const topmostVisibleSection = Array.from(allSections).find(section => 
+    sectionVisibility.has(section.dataset.month)
+  );
+  
+  // Update picker to topmost visible section
+}, {
+  threshold: [0]  // Single threshold - just detect ANY visibility
+});
+```
+
+**Key improvements:**
+1. **Map tracks all visible sections** - Persists state between callbacks
+2. **Single threshold `[0]`** - Only fires when sections enter/leave viewport
+3. **Topmost visible logic** - Query DOM in order, pick first visible section
+4. **"Newspaper reading" model** - Show month as long as any part is visible
+
+**Testing verified:**
+- Slow scroll through months with 12 images (2 rows)
+- First row scrolls above fold → picker stays on current month
+- Last row scrolls above fold → instant switch to next month
+- Rock back/forth over boundary → crisp, reliable switches
+- No flashing, no oscillation
+
+---
+
 ## Session 4: January 22, 2026
 
 ### Import Counting - Duplicate File Path Bug

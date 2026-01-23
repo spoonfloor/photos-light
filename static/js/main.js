@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v128';
+const MAIN_JS_VERSION = 'v129';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -364,43 +364,54 @@ function wireDatePicker() {
   monthPicker.addEventListener('change', handleDateChange);
   yearPicker.addEventListener('change', handleDateChange);
 
+  // Track visibility of all sections
+  const sectionVisibility = new Map();
+
   // Setup IntersectionObserver to update picker based on scroll position
   const observer = new IntersectionObserver(
     (entries) => {
-      // Find the most visible month section
-      let mostVisible = null;
-      let maxRatio = 0;
-
+      // Update visibility state for sections that changed
       entries.forEach((entry) => {
-        if (entry.intersectionRatio > maxRatio) {
-          maxRatio = entry.intersectionRatio;
-          mostVisible = entry.target;
+        const monthId = entry.target.dataset.month;
+        if (monthId) {
+          if (entry.intersectionRatio > 0) {
+            // Section is visible - store it
+            sectionVisibility.set(monthId, entry.target);
+          } else {
+            // Section is not visible - remove it
+            sectionVisibility.delete(monthId);
+          }
         }
       });
 
-      // Update picker to match visible month
-      if (mostVisible && maxRatio > 0.1) {
-        // At least 10% visible
-        const monthId = mostVisible.dataset.month; // e.g., "2025-12"
-        if (monthId) {
-          const [year, month] = monthId.split('-');
+      // Get all month sections in DOM order, find first visible one
+      const allSections = document.querySelectorAll('.month-section');
+      const topmostVisibleSection = Array.from(allSections).find(section => 
+        sectionVisibility.has(section.dataset.month)
+      );
+      
+      if (!topmostVisibleSection) return;
 
-          // Set flag to prevent triggering jump
-          updatingFromScroll = true;
+      const monthId = topmostVisibleSection.dataset.month;
 
-          // Update pickers
-          yearPicker.value = year;
-          monthPicker.value = parseInt(month, 10).toString(); // Remove leading zero
+      if (monthId) {
+        const [year, month] = monthId.split('-');
 
-          // Reset flag after a brief delay
-          setTimeout(() => {
-            updatingFromScroll = false;
-          }, 100);
-        }
+        // Set flag to prevent triggering jump
+        updatingFromScroll = true;
+
+        // Update pickers
+        yearPicker.value = year;
+        monthPicker.value = parseInt(month, 10).toString(); // Remove leading zero
+
+        // Reset flag after a brief delay
+        setTimeout(() => {
+          updatingFromScroll = false;
+        }, 100);
       }
     },
     {
-      threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], // Track visibility at multiple points
+      threshold: [0], // Just detect ANY visibility (entering or leaving viewport)
       rootMargin: '-60px 0px 0px 0px', // Offset for app bar height
     }
   );

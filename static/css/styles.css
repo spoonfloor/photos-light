@@ -968,7 +968,6 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px 12px 20px;
-  border-bottom: 1px solid var(--border-color);
 }
 
 .import-title {
@@ -1076,7 +1075,6 @@ body {
 }
 
 .import-details-section {
-  border-top: 1px solid var(--border-color);
   padding: 12px 20px;
 }
 
@@ -1153,7 +1151,6 @@ body {
   display: flex;
   gap: 12px;
   padding: 16px 20px;
-  border-top: 1px solid var(--border-color);
   justify-content: flex-end;
 }
 
@@ -1185,7 +1182,6 @@ body {
 .import-btn-secondary {
   background: transparent;
   color: var(--text-secondary);
-  border: 1px solid transparent;
 }
 
 .import-btn-secondary:hover {
@@ -1265,7 +1261,6 @@ body {
 }
 
 .duplicate-set {
-  border-bottom: 1px solid var(--border-color);
   padding: 12px 0;
 }
 

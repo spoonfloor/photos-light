@@ -2,7 +2,7 @@
 
 Last updated: January 21, 2026
 
-**Status:** 12 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal), 1 remaining bug + 1 deferred feature
+**Status:** 13 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll), 2 remaining bugs + 1 deferred feature
 
 ---
 
@@ -38,16 +38,39 @@ Last updated: January 21, 2026
 
 ## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
 
-### Month Dividers During Scroll
+### Date Changes - Don't Survive Database Rebuild
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
+
+**Issue:** Date changes don't survive database rebuild (bad)
+- User manually edits photo dates
+- Rebuild database is triggered
+- Date changes are lost, photos revert to original dates
+- Results in data loss from user's perspective
+
+**Fix approach:** Need to persist date edits to file metadata (EXIF) or separate metadata file, not just in database
+
+---
+
+### Date Picker - Missing After Import
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 30 minutes  
 **Status:** NOT STARTED
 
-**Issue:** Month dividers update as you scroll, causing flashes of other dates
-- Visual polish issue during frequent operation
-- Likely throttling/debouncing issue with scroll handler
+**Issue:** Blank library → import photos → app bar date picker absent (bad)
+- After first import into empty library, date picker doesn't appear in app bar
+- Likely missing UI refresh/update after import completes
+- Prevents navigation by date after import
 
-**Fix approach:** Debounce month divider updates during scroll
+**Fix approach:** Trigger app bar refresh after import completion
+
+---
+
+### ✅ Month Dividers During Scroll (FIXED v129)
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 30 minutes  
+**Status:** ✅ FIXED - See bugs-fixed.md
 
 ---
 
@@ -132,9 +155,13 @@ Based on impact, frequency, and effort:
 4. ✅ **Toast Timing + Date Edit Undo** (DONE - v89-v94)
 5. ✅ **Database Rebuild - Empty Grid** (DONE - v99-v100)
 6. ✅ **Corrupted DB Detection During Operations** (DONE - v101-v110)
-7. 🔴 **Photo Picker - NAS Navigation Issues** (2 hrs, high impact but complex)
-8. 🟡 **Month Dividers During Scroll** (30 min, polish)
-9. 🟢 **Video Format Support** (30 min, edge case)
+7. ✅ **Photo Picker - Checkbox Toggle Bug** (DONE - v123-v124)
+8. ✅ **Photo Picker - Count Display** (DONE - v125)
+9. ✅ **Photo Picker - Background Counting** (DONE - v126)
+10. ✅ **Photo Picker - Button Rename & Confirmation Dialog** (DONE - v127)
+11. 🟡 **Date Changes - Don't Survive Database Rebuild** (1-2 hrs, data loss issue)
+12. 🟡 **Date Picker - Missing After Import** (30 min, affects post-import workflow)
+13. 🟡 **Month Dividers During Scroll** (30 min, polish)
 10. 🟢 **Import Count Issues** (2 hrs, low impact)
 11. 🟢 **Manual Restore & Rebuild** (1 hr, edge case)
 12. 🟢 **Database Missing Prompt** (30 min, can't reproduce)
@@ -151,15 +178,15 @@ Based on impact, frequency, and effort:
 
 ## SUMMARY
 
-**Next up:** Month Dividers During Scroll - Polish issue
+**Next up:** Date Changes - Don't Survive Database Rebuild (data loss issue)
 
-**Total remaining:** 1 bug + 1 deferred feature
+**Total remaining:** 2 bugs + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 1 bug (Month Dividers)
+- 🟡 Polish: 2 bugs (Date Changes Persistence, Date Picker Missing After Import)
 - 🟢 Edge cases: 0 bugs (Video Format and Import Counts removed - cannot reproduce or low priority)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~30 minutes for remaining bug (excluding deferred feature)
+**Estimated total effort:** ~2 hours for remaining bugs (excluding deferred feature)
 
 ---
 
