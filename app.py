@@ -199,6 +199,328 @@ def create_db_backup():
         print(f"❌ Error creating DB backup: {e}")
         return None
 
+def write_photo_exif(file_path, new_date):
+    """Write EXIF date to photo using exiftool"""
+    print(f"🔧 Writing EXIF to: {os.path.basename(file_path)}")
+    print(f"   Target date: {new_date}")
+    
+    try:
+        cmd = [
+            'exiftool',
+            f'-DateTimeOriginal={new_date}',
+            f'-CreateDate={new_date}',
+            f'-ModifyDate={new_date}',
+            '-overwrite_original',
+            '-P',
+            file_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        print(f"   exiftool exit code: {result.returncode}")
+        print(f"   exiftool stdout: {result.stdout.strip()}")
+        
+        if result.returncode != 0:
+            print(f"   ❌ exiftool stderr: {result.stderr}")
+            raise Exception(f"exiftool failed: {result.stderr}")
+        
+        # Verify write succeeded by reading back
+        print(f"   🔍 Verifying write...")
+        verify_cmd = ['exiftool', '-DateTimeOriginal', '-s3', file_path]
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=5)
+        
+        if verify_result.returncode == 0:
+            read_date = verify_result.stdout.strip()
+            print(f"   Read back: {read_date}")
+            if read_date != new_date:
+                raise Exception(f"EXIF verification failed: wrote {new_date}, read back {read_date}")
+            print(f"   ✅ EXIF write verified")
+        else:
+            raise Exception(f"EXIF verification failed: could not read back date")
+            
+    except subprocess.TimeoutExpired:
+        raise Exception("exiftool timeout after 30s")
+    except FileNotFoundError:
+        raise Exception("exiftool not found")
+
+def write_video_metadata(file_path, new_date):
+    """Write metadata to video using ffmpeg"""
+    try:
+        # Convert to ISO 8601 format
+        iso_date = new_date.replace(':', '-', 2).replace(' ', 'T')
+        
+        base, ext = os.path.splitext(file_path)
+        temp_output = f"{base}_temp{ext}"
+        
+        cmd = [
+            'ffmpeg',
+            '-i', file_path,
+            '-metadata', f'creation_time={iso_date}',
+            '-codec', 'copy',
+            '-y',
+            temp_output
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        
+        if result.returncode != 0:
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            raise Exception(f"ffmpeg failed: {result.stderr}")
+        
+        # Replace original
+        os.replace(temp_output, file_path)
+            
+    except subprocess.TimeoutExpired:
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+        raise Exception("ffmpeg timeout after 60s")
+    except FileNotFoundError:
+        raise Exception("ffmpeg not found")
+
+def parse_filename(filename):
+    """
+    Parse img_YYYYMMDD_HASH[_counter].ext format
+    Handles collision-resolved filenames like img_20260122_abc12345_2.jpg
+    """
+    parts = filename.split('_')
+    if len(parts) < 3:
+        return None, None, None, None
+    
+    prefix = parts[0]
+    date_str = parts[1]
+    
+    # Everything after date is hash + optional counter + extension
+    # Join remaining parts and split off extension
+    remainder = '_'.join(parts[2:])
+    hash_part, ext = os.path.splitext(remainder)
+    
+    return prefix, date_str, hash_part, ext
+
+def generate_new_filename(old_filename, new_date):
+    """Generate new filename with new date but same hash"""
+    prefix, _, hash_part, ext = parse_filename(old_filename)
+    if not prefix or not hash_part:
+        # Can't parse - generate new canonical name with date and first 8 chars of filename
+        new_date_str = new_date.split()[0].replace(':', '')
+        basename = os.path.splitext(old_filename)[0][:8]
+        ext = os.path.splitext(old_filename)[1]
+        return f"img_{new_date_str}_{basename}{ext}"
+    
+    # Extract date: "2025:12:25 14:30:00" -> "20251225"
+    new_date_str = new_date.split()[0].replace(':', '')
+    return f"{prefix}_{new_date_str}_{hash_part}{ext}"
+
+def get_date_folder(date_str):
+    """Get folder path from date: YYYY/YYYY-MM-DD"""
+    parts = date_str.split()[0].split(':')
+    year = parts[0]
+    month = parts[1]
+    day = parts[2]
+    return os.path.join(year, f"{year}-{month}-{day}")
+
+class DateEditTransaction:
+    """Track all operations for rollback"""
+    def __init__(self):
+        self.operations = []
+        self.failed_files = []
+    
+    def log_exif_write(self, file_path, old_date):
+        self.operations.append(('exif', {
+            'file': file_path,
+            'old_date': old_date
+        }))
+    
+    def log_move(self, old_path, new_path):
+        self.operations.append(('move', {
+            'from': old_path,
+            'to': new_path
+        }))
+    
+    def log_failure(self, filename, error):
+        self.failed_files.append({
+            'filename': filename,
+            'error': str(error)
+        })
+    
+    def rollback(self, library_path):
+        """Undo all operations in reverse order"""
+        print(f"\n🔄 Rolling back {len(self.operations)} operations...")
+        
+        for action, details in reversed(self.operations):
+            try:
+                if action == 'move':
+                    old_full = os.path.join(library_path, details['from'])
+                    new_full = os.path.join(library_path, details['to'])
+                    
+                    if os.path.exists(new_full):
+                        os.makedirs(os.path.dirname(old_full), exist_ok=True)
+                        shutil.move(new_full, old_full)
+                        print(f"  ↩️  Moved back: {details['to']} -> {details['from']}")
+                
+                elif action == 'exif':
+                    file_path = details['file']
+                    old_date = details['old_date']
+                    
+                    if os.path.exists(file_path):
+                        # Determine file type
+                        ext = os.path.splitext(file_path)[1].lower()
+                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+                        
+                        if ext in photo_exts:
+                            write_photo_exif(file_path, old_date)
+                        else:
+                            write_video_metadata(file_path, old_date)
+                        
+                        print(f"  ↩️  Restored EXIF: {os.path.basename(file_path)}")
+            
+            except Exception as e:
+                print(f"  ⚠️  Rollback error (continuing): {e}")
+        
+        print(f"✅ Rollback complete")
+
+class DateEditTransaction:
+    """Track all operations for rollback"""
+    def __init__(self):
+        self.operations = []
+        self.failed_files = []
+    
+    def log_exif_write(self, file_path, old_date):
+        self.operations.append(('exif', {
+            'file': file_path,
+            'old_date': old_date
+        }))
+    
+    def log_move(self, old_path, new_path):
+        self.operations.append(('move', {
+            'from': old_path,
+            'to': new_path
+        }))
+    
+    def log_failure(self, filename, error):
+        self.failed_files.append({
+            'filename': filename,
+            'error': str(error)
+        })
+    
+    def rollback(self, library_path):
+        """Undo all operations in reverse order"""
+        print(f"\n🔄 Rolling back {len(self.operations)} operations...")
+        
+        for action, details in reversed(self.operations):
+            try:
+                if action == 'move':
+                    old_full = os.path.join(library_path, details['from'])
+                    new_full = os.path.join(library_path, details['to'])
+                    
+                    if os.path.exists(new_full):
+                        os.makedirs(os.path.dirname(old_full), exist_ok=True)
+                        shutil.move(new_full, old_full)
+                        print(f"  ↩️  Moved back: {details['to']} -> {details['from']}")
+                
+                elif action == 'exif':
+                    file_path = details['file']
+                    old_date = details['old_date']
+                    
+                    if os.path.exists(file_path):
+                        # Determine file type
+                        ext = os.path.splitext(file_path)[1].lower()
+                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+                        
+                        if ext in photo_exts:
+                            write_photo_exif(file_path, old_date)
+                        else:
+                            write_video_metadata(file_path, old_date)
+                        
+                        print(f"  ↩️  Restored EXIF: {os.path.basename(file_path)}")
+            
+            except Exception as e:
+                print(f"  ⚠️  Rollback error (continuing): {e}")
+        
+        print(f"✅ Rollback complete")
+
+def update_photo_date_with_files(photo_id, new_date, conn):
+    """
+    Update single photo date with full file operations
+    Returns: (success, error_message, transaction)
+    """
+    cursor = conn.cursor()
+    transaction = DateEditTransaction()
+    
+    try:
+        # Get photo info
+        cursor.execute("SELECT current_path, date_taken, file_type FROM photos WHERE id = ?", (photo_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False, "Photo not found", transaction
+        
+        old_rel_path = row['current_path']
+        old_filename = os.path.basename(old_rel_path)
+        old_date = row['date_taken']
+        file_type = row['file_type']
+        
+        old_full_path = os.path.join(LIBRARY_PATH, old_rel_path)
+        
+        if not os.path.exists(old_full_path):
+            return False, "File not found on disk", transaction
+        
+        # Phase 1: Write EXIF
+        try:
+            if file_type == 'photo':
+                write_photo_exif(old_full_path, new_date)
+            else:
+                write_video_metadata(old_full_path, new_date)
+            
+            transaction.log_exif_write(old_full_path, old_date)
+        except Exception as e:
+            transaction.log_failure(old_filename, e)
+            raise
+        
+        # Phase 2: Rename and move file
+        try:
+            new_filename = generate_new_filename(old_filename, new_date)
+            new_folder = get_date_folder(new_date)
+            new_rel_path = os.path.join(new_folder, new_filename)
+            new_full_path = os.path.join(LIBRARY_PATH, new_rel_path)
+            
+            # Create destination folder
+            os.makedirs(os.path.dirname(new_full_path), exist_ok=True)
+            
+            # Move file
+            shutil.move(old_full_path, new_full_path)
+            transaction.log_move(old_rel_path, new_rel_path)
+            
+            # Clean up empty old folders
+            try:
+                old_dir = os.path.dirname(old_full_path)
+                # Remove date folder if empty
+                if os.path.isdir(old_dir) and not os.listdir(old_dir):
+                    os.rmdir(old_dir)
+                    # Remove year folder if empty
+                    year_dir = os.path.dirname(old_dir)
+                    if os.path.isdir(year_dir) and not os.listdir(year_dir):
+                        os.rmdir(year_dir)
+            except Exception as e:
+                # Don't fail the whole operation if cleanup fails
+                print(f"  ⚠️  Couldn't clean up empty folders: {e}")
+            
+            # Update database
+            cursor.execute("""
+                UPDATE photos 
+                SET current_path = ?, 
+                    original_filename = ?,
+                    date_taken = ?
+                WHERE id = ?
+            """, (new_rel_path, new_filename, new_date, photo_id))
+            
+        except Exception as e:
+            transaction.log_failure(old_filename, e)
+            raise
+        
+        return True, None, transaction
+        
+    except Exception as e:
+        return False, str(e), transaction
+
 def generate_thumbnail_for_file(file_path, content_hash, file_type):
     """Generate thumbnail for a file using hash-based sharding"""
     try:
@@ -830,7 +1152,7 @@ def reveal_in_finder(photo_id):
 @app.route('/api/photo/update_date', methods=['POST'])
 @handle_db_corruption
 def update_photo_date():
-    """Update photo date"""
+    """Update photo date with full file operations (EXIF + rename + move)"""
     try:
         data = request.get_json()
         photo_id = data.get('photo_id')
@@ -843,15 +1165,27 @@ def update_photo_date():
             print(f"\n🔍 DRY RUN - Would update photo {photo_id} date to: {new_date}")
             return jsonify({'status': 'success', 'dry_run': True, 'new_date': new_date})
         
-        # Actually update the database
+        # Update with full file operations
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE photos SET date_taken = ? WHERE id = ?", (new_date, photo_id))
-        conn.commit()
-        conn.close()
+        success, error, transaction = update_photo_date_with_files(photo_id, new_date, conn)
         
-        print(f"✅ Updated photo {photo_id} date to: {new_date}")
-        return jsonify({'status': 'success', 'dry_run': False, 'new_date': new_date})
+        if success:
+            conn.commit()
+            conn.close()
+            print(f"✅ Updated photo {photo_id} with file operations")
+            return jsonify({'status': 'success', 'new_date': new_date})
+        else:
+            # Rollback transaction
+            transaction.rollback(LIBRARY_PATH)
+            conn.rollback()
+            conn.close()
+            
+            return jsonify({
+                'status': 'error',
+                'error': error,
+                'failed_files': transaction.failed_files
+            }), 500
+            
     except Exception as e:
         app.logger.error(f"Error updating photo date: {e}")
         return jsonify({'error': str(e)}), 500
@@ -859,7 +1193,7 @@ def update_photo_date():
 @app.route('/api/photos/bulk_update_date', methods=['POST'])
 @handle_db_corruption
 def bulk_update_photo_dates():
-    """Bulk update photo dates"""
+    """Bulk update photo dates with full file operations"""
     try:
         data = request.get_json()
         photo_ids = data.get('photo_ids', [])
@@ -878,40 +1212,34 @@ def bulk_update_photo_dates():
         
         from datetime import datetime, timedelta
         
+        # Calculate target date for each photo based on mode
+        photo_date_map = {}  # photo_id -> target_date_str
+        
         if mode == 'same':
             # Set all photos to the same date
             for photo_id in photo_ids:
-                cursor.execute("UPDATE photos SET date_taken = ? WHERE id = ?", (new_date, photo_id))
-            print(f"✅ Updated {len(photo_ids)} photos to same date: {new_date}")
+                photo_date_map[photo_id] = new_date
         
         elif mode == 'shift':
             # Shift all photos by the offset from the first photo
-            # Get first photo's original date
             cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_ids[0],))
             row = cursor.fetchone()
             if not row:
                 return jsonify({'error': 'First photo not found'}), 404
             
             original_date_str = row['date_taken']
-            
-            # Parse dates (YYYY:MM:DD HH:MM:SS)
             original_date = datetime.strptime(original_date_str, '%Y:%m:%d %H:%M:%S')
             new_date_obj = datetime.strptime(new_date, '%Y:%m:%d %H:%M:%S')
-            
-            # Calculate offset
             offset = new_date_obj - original_date
             
-            # Apply offset to all photos
+            # Calculate shifted date for each photo
             for photo_id in photo_ids:
                 cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
                 row = cursor.fetchone()
                 if row:
                     photo_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
                     shifted_date = photo_date + offset
-                    shifted_date_str = shifted_date.strftime('%Y:%m:%d %H:%M:%S')
-                    cursor.execute("UPDATE photos SET date_taken = ? WHERE id = ?", (shifted_date_str, photo_id))
-            
-            print(f"✅ Shifted {len(photo_ids)} photos by {offset}")
+                    photo_date_map[photo_id] = shifted_date.strftime('%Y:%m:%d %H:%M:%S')
         
         elif mode == 'sequence':
             # Sequence photos with interval
@@ -928,7 +1256,7 @@ def bulk_update_photo_dates():
             else:
                 return jsonify({'error': 'Invalid interval unit'}), 400
             
-            # Get all photos with their original dates to maintain order
+            # Get all photos with their original dates
             photo_dates = []
             for photo_id in photo_ids:
                 cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
@@ -937,22 +1265,58 @@ def bulk_update_photo_dates():
                     original_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
                     photo_dates.append((photo_id, original_date))
             
-            # Sort by original date to maintain chronological order
+            # Sort by original date
             photo_dates.sort(key=lambda x: x[1])
             
-            # Apply sequence starting from base date
+            # Apply sequence
             base_date = datetime.strptime(new_date, '%Y:%m:%d %H:%M:%S')
             for index, (photo_id, _) in enumerate(photo_dates):
                 sequenced_date = base_date + (interval * index)
-                sequenced_date_str = sequenced_date.strftime('%Y:%m:%d %H:%M:%S')
-                cursor.execute("UPDATE photos SET date_taken = ? WHERE id = ?", (sequenced_date_str, photo_id))
+                photo_date_map[photo_id] = sequenced_date.strftime('%Y:%m:%d %H:%M:%S')
+        
+        # Now process all photos with file operations
+        master_transaction = DateEditTransaction()
+        success_count = 0
+        
+        for photo_id, target_date in photo_date_map.items():
+            success, error, transaction = update_photo_date_with_files(photo_id, target_date, conn)
             
-            print(f"✅ Sequenced {len(photo_ids)} photos with {interval_amount} {interval_unit} intervals")
+            if success:
+                success_count += 1
+                # Merge this transaction into master
+                master_transaction.operations.extend(transaction.operations)
+            else:
+                # Log failure
+                cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
+                row = cursor.fetchone()
+                filename = os.path.basename(row['current_path']) if row else f"photo_{photo_id}"
+                master_transaction.log_failure(filename, error)
         
-        conn.commit()
-        conn.close()
-        
-        return jsonify({'status': 'success', 'dry_run': False, 'updated_count': len(photo_ids)})
+        # Check results
+        if master_transaction.failed_files:
+            # At least one failure - rollback EVERYTHING
+            print(f"❌ {len(master_transaction.failed_files)} failures - rolling back all changes")
+            master_transaction.rollback(LIBRARY_PATH)
+            conn.rollback()
+            conn.close()
+            
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to update {len(master_transaction.failed_files)} of {len(photo_ids)} files',
+                'failed_count': len(master_transaction.failed_files),
+                'total_count': len(photo_ids),
+                'failed_files': master_transaction.failed_files
+            }), 500
+        else:
+            # All succeeded - commit
+            conn.commit()
+            conn.close()
+            print(f"✅ Updated {success_count} photos with file operations")
+            return jsonify({
+                'status': 'success',
+                'updated_count': success_count
+            })
+            
     except Exception as e:
         app.logger.error(f"Error bulk updating photo dates: {e}")
         return jsonify({'error': str(e)}), 500

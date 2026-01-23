@@ -2,7 +2,7 @@
 
 Last updated: January 21, 2026
 
-**Status:** 13 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll), 2 remaining bugs + 1 deferred feature
+**Status:** 13 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll), 3 remaining bugs + 1 deferred feature
 
 ---
 
@@ -71,6 +71,20 @@ Last updated: January 21, 2026
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 30 minutes  
 **Status:** ✅ FIXED - See bugs-fixed.md
+
+---
+
+### Dialog Spinner - Remove When Realtime Feedback Exists
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 30 minutes  
+**Status:** NOT STARTED
+
+**Issue:** Remove braille spinner from all dialogs where there is already realtime feedback
+- Redundant visual element when progress is already shown
+- Creates visual clutter
+- Affects multiple dialogs (import, rebuild, etc.)
+
+**Fix approach:** Audit all dialogs and remove spinner when progress bars/counts/status text already provide feedback
 
 ---
 
@@ -159,9 +173,10 @@ Based on impact, frequency, and effort:
 8. ✅ **Photo Picker - Count Display** (DONE - v125)
 9. ✅ **Photo Picker - Background Counting** (DONE - v126)
 10. ✅ **Photo Picker - Button Rename & Confirmation Dialog** (DONE - v127)
-11. 🟡 **Date Changes - Don't Survive Database Rebuild** (1-2 hrs, data loss issue)
-12. 🟡 **Date Picker - Missing After Import** (30 min, affects post-import workflow)
-13. 🟡 **Month Dividers During Scroll** (30 min, polish)
+11. ✅ **Month Dividers During Scroll** (DONE - v129)
+12. 🟡 **Date Changes - Don't Survive Database Rebuild** (1-2 hrs, data loss issue)
+13. 🟡 **Date Picker - Missing After Import** (30 min, affects post-import workflow)
+14. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
 10. 🟢 **Import Count Issues** (2 hrs, low impact)
 11. 🟢 **Manual Restore & Rebuild** (1 hr, edge case)
 12. 🟢 **Database Missing Prompt** (30 min, can't reproduce)
@@ -180,13 +195,13 @@ Based on impact, frequency, and effort:
 
 **Next up:** Date Changes - Don't Survive Database Rebuild (data loss issue)
 
-**Total remaining:** 2 bugs + 1 deferred feature
+**Total remaining:** 3 bugs + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 2 bugs (Date Changes Persistence, Date Picker Missing After Import)
+- 🟡 Polish: 3 bugs (Date Changes Persistence, Date Picker Missing After Import, Dialog Spinner Removal)
 - 🟢 Edge cases: 0 bugs (Video Format and Import Counts removed - cannot reproduce or low priority)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~2 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~2-3 hours for remaining bugs (excluding deferred feature)
 
 ---
 
