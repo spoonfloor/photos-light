@@ -112,7 +112,7 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
         # Rebuild mode: index everything, don't remove anything
         db_entries = {}
         missing_files_list = []
-        untracked_files_list = list(filesystem_paths)
+        untracked_files_list = sorted(list(filesystem_paths))  # Sort for deterministic order
         print(f"  Full rebuild: indexing all {len(untracked_files_list)} files")
     else:
         # Incremental mode: diff and sync
@@ -120,8 +120,8 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
         db_entries = {row['current_path']: row['id'] for row in cursor.fetchall()}
         db_paths = set(db_entries.keys())
         
-        missing_files_list = list(db_paths - filesystem_paths)
-        untracked_files_list = list(filesystem_paths - db_paths)
+        missing_files_list = sorted(list(db_paths - filesystem_paths))  # Sort for deterministic order
+        untracked_files_list = sorted(list(filesystem_paths - db_paths))  # Sort for deterministic order
         print(f"  Found {len(db_entries)} DB entries, {len(missing_files_list)} ghosts, {len(untracked_files_list)} moles")
     
     # Track details for final report

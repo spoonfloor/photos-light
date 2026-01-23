@@ -224,7 +224,6 @@ These are enhancement ideas, not bugs. To be considered for future feature work.
 ### Date Editing
 - Date change causes navigation from lightbox to grid (bad UX)
 - Date change anchor date should be topmost photo in grid
-- Changes photo order when all photos have same date (sorted by name?) - What is desired UX?
 
 ### Lightbox
 - Date jump should frame grid so date is visible

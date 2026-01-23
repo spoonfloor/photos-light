@@ -1003,3 +1003,66 @@ resolve(rootSelections);
 - No duplicate file paths sent to backend ✓
 
 ---
+
+## Session 6: January 23, 2026
+
+### Photo Order Instability with Identical Timestamps
+**Fixed:** Deterministic ordering when photos have same date  
+**Version:** v133-v134
+
+**Issues resolved:**
+- ✅ Photos with identical timestamps now sort consistently
+- ✅ Order stable across database rebuilds
+- ✅ Order stable across page reloads
+- ✅ Predictable tie-breaking using filepath (alphabetical)
+
+**Root cause:**
+SQL query used `ORDER BY date_taken DESC` with no secondary sort key. When multiple photos had identical `date_taken` values (down to the second), SQLite returned them in arbitrary order. While consistent within a session, the order could change after database rebuild because:
+1. Rebuild deletes database → all `id` values lost
+2. Files walked in arbitrary filesystem order
+3. New `id` values assigned based on insertion order
+4. Different insertion order = different tie-breaking order
+
+**Edge case trigger:**
+This situation occurs when:
+- User manually changes multiple photos to same date/time (e.g., bulk edit to "2026-01-15 12:00:00")
+- Photos from burst mode have identical timestamps (rare, camera dependent)
+
+**Decision:**
+This is **not a bug** - it's expected behavior. When timestamps are identical, some tie-breaker must determine order. The fix ensures that tie-breaker is stable and deterministic.
+
+If users need specific ordering, they already have the tool: offset photos by 1 second using the date editor.
+
+**The fix:**
+```python
+# app.py: Added current_path as secondary sort key (3 locations)
+ORDER BY date_taken DESC, current_path ASC
+
+# library_sync.py: Sort files before inserting during rebuild
+untracked_files_list = sorted(list(filesystem_paths))
+```
+
+**Why `current_path`?**
+- Stable across rebuilds (path doesn't change)
+- Contains date and hash: `2026/2026-01-15/img_20260115_hash.jpg`
+- Alphabetical sort is deterministic
+- No schema changes required
+
+**Why not `id`?**
+- `id` values are not stable across rebuilds
+- Database rebuild assigns new sequential ids based on insertion order
+- Insertion order varies based on filesystem walk order
+
+**Testing verified:**
+- Import 4 photos with different dates
+- Change all to same date → order changes to alphabetical by filename (expected)
+- Rebuild database → order stays identical (stable) ✓
+- Reload page → order stays identical (deterministic) ✓
+- No random reordering, predictable behavior
+
+**User guidance:**
+- When photos have identical timestamps, they sort alphabetically by filename
+- To control exact ordering, use date editor to offset photos by 1 second
+
+---
+

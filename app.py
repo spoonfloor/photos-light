@@ -648,7 +648,7 @@ def get_photos():
                 height
             FROM photos
             WHERE date_taken IS NOT NULL
-            ORDER BY date_taken {order_by}
+            ORDER BY date_taken {order_by}, current_path ASC
         """
         
         # Only add LIMIT if specified
@@ -1548,7 +1548,7 @@ def jump_to_date():
                 FROM photos
                 WHERE date_taken IS NOT NULL 
                   AND substr(date_taken, 1, 7) <= ?
-                ORDER BY date_taken DESC
+                ORDER BY date_taken DESC, current_path ASC
                 LIMIT ?
             """
         else:
@@ -1564,7 +1564,7 @@ def jump_to_date():
                 FROM photos
                 WHERE date_taken IS NOT NULL 
                   AND substr(date_taken, 1, 7) >= ?
-                ORDER BY date_taken ASC
+                ORDER BY date_taken ASC, current_path ASC
                 LIMIT ?
             """
         
