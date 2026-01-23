@@ -465,10 +465,12 @@ def update_photo_date_with_files(photo_id, new_date, conn):
         
         # Phase 1: Write EXIF
         try:
-            if file_type == 'photo':
+            if file_type == 'image':
                 write_photo_exif(old_full_path, new_date)
-            else:
+            elif file_type == 'video':
                 write_video_metadata(old_full_path, new_date)
+            else:
+                raise Exception(f"Unknown file type: {file_type}")
             
             transaction.log_exif_write(old_full_path, old_date)
         except Exception as e:
