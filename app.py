@@ -68,9 +68,17 @@ DB_BACKUP_DIR = None
 IMPORT_TEMP_DIR = None
 LOG_DIR = None
 
-# Supported media file extensions
-PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
-VIDEO_EXTENSIONS = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+# Supported media file extensions (wide net for discovery)
+PHOTO_EXTENSIONS = {
+    '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+    '.webp', '.avif', '.jp2',
+    '.raw', '.cr2', '.nef', '.arw', '.dng'
+}
+VIDEO_EXTENSIONS = {
+    '.mov', '.mp4', '.m4v', '.avi', '.mkv',
+    '.wmv', '.webm', '.flv', '.3gp',
+    '.mpg', '.mpeg', '.vob', '.ts', '.mts'
+}
 ALL_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 
 # ============================================================================
@@ -245,6 +253,15 @@ def write_photo_exif(file_path, new_date):
 def write_video_metadata(file_path, new_date):
     """Write metadata to video using ffmpeg"""
     try:
+        # Check if format supports metadata before attempting write
+        _, ext = os.path.splitext(file_path)
+        ext_lower = ext.lower()
+        
+        # Formats that don't support embedded metadata
+        unsupported_formats = {'.mpg', '.mpeg', '.vob', '.ts', '.mts'}
+        if ext_lower in unsupported_formats:
+            raise Exception(f"Format {ext.upper()} does not support embedded metadata")
+        
         # Convert to ISO 8601 format
         iso_date = new_date.replace(':', '-', 2).replace(' ', 'T')
         
@@ -1842,6 +1859,11 @@ def import_from_paths():
                         if 'timeout' in error_str:
                             category = 'timeout'
                             user_message = "Processing timeout (file too large or slow storage)"
+                        # Check for corruption BEFORE tool detection (avoid false positives)
+                        elif ('not a valid' in error_str or 'corrupt' in error_str or 
+                              'invalid data' in error_str or 'moov atom' in error_str):
+                            category = 'corrupted'
+                            user_message = "File corrupted or invalid format"
                         elif 'not found' in error_str and 'exiftool' in error_str:
                             category = 'missing_tool'
                             user_message = "Required tool not installed (exiftool)"
@@ -1851,9 +1873,6 @@ def import_from_paths():
                         elif 'permission' in error_str or 'denied' in error_str:
                             category = 'permission'
                             user_message = "Permission denied"
-                        elif 'not a valid' in error_str or 'corrupt' in error_str:
-                            category = 'corrupted'
-                            user_message = "File corrupted or invalid format"
                         else:
                             category = 'unsupported'
                             user_message = str(exif_error)
@@ -1946,7 +1965,7 @@ def copy_rejected_files():
                 failed += 1
         
         # Create report file
-        report_path = os.path.join(reject_folder, 'rejection_report.txt')
+        report_path = os.path.join(reject_folder, '_REPORT.txt')
         with open(report_path, 'w') as f:
             f.write(f"Import Rejection Report\n")
             f.write(f"Generated: {datetime.now()}\n\n")

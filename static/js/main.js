@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v138';
+const MAIN_JS_VERSION = 'v145';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5628,18 +5628,9 @@ function showUnifiedErrorDetails() {
       div.className = 'import-detail-item';
       div.style.marginTop = hasGeneralErrors ? '16px' : '0';
       
-      // Determine icon based on category
-      const iconMap = {
-        'corrupted': 'error',
-        'unsupported': 'block',
-        'permission': 'lock',
-        'timeout': 'schedule',
-        'missing_tool': 'build'
-      };
-      const icon = iconMap[item.category] || 'error';
-      
+      // Universal error icon for all rejection types
       div.innerHTML = `
-        <span class="material-symbols-outlined import-detail-icon error">${icon}</span>
+        <span class="material-symbols-outlined import-detail-icon error">error</span>
         <div class="import-detail-text">
           <div>${item.file}</div>
           <div class="import-detail-message">${item.reason}</div>
