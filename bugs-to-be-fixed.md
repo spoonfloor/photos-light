@@ -2,7 +2,7 @@
 
 Last updated: January 21, 2026
 
-**Status:** 13 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll), 3 remaining bugs + 1 deferred feature
+**Status:** 14 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild), 3 remaining bugs + 1 deferred feature
 
 ---
 
@@ -38,18 +38,10 @@ Last updated: January 21, 2026
 
 ## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
 
-### Date Changes - Don't Survive Database Rebuild
+### ✅ Date Changes - Survive Database Rebuild (FIXED v146-v150)
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 1-2 hours  
-**Status:** NOT STARTED
-
-**Issue:** Date changes don't survive database rebuild (bad)
-- User manually edits photo dates
-- Rebuild database is triggered
-- Date changes are lost, photos revert to original dates
-- Results in data loss from user's perspective
-
-**Fix approach:** Need to persist date edits to file metadata (EXIF) or separate metadata file, not just in database
+**Status:** ✅ FIXED - See bugs-fixed.md
 
 ---
 
@@ -85,6 +77,25 @@ Last updated: January 21, 2026
 - Affects multiple dialogs (import, rebuild, etc.)
 
 **Fix approach:** Audit all dialogs and remove spinner when progress bars/counts/status text already provide feedback
+
+---
+
+### Date Changes - Latency & Feedback Issues
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 2-3 hours  
+**Status:** NOT STARTED
+
+**Issue:** Need plan to deal with latency associated with date changes - feedback needs to be instant
+- Date changes can take time (moving files, updating database)
+- Currently no progress indication or immediate feedback
+- User doesn't know if operation is in progress or complete
+- Creates perception of unresponsiveness
+
+**Fix approach:** 
+- Add progress dialog for date change operations
+- Provide instant visual feedback when operation starts
+- Show progress for file moves and database updates
+- Consider optimistic UI updates while operation completes in background
 
 ---
 
@@ -174,9 +185,10 @@ Based on impact, frequency, and effort:
 9. ✅ **Photo Picker - Background Counting** (DONE - v126)
 10. ✅ **Photo Picker - Button Rename & Confirmation Dialog** (DONE - v127)
 11. ✅ **Month Dividers During Scroll** (DONE - v129)
-12. 🟡 **Date Changes - Don't Survive Database Rebuild** (1-2 hrs, data loss issue)
-13. 🟡 **Date Picker - Missing After Import** (30 min, affects post-import workflow)
-14. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
+12. ✅ **Date Changes - Don't Survive Database Rebuild** (DONE - v146-v150)
+13. 🟡 **Date Changes - Latency & Feedback Issues** (2-3 hrs, responsiveness/UX)
+14. 🟡 **Date Picker - Missing After Import** (30 min, affects post-import workflow)
+15. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
 10. 🟢 **Import Count Issues** (2 hrs, low impact)
 11. 🟢 **Manual Restore & Rebuild** (1 hr, edge case)
 12. 🟢 **Database Missing Prompt** (30 min, can't reproduce)
@@ -193,15 +205,15 @@ Based on impact, frequency, and effort:
 
 ## SUMMARY
 
-**Next up:** Date Changes - Don't Survive Database Rebuild (data loss issue)
+**Next up:** Date Changes - Latency & Feedback Issues
 
 **Total remaining:** 3 bugs + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 3 bugs (Date Changes Persistence, Date Picker Missing After Import, Dialog Spinner Removal)
+- 🟡 Polish: 3 bugs (Date Changes Latency/Feedback, Date Picker Missing After Import, Dialog Spinner Removal)
 - 🟢 Edge cases: 0 bugs (Video Format and Import Counts removed - cannot reproduce or low priority)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~2-3 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~3-4 hours for remaining bugs (excluding deferred feature)
 
 ---
 

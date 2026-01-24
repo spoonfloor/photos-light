@@ -1066,3 +1066,117 @@ untracked_files_list = sorted(list(filesystem_paths))
 
 ---
 
+## Session 7: January 24, 2026
+
+### Date Changes - Survive Database Rebuild
+**Fixed:** EXIF/metadata writes now persist through rebuilds with clean thumbnail management  
+**Version:** v146-v150
+
+**Issues resolved:**
+- ✅ Video dates now persist across rebuilds (ffprobe for reading metadata)
+- ✅ WMV format explicitly rejected (cannot store metadata reliably)
+- ✅ Old thumbnails automatically deleted when hash changes (keeps filesystem clean)
+- ✅ Database and filesystem stay synchronized
+- ✅ Format extension lists synced between app.py and library_sync.py
+
+**Root causes:**
+1. **Video metadata not read during rebuild:** `extract_exif_date()` used `exiftool` for all files, which doesn't read video metadata. Fell back to filesystem modification time (unreliable - changes during file operations).
+2. **WMV can't store metadata:** Despite being pickable, WMV format cannot reliably store `creation_time` metadata. Files were accepted on import but dates didn't persist.
+3. **Orphaned thumbnails:** EXIF writes change file hashes, but old thumbnails with old hashes were left on disk, wasting space.
+4. **Format list drift:** `library_sync.py` had hardcoded extension lists that weren't updated when `app.py` expanded its lists. Rebuild ignored new formats.
+
+**The fixes:**
+
+**Fix 1: Enhanced `extract_exif_date()` to use ffprobe for videos**
+```python
+def extract_exif_date(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    video_exts = {'.mov', '.mp4', '.m4v', ...}
+    
+    if ext in video_exts:
+        # Try ffprobe for video metadata
+        result = subprocess.run(
+            ['ffprobe', '-v', 'quiet', '-show_entries', 'format_tags=creation_time', ...],
+            ...
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            # Convert ISO 8601 to EXIF format: 2000-01-01T08:00:06.000000Z -> 2000:01:01 08:00:06
+            iso_date = result.stdout.strip()
+            date_part, time_part = iso_date.split('T')
+            time_part = time_part.split('.')[0].split('Z')[0]
+            exif_date = date_part.replace('-', ':') + ' ' + time_part
+            return exif_date
+    else:
+        # Try exiftool for photo EXIF
+        result = subprocess.run(['exiftool', '-DateTimeOriginal', ...])
+```
+
+**Fix 2: Added WMV to unsupported formats**
+```python
+def write_video_metadata(file_path, new_date):
+    unsupported_formats = {'.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi', '.wmv'}
+    if ext_lower in unsupported_formats:
+        raise Exception(f"Format {ext.upper()} does not support embedded metadata")
+```
+
+**Fix 3: Auto-delete old thumbnails on hash change**
+```python
+# In both import and date edit flows:
+if new_hash != old_hash:
+    print(f"  📝 Hash changed: {old_hash[:8]} → {new_hash[:8]}")
+    
+    # Delete old thumbnail if hash changed (keep DB squeaky clean)
+    if old_hash:
+        old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
+        if os.path.exists(old_thumb_path):
+            os.remove(old_thumb_path)
+            print(f"  🗑️  Deleted old thumbnail")
+    
+    # Update database with new hash
+    cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
+```
+
+**Fix 4: Synced format lists across modules**
+```python
+# library_sync.py: Updated hardcoded lists to match app.py
+photo_exts = {
+    '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+    '.webp', '.avif', '.jp2',
+    '.raw', '.cr2', '.nef', '.arw', '.dng'
+}
+video_exts = {
+    '.mov', '.mp4', '.m4v', '.mkv',
+    '.wmv', '.webm', '.flv', '.3gp',
+    '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
+}
+```
+
+**Workflow verification:**
+1. ✅ **Blank library → import with date → rebuild → correct dates**
+   - Fresh import to August 2030
+   - 17/18 files correctly in `2030/2030-08-24/`
+   - 1 WMV stuck at 2026 (expected - can't store metadata)
+   
+2. ✅ **Date edit → rebuild → edited date persists**
+   - Photos: EXIF DateTimeOriginal written and read correctly
+   - Videos (MOV, MP4, WEBM, etc.): `creation_time` written and read correctly
+   - WMV: Rejected on import with clear error
+   
+3. ✅ **Hash consistency**
+   - File hash matches database hash after EXIF write
+   - Thumbnails regenerate with correct hash
+   - No orphaned thumbnails accumulating
+
+**Testing verified:**
+- Import test library with mixed formats → all supported formats import correctly
+- Edit dates on photos and videos → dates survive rebuild
+- WMV files rejected on import with message: "Format WMV does not support embedded metadata"
+- Thumbnail directory stays clean (old thumbnails deleted automatically)
+- Database rebuild finds all files (no formats ignored due to outdated extension lists)
+
+**Documentation:**
+- Added investigation notes to `EXIF_IMPORT_HOMEWORK.md`
+- Captures full diagnosis process and testing results
+
+---
+
