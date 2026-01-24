@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v136';
+const MAIN_JS_VERSION = 'v138';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5616,62 +5616,49 @@ function showUnifiedErrorDetails() {
     });
   }
   
-  // Section 2: Rejections grouped by category (if any)
+  // Section 2: Rejections - flat list without header
   if (hasRejections) {
-    const rejectionHeader = document.createElement('div');
-    rejectionHeader.className = 'import-detail-category-header';
-    rejectionHeader.innerHTML = `
-      <span class="material-symbols-outlined">block</span>
-      <strong>Metadata Write Failures</strong> (${window.importRejections.length})
-    `;
-    rejectionHeader.style.marginTop = hasGeneralErrors ? '24px' : '0';
-    detailsList.appendChild(rejectionHeader);
+    const MAX_DISPLAY = 20;
     
-    // Group rejections by category
-    const categories = {
-      'corrupted': { icon: 'error', label: 'Corrupted or Invalid', items: [] },
-      'unsupported': { icon: 'block', label: 'Unsupported Format', items: [] },
-      'permission': { icon: 'lock', label: 'Permission Denied', items: [] },
-      'timeout': { icon: 'schedule', label: 'Processing Timeout', items: [] },
-      'missing_tool': { icon: 'build', label: 'Missing Tool', items: [] }
-    };
+    // Show first 20 rejections
+    const itemsToShow = window.importRejections.slice(0, MAX_DISPLAY);
     
-    window.importRejections.forEach(rejection => {
-      const cat = categories[rejection.category] || categories['unsupported'];
-      cat.items.push(rejection);
+    itemsToShow.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'import-detail-item';
+      div.style.marginTop = hasGeneralErrors ? '16px' : '0';
+      
+      // Determine icon based on category
+      const iconMap = {
+        'corrupted': 'error',
+        'unsupported': 'block',
+        'permission': 'lock',
+        'timeout': 'schedule',
+        'missing_tool': 'build'
+      };
+      const icon = iconMap[item.category] || 'error';
+      
+      div.innerHTML = `
+        <span class="material-symbols-outlined import-detail-icon error">${icon}</span>
+        <div class="import-detail-text">
+          <div>${item.file}</div>
+          <div class="import-detail-message">${item.reason}</div>
+        </div>
+      `;
+      detailsList.appendChild(div);
     });
     
-    // Render by category
-    for (const [key, cat] of Object.entries(categories)) {
-      if (cat.items.length === 0) continue;
-      
-      // Category subheader
-      const subheader = document.createElement('div');
-      subheader.style.marginLeft = '20px';
-      subheader.style.marginTop = '12px';
-      subheader.style.marginBottom = '8px';
-      subheader.style.fontSize = '13px';
-      subheader.style.color = '#b3b3b3';
-      subheader.innerHTML = `
-        <span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle; margin-right: 4px;">${cat.icon}</span>
-        ${cat.label} (${cat.items.length})
-      `;
-      detailsList.appendChild(subheader);
-      
-      // Items
-      cat.items.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'import-detail-item';
-        div.style.marginLeft = '20px';
-        div.innerHTML = `
-          <span class="material-symbols-outlined import-detail-icon error">${cat.icon}</span>
-          <div class="import-detail-text">
-            <div>${item.file}</div>
-            <div class="import-detail-message">${item.reason}</div>
-          </div>
-        `;
-        detailsList.appendChild(div);
-      });
+    // Show "and N more" if capped
+    if (window.importRejections.length > MAX_DISPLAY) {
+      const remaining = window.importRejections.length - MAX_DISPLAY;
+      const moreDiv = document.createElement('div');
+      moreDiv.style.padding = '12px';
+      moreDiv.style.textAlign = 'center';
+      moreDiv.style.color = '#b3b3b3';
+      moreDiv.style.fontStyle = 'italic';
+      moreDiv.style.fontSize = '13px';
+      moreDiv.textContent = `... and ${remaining} more`;
+      detailsList.appendChild(moreDiv);
     }
     
     // Add action buttons for rejections
@@ -5680,7 +5667,7 @@ function showUnifiedErrorDetails() {
     actions.innerHTML = `
       <button class="import-btn import-btn-secondary" id="copyRejectedBtn">
         <span class="material-symbols-outlined">folder_copy</span>
-        Copy failed files to folder...
+        Collect rejected files
       </button>
       <button class="import-btn import-btn-secondary" id="exportRejectionListBtn">
         <span class="material-symbols-outlined">description</span>
@@ -5747,11 +5734,22 @@ async function copyRejectedFiles() {
       return;
     }
     
+    // Hide import overlay to show folder picker cleanly
+    const importOverlay = document.getElementById('importOverlay');
+    if (importOverlay) {
+      importOverlay.style.display = 'none';
+    }
+    
     // Show folder picker
     const destFolder = await FolderPicker.show({
-      title: 'Copy Rejected Files',
+      title: 'Copy rejected files',
       subtitle: 'Choose destination folder for rejected files'
     });
+    
+    // Restore import overlay
+    if (importOverlay) {
+      importOverlay.style.display = 'block';
+    }
     
     if (!destFolder) {
       console.log('User cancelled folder selection');
@@ -5776,7 +5774,7 @@ async function copyRejectedFiles() {
     }
     
     const result = await response.json();
-    showToast(`Copied ${result.copied} files to ${result.folder}`, 'success');
+    showToast(`Copied ${result.copied} files to ${result.folder}`, null, 3000);
     
   } catch (error) {
     console.error('Copy rejected files failed:', error);
@@ -5822,7 +5820,7 @@ function exportRejectionList() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   
-  showToast('Report downloaded', 'success');
+  showToast('Report downloaded', null, 3000);
 }
 
 // Start when DOM is ready

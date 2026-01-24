@@ -1916,7 +1916,7 @@ def copy_rejected_files():
         
         # Create timestamped subfolder
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        reject_folder = os.path.join(destination, f'Photos_Rejected_{timestamp}')
+        reject_folder = os.path.join(destination, f'rejected_{timestamp}')
         os.makedirs(reject_folder, exist_ok=True)
         
         # Copy files

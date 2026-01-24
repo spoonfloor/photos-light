@@ -1116,6 +1116,7 @@ body {
   gap: 8px;
   padding: 8px 0;
   font-size: 13px;
+  /* No cards, no backgrounds, no borders */
 }
 
 .import-detail-icon {
@@ -1801,10 +1802,8 @@ body {
   gap: 8px;
   margin-top: 16px;
   margin-bottom: 8px;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 4px;
   font-size: 14px;
+  /* No cards, no backgrounds */
 }
 
 .import-detail-category-header .material-symbols-outlined {
@@ -1817,14 +1816,14 @@ body {
   display: flex;
   gap: 8px;
   margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  /* No divider above buttons */
 }
 
 .import-rejection-actions .import-btn {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap; /* Prevent text wrapping */
 }
 
 .import-rejection-actions .material-symbols-outlined {

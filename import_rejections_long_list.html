@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Import Rejections - Long List Framework</title>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+  <style>
+    :root {
+      --body-bg: #121212;
+      --text-primary: #e8e8e8;
+      --text-secondary: #b3b3b3;
+      --accent-color: #6d49ff;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 15.5px;
+      background: var(--body-bg);
+      color: var(--text-primary);
+      padding: 40px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    .material-symbols-outlined {
+      font-family: 'Material Symbols Outlined';
+      font-size: 24px;
+    }
+
+    .import-card {
+      background: #1f1f1f;
+      border-radius: 12px;
+      width: 500px;
+      padding: 24px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    }
+
+    .import-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+
+    .import-title {
+      font-size: 18px;
+      font-weight: 500;
+    }
+
+    .import-status-text {
+      margin-bottom: 16px;
+      font-size: 15px;
+    }
+
+    .import-stats {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+
+    .import-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .import-stat-label {
+      font-size: 13px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .import-stat-value {
+      font-size: 24px;
+      font-weight: 500;
+    }
+
+    .import-details-toggle {
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: var(--text-primary);
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 14px;
+      margin-bottom: 12px;
+    }
+
+    .import-details-toggle:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .import-details-list {
+      max-height: 300px;
+      overflow-y: auto;
+      margin-bottom: 16px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .section-header .material-symbols-outlined {
+      font-size: 20px;
+      color: #d32f2f;
+    }
+
+    .import-detail-item {
+      display: flex;
+      gap: 12px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 6px;
+      border-left: 3px solid #d32f2f;
+      margin-bottom: 8px;
+    }
+
+    .import-detail-icon {
+      font-size: 20px;
+      color: #d32f2f;
+      flex-shrink: 0;
+    }
+
+    .import-detail-text {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .import-detail-text > div:first-child {
+      font-weight: 500;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+
+    .import-detail-message {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .more-items {
+      padding: 12px;
+      text-align: center;
+      color: var(--text-secondary);
+      font-style: italic;
+      font-size: 13px;
+    }
+
+    .import-rejection-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .import-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 16px;
+      border-radius: 6px;
+      border: none;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-primary);
+    }
+
+    .import-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .import-btn .material-symbols-outlined {
+      font-size: 18px;
+    }
+
+    .import-details-list::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    .import-details-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .import-details-list::-webkit-scrollbar-thumb {
+      background: #333;
+      border-radius: 4px;
+    }
+
+    .import-details-list::-webkit-scrollbar-thumb:hover {
+      background: #444;
+    }
+
+    .demo-label {
+      margin-top: 20px;
+      padding: 12px;
+      background: rgba(109, 73, 255, 0.2);
+      border-radius: 4px;
+      font-size: 13px;
+      color: #a89dff;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <div class="import-card">
+      <!-- Header -->
+      <div class="import-header">
+        <span class="import-title">Import</span>
+      </div>
+
+      <!-- Status -->
+      <div class="import-status-text">
+        <p>Import complete with 47 errors</p>
+      </div>
+
+      <!-- Stats -->
+      <div class="import-stats">
+        <span class="import-stat">
+          <span class="import-stat-label">Imported:</span>
+          <span class="import-stat-value">953</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Duplicates:</span>
+          <span class="import-stat-value">12</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Errors:</span>
+          <span class="import-stat-value">47</span>
+        </span>
+      </div>
+
+      <!-- Details Section (expanded) -->
+      <button class="import-details-toggle">
+        <span class="material-symbols-outlined">expand_less</span>
+        <span>Hide error details</span>
+      </button>
+      
+      <div class="import-details-list">
+        <!-- Metadata Write Failures Section -->
+        <div class="section-header">
+          <span class="material-symbols-outlined">block</span>
+          <strong>Metadata Write Failures</strong> (47)
+        </div>
+
+        <!-- Show first 20 items -->
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0001.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0002.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">lock</span>
+          <div class="import-detail-text">
+            <div>IMG_0003.jpg</div>
+            <div class="import-detail-message">Permission denied</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0004.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">schedule</span>
+          <div class="import-detail-text">
+            <div>IMG_0005.jpg</div>
+            <div class="import-detail-message">Processing timeout (file too large or slow storage)</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0006.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0007.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0008.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">lock</span>
+          <div class="import-detail-text">
+            <div>IMG_0009.jpg</div>
+            <div class="import-detail-message">Permission denied</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0010.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0011.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0012.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0013.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">schedule</span>
+          <div class="import-detail-text">
+            <div>IMG_0014.jpg</div>
+            <div class="import-detail-message">Processing timeout (file too large or slow storage)</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0015.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0016.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0017.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">lock</span>
+          <div class="import-detail-text">
+            <div>IMG_0018.jpg</div>
+            <div class="import-detail-message">Permission denied</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0019.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <div class="import-detail-item">
+          <span class="material-symbols-outlined import-detail-icon">error</span>
+          <div class="import-detail-text">
+            <div>IMG_0020.jpg</div>
+            <div class="import-detail-message">File corrupted or invalid format</div>
+          </div>
+        </div>
+
+        <!-- "And N more" message -->
+        <div class="more-items">
+          ... and 27 more
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="import-rejection-actions">
+          <button class="import-btn">
+            <span class="material-symbols-outlined">folder_copy</span>
+            Copy failed files to folder...
+          </button>
+          <button class="import-btn">
+            <span class="material-symbols-outlined">description</span>
+            Export list
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-label">
+      <strong>Long List Framework:</strong> Shows first 20 items, then "... and N more"<br>
+      300px max-height with scrollbar • Matches existing pattern in date_edit_error_mockup.html
+    </div>
+  </div>
+</body>
+</html>
