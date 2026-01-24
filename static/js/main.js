@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v135';
+const MAIN_JS_VERSION = 'v136';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5396,12 +5396,6 @@ function handleImportEvent(event, data) {
     duplicateCount.textContent = data.duplicates || 0;
     errorCount.textContent = data.errors || 0;
 
-    // Show rejection count in status
-    const rejectedCount = data.rejected || 0;
-    if (rejectedCount > 0) {
-      statusText.innerHTML = `<p>Importing... (${rejectedCount} rejected)<span class="import-spinner"></span></p>`;
-    }
-
     // Track imported photo ID if provided
     if (data.photo_id) {
       if (!window.importedPhotoIds) {
@@ -5437,16 +5431,15 @@ function handleImportEvent(event, data) {
   }
 
   if (event === 'complete') {
-    const totalRejected = data.rejected || 0;
     const totalErrors = data.errors || 0;
     
-    if (totalRejected > 0) {
-      statusText.innerHTML = `<p>Import complete: ${data.imported} imported, ${totalRejected} rejected</p>`;
-      showRejectionDetails();
-    } else if (totalErrors > 0) {
+    if (totalErrors > 0) {
       statusText.innerHTML = `<p>Import complete with ${totalErrors} error${
         totalErrors > 1 ? 's' : ''
       }</p>`;
+
+      // Show unified error details (includes both general errors and rejections)
+      showUnifiedErrorDetails();
 
       // Show error details if we have them
       if (window.importErrors && window.importErrors.length > 0) {
@@ -5583,88 +5576,165 @@ async function init() {
 }
 
 /**
- * Show rejection details in import overlay
+ * Show unified error details (general errors + rejections) in import overlay
  */
-function showRejectionDetails() {
+function showUnifiedErrorDetails() {
   const detailsSection = document.getElementById('importDetailsSection');
   const detailsList = document.getElementById('importDetailsList');
   const toggleBtn = document.getElementById('importDetailsToggle');
   
-  if (!detailsSection || !detailsList || !window.importRejections) return;
+  if (!detailsSection || !detailsList) return;
   
   detailsSection.style.display = 'block';
   detailsList.innerHTML = '';
   
-  // Group by category
-  const categories = {
-    'corrupted': { icon: 'error', label: 'Corrupted or Invalid', items: [] },
-    'unsupported': { icon: 'block', label: 'Unsupported Format', items: [] },
-    'permission': { icon: 'lock', label: 'Permission Denied', items: [] },
-    'timeout': { icon: 'schedule', label: 'Processing Timeout', items: [] },
-    'missing_tool': { icon: 'build', label: 'Missing Tool', items: [] }
-  };
+  const hasGeneralErrors = window.importErrors && window.importErrors.length > 0;
+  const hasRejections = window.importRejections && window.importRejections.length > 0;
+  const totalErrors = (window.importErrors?.length || 0) + (window.importRejections?.length || 0);
   
-  // Sort rejections into categories
-  window.importRejections.forEach(rejection => {
-    const cat = categories[rejection.category] || categories['unsupported'];
-    cat.items.push(rejection);
-  });
-  
-  // Render by category
-  for (const [key, cat] of Object.entries(categories)) {
-    if (cat.items.length === 0) continue;
-    
-    // Category header
+  // Section 1: General errors (if any)
+  if (hasGeneralErrors) {
     const header = document.createElement('div');
     header.className = 'import-detail-category-header';
     header.innerHTML = `
-      <span class="material-symbols-outlined">${cat.icon}</span>
-      <strong>${cat.label}</strong> (${cat.items.length})
+      <span class="material-symbols-outlined">error</span>
+      <strong>Import Errors</strong> (${window.importErrors.length})
     `;
     detailsList.appendChild(header);
     
-    // Items
-    cat.items.forEach(item => {
-      const div = document.createElement('div');
-      div.className = 'import-detail-item';
-      div.innerHTML = `
-        <span class="material-symbols-outlined import-detail-icon error">${cat.icon}</span>
+    window.importErrors.forEach(err => {
+      const item = document.createElement('div');
+      item.className = 'import-detail-item';
+      item.innerHTML = `
+        <span class="material-symbols-outlined import-detail-icon error">error</span>
         <div class="import-detail-text">
-          <div>${item.file}</div>
-          <div class="import-detail-message">${item.reason}</div>
+          <div>${err.file}</div>
+          <div class="import-detail-message">${err.message}</div>
         </div>
       `;
-      detailsList.appendChild(div);
+      detailsList.appendChild(item);
     });
   }
   
-  // Add action buttons
-  const actions = document.createElement('div');
-  actions.className = 'import-rejection-actions';
-  actions.innerHTML = `
-    <button class="import-btn import-btn-secondary" id="copyRejectedBtn">
-      <span class="material-symbols-outlined">folder_copy</span>
-      Copy rejected files to folder...
-    </button>
-    <button class="import-btn import-btn-secondary" id="exportRejectionListBtn">
-      <span class="material-symbols-outlined">description</span>
-      Export list
-    </button>
-  `;
-  detailsList.appendChild(actions);
-  
-  // Wire up buttons
-  document.getElementById('copyRejectedBtn')?.addEventListener('click', copyRejectedFiles);
-  document.getElementById('exportRejectionListBtn')?.addEventListener('click', exportRejectionList);
+  // Section 2: Rejections grouped by category (if any)
+  if (hasRejections) {
+    const rejectionHeader = document.createElement('div');
+    rejectionHeader.className = 'import-detail-category-header';
+    rejectionHeader.innerHTML = `
+      <span class="material-symbols-outlined">block</span>
+      <strong>Metadata Write Failures</strong> (${window.importRejections.length})
+    `;
+    rejectionHeader.style.marginTop = hasGeneralErrors ? '24px' : '0';
+    detailsList.appendChild(rejectionHeader);
+    
+    // Group rejections by category
+    const categories = {
+      'corrupted': { icon: 'error', label: 'Corrupted or Invalid', items: [] },
+      'unsupported': { icon: 'block', label: 'Unsupported Format', items: [] },
+      'permission': { icon: 'lock', label: 'Permission Denied', items: [] },
+      'timeout': { icon: 'schedule', label: 'Processing Timeout', items: [] },
+      'missing_tool': { icon: 'build', label: 'Missing Tool', items: [] }
+    };
+    
+    window.importRejections.forEach(rejection => {
+      const cat = categories[rejection.category] || categories['unsupported'];
+      cat.items.push(rejection);
+    });
+    
+    // Render by category
+    for (const [key, cat] of Object.entries(categories)) {
+      if (cat.items.length === 0) continue;
+      
+      // Category subheader
+      const subheader = document.createElement('div');
+      subheader.style.marginLeft = '20px';
+      subheader.style.marginTop = '12px';
+      subheader.style.marginBottom = '8px';
+      subheader.style.fontSize = '13px';
+      subheader.style.color = '#b3b3b3';
+      subheader.innerHTML = `
+        <span class="material-symbols-outlined" style="font-size: 16px; vertical-align: middle; margin-right: 4px;">${cat.icon}</span>
+        ${cat.label} (${cat.items.length})
+      `;
+      detailsList.appendChild(subheader);
+      
+      // Items
+      cat.items.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'import-detail-item';
+        div.style.marginLeft = '20px';
+        div.innerHTML = `
+          <span class="material-symbols-outlined import-detail-icon error">${cat.icon}</span>
+          <div class="import-detail-text">
+            <div>${item.file}</div>
+            <div class="import-detail-message">${item.reason}</div>
+          </div>
+        `;
+        detailsList.appendChild(div);
+      });
+    }
+    
+    // Add action buttons for rejections
+    const actions = document.createElement('div');
+    actions.className = 'import-rejection-actions';
+    actions.innerHTML = `
+      <button class="import-btn import-btn-secondary" id="copyRejectedBtn">
+        <span class="material-symbols-outlined">folder_copy</span>
+        Copy failed files to folder...
+      </button>
+      <button class="import-btn import-btn-secondary" id="exportRejectionListBtn">
+        <span class="material-symbols-outlined">description</span>
+        Export list
+      </button>
+    `;
+    detailsList.appendChild(actions);
+    
+    // Wire up buttons
+    document.getElementById('copyRejectedBtn')?.addEventListener('click', copyRejectedFiles);
+    document.getElementById('exportRejectionListBtn')?.addEventListener('click', exportRejectionList);
+  }
   
   // Keep collapsed initially
   detailsList.style.display = 'none';
   if (toggleBtn) {
+    toggleBtn.classList.remove('expanded');
     toggleBtn.innerHTML = `
       <span class="material-symbols-outlined">expand_more</span>
-      <span>Show ${window.importRejections.length} rejected files</span>
+      <span>Show error details</span>
     `;
+    
+    // Wire up toggle
+    const newToggleBtn = toggleBtn.cloneNode(true);
+    toggleBtn.parentNode.replaceChild(newToggleBtn, toggleBtn);
+    
+    newToggleBtn.addEventListener('click', () => {
+      const isExpanded = detailsList.style.display !== 'none';
+      
+      if (isExpanded) {
+        detailsList.style.display = 'none';
+        newToggleBtn.classList.remove('expanded');
+        newToggleBtn.innerHTML = `
+          <span class="material-symbols-outlined">expand_more</span>
+          <span>Show error details</span>
+        `;
+      } else {
+        detailsList.style.display = 'block';
+        newToggleBtn.classList.add('expanded');
+        newToggleBtn.innerHTML = `
+          <span class="material-symbols-outlined">expand_less</span>
+          <span>Hide error details</span>
+        `;
+      }
+    });
   }
+}
+
+/**
+ * Show rejection details in import overlay (DEPRECATED - use showUnifiedErrorDetails)
+ */
+function showRejectionDetails() {
+  // Keep for backward compatibility, redirect to unified version
+  showUnifiedErrorDetails();
 }
 
 /**

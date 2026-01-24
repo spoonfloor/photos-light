@@ -1728,7 +1728,6 @@ def import_from_paths():
             imported_count = 0
             duplicate_count = 0
             error_count = 0
-            rejected_count = 0  # Files that failed EXIF write
             
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1859,10 +1858,10 @@ def import_from_paths():
                             category = 'unsupported'
                             user_message = str(exif_error)
                         
-                        # Track rejection (don't increment imported_count)
-                        rejected_count += 1
+                        # Track rejection as error
+                        error_count += 1
                         
-                        # Yield rejection event
+                        # Yield rejection event (special type of error with extra metadata)
                         yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(exif_error)})}\n\n"
                         
                         # Continue to next file (don't increment imported_count)
@@ -1871,7 +1870,7 @@ def import_from_paths():
                     # SUCCESS - file imported with EXIF
                     imported_count += 1
                     
-                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'rejected': rejected_count, 'current': file_index, 'total': total_files, 'photo_id': photo_id})}\n\n"
+                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files, 'photo_id': photo_id})}\n\n"
                     
                 except Exception as e:
                     error_msg = str(e)
@@ -1888,10 +1887,9 @@ def import_from_paths():
             print(f"  Imported: {imported_count}")
             print(f"  Duplicates: {duplicate_count}")
             print(f"  Errors: {error_count}")
-            print(f"  Rejected: {rejected_count}")
             print(f"{'='*60}\n")
             
-            yield f"event: complete\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'rejected': rejected_count})}\n\n"
+            yield f"event: complete\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
             
         except Exception as e:
             print(f"❌ Import error: {e}")
