@@ -75,9 +75,9 @@ PHOTO_EXTENSIONS = {
     '.raw', '.cr2', '.nef', '.arw', '.dng'
 }
 VIDEO_EXTENSIONS = {
-    '.mov', '.mp4', '.m4v', '.avi', '.mkv',
+    '.mov', '.mp4', '.m4v', '.mkv',
     '.wmv', '.webm', '.flv', '.3gp',
-    '.mpg', '.mpeg', '.vob', '.ts', '.mts'
+    '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
 }
 ALL_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 
@@ -163,17 +163,39 @@ def save_and_hash(file_storage, dest_path):
     return sha256.hexdigest()[:7]
 
 def extract_exif_date(file_path):
-    """Extract EXIF date using exiftool"""
+    """Extract EXIF/metadata date using exiftool (photos) or ffprobe (videos)"""
     try:
-        # Try exiftool first
-        result = subprocess.run(
-            ['exiftool', '-DateTimeOriginal', '-s3', '-d', '%Y:%m:%d %H:%M:%S', file_path],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+        # Determine file type
+        ext = os.path.splitext(file_path)[1].lower()
+        video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mkv', '.wmv', '.webm', '.flv', '.3gp', '.mpg', '.mpeg', '.vob', '.ts', '.mts'}
+        
+        if ext in video_exts:
+            # Try ffprobe for video metadata
+            result = subprocess.run(
+                ['ffprobe', '-v', 'quiet', '-show_entries', 'format_tags=creation_time', 
+                 '-of', 'default=noprint_wrappers=1:nokey=1', file_path],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Convert ISO 8601 to EXIF format: 2000-01-01T08:00:06.000000Z -> 2000:01:01 08:00:06
+                iso_date = result.stdout.strip()
+                if 'T' in iso_date:
+                    date_part, time_part = iso_date.split('T')
+                    time_part = time_part.split('.')[0].split('Z')[0]  # Remove microseconds and Z
+                    exif_date = date_part.replace('-', ':') + ' ' + time_part
+                    return exif_date
+        else:
+            # Try exiftool for photo EXIF
+            result = subprocess.run(
+                ['exiftool', '-DateTimeOriginal', '-s3', '-d', '%Y:%m:%d %H:%M:%S', file_path],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
         
         # Fall back to file modification time
         mtime = os.path.getmtime(file_path)
@@ -257,8 +279,8 @@ def write_video_metadata(file_path, new_date):
         _, ext = os.path.splitext(file_path)
         ext_lower = ext.lower()
         
-        # Formats that don't support embedded metadata
-        unsupported_formats = {'.mpg', '.mpeg', '.vob', '.ts', '.mts'}
+        # Formats that don't support embedded metadata reliably
+        unsupported_formats = {'.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi', '.wmv'}
         if ext_lower in unsupported_formats:
             raise Exception(f"Format {ext.upper()} does not support embedded metadata")
         
@@ -490,6 +512,33 @@ def update_photo_date_with_files(photo_id, new_date, conn):
                 raise Exception(f"Unknown file type: {file_type}")
             
             transaction.log_exif_write(old_full_path, old_date)
+            
+            # Rehash file after EXIF write (content changed)
+            sha256 = hashlib.sha256()
+            with open(old_full_path, 'rb') as f:
+                while chunk := f.read(1024 * 1024):
+                    sha256.update(chunk)
+            new_hash = sha256.hexdigest()
+            
+            # Get old hash from database
+            cursor.execute("SELECT content_hash FROM photos WHERE id = ?", (photo_id,))
+            row = cursor.fetchone()
+            old_hash = row['content_hash'] if row else None
+            
+            if new_hash != old_hash:
+                print(f"  📝 Hash changed: {old_hash[:8] if old_hash else 'N/A'} → {new_hash[:8]}")
+                
+                # Delete old thumbnail if hash changed (keep DB squeaky clean)
+                if old_hash:
+                    old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
+                    if os.path.exists(old_thumb_path):
+                        os.remove(old_thumb_path)
+                        print(f"  🗑️  Deleted old thumbnail")
+                
+                # Update database with new hash
+                cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
+                # Note: Old thumbnail with old hash will be orphaned, new one generated on-demand
+            
         except Exception as e:
             transaction.log_failure(old_filename, e)
             raise
@@ -1834,6 +1883,29 @@ def import_from_paths():
                         else:
                             raise Exception(f"Unknown file type: {file_type}")
                         print(f"   ✅ EXIF written and verified")
+                        
+                        # Rehash file after EXIF write (content changed)
+                        print(f"   🔄 Rehashing file after EXIF write...")
+                        sha256 = hashlib.sha256()
+                        with open(target_path, 'rb') as f:
+                            while chunk := f.read(1024 * 1024):
+                                sha256.update(chunk)
+                        new_hash = sha256.hexdigest()
+                        
+                        if new_hash != content_hash:
+                            print(f"   📝 Hash changed: {content_hash[:8]} → {new_hash[:8]}")
+                            
+                            # Delete old thumbnail if hash changed (keep DB squeaky clean)
+                            old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4], f"{content_hash}.jpg")
+                            if os.path.exists(old_thumb_path):
+                                os.remove(old_thumb_path)
+                                print(f"   🗑️  Deleted old thumbnail")
+                            
+                            # Update database with new hash
+                            cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
+                            conn.commit()
+                            # Note: Thumbnail will be regenerated on-demand with new hash
+                        
                     except Exception as exif_error:
                         # EXIF write failed - rollback this file
                         print(f"   ❌ EXIF write failed: {exif_error}")

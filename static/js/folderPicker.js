@@ -13,6 +13,7 @@ const FolderPicker = (() => {
   let resolveCallback = null; // Store resolve callback for database click handler
   let onSelectCallback = null;
   let onCancelCallback = null;
+  let keyboardHandler = null; // Store keyboard event handler for cleanup
 
   // ===========================================================================
   // API Calls
@@ -248,6 +249,37 @@ const FolderPicker = (() => {
   }
 
   // ===========================================================================
+  // Keyboard Shortcuts
+  // ===========================================================================
+
+  async function handleKeyboard(e) {
+    // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
+    if (e.metaKey && e.shiftKey && e.key === 'D') {
+      e.preventDefault();
+      
+      // Find user's home directory (contains /Users/ but not Shared)
+      const homeLocation = topLevelLocations.find(loc => 
+        loc.path.includes('/Users/') && !loc.path.includes('Shared')
+      );
+      
+      if (homeLocation) {
+        const desktopPath = homeLocation.path + '/Desktop';
+        console.log('⌨️ Cmd+Shift+D: Navigating to Desktop:', desktopPath);
+        
+        try {
+          // Validate Desktop exists before navigating
+          await listDirectory(desktopPath);
+          await navigateTo(desktopPath);
+        } catch (error) {
+          console.warn('⚠️ Desktop not accessible:', error.message);
+          // Fallback to home directory if Desktop doesn't exist
+          await navigateTo(homeLocation.path);
+        }
+      }
+    }
+  }
+
+  // ===========================================================================
   // Public API
   // ===========================================================================
 
@@ -316,6 +348,10 @@ const FolderPicker = (() => {
         // Show overlay
         overlay.style.display = 'flex';
 
+        // Set up keyboard shortcuts
+        keyboardHandler = (e) => handleKeyboard(e);
+        document.addEventListener('keydown', keyboardHandler);
+
         // Wire up buttons
         const closeBtn = document.getElementById('folderPickerCloseBtn');
         const cancelBtn = document.getElementById('folderPickerCancelBtn');
@@ -323,6 +359,10 @@ const FolderPicker = (() => {
 
         const handleCancel = () => {
           overlay.style.display = 'none';
+          if (keyboardHandler) {
+            document.removeEventListener('keydown', keyboardHandler);
+            keyboardHandler = null;
+          }
           resolveCallback = null;
           resolve(null);
         };
@@ -338,6 +378,10 @@ const FolderPicker = (() => {
           console.log('💾 Saved path for next session:', selectedPath);
           
           overlay.style.display = 'none';
+          if (keyboardHandler) {
+            document.removeEventListener('keydown', keyboardHandler);
+            keyboardHandler = null;
+          }
           resolveCallback = null;
           resolve(selectedPath);
         };
@@ -359,6 +403,11 @@ const FolderPicker = (() => {
     const overlay = document.getElementById('folderPickerOverlay');
     if (overlay) {
       overlay.style.display = 'none';
+    }
+    // Clean up keyboard listener
+    if (keyboardHandler) {
+      document.removeEventListener('keydown', keyboardHandler);
+      keyboardHandler = null;
     }
   }
 

@@ -13,6 +13,7 @@ const PhotoPicker = (() => {
   let isCountingInBackground = false;
   let countingAborted = false; // Flag to abort ongoing counting operations
   let fileListClickHandler = null; // Store reference to event handler for cleanup
+  let keyboardHandler = null; // Store keyboard event handler for cleanup
 
   // ===========================================================================
   // API Calls
@@ -473,6 +474,37 @@ const PhotoPicker = (() => {
   }
 
   // ===========================================================================
+  // Keyboard Shortcuts
+  // ===========================================================================
+
+  async function handleKeyboard(e) {
+    // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
+    if (e.metaKey && e.shiftKey && e.key === 'D') {
+      e.preventDefault();
+      
+      // Find user's home directory (contains /Users/ but not Shared)
+      const homeLocation = topLevelLocations.find(loc => 
+        loc.path.includes('/Users/') && !loc.path.includes('Shared')
+      );
+      
+      if (homeLocation) {
+        const desktopPath = homeLocation.path + '/Desktop';
+        console.log('⌨️ Cmd+Shift+D: Navigating to Desktop:', desktopPath);
+        
+        try {
+          // Validate Desktop exists before navigating
+          await listDirectory(desktopPath);
+          await navigateTo(desktopPath);
+        } catch (error) {
+          console.warn('⚠️ Desktop not accessible:', error.message);
+          // Fallback to home directory if Desktop doesn't exist
+          await navigateTo(homeLocation.path);
+        }
+      }
+    }
+  }
+
+  // ===========================================================================
   // Helper Functions
   // ===========================================================================
 
@@ -576,6 +608,10 @@ const PhotoPicker = (() => {
         // Show overlay
         overlay.style.display = 'flex';
 
+        // Set up keyboard shortcuts
+        keyboardHandler = (e) => handleKeyboard(e);
+        document.addEventListener('keydown', keyboardHandler);
+
         // Wire up buttons
         const closeBtn = document.getElementById('photoPickerCloseBtn');
         const cancelBtn = document.getElementById('photoPickerCancelBtn');
@@ -592,6 +628,10 @@ const PhotoPicker = (() => {
           }
           
           overlay.style.display = 'none';
+          if (keyboardHandler) {
+            document.removeEventListener('keydown', keyboardHandler);
+            keyboardHandler = null;
+          }
           resolveCallback = null;
           resolve(null);
         };
@@ -604,6 +644,10 @@ const PhotoPicker = (() => {
           console.log('💾 Saved path for next session:', currentPath);
           
           overlay.style.display = 'none';
+          if (keyboardHandler) {
+            document.removeEventListener('keydown', keyboardHandler);
+            keyboardHandler = null;
+          }
           resolveCallback = null;
           
           // Return only root selections (folders/files user checked)
@@ -635,6 +679,11 @@ const PhotoPicker = (() => {
     const overlay = document.getElementById('photoPickerOverlay');
     if (overlay) {
       overlay.style.display = 'none';
+    }
+    // Clean up keyboard listener
+    if (keyboardHandler) {
+      document.removeEventListener('keydown', keyboardHandler);
+      keyboardHandler = null;
     }
   }
 

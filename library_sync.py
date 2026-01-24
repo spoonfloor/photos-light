@@ -19,8 +19,16 @@ def count_media_files(library_path):
     Returns:
         int: Number of media files found
     """
-    photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
-    video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+    photo_exts = {
+        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+        '.webp', '.avif', '.jp2',
+        '.raw', '.cr2', '.nef', '.arw', '.dng'
+    }
+    video_exts = {
+        '.mov', '.mp4', '.m4v', '.mkv',
+        '.wmv', '.webm', '.flv', '.3gp',
+        '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
+    }
     all_exts = photo_exts | video_exts
     
     count = 0
@@ -80,8 +88,16 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     Yields:
         SSE event strings for progress tracking
     """
-    photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
-    video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+    photo_exts = {
+        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+        '.webp', '.avif', '.jp2',
+        '.raw', '.cr2', '.nef', '.arw', '.dng'
+    }
+    video_exts = {
+        '.mov', '.mp4', '.m4v', '.mkv',
+        '.wmv', '.webm', '.flv', '.3gp',
+        '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
+    }
     all_exts = photo_exts | video_exts
     
     cursor = db_connection.cursor()
