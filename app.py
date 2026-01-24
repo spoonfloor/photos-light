@@ -1728,6 +1728,7 @@ def import_from_paths():
             imported_count = 0
             duplicate_count = 0
             error_count = 0
+            rejected_count = 0  # Files that failed EXIF write
             
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1807,9 +1808,70 @@ def import_from_paths():
                     shutil.copy2(source_path, target_path)
                     print(f"   ✅ Copied to: {relative_path}")
                     
+                    # Write EXIF metadata to file
+                    try:
+                        print(f"   🔧 Writing EXIF metadata...")
+                        if file_type == 'image':
+                            write_photo_exif(target_path, date_taken)
+                        elif file_type == 'video':
+                            write_video_metadata(target_path, date_taken)
+                        else:
+                            raise Exception(f"Unknown file type: {file_type}")
+                        print(f"   ✅ EXIF written and verified")
+                    except Exception as exif_error:
+                        # EXIF write failed - rollback this file
+                        print(f"   ❌ EXIF write failed: {exif_error}")
+                        
+                        # Clean up: Delete copied file
+                        try:
+                            if os.path.exists(target_path):
+                                os.remove(target_path)
+                                print(f"   🗑️  Deleted copied file")
+                        except Exception as cleanup_error:
+                            print(f"   ⚠️  Couldn't delete file: {cleanup_error}")
+                        
+                        # Clean up: Delete database record
+                        try:
+                            cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+                            conn.commit()
+                            print(f"   🗑️  Deleted database record (ID: {photo_id})")
+                        except Exception as db_error:
+                            print(f"   ⚠️  Couldn't delete DB record: {db_error}")
+                        
+                        # Categorize error
+                        error_str = str(exif_error).lower()
+                        if 'timeout' in error_str:
+                            category = 'timeout'
+                            user_message = "Processing timeout (file too large or slow storage)"
+                        elif 'not found' in error_str and 'exiftool' in error_str:
+                            category = 'missing_tool'
+                            user_message = "Required tool not installed (exiftool)"
+                        elif 'not found' in error_str and 'ffmpeg' in error_str:
+                            category = 'missing_tool'
+                            user_message = "Required tool not installed (ffmpeg)"
+                        elif 'permission' in error_str or 'denied' in error_str:
+                            category = 'permission'
+                            user_message = "Permission denied"
+                        elif 'not a valid' in error_str or 'corrupt' in error_str:
+                            category = 'corrupted'
+                            user_message = "File corrupted or invalid format"
+                        else:
+                            category = 'unsupported'
+                            user_message = str(exif_error)
+                        
+                        # Track rejection (don't increment imported_count)
+                        rejected_count += 1
+                        
+                        # Yield rejection event
+                        yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(exif_error)})}\n\n"
+                        
+                        # Continue to next file (don't increment imported_count)
+                        continue
+                    
+                    # SUCCESS - file imported with EXIF
                     imported_count += 1
                     
-                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files, 'photo_id': photo_id})}\n\n"
+                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'rejected': rejected_count, 'current': file_index, 'total': total_files, 'photo_id': photo_id})}\n\n"
                     
                 except Exception as e:
                     error_msg = str(e)
@@ -1826,9 +1888,10 @@ def import_from_paths():
             print(f"  Imported: {imported_count}")
             print(f"  Duplicates: {duplicate_count}")
             print(f"  Errors: {error_count}")
+            print(f"  Rejected: {rejected_count}")
             print(f"{'='*60}\n")
             
-            yield f"event: complete\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
+            yield f"event: complete\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'rejected': rejected_count})}\n\n"
             
         except Exception as e:
             print(f"❌ Import error: {e}")
@@ -1837,6 +1900,95 @@ def import_from_paths():
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+@app.route('/api/import/copy-rejected-files', methods=['POST'])
+def copy_rejected_files():
+    """Copy rejected import files to user-specified folder with report"""
+    try:
+        data = request.json
+        files = data.get('files', [])
+        destination = data.get('destination')
+        
+        if not files or not destination:
+            return jsonify({'error': 'Missing files or destination'}), 400
+        
+        if not os.path.exists(destination):
+            return jsonify({'error': 'Destination folder does not exist'}), 400
+        
+        # Create timestamped subfolder
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        reject_folder = os.path.join(destination, f'Photos_Rejected_{timestamp}')
+        os.makedirs(reject_folder, exist_ok=True)
+        
+        # Copy files
+        copied = 0
+        failed = 0
+        for item in files:
+            source = item.get('source_path')
+            if not source or not os.path.exists(source):
+                failed += 1
+                continue
+            
+            try:
+                filename = os.path.basename(source)
+                dest_path = os.path.join(reject_folder, filename)
+                
+                # Handle naming collisions
+                counter = 1
+                base, ext = os.path.splitext(filename)
+                while os.path.exists(dest_path):
+                    dest_path = os.path.join(reject_folder, f"{base}_{counter}{ext}")
+                    counter += 1
+                
+                shutil.copy2(source, dest_path)
+                copied += 1
+            except Exception as e:
+                print(f"  ⚠️  Failed to copy {source}: {e}")
+                failed += 1
+        
+        # Create report file
+        report_path = os.path.join(reject_folder, 'rejection_report.txt')
+        with open(report_path, 'w') as f:
+            f.write(f"Import Rejection Report\n")
+            f.write(f"Generated: {datetime.now()}\n\n")
+            f.write(f"Total files: {len(files)}\n")
+            f.write(f"Successfully copied: {copied}\n")
+            f.write(f"Failed to copy: {failed}\n\n")
+            f.write("=" * 70 + "\n\n")
+            
+            # Group by category
+            by_category = {}
+            for item in files:
+                cat = item.get('category', 'unknown')
+                if cat not in by_category:
+                    by_category[cat] = []
+                by_category[cat].append(item)
+            
+            for category, items in by_category.items():
+                f.write(f"\n{category.upper()}\n")
+                f.write("-" * 70 + "\n")
+                for item in items:
+                    f.write(f"\nFile: {item.get('file', 'unknown')}\n")
+                    f.write(f"Reason: {item.get('reason', 'unknown')}\n")
+                    f.write(f"Source: {item.get('source_path', 'unknown')}\n")
+                    if item.get('technical_error'):
+                        f.write(f"Technical: {item.get('technical_error')}\n")
+        
+        print(f"✅ Copied {copied} rejected files to: {reject_folder}")
+        
+        return jsonify({
+            'success': True,
+            'copied': copied,
+            'failed': failed,
+            'folder': reject_folder
+        })
+        
+    except Exception as e:
+        print(f"❌ Copy rejected files failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 def start_background_thumbnail_generation(photo_ids):

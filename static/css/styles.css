@@ -1789,3 +1789,44 @@ body {
   background: #444;
 }
 
+
+/* ========================================================================== */
+/* IMPORT REJECTION STYLING                                                  */
+/* ========================================================================== */
+
+/* Category headers in rejection list */
+.import-detail-category-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.import-detail-category-header .material-symbols-outlined {
+  font-size: 20px;
+  color: #d32f2f;
+}
+
+/* Rejection action buttons */
+.import-rejection-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.import-rejection-actions .import-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.import-rejection-actions .material-symbols-outlined {
+  font-size: 18px;
+}

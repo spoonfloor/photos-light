@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v134';
+const MAIN_JS_VERSION = 'v135';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5378,6 +5378,12 @@ function handleImportEvent(event, data) {
     }
     window.importedPhotoIds = [];
 
+    // Initialize rejection tracking
+    if (!window.importRejections) {
+      window.importRejections = [];
+    }
+    window.importRejections = [];
+
     // Hide details section initially
     const detailsSection = document.getElementById('importDetailsSection');
     if (detailsSection) {
@@ -5389,6 +5395,12 @@ function handleImportEvent(event, data) {
     importedCount.textContent = data.imported || 0;
     duplicateCount.textContent = data.duplicates || 0;
     errorCount.textContent = data.errors || 0;
+
+    // Show rejection count in status
+    const rejectedCount = data.rejected || 0;
+    if (rejectedCount > 0) {
+      statusText.innerHTML = `<p>Importing... (${rejectedCount} rejected)<span class="import-spinner"></span></p>`;
+    }
 
     // Track imported photo ID if provided
     if (data.photo_id) {
@@ -5410,9 +5422,28 @@ function handleImportEvent(event, data) {
     }
   }
 
+  // Handle rejection events
+  if (event === 'rejected') {
+    if (!window.importRejections) {
+      window.importRejections = [];
+    }
+    window.importRejections.push({
+      file: data.file,
+      source_path: data.source_path,
+      reason: data.reason,
+      category: data.category,
+      technical_error: data.technical_error
+    });
+  }
+
   if (event === 'complete') {
+    const totalRejected = data.rejected || 0;
     const totalErrors = data.errors || 0;
-    if (totalErrors > 0) {
+    
+    if (totalRejected > 0) {
+      statusText.innerHTML = `<p>Import complete: ${data.imported} imported, ${totalRejected} rejected</p>`;
+      showRejectionDetails();
+    } else if (totalErrors > 0) {
       statusText.innerHTML = `<p>Import complete with ${totalErrors} error${
         totalErrors > 1 ? 's' : ''
       }</p>`;
@@ -5549,6 +5580,179 @@ async function init() {
 
   // Check library health before making any data API calls
   await checkLibraryHealthAndInit();
+}
+
+/**
+ * Show rejection details in import overlay
+ */
+function showRejectionDetails() {
+  const detailsSection = document.getElementById('importDetailsSection');
+  const detailsList = document.getElementById('importDetailsList');
+  const toggleBtn = document.getElementById('importDetailsToggle');
+  
+  if (!detailsSection || !detailsList || !window.importRejections) return;
+  
+  detailsSection.style.display = 'block';
+  detailsList.innerHTML = '';
+  
+  // Group by category
+  const categories = {
+    'corrupted': { icon: 'error', label: 'Corrupted or Invalid', items: [] },
+    'unsupported': { icon: 'block', label: 'Unsupported Format', items: [] },
+    'permission': { icon: 'lock', label: 'Permission Denied', items: [] },
+    'timeout': { icon: 'schedule', label: 'Processing Timeout', items: [] },
+    'missing_tool': { icon: 'build', label: 'Missing Tool', items: [] }
+  };
+  
+  // Sort rejections into categories
+  window.importRejections.forEach(rejection => {
+    const cat = categories[rejection.category] || categories['unsupported'];
+    cat.items.push(rejection);
+  });
+  
+  // Render by category
+  for (const [key, cat] of Object.entries(categories)) {
+    if (cat.items.length === 0) continue;
+    
+    // Category header
+    const header = document.createElement('div');
+    header.className = 'import-detail-category-header';
+    header.innerHTML = `
+      <span class="material-symbols-outlined">${cat.icon}</span>
+      <strong>${cat.label}</strong> (${cat.items.length})
+    `;
+    detailsList.appendChild(header);
+    
+    // Items
+    cat.items.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'import-detail-item';
+      div.innerHTML = `
+        <span class="material-symbols-outlined import-detail-icon error">${cat.icon}</span>
+        <div class="import-detail-text">
+          <div>${item.file}</div>
+          <div class="import-detail-message">${item.reason}</div>
+        </div>
+      `;
+      detailsList.appendChild(div);
+    });
+  }
+  
+  // Add action buttons
+  const actions = document.createElement('div');
+  actions.className = 'import-rejection-actions';
+  actions.innerHTML = `
+    <button class="import-btn import-btn-secondary" id="copyRejectedBtn">
+      <span class="material-symbols-outlined">folder_copy</span>
+      Copy rejected files to folder...
+    </button>
+    <button class="import-btn import-btn-secondary" id="exportRejectionListBtn">
+      <span class="material-symbols-outlined">description</span>
+      Export list
+    </button>
+  `;
+  detailsList.appendChild(actions);
+  
+  // Wire up buttons
+  document.getElementById('copyRejectedBtn')?.addEventListener('click', copyRejectedFiles);
+  document.getElementById('exportRejectionListBtn')?.addEventListener('click', exportRejectionList);
+  
+  // Keep collapsed initially
+  detailsList.style.display = 'none';
+  if (toggleBtn) {
+    toggleBtn.innerHTML = `
+      <span class="material-symbols-outlined">expand_more</span>
+      <span>Show ${window.importRejections.length} rejected files</span>
+    `;
+  }
+}
+
+/**
+ * Copy rejected files to user-specified folder
+ */
+async function copyRejectedFiles() {
+  try {
+    if (!window.importRejections || window.importRejections.length === 0) {
+      showToast('No rejected files to copy', 'error');
+      return;
+    }
+    
+    // Show folder picker
+    const destFolder = await FolderPicker.show({
+      title: 'Copy Rejected Files',
+      subtitle: 'Choose destination folder for rejected files'
+    });
+    
+    if (!destFolder) {
+      console.log('User cancelled folder selection');
+      return;
+    }
+    
+    showToast('Copying files...', 'info');
+    
+    // Call backend
+    const response = await fetch('/api/import/copy-rejected-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: window.importRejections,
+        destination: destFolder
+      })
+    });
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Copy failed');
+    }
+    
+    const result = await response.json();
+    showToast(`Copied ${result.copied} files to ${result.folder}`, 'success');
+    
+  } catch (error) {
+    console.error('Copy rejected files failed:', error);
+    showToast(`Copy failed: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Export rejection list as text file
+ */
+function exportRejectionList() {
+  if (!window.importRejections || window.importRejections.length === 0) {
+    showToast('No rejected files to export', 'error');
+    return;
+  }
+  
+  // Build report text
+  const timestamp = new Date().toISOString();
+  let report = `Import Rejection Report\n`;
+  report += `Generated: ${timestamp}\n`;
+  report += `Total rejected: ${window.importRejections.length}\n\n`;
+  report += `${'='.repeat(70)}\n\n`;
+  
+  window.importRejections.forEach((item, i) => {
+    report += `${i + 1}. ${item.file}\n`;
+    report += `   Reason: ${item.reason}\n`;
+    report += `   Category: ${item.category}\n`;
+    report += `   Source: ${item.source_path}\n`;
+    if (item.technical_error) {
+      report += `   Technical: ${item.technical_error}\n`;
+    }
+    report += `\n`;
+  });
+  
+  // Download as text file
+  const blob = new Blob([report], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `rejection_report_${Date.now()}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  
+  showToast('Report downloaded', 'success');
 }
 
 // Start when DOM is ready
