@@ -1536,7 +1536,7 @@ body {
 .folder-placeholder {
   height: 46px; /* padding (14px * 2) + border (1px * 2) + content */
   margin-bottom: 8px; /* Same as folder-item */
-  background: rgba(255, 255, 255, 0.03); /* Very low contrast */
+  background: #252525; /* Same as folder-item background */
   border-radius: 6px;
 }
 
