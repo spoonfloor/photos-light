@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v161';
+const MAIN_JS_VERSION = 'v162';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1303,7 +1303,7 @@ function showDateChangeProgressOverlay(photoCount) {
 
   // Reset display
   if (statusText) {
-    statusText.innerHTML = 'Starting<span class="import-spinner"></span>';
+    statusText.textContent = 'Starting';
   }
 
   // Show stats for multiple photos
@@ -1349,7 +1349,7 @@ function updateDateChangeProgress(current, total) {
     if (total === 1) {
       statusText.innerHTML = 'Updating date<span class="import-spinner"></span>';
     } else {
-      statusText.innerHTML = `Updating photo ${current} of ${total}<span class="import-spinner"></span>`;
+      statusText.textContent = `Updating photo ${current} of ${total}`;
     }
   }
 }
@@ -5524,7 +5524,7 @@ function handleImportEvent(event, data) {
   const doneBtn = document.getElementById('importDoneBtn');
 
   if (event === 'start') {
-    statusText.innerHTML = `<p>Importing ${data.total} files<span class="import-spinner"></span></p>`;
+    statusText.textContent = `Importing ${data.total} files`;
     stats.style.display = 'flex';
 
     // Initialize error tracking

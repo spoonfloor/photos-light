@@ -1314,6 +1314,63 @@ Complete analysis in `EMPTY_FOLDER_CLEANUP_INVESTIGATION.md`:
 
 ---
 
+## Session 9: January 25, 2026
+
+### Dialog Spinner - Remove When Realtime Feedback Exists
+**Fixed:** Removed redundant spinners from dialogs with live counters  
+**Version:** v162
+
+**Issues resolved:**
+- ✅ Import dialog - Removed spinner from "Importing X files" (has 3 live counters)
+- ✅ Date change dialog - Removed spinner from bulk update "Updating photo X of Y" (has counter)
+- ✅ Import dialog - Removed spinner from initial "Preparing import" state (never visible)
+- ✅ Date change dialog - Removed spinner from initial "Starting" state (never visible)
+- ✅ Cleaner UI - Progress feedback now provided by counters alone
+
+**Root cause:**
+Braille spinners (animated ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ characters) were added to all dialog states for consistency. However, some dialogs have realtime feedback (live counters, progress bars) that make spinners redundant visual clutter.
+
+**Investigation:**
+Conducted comprehensive audit of all 11 spinner usages across 6 dialogs. Identified 5 locations where spinners are warranted (scanning/checking phases with no other feedback) and 4 locations where spinners are redundant.
+
+**Spinners kept (5 warranted locations):**
+1. **Rebuild Database** - "Scanning library" (filesystem scan, 0.5-2s, no other feedback)
+2. **Update Index** - "Scanning library" (filesystem scan, 0.5-2s, no other feedback)
+3. **Date Change** - "Updating date" single photo (EXIF write, 1-3s, no counter for single photo)
+4. **Duplicates** - "Scanning for duplicates" (database query, 0.5-3s, no other feedback)
+5. **Rebuild Thumbnails** - "Checking thumbnails" (filesystem check, 0.1-0.5s, no other feedback)
+
+**Spinners removed (4 redundant locations):**
+1. **Import** - "Importing X files" → Has 3 live counters (IMPORTED: X, DUPLICATES: Y, ERRORS: Z)
+2. **Date Change** - "Updating photo X of Y" → Has counter showing progress
+3. **Import** - "Preparing import" → Never visible (replaced immediately)
+4. **Date Change** - "Starting" → Never visible (replaced immediately)
+
+**The fix:**
+```javascript
+// Before (redundant spinner with counter):
+statusText.innerHTML = `Importing ${data.total} files<span class="import-spinner"></span>`;
+
+// After (counter provides feedback):
+statusText.textContent = `Importing ${data.total} files`;
+```
+
+**Changes:**
+- 2 HTML fragments updated (removed spinner from default text)
+- 3 JavaScript locations updated (removed spinner span, changed `.innerHTML` to `.textContent`)
+- No layout changes - spinner was purely decorative at end of line
+
+**Testing verified:**
+- Import dialog: Counters update correctly, no spinner clutter ✓
+- Date change bulk: "X of Y" counter visible, no spinner ✓
+- Date change single: Spinner still present (warranted - no counter) ✓
+- All scanning phases: Spinners still present (warranted - no other feedback) ✓
+- No layout shifts or visual regressions ✓
+
+**Impact:** Pure UX polish. Dialogs are cleaner - live counters provide progress feedback without redundant spinning animations. Spinners remain where they're the only feedback indicator.
+
+---
+
 ### Date Picker - Missing After Import
 **Fixed:** Date picker now automatically refreshes after import completes  
 **Version:** v158 (already implemented)

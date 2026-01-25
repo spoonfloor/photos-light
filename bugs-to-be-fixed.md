@@ -2,7 +2,7 @@
 
 Last updated: January 24, 2026
 
-**Status:** 18 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup), 1 remaining bug + 1 deferred feature
+**Status:** 19 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal), 1 remaining bug + 1 deferred feature
 
 ---
 
@@ -63,17 +63,24 @@ Last updated: January 24, 2026
 
 ---
 
-### Dialog Spinner - Remove When Realtime Feedback Exists
+### ✅ Dialog Spinner - Remove When Realtime Feedback Exists (FIXED v162)
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 30 minutes  
+**Status:** ✅ FIXED - See bugs-fixed.md
+
+---
+
+### Dialog Framework - Multiple Dialogs Showing Simultaneously
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 2 hours  
 **Status:** NOT STARTED
 
-**Issue:** Remove braille spinner from all dialogs where there is already realtime feedback
-- Redundant visual element when progress is already shown
-- Creates visual clutter
-- Affects multiple dialogs (import, rebuild, etc.)
+**Issue:** Need way to prevent two dialogs from appearing at the same time
+- Multiple dialogs can appear on top of each other
+- Creates confusing UX and potential interaction issues
+- Need modal queue or dialog manager
 
-**Fix approach:** Audit all dialogs and remove spinner when progress bars/counts/status text already provide feedback
+**Fix approach:** Implement dialog queue/manager system to ensure only one dialog displays at a time
 
 ---
 
@@ -176,7 +183,8 @@ Based on impact, frequency, and effort:
 15. ✅ **Date Picker - Missing After Import** (DONE - v158, verified working)
 16. ✅ **Database Operations - Empty Folder Cleanup** (DONE - v161)
 17. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
-18. 🔵 **Import Duplicate Detection** (deferred feature work)
+18. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
+19. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Rationale:**
 - **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
@@ -189,15 +197,15 @@ Based on impact, frequency, and effort:
 
 ## SUMMARY
 
-**Next up:** Dialog Spinner - Remove When Realtime Feedback Exists
+**Next up:** Dialog Framework - Multiple Dialogs Showing Simultaneously
 
 **Total remaining:** 1 bug + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 1 bug (Dialog Spinner Removal)
-- 🟢 Edge cases: 0 bugs (Video Format and Import Counts removed - cannot reproduce or low priority)
+- 🟡 Polish: 1 bug (Dialog Framework)
+- 🟢 Edge cases: 0 bugs (All edge cases resolved ✅)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~30 minutes for remaining bug (excluding deferred feature)
+**Estimated total effort:** ~2 hours for remaining bug (excluding deferred feature)
 
 ---
 
