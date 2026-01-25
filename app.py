@@ -3546,6 +3546,328 @@ def reset_library():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/library/terraform', methods=['POST'])
+def terraform_library():
+    """
+    Terraform an existing photo collection into app-compliant structure (SSE streaming)
+    - Moves files in-place (no copying)
+    - Writes EXIF to all files
+    - Renames to canonical format
+    - Organizes into YYYY/YYYY-MM-DD structure
+    - Moves duplicates and errors to .trash/
+    """
+    def generate():
+        try:
+            data = request.json
+            library_path = data.get('library_path')
+            
+            if not library_path or not os.path.exists(library_path):
+                yield f"event: error\ndata: {json.dumps({'error': 'Invalid library path'})}\n\n"
+                return
+            
+            print(f"\n{'='*60}")
+            print(f"🔄 TERRAFORM LIBRARY: {library_path}")
+            print(f"{'='*60}\n")
+            
+            # PRE-FLIGHT CHECKS
+            print("🔍 Running pre-flight checks...")
+            
+            # Check for required tools
+            try:
+                subprocess.run(['exiftool', '-ver'], check=True, capture_output=True, timeout=5)
+                print("  ✅ exiftool available")
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                yield f"event: error\ndata: {json.dumps({'error': 'exiftool not installed. Install via: brew install exiftool'})}\n\n"
+                return
+            
+            try:
+                subprocess.run(['ffmpeg', '-version'], check=True, capture_output=True, timeout=5)
+                print("  ✅ ffmpeg available")
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                yield f"event: error\ndata: {json.dumps({'error': 'ffmpeg not installed. Install via: brew install ffmpeg'})}\n\n"
+                return
+            
+            # Check disk space (require at least 10% free)
+            stat = os.statvfs(library_path)
+            free_space = stat.f_bavail * stat.f_frsize
+            total_space = stat.f_blocks * stat.f_frsize
+            free_pct = (free_space / total_space) * 100
+            
+            print(f"  💾 Disk space: {free_pct:.1f}% free")
+            if free_pct < 10:
+                yield f"event: error\ndata: {json.dumps({'error': f'Low disk space: {free_pct:.1f}% free. Need at least 10%.'})}\n\n"
+                return
+            print("  ✅ Disk space OK")
+            
+            # Check write permissions
+            test_file = os.path.join(library_path, '.terraform_test')
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                print("  ✅ Write permissions OK")
+            except (PermissionError, OSError) as e:
+                yield f"event: error\ndata: {json.dumps({'error': f'No write permission: {str(e)}'})}\n\n"
+                return
+            
+            print("✅ Pre-flight checks passed\n")
+            
+            # Create hidden directories
+            trash_dir = os.path.join(library_path, '.trash')
+            thumbnails_dir = os.path.join(library_path, '.thumbnails')
+            db_backups_dir = os.path.join(library_path, '.db_backups')
+            import_temp_dir = os.path.join(library_path, '.import_temp')
+            logs_dir = os.path.join(library_path, '.logs')
+            
+            for directory in [trash_dir, thumbnails_dir, db_backups_dir, import_temp_dir, logs_dir]:
+                os.makedirs(directory, exist_ok=True)
+            
+            # Create manifest log
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_filename = f"terraform_{timestamp}.jsonl"
+            log_path = os.path.join(logs_dir, log_filename)
+            log_file = open(log_path, 'w')
+            
+            def log_manifest(event_type, data):
+                entry = {
+                    'timestamp': datetime.now().isoformat(),
+                    'event': event_type,
+                    **data
+                }
+                log_file.write(json.dumps(entry) + '\n')
+                log_file.flush()
+            
+            log_manifest('start', {'library_path': library_path})
+            
+            # SCAN for all media files recursively
+            print("📂 Scanning for media files...")
+            media_files = []
+            
+            for root, dirs, files in os.walk(library_path):
+                # Skip hidden directories
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                
+                for filename in files:
+                    _, ext = os.path.splitext(filename)
+                    ext_lower = ext.lower()
+                    if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
+                        full_path = os.path.join(root, filename)
+                        media_files.append(full_path)
+            
+            total_files = len(media_files)
+            print(f"✅ Found {total_files} media files\n")
+            
+            log_manifest('scan_complete', {'total_files': total_files})
+            
+            yield f"event: start\ndata: {json.dumps({'total': total_files})}\n\n"
+            
+            # Create database
+            db_path = os.path.join(library_path, 'photo_library.db')
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Create schema
+            from db_schema import create_database_schema
+            create_database_schema(cursor)
+            conn.commit()
+            print("✅ Database created\n")
+            
+            # Track results
+            processed_count = 0
+            duplicate_count = 0
+            error_count = 0
+            
+            # PROCESS each file
+            for file_index, source_path in enumerate(media_files, 1):
+                try:
+                    filename = os.path.basename(source_path)
+                    print(f"{file_index}/{total_files}. Processing: {filename}")
+                    
+                    log_manifest('processing', {'file': source_path})
+                    
+                    # 1. Hash the file
+                    content_hash = compute_hash(source_path)
+                    print(f"   Hash: {content_hash[:16]}...")
+                    
+                    # 2. Check for duplicates
+                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
+                    existing = cursor.fetchone()
+                    
+                    if existing:
+                        print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
+                        
+                        # Move to .trash/duplicates/
+                        dup_dir = os.path.join(trash_dir, 'duplicates')
+                        os.makedirs(dup_dir, exist_ok=True)
+                        dup_path = os.path.join(dup_dir, filename)
+                        
+                        counter = 1
+                        while os.path.exists(dup_path):
+                            base, ext = os.path.splitext(filename)
+                            dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
+                            counter += 1
+                        
+                        shutil.move(source_path, dup_path)
+                        print(f"   🗑️  Moved to: {os.path.relpath(dup_path, library_path)}")
+                        
+                        log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
+                        
+                        duplicate_count += 1
+                        yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        continue
+                    
+                    # 3. Extract date
+                    date_taken = extract_exif_date(source_path)
+                    if not date_taken:
+                        date_taken = datetime.fromtimestamp(os.path.getmtime(source_path)).strftime('%Y:%m:%d %H:%M:%S')
+                    print(f"   Date: {date_taken}")
+                    
+                    # 4. Get dimensions
+                    dimensions = get_image_dimensions(source_path)
+                    width = dimensions[0] if dimensions else None
+                    height = dimensions[1] if dimensions else None
+                    
+                    # 5. Write EXIF (IN PLACE)
+                    _, ext = os.path.splitext(source_path)
+                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'image'
+                    
+                    print(f"   🔧 Writing EXIF metadata...")
+                    try:
+                        if file_type == 'image':
+                            write_photo_exif(source_path, date_taken)
+                        else:
+                            write_video_metadata(source_path, date_taken)
+                        print(f"   ✅ EXIF written")
+                    except Exception as exif_error:
+                        # EXIF write failed - move to trash
+                        print(f"   ❌ EXIF write failed: {exif_error}")
+                        
+                        error_dir = os.path.join(trash_dir, 'exif_failed')
+                        os.makedirs(error_dir, exist_ok=True)
+                        error_path = os.path.join(error_dir, filename)
+                        
+                        counter = 1
+                        while os.path.exists(error_path):
+                            base, ext_orig = os.path.splitext(filename)
+                            error_path = os.path.join(error_dir, f"{base}_{counter}{ext_orig}")
+                            counter += 1
+                        
+                        shutil.move(source_path, error_path)
+                        print(f"   🗑️  Moved to: {os.path.relpath(error_path, library_path)}")
+                        
+                        log_manifest('failed', {'file': source_path, 'reason': str(exif_error), 'category': 'exif_failed', 'moved_to': error_path})
+                        
+                        error_count += 1
+                        yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': str(exif_error), 'category': 'exif_failed'})}\n\n"
+                        continue
+                    
+                    # 6. Rehash after EXIF write
+                    print(f"   🔄 Rehashing after EXIF write...")
+                    new_hash = compute_hash(source_path)
+                    if new_hash != content_hash:
+                        print(f"   📝 Hash changed: {content_hash[:8]} → {new_hash[:8]}")
+                        content_hash = new_hash
+                    
+                    # 7. Build target path
+                    date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
+                    year = date_obj.strftime('%Y')
+                    date_folder = date_obj.strftime('%Y-%m-%d')
+                    target_dir = os.path.join(library_path, year, date_folder)
+                    os.makedirs(target_dir, exist_ok=True)
+                    
+                    # 8. Generate canonical filename
+                    short_hash = content_hash[:8]
+                    base_name = f"img_{date_obj.strftime('%Y%m%d')}_{short_hash}"
+                    canonical_name = base_name + ext.lower()
+                    target_path = os.path.join(target_dir, canonical_name)
+                    
+                    # Handle naming collisions
+                    counter = 1
+                    while os.path.exists(target_path):
+                        canonical_name = f"{base_name}_{counter}{ext.lower()}"
+                        target_path = os.path.join(target_dir, canonical_name)
+                        counter += 1
+                    
+                    # 9. Move file
+                    shutil.move(source_path, target_path)
+                    relative_path = os.path.relpath(target_path, library_path)
+                    print(f"   ✅ Moved to: {relative_path}")
+                    
+                    # 10. Insert DB record
+                    file_size = os.path.getsize(target_path)
+                    
+                    cursor.execute('''
+                        INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, width, height))
+                    
+                    photo_id = cursor.lastrowid
+                    conn.commit()
+                    
+                    log_manifest('success', {'original': source_path, 'new': target_path, 'hash': content_hash, 'id': photo_id})
+                    
+                    processed_count += 1
+                    yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                    
+                except Exception as e:
+                    # Unexpected error
+                    print(f"   ❌ Error: {e}")
+                    
+                    # Try to move to trash
+                    try:
+                        error_dir = os.path.join(trash_dir, 'errors')
+                        os.makedirs(error_dir, exist_ok=True)
+                        error_path = os.path.join(error_dir, filename)
+                        
+                        counter = 1
+                        while os.path.exists(error_path):
+                            base, ext_orig = os.path.splitext(filename)
+                            error_path = os.path.join(error_dir, f"{base}_{counter}{ext_orig}")
+                            counter += 1
+                        
+                        if os.path.exists(source_path):
+                            shutil.move(source_path, error_path)
+                            print(f"   🗑️  Moved to: {os.path.relpath(error_path, library_path)}")
+                    except Exception as move_error:
+                        print(f"   ⚠️  Could not move to trash: {move_error}")
+                    
+                    log_manifest('failed', {'file': source_path, 'reason': str(e), 'category': 'error'})
+                    
+                    error_count += 1
+                    yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                    yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': str(e), 'category': 'error'})}\n\n"
+            
+            # Cleanup empty folders recursively
+            print("\n🧹 Cleaning up empty folders...")
+            cleanup_empty_folders(library_path)
+            print("✅ Cleanup complete")
+            
+            # Close DB
+            conn.close()
+            
+            # Log completion
+            log_manifest('complete', {'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count})
+            log_file.close()
+            
+            print(f"\n{'='*60}")
+            print(f"✅ TERRAFORM COMPLETE")
+            print(f"   Processed: {processed_count}")
+            print(f"   Duplicates: {duplicate_count}")
+            print(f"   Errors: {error_count}")
+            print(f"   Log: {os.path.relpath(log_path, library_path)}")
+            print(f"{'='*60}\n")
+            
+            yield f"event: complete\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'log_path': os.path.relpath(log_path, library_path)})}\n\n"
+            
+        except Exception as e:
+            error_logger.error(f"Terraform failed: {e}")
+            print(f"\n❌ Terraform failed: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
 if __name__ == '__main__':
     print("\n🖼️  Photos Light Starting...")
     print(f"📁 Static files: {STATIC_DIR}")

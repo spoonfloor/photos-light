@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v165';
+const MAIN_JS_VERSION = 'v166';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5082,6 +5082,157 @@ async function showTerraformCompleteDialog(results = {}) {
 }
 
 /**
+ * Execute terraform conversion (preview → warning → convert → complete)
+ * @param {Object} options - { path: string, media_count: number }
+ */
+async function executeTerraformFlow(options = {}) {
+  try {
+    const { path, media_count } = options;
+    
+    // TODO: Get photo/video breakdown from backend
+    // For now, estimate 90% photos, 10% videos
+    const photo_count = Math.floor(media_count * 0.9);
+    const video_count = media_count - photo_count;
+    
+    // Step 1: Preview
+    console.log('📊 Showing preview...');
+    const continuePreview = await showTerraformPreviewDialog({
+      path,
+      photo_count,
+      video_count
+    });
+    
+    if (!continuePreview) {
+      console.log('User cancelled at preview');
+      return false;
+    }
+    
+    // Step 2: Warning
+    console.log('⚠️  Showing warning...');
+    
+    // Estimate time: ~2 seconds per file
+    const estimated_seconds = Math.ceil(media_count * 2);
+    const estimated_minutes = Math.ceil(estimated_seconds / 60);
+    const estimated_time = estimated_minutes < 60 
+      ? `${estimated_minutes}-${estimated_minutes + 2} minutes`
+      : `${Math.floor(estimated_minutes / 60)}-${Math.ceil(estimated_minutes / 60)} hours`;
+    
+    const continueWarning = await showTerraformWarningDialog({
+      total_files: media_count,
+      estimated_time
+    });
+    
+    if (!continueWarning) {
+      console.log('User cancelled at warning');
+      return false;
+    }
+    
+    // Step 3: Execute terraform
+    console.log('🔄 Starting terraform...');
+    
+    // Load progress overlay
+    let progressOverlay = document.getElementById('terraformProgressOverlay');
+    if (!progressOverlay) {
+      await loadTerraformProgressOverlay();
+      progressOverlay = document.getElementById('terraformProgressOverlay');
+    }
+    
+    progressOverlay.style.display = 'flex';
+    
+    // Start SSE
+    const response = await fetch('/api/library/terraform', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: path })
+    });
+    
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    
+    let processed = 0;
+    let duplicates = 0;
+    let errors = 0;
+    let log_path = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        if (line.startsWith('event: ')) {
+          const event = line.substring(7);
+          continue;
+        }
+        
+        if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.substring(6));
+          
+          // Update progress UI
+          if (data.processed !== undefined) {
+            processed = data.processed;
+            document.getElementById('terraformProgressProcessed').textContent = processed.toLocaleString();
+          }
+          if (data.duplicates !== undefined) {
+            duplicates = data.duplicates;
+            document.getElementById('terraformProgressDuplicates').textContent = duplicates.toLocaleString();
+          }
+          if (data.errors !== undefined) {
+            errors = data.errors;
+            document.getElementById('terraformProgressErrors').textContent = errors.toLocaleString();
+          }
+          if (data.log_path) {
+            log_path = data.log_path;
+          }
+          
+          // Update status
+          if (data.current && data.total) {
+            const statusEl = document.getElementById('terraformProgressStatus');
+            statusEl.textContent = `Processing files (${data.current} / ${data.total})...`;
+          }
+        }
+      }
+    }
+    
+    // Hide progress overlay
+    progressOverlay.style.display = 'none';
+    
+    // Step 4: Show completion
+    console.log('✅ Terraform complete');
+    await showTerraformCompleteDialog({
+      processed,
+      duplicates,
+      errors,
+      log_path
+    });
+    
+    // Step 5: Switch to this library
+    const dbPath = path + '/photo_library.db';
+    await switchToLibrary(path, dbPath);
+    
+    return true;
+    
+  } catch (error) {
+    console.error('❌ Terraform failed:', error);
+    showToast(`Terraform failed: ${error.message}`, 'error');
+    
+    // Hide progress overlay if showing
+    const progressOverlay = document.getElementById('terraformProgressOverlay');
+    if (progressOverlay) {
+      progressOverlay.style.display = 'none';
+    }
+    
+    return false;
+  }
+}
+
+/**
  * Browse for library (uses custom folder picker)
  * Handles 3 scenarios:
  * 1. Folder has DB → open it
@@ -5215,22 +5366,15 @@ async function browseSwitchLibrary() {
         // User chose to terraform
         console.log('User chose: Convert this library');
         
-        // TODO: Implement terraform flow (preview → warning → execute)
-        showToast('Terraform conversion coming soon', null);
-        
-        // TEMPORARY: Fall back to reset
-        console.log('📦 [TEMP] Resetting config and reloading...');
-        const response = await fetch('/api/library/reset', {
-          method: 'DELETE',
+        // Execute full terraform flow
+        const success = await executeTerraformFlow({
+          path: selectedPath,
+          media_count: checkResult.media_count
         });
-
-        const data = await response.json();
-
-        if (data.status === 'success') {
-          console.log('✅ Configuration reset - reloading to first-run state...');
-          window.location.reload();
-        } else {
-          throw new Error(data.error || 'Reset failed');
+        
+        if (!success) {
+          console.log('Terraform flow failed or was cancelled');
+          return false;
         }
       }
       else {
