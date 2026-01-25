@@ -479,8 +479,9 @@ const PhotoPicker = (() => {
 
   async function handleKeyboard(e) {
     // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
-    if (e.metaKey && e.shiftKey && e.key === 'D') {
+    if (e.metaKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
       e.preventDefault();
+      console.log('✅ Desktop shortcut detected!');
       
       // Find user's home directory (contains /Users/ but not Shared)
       const homeLocation = topLevelLocations.find(loc => 
@@ -500,6 +501,8 @@ const PhotoPicker = (() => {
           // Fallback to home directory if Desktop doesn't exist
           await navigateTo(homeLocation.path);
         }
+      } else {
+        console.warn('⚠️ Home directory not found in topLevelLocations');
       }
     }
   }
