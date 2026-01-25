@@ -1537,6 +1537,7 @@ body {
   height: 46px; /* padding (14px * 2) + border (1px * 2) + content */
   margin-bottom: 8px; /* Same as folder-item */
   background: #252525; /* Same as folder-item background */
+  border: 1px solid #2a2a2a; /* Same as folder-item border */
   border-radius: 6px;
 }
 
