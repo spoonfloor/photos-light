@@ -154,7 +154,7 @@ const FolderPicker = (() => {
       updateButtonText();
 
       if (folders.length === 0 && !currentHasDb) {
-        folderList.innerHTML = '<div class="empty-state">Select \'Create new\' to create a library here</div>';
+        folderList.innerHTML = '<div class="empty-state">Empty folder - select this location to continue</div>';
         return;
       }
 
