@@ -1550,6 +1550,11 @@ body {
   overflow: clip;
 }
 
+/* Disable scroll on folder-list when showing placeholders */
+.folder-list:has(.folder-placeholder-container) {
+  overflow-y: hidden;
+}
+
 .folder-item-db {
   opacity: 1;
   cursor: pointer;
