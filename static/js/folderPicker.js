@@ -159,8 +159,6 @@ const FolderPicker = (() => {
           <div class="folder-placeholder"></div>
           <div class="folder-placeholder"></div>
           <div class="folder-placeholder"></div>
-          <div class="folder-placeholder"></div>
-          <div class="folder-placeholder"></div>
         `;
         return;
       }
