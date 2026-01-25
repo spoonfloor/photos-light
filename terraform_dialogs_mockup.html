@@ -1,0 +1,331 @@
+<!-- DIALOG 1: Choice Dialog (When folder has media but no DB) -->
+<div class="import-overlay" id="terraformChoiceOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Open library</span>
+      <button class="import-close-btn" id="terraformChoiceCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Content -->
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <p style="margin: 0 0 12px 0; font-size: 14px;">
+          Found <strong id="terraformMediaCount">1,234</strong> media files in:
+        </p>
+        <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 20px 0;" id="terraformFolderPath">
+          /Users/eric/OldPhotos/
+        </p>
+        <p style="margin: 0 0 16px 0; font-size: 14px; color: var(--text-secondary);">
+          What would you like to do?
+        </p>
+      </div>
+
+      <!-- Radio Options -->
+      <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 8px;">
+        <!-- Option 1: Create Blank -->
+        <label style="display: flex; align-items: start; gap: 12px; padding: 12px; border-radius: 6px; cursor: pointer; background: var(--bg-primary); border: 1px solid #444;">
+          <input type="radio" name="terraformChoice" value="blank" checked style="margin-top: 2px; cursor: pointer;" />
+          <div>
+            <div style="font-size: 14px; font-weight: 500; margin-bottom: 4px;">Create blank library</div>
+            <div style="font-size: 13px; color: var(--text-secondary);">Start fresh, ignore existing files</div>
+          </div>
+        </label>
+
+        <!-- Option 2: Terraform -->
+        <label style="display: flex; align-items: start; gap: 12px; padding: 12px; border-radius: 6px; cursor: pointer; background: var(--bg-primary); border: 1px solid #444;">
+          <input type="radio" name="terraformChoice" value="terraform" style="margin-top: 2px; cursor: pointer;" />
+          <div>
+            <div style="font-size: 14px; font-weight: 500; margin-bottom: 4px;">Terraform this folder</div>
+            <div style="font-size: 13px; color: var(--text-secondary);">Organize existing files into library</div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="terraformChoiceCancelBtn">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="terraformChoiceContinueBtn">
+        Continue
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- DIALOG 2: Preview Dialog -->
+<div class="import-overlay" id="terraformPreviewOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Terraform folder</span>
+      <button class="import-close-btn" id="terraformPreviewCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Content -->
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <p style="margin: 0 0 4px 0; font-size: 14px; color: var(--text-secondary);">
+          Found in:
+        </p>
+        <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 16px 0;" id="terraformPreviewPath">
+          /Users/eric/OldPhotos/
+        </p>
+
+        <!-- File Counts -->
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; padding: 12px; background: var(--bg-primary); border-radius: 6px; font-size: 13px;">
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-secondary);">Photos:</span>
+            <span id="terraformPhotoCount">1,234</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-secondary);">Videos:</span>
+            <span id="terraformVideoCount">156</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-secondary);">RAW files (will be skipped):</span>
+            <span id="terraformRawCount" style="color: #ffa500;">45</span>
+          </div>
+        </div>
+
+        <!-- Sample Files -->
+        <p style="margin: 0 0 8px 0; font-size: 13px; color: var(--text-secondary);">
+          Sample files:
+        </p>
+        <div style="font-family: monospace; font-size: 12px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 16px;" id="terraformSampleFiles">
+          IMG_1234.jpg (2024-12-25)<br>
+          DSC_5678.cr2 (2023-06-15)<br>
+          20230101_video.mov (2023-01-01)<br>
+          ...
+        </div>
+
+        <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">
+          Is this the correct folder?
+        </p>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="terraformPreviewBackBtn">
+        No, go back
+      </button>
+      <button class="import-btn import-btn-primary" id="terraformPreviewContinueBtn">
+        Yes, continue
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- DIALOG 3: Warning Dialog -->
+<div class="import-overlay" id="terraformWarningOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Terraform folder</span>
+      <button class="import-close-btn" id="terraformWarningCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Content -->
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <p style="margin: 0 0 16px 0; font-size: 14px;">
+          This will reorganize <strong id="terraformWarningCount">1,234</strong> files in place:
+        </p>
+
+        <!-- What will happen -->
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; font-size: 13px; line-height: 1.5;">
+          <div style="display: flex; gap: 8px;">
+            <span style="color: #4CAF50;">✓</span>
+            <span>Write EXIF metadata to all files</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <span style="color: #4CAF50;">✓</span>
+            <span>Rename to standard format</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <span style="color: #4CAF50;">✓</span>
+            <span>Organize into YYYY/YYYY-MM-DD folders</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <span style="color: #4CAF50;">✓</span>
+            <span>Move duplicates to .trash/</span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <span style="color: #ffa500;">✓</span>
+            <span>Skip RAW files (too risky - see .trash/)</span>
+          </div>
+        </div>
+
+        <!-- Warnings -->
+        <div style="padding: 12px; background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); border-radius: 6px; margin-bottom: 12px;">
+          <div style="display: flex; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 500; color: #ffa500;">
+            <span class="material-symbols-outlined" style="font-size: 18px;">warning</span>
+            <span>WARNING: This modifies files permanently.</span>
+          </div>
+          <p style="margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+            EXIF changes cannot be undone.
+          </p>
+        </div>
+
+        <div style="padding: 12px; background: rgba(255, 107, 107, 0.1); border: 1px solid rgba(255, 107, 107, 0.3); border-radius: 6px; margin-bottom: 16px;">
+          <div style="display: flex; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 500; color: #ff6b6b;">
+            <span class="material-symbols-outlined" style="font-size: 18px;">priority_high</span>
+            <span>CRITICAL: Make a backup before proceeding!</span>
+          </div>
+          <p style="margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+            Time Machine, copy to external drive, etc.
+          </p>
+        </div>
+
+        <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">
+          Estimated time: <strong id="terraformEstimateTime">8-10 minutes</strong>
+        </p>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="terraformWarningCancelBtn">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="terraformWarningConfirmBtn">
+        I have a backup
+      </button>
+    </div>
+  </div>
+</div>
+
+
+<!-- DIALOG 4: Progress Dialog -->
+<div class="import-overlay" id="terraformProgressOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Terraforming folder</span>
+      <!-- No close button during operation -->
+    </div>
+
+    <!-- Progress Section -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="terraformStatusText">
+        Processing files...
+      </div>
+      
+      <div class="import-stats" id="terraformStats">
+        <span class="import-stat">
+          <span class="import-stat-label">Processed:</span>
+          <span class="import-stat-value" id="terraformProcessedCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Duplicates:</span>
+          <span class="import-stat-value" id="terraformDuplicateCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Errors:</span>
+          <span class="import-stat-value" id="terraformErrorCount">0</span>
+        </span>
+      </div>
+
+      <!-- Progress Bar -->
+      <div style="margin-top: 16px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; color: var(--text-secondary);">
+          <span id="terraformProgressText">0 / 1,234</span>
+          <span id="terraformProgressPercent">0%</span>
+        </div>
+        <div style="width: 100%; height: 4px; background: var(--bg-primary); border-radius: 2px; overflow: hidden;">
+          <div id="terraformProgressBar" style="width: 0%; height: 100%; background: var(--accent-color); transition: width 0.3s ease;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Details Section (expandable errors) -->
+    <div class="import-details-section" id="terraformDetailsSection" style="display: none;">
+      <button class="import-details-toggle" id="terraformDetailsToggle">
+        <span class="material-symbols-outlined">expand_more</span>
+        <span>Show errors</span>
+      </button>
+      
+      <div class="import-details-list" id="terraformDetailsList" style="display: none;">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+
+    <!-- Actions (empty during processing) -->
+    <div class="import-actions">
+      <!-- No buttons during operation -->
+    </div>
+  </div>
+</div>
+
+
+<!-- DIALOG 5: Completion Dialog -->
+<div class="import-overlay" id="terraformCompleteOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title">Terraform complete</span>
+      <button class="import-close-btn" id="terraformCompleteCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Content -->
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <p style="margin: 0 0 16px 0; font-size: 14px;">
+          Successfully organized your library.
+        </p>
+
+        <!-- Summary Stats -->
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; padding: 12px; background: var(--bg-primary); border-radius: 6px; font-size: 13px;">
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-secondary);">Processed:</span>
+            <span id="terraformFinalProcessed" style="color: #4CAF50; font-weight: 500;">1,200</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-secondary);">Duplicates:</span>
+            <span id="terraformFinalDuplicates">25</span>
+          </div>
+          <div style="display: flex; justify-content: space-between;">
+            <span style="color: var(--text-secondary);">Errors:</span>
+            <span id="terraformFinalErrors">9</span>
+          </div>
+        </div>
+
+        <p style="margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+          <span id="terraformManifestInfo">A detailed log has been saved to .logs/terraform_20260125_143022.json</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Details Section (errors if any) -->
+    <div class="import-details-section" id="terraformCompleteDetailsSection" style="display: none;">
+      <button class="import-details-toggle" id="terraformCompleteDetailsToggle">
+        <span class="material-symbols-outlined">expand_more</span>
+        <span>Show errors</span>
+      </button>
+      
+      <div class="import-details-list" id="terraformCompleteDetailsList" style="display: none;">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-primary" id="terraformCompleteDoneBtn">
+        Done
+      </button>
+    </div>
+  </div>
+</div>
