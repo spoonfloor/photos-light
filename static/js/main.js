@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v163';
+const MAIN_JS_VERSION = 'v164';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1699,15 +1699,15 @@ function showCriticalErrorModal(type, path = '') {
   if (type === 'db_missing' || type === 'db_corrupted') {
     title.textContent = 'Database missing';
 
-    message.innerHTML = `<p style="margin: 0;">The file your library needs to display and keep track of your photos is missing or corrupted. To continue, you can rebuild the database or switch to a different library.</p>`;
+    message.innerHTML = `<p style="margin: 0;">The file your library needs to display and keep track of your photos is missing or corrupted. To continue, you can rebuild the database or open a different library.</p>`;
 
     // Add buttons
     const switchBtn = document.createElement('button');
     switchBtn.className = 'import-btn import-btn-secondary';
-    switchBtn.textContent = 'Switch library';
+    switchBtn.textContent = 'Open library';
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
-      await openSwitchLibraryOverlay();
+      await browseSwitchLibrary();
     };
 
     const rebuildBtn = document.createElement('button');
@@ -1726,15 +1726,15 @@ function showCriticalErrorModal(type, path = '') {
     message.innerHTML = `
       <p style="margin: 0 0 12px 0;">Can't access your library:</p>
       <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">${path}</p>
-      <p style="margin: 0;">Your library folder is no longer accessible. To continue, you can retry the connection or switch to a different library.</p>
+      <p style="margin: 0;">Your library folder is no longer accessible. To continue, you can retry the connection or open a different library.</p>
     `;
 
     const switchBtn = document.createElement('button');
     switchBtn.className = 'import-btn import-btn-secondary';
-    switchBtn.textContent = 'Switch library';
+    switchBtn.textContent = 'Open library';
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
-      await openSwitchLibraryOverlay();
+      await browseSwitchLibrary();
     };
 
     const retryBtn = document.createElement('button');
@@ -2516,7 +2516,7 @@ function setupThumbnailLazyLoading() {
 // =====================
 
 /**
- * Render first-run empty state
+ * Render empty state (used for both first-run and empty library)
  */
 function renderFirstRunEmptyState() {
   const container = document.getElementById('photoContainer');
@@ -2525,32 +2525,7 @@ function renderFirstRunEmptyState() {
   container.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
       <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">Welcome!</div>
-        <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
-      </div>
-      <div style="display: flex; gap: 12px;">
-        <button class="import-btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
-          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
-          <span>Open library</span>
-        </button>
-        <button class="import-btn import-btn-primary" onclick="handleAddPhotosFirstRun()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
-          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
-          <span>Add photos</span>
-        </button>
-      </div>
-    </div>
-  `;
-}
-
-/**
- * Render first-run empty state (no library configured)
- */
-function renderFirstRunEmptyState() {
-  const container = document.getElementById('photoContainer');
-  container.innerHTML = `
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
-      <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">Welcome!</div>
+        <div style="font-size: 18px; margin-bottom: 8px;">No photos to display</div>
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
@@ -2583,13 +2558,13 @@ function renderPhotoGrid(photos, append = false) {
       container.innerHTML = `
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
           <div style="text-align: center;">
-            <div style="font-size: 18px; margin-bottom: 8px;">No photos found</div>
-            <div style="font-size: 14px; color: var(--text-secondary);">Add photos or switch to an existing library.</div>
+            <div style="font-size: 18px; margin-bottom: 8px;">No photos to display</div>
+            <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
           </div>
           <div style="display: flex; gap: 12px;">
-            <button class="import-btn" onclick="openSwitchLibraryOverlay()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
+            <button class="import-btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
               <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
-              <span>Switch library</span>
+              <span>Open library</span>
             </button>
             <button class="import-btn import-btn-primary" onclick="triggerImportWithLibraryCheck()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
               <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
@@ -3408,9 +3383,9 @@ async function loadUtilitiesMenu() {
 
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
-        console.log('🔧 Switch Library clicked');
+        console.log('🔧 Open Library clicked');
         hideUtilitiesMenu();
-        openSwitchLibraryOverlay();
+        browseSwitchLibrary();
       });
     }
 
@@ -4864,6 +4839,10 @@ function closeSwitchLibraryOverlay() {
 
 /**
  * Browse for library (uses custom folder picker)
+ * Handles 3 scenarios:
+ * 1. Folder has DB → open it
+ * 2. Folder has no DB, no media → create blank library
+ * 3. Folder has no DB, has media → show terraform choice dialog
  */
 async function browseSwitchLibrary() {
   try {
@@ -4884,7 +4863,7 @@ async function browseSwitchLibrary() {
 
     console.log('📂 Selected path:', selectedPath);
 
-    // Check if path has a database
+    // Check if path has a database and/or media
     const potentialDbPath = selectedPath + '/photo_library.db';
     
     // Try to check if library exists via backend
@@ -4897,13 +4876,59 @@ async function browseSwitchLibrary() {
     const checkResult = await checkResponse.json();
 
     if (checkResult.exists) {
-      // Existing library - switch immediately
+      // SCENARIO 1: Existing library - switch immediately
       console.log('✅ Found existing library:', selectedPath);
       closeSwitchLibraryOverlay();
       await switchToLibrary(selectedPath, potentialDbPath);
-    } else {
-      // No library found - go to first-run flow (reset config and reload)
-      console.log('📦 No library found - redirecting to first-run flow...');
+    }
+    else if (!checkResult.has_media) {
+      // SCENARIO 2: No DB, no media - create blank library here
+      console.log('📦 Empty folder - creating blank library...');
+      
+      // Get library name
+      const libraryName = await showNameLibraryDialog({
+        title: 'Name your library',
+        parentPath: selectedPath
+      });
+
+      if (!libraryName) {
+        console.log('User cancelled library naming');
+        return false;
+      }
+
+      // Create library in subfolder
+      const libraryPath = selectedPath + '/' + libraryName;
+      const dbPath = libraryPath + '/photo_library.db';
+
+      console.log('📚 Creating library:', libraryPath);
+
+      const createResponse = await fetch('/api/library/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ library_path: libraryPath, db_path: dbPath }),
+      });
+
+      const createResult = await createResponse.json();
+
+      if (!createResponse.ok) {
+        throw new Error(createResult.error || 'Failed to create library');
+      }
+
+      console.log('✅ Library created');
+
+      // Switch to new library
+      await switchToLibrary(libraryPath, dbPath);
+    }
+    else {
+      // SCENARIO 3: No DB, has media - show terraform choice dialog
+      console.log(`📸 Found ${checkResult.media_count} media file(s) - showing terraform choice...`);
+      
+      // TODO: Show terraform choice dialog
+      // For now, show a toast indicating this feature is coming
+      showToast('Terraform feature coming soon', null);
+      
+      // TEMPORARY: Fall back to old behavior (reset and reload)
+      console.log('📦 [TEMP] Resetting config and reloading...');
       closeSwitchLibraryOverlay();
       
       const response = await fetch('/api/library/reset', {

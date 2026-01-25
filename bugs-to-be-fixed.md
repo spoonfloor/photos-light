@@ -2,7 +2,7 @@
 
 Last updated: January 25, 2026
 
-**Status:** 19 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal), 3 remaining bugs + 1 deferred feature
+**Status:** 19 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal), 4 remaining bugs + 1 deferred feature
 
 ---
 
@@ -131,6 +131,31 @@ Last updated: January 25, 2026
 
 ---
 
+### Performance Optimization - High-Latency Operations
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** Research + implementation (TBD)  
+**Status:** NOT STARTED
+
+**Issue:** Research improvements to efficiency of operations requiring rehashing and high-latency processing
+
+**Operations to analyze:**
+1. Import (file scanning, hashing, EXIF extraction)
+2. Date change (file moves, EXIF updates, rehashing)
+3. Rebuild database (full rescan, rehashing all files)
+4. Update database/index (incremental scanning, hash comparison)
+5. Any other operations requiring rehashing
+
+**Research goals:**
+- Identify bottlenecks in each operation
+- Evaluate caching strategies for hashes
+- Consider incremental vs full processing
+- Explore parallelization opportunities
+- Assess trade-offs between speed and accuracy
+
+**Outcome:** Performance optimization plan with prioritized improvements
+
+---
+
 ### ✅ Date Changes - Latency & Feedback Issues (FIXED v155)
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 2-3 hours  
@@ -233,7 +258,8 @@ Based on impact, frequency, and effort:
 18. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
 19. 🟡 **Utilities Menu - String and Order Changes** (15 min, UX consistency)
 20. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
-21. 🔵 **Import Duplicate Detection** (deferred feature work)
+21. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+22. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Rationale:**
 - **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
@@ -248,13 +274,13 @@ Based on impact, frequency, and effort:
 
 **Next up:** Utilities Menu - String and Order Changes (15 min quick win)
 
-**Total remaining:** 3 bugs + 1 deferred feature
+**Total remaining:** 4 bugs + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 3 bugs (Dialog Framework, Utilities Menu Changes, Duplicates Feature Research)
+- 🟡 Polish: 4 bugs (Dialog Framework, Utilities Menu Changes, Duplicates Feature Research, Performance Optimization Research)
 - 🟢 Edge cases: 0 bugs (All edge cases resolved ✅)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~2-3 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~2-3 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 

@@ -3351,7 +3351,7 @@ def browse_library():
 
 @app.route('/api/library/check', methods=['POST'])
 def check_library():
-    """Check if a path contains a valid library"""
+    """Check if a path contains a valid library and count media files if no DB exists"""
     try:
         data = request.json
         library_path = data.get('library_path')
@@ -3361,14 +3361,37 @@ def check_library():
         
         # Check if path exists
         if not os.path.exists(library_path):
-            return jsonify({'exists': False})
+            return jsonify({
+                'exists': False,
+                'has_media': False,
+                'media_count': 0,
+                'library_path': library_path,
+                'db_path': None
+            })
         
         # Check if database exists
         db_path = os.path.join(library_path, 'photo_library.db')
         exists = os.path.exists(db_path)
         
+        # If no database, scan for media files
+        has_media = False
+        media_count = 0
+        
+        if not exists:
+            print(f"  📊 No database found, scanning for media files...")
+            from library_sync import count_media_files
+            try:
+                media_count = count_media_files(library_path)
+                has_media = media_count > 0
+                print(f"  ✅ Found {media_count} media file(s)")
+            except Exception as e:
+                print(f"  ⚠️  Error counting media files: {e}")
+                # Continue with has_media=False if counting fails
+        
         return jsonify({
             'exists': exists,
+            'has_media': has_media,
+            'media_count': media_count,
             'library_path': library_path,
             'db_path': db_path
         })
