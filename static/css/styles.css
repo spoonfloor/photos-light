@@ -1545,6 +1545,11 @@ body {
   margin-bottom: 0;
 }
 
+/* Prevent scrolling on empty state placeholders */
+.folder-placeholder-container {
+  overflow: clip;
+}
+
 .folder-item-db {
   opacity: 1;
   cursor: pointer;
