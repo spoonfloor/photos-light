@@ -3546,6 +3546,60 @@ def reset_library():
         return jsonify({'error': str(e)}), 500
 
 
+def cleanup_empty_folders_recursive(root_path):
+    """
+    Recursively remove empty directories from a library after terraform.
+    Walks bottom-up to ensure deepest directories are checked first.
+    Skips hidden directories (.trash, .thumbnails, etc).
+    """
+    MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
+                  '.bmp', '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
+                  '.avi', '.mpg', '.mpeg', '.3gp', '.mkv',
+                  '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2'}
+    
+    removed_count = 0
+    
+    # Walk bottom-up (topdown=False) so we process leaf directories first
+    for dirpath, dirnames, filenames in os.walk(root_path, topdown=False):
+        # Skip hidden directories
+        if any(part.startswith('.') for part in dirpath.split(os.sep)):
+            continue
+        
+        # Don't delete root
+        if os.path.abspath(dirpath) == os.path.abspath(root_path):
+            continue
+        
+        # Check if directory is empty or contains only non-media files
+        has_media = False
+        
+        for filename in filenames:
+            _, ext = os.path.splitext(filename)
+            if ext.lower() in MEDIA_EXTS:
+                has_media = True
+                break
+        
+        # If no media files and no subdirectories, delete the folder
+        if not has_media:
+            try:
+                # Remove any non-media files first
+                for filename in filenames:
+                    file_path = os.path.join(dirpath, filename)
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+                
+                # Try to remove directory
+                os.rmdir(dirpath)
+                removed_count += 1
+                print(f"    🗑️  Removed empty folder: {os.path.relpath(dirpath, root_path)}")
+            except OSError as e:
+                # Folder not empty (has subdirs) or permission error
+                pass
+    
+    return removed_count
+
+
 @app.route('/api/library/terraform', methods=['POST'])
 def terraform_library():
     """
@@ -3840,8 +3894,8 @@ def terraform_library():
             
             # Cleanup empty folders recursively
             print("\n🧹 Cleaning up empty folders...")
-            cleanup_empty_folders(library_path)
-            print("✅ Cleanup complete")
+            removed_count = cleanup_empty_folders_recursive(library_path)
+            print(f"✅ Cleanup complete - removed {removed_count} empty folder(s)")
             
             # Close DB
             conn.close()
