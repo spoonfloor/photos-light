@@ -2,7 +2,7 @@
 
 Last updated: January 24, 2026
 
-**Status:** 16 items complete (Date Picker, Date Editor, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization), 3 remaining bugs + 1 deferred feature
+**Status:** 17 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import), 2 remaining bugs + 1 deferred feature
 
 ---
 
@@ -45,17 +45,14 @@ Last updated: January 24, 2026
 
 ---
 
-### Date Picker - Missing After Import
+### ✅ Date Picker - Missing After Import (FIXED v158)
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 30 minutes  
-**Status:** NOT STARTED
+**Status:** ✅ FIXED - Already implemented, verified working
 
 **Issue:** Blank library → import photos → app bar date picker absent (bad)
-- After first import into empty library, date picker doesn't appear in app bar
-- Likely missing UI refresh/update after import completes
-- Prevents navigation by date after import
 
-**Fix approach:** Trigger app bar refresh after import completion
+**Resolution:** Investigation revealed this was already fixed in v158. Import completion automatically calls `loadAndRenderPhotos()` which refreshes the date picker via `populateDatePicker()`. Verified working correctly.
 
 ---
 
@@ -190,13 +187,10 @@ Based on impact, frequency, and effort:
 12. ✅ **Date Changes - Don't Survive Database Rebuild** (DONE - v146-v150)
 13. ✅ **Date Changes - Latency & Feedback Issues** (DONE - v155)
 14. ✅ **Import Duplicate Categorization** (DONE - v156-v157)
-15. 🟡 **Database Operations - Empty Folder Cleanup** (1 hr, maintenance/cleanup)
-16. 🟡 **Date Picker - Missing After Import** (30 min, affects post-import workflow)
+15. ✅ **Date Picker - Missing After Import** (DONE - v158, verified working)
+16. 🟡 **Database Operations - Empty Folder Cleanup** (1 hr, maintenance/cleanup)
 17. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
-10. 🟢 **Import Count Issues** (2 hrs, low impact)
-11. 🟢 **Manual Restore & Rebuild** (1 hr, edge case)
-12. 🟢 **Database Missing Prompt** (30 min, can't reproduce)
-13. 🔵 **Import Duplicate Detection** (deferred feature work)
+18. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Rationale:**
 - **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
@@ -211,13 +205,13 @@ Based on impact, frequency, and effort:
 
 **Next up:** Database Operations - Empty Folder Cleanup
 
-**Total remaining:** 3 bugs + 1 deferred feature
+**Total remaining:** 2 bugs + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 3 bugs (Database Operations Empty Folder Cleanup, Date Picker Missing After Import, Dialog Spinner Removal)
+- 🟡 Polish: 2 bugs (Database Operations Empty Folder Cleanup, Dialog Spinner Removal)
 - 🟢 Edge cases: 0 bugs (Video Format and Import Counts removed - cannot reproduce or low priority)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~2 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~1.5 hours for remaining bugs (excluding deferred feature)
 
 ---
 

@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v157';
+const MAIN_JS_VERSION = 'v160';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5631,7 +5631,7 @@ function handleImportEvent(event, data) {
             toggleBtn.classList.remove('expanded');
             toggleBtn.innerHTML = `
               <span class="material-symbols-outlined">expand_more</span>
-              <span>Show error details</span>
+              <span>Show details</span>
             `;
           }
         }
@@ -5838,7 +5838,7 @@ function showUnifiedErrorDetails() {
     toggleBtn.classList.remove('expanded');
     toggleBtn.innerHTML = `
       <span class="material-symbols-outlined">expand_more</span>
-      <span>Show error details</span>
+      <span>Show details</span>
     `;
     
     // Wire up toggle
@@ -5853,14 +5853,14 @@ function showUnifiedErrorDetails() {
         newToggleBtn.classList.remove('expanded');
         newToggleBtn.innerHTML = `
           <span class="material-symbols-outlined">expand_more</span>
-          <span>Show error details</span>
+          <span>Show details</span>
         `;
       } else {
         detailsList.style.display = 'block';
         newToggleBtn.classList.add('expanded');
         newToggleBtn.innerHTML = `
           <span class="material-symbols-outlined">expand_less</span>
-          <span>Hide error details</span>
+          <span>Hide details</span>
         `;
       }
     });

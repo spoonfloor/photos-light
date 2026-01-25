@@ -1232,3 +1232,91 @@ else:
 
 ---
 
+### Date Picker - Missing After Import
+**Fixed:** Date picker now automatically refreshes after import completes  
+**Version:** v158 (already implemented)
+
+**Issues resolved:**
+- ✅ Date picker appears/updates automatically after importing into blank library
+- ✅ No page refresh required to see date navigation after first import
+- ✅ Works for all import scenarios (blank library, additional imports)
+
+**Root cause:**
+This bug was reported as missing behavior, but investigation revealed it was already implemented correctly in v158. The import completion flow automatically triggers a photo grid reload, which includes refreshing the date picker.
+
+**The implementation:**
+```javascript
+// handleImportEvent() - when import completes
+if (importedPhotos > 0) {
+  console.log(`🔄 Reloading ${importedPhotos} newly imported photos...`);
+  loadAndRenderPhotos();  // Reloads grid
+}
+
+// loadAndRenderPhotos() - after loading photos
+await populateDatePicker();  // Refreshes date picker
+```
+
+**Flow:**
+1. Import completes → `handleImportEvent()` receives `'complete'` event
+2. If photos imported > 0 → calls `loadAndRenderPhotos()`
+3. `loadAndRenderPhotos()` → calls `await populateDatePicker()`
+4. Date picker refreshed with new years from database
+
+**Testing verified:**
+- Blank library → import photos → date picker appears immediately ✓
+- Existing library → import additional photos to new years → date picker updates ✓
+- No manual refresh required ✓
+
+**Impact:** This was verified as already working correctly. Moved to fixed bugs list for documentation purposes.
+
+---
+
+### Lightbox Image Sizing - EXIF Orientation
+**Fixed:** Portrait images with EXIF rotation now fill lightbox properly  
+**Documentation:** FIX_LIGHTBOX_EXIF_ORIENTATION.md  
+**Version:** v160
+
+**Issues resolved:**
+- ✅ Portrait photos with EXIF orientation metadata now fill viewport without letterboxing
+- ✅ Lightbox sizing works correctly at all window sizes
+- ✅ Database stores display dimensions (EXIF-corrected) instead of raw sensor dimensions
+
+**Root cause:**
+Camera sensors are always landscape. When you take a portrait photo, the camera:
+1. Captures pixels in landscape (e.g., 3264×2448)
+2. Writes EXIF Orientation tag (e.g., "rotate 90° CW")
+
+Browsers/viewers read EXIF and rotate for display (2448×3264). But `get_image_dimensions()` returned raw sensor dimensions without applying EXIF rotation, storing wrong dimensions in database.
+
+Result: Lightbox used landscape dimensions (3264×2448) to calculate sizing, but image displayed as portrait (2448×3264) → wrong aspect ratio → letterboxing.
+
+**The fix:**
+```python
+# Before (app.py line 133):
+with Image.open(file_path) as img:
+    return img.size  # Raw dimensions, ignores EXIF
+
+# After (v160):
+with Image.open(file_path) as img:
+    from PIL import ImageOps
+    img_oriented = ImageOps.exif_transpose(img)
+    return img_oriented.size  # Display dimensions, EXIF applied
+```
+
+`ImageOps.exif_transpose()` reads EXIF Orientation tag and returns image with correct display dimensions.
+
+**Testing verified:**
+- Portrait photo with EXIF Orientation = 6 (rotate 90° CW)
+- Before: Database had 3264×2448 (landscape), lightbox letterboxed
+- After rebuild: Database has 2448×3264 (portrait), lightbox fills properly ✓
+- Works at all window sizes ✓
+
+**Migration required:**
+- New imports (v160+): Work immediately ✅
+- Existing photos: Need "Rebuild Database" to fix stored dimensions
+- Only affects photos with EXIF orientation tags 5, 6, 7, 8 (~10-40% of phone photo libraries)
+
+**Impact:** Proper architecture - database is source of truth with correct data. No runtime workarounds needed.
+
+---
+

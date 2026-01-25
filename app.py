@@ -131,7 +131,11 @@ def get_image_dimensions(file_path):
         else:
             # Use PIL for images
             with Image.open(file_path) as img:
-                return img.size  # (width, height)
+                # Apply EXIF orientation transpose to get display dimensions
+                # (EXIF orientation values 5, 6, 7, 8 swap width/height)
+                from PIL import ImageOps
+                img_oriented = ImageOps.exif_transpose(img)
+                return img_oriented.size  # (width, height) as displayed
     except Exception as e:
         print(f"Error reading dimensions for {file_path}: {e}")
         return None
