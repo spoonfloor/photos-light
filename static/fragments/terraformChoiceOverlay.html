@@ -1,0 +1,44 @@
+<!-- Terraform Choice Overlay -->
+<div class="import-overlay" id="terraformChoiceOverlay" style="display: none;">
+  <div class="import-card">
+    <div class="import-header">
+      <span class="import-title">Open library</span>
+      <button class="import-close-btn" id="terraformChoiceCloseBtn" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <p style="margin: 0 0 12px 0; font-size: 14px;">
+          Found <strong id="terraformChoiceCount">0</strong> media files in:
+        </p>
+        <p id="terraformChoicePath" style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 20px 0;">
+          /path/to/folder/
+        </p>
+        <p style="margin: 0 0 16px 0; font-size: 14px; color: var(--text-secondary);">
+          What would you like to do?
+        </p>
+      </div>
+      <!-- NO BORDERS - bare radio buttons -->
+      <div style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 8px;">
+        <label style="display: flex; align-items: start; gap: 12px; padding: 8px 0; cursor: pointer;">
+          <input type="radio" name="terraformChoice" value="blank" checked style="margin-top: 2px; min-width: 16px; flex-shrink: 0;" />
+          <div>
+            <div style="font-size: 14px; font-weight: 400; margin-bottom: 0px;">Create new library folder in this location</div>
+          </div>
+        </label>
+        <label style="display: flex; align-items: start; gap: 12px; padding: 8px 0; cursor: pointer;">
+          <input type="radio" name="terraformChoice" value="terraform" style="margin-top: 2px; min-width: 16px; flex-shrink: 0;" />
+          <div>
+            <div style="font-size: 14px; font-weight: 400; margin-bottom: 4px;">Convert this library</div>
+            <div style="font-size: 13px; color: var(--text-secondary);">Create new database and update all files and folders</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="terraformChoiceCancelBtn">Cancel</button>
+      <button class="import-btn import-btn-primary" id="terraformChoiceContinueBtn">Continue</button>
+    </div>
+  </div>
+</div>

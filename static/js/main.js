@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v164';
+const MAIN_JS_VERSION = 'v165';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -4837,6 +4837,250 @@ function closeSwitchLibraryOverlay() {
   }
 }
 
+// =====================
+// TERRAFORM DIALOGS
+// =====================
+
+/**
+ * Load terraform choice overlay
+ */
+async function loadTerraformChoiceOverlay() {
+  try {
+    const response = await fetch('/fragments/terraformChoiceOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    console.log('✅ Terraform choice overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load terraform choice overlay:', error);
+  }
+}
+
+/**
+ * Show terraform choice dialog
+ * @param {Object} options - { path: string, media_count: number }
+ * @returns {Promise<string|null>} 'blank' | 'terraform' | null if cancelled
+ */
+async function showTerraformChoiceDialog(options = {}) {
+  return new Promise(async (resolve) => {
+    // Load overlay if needed
+    let overlay = document.getElementById('terraformChoiceOverlay');
+    if (!overlay) {
+      await loadTerraformChoiceOverlay();
+      overlay = document.getElementById('terraformChoiceOverlay');
+    }
+
+    // Set values
+    document.getElementById('terraformChoiceCount').textContent = options.media_count.toLocaleString();
+    document.getElementById('terraformChoicePath').textContent = options.path;
+
+    // Reset radio selection to "blank" by default
+    const blankRadio = document.querySelector('input[name="terraformChoice"][value="blank"]');
+    if (blankRadio) blankRadio.checked = true;
+
+    const closeBtn = document.getElementById('terraformChoiceCloseBtn');
+    const cancelBtn = document.getElementById('terraformChoiceCancelBtn');
+    const continueBtn = document.getElementById('terraformChoiceContinueBtn');
+
+    const handleCancel = () => {
+      overlay.style.display = 'none';
+      resolve(null);
+    };
+
+    const handleContinue = () => {
+      const selected = document.querySelector('input[name="terraformChoice"]:checked');
+      overlay.style.display = 'none';
+      resolve(selected ? selected.value : null);
+    };
+
+    closeBtn.onclick = handleCancel;
+    cancelBtn.onclick = handleCancel;
+    continueBtn.onclick = handleContinue;
+
+    overlay.style.display = 'flex';
+  });
+}
+
+/**
+ * Load terraform preview overlay
+ */
+async function loadTerraformPreviewOverlay() {
+  try {
+    const response = await fetch('/fragments/terraformPreviewOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    console.log('✅ Terraform preview overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load terraform preview overlay:', error);
+  }
+}
+
+/**
+ * Show terraform preview dialog
+ * @param {Object} options - { path: string, photo_count: number, video_count: number }
+ * @returns {Promise<boolean>} true to continue, false to go back
+ */
+async function showTerraformPreviewDialog(options = {}) {
+  return new Promise(async (resolve) => {
+    // Load overlay if needed
+    let overlay = document.getElementById('terraformPreviewOverlay');
+    if (!overlay) {
+      await loadTerraformPreviewOverlay();
+      overlay = document.getElementById('terraformPreviewOverlay');
+    }
+
+    // Set values
+    document.getElementById('terraformPreviewPath').textContent = options.path;
+    document.getElementById('terraformPreviewPhotos').textContent = options.photo_count.toLocaleString();
+    document.getElementById('terraformPreviewVideos').textContent = options.video_count.toLocaleString();
+
+    const closeBtn = document.getElementById('terraformPreviewCloseBtn');
+    const continueBtn = document.getElementById('terraformPreviewContinueBtn');
+    const backBtn = document.getElementById('terraformPreviewBackBtn');
+
+    const handleClose = () => {
+      overlay.style.display = 'none';
+      resolve(false);
+    };
+
+    const handleContinue = () => {
+      overlay.style.display = 'none';
+      resolve(true);
+    };
+
+    const handleBack = () => {
+      overlay.style.display = 'none';
+      resolve(false);
+    };
+
+    closeBtn.onclick = handleClose;
+    continueBtn.onclick = handleContinue;
+    backBtn.onclick = handleBack;
+
+    overlay.style.display = 'flex';
+  });
+}
+
+/**
+ * Load terraform warning overlay
+ */
+async function loadTerraformWarningOverlay() {
+  try {
+    const response = await fetch('/fragments/terraformWarningOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    console.log('✅ Terraform warning overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load terraform warning overlay:', error);
+  }
+}
+
+/**
+ * Show terraform warning dialog
+ * @param {Object} options - { total_files: number, estimated_time: string }
+ * @returns {Promise<boolean>} true to continue, false to go back
+ */
+async function showTerraformWarningDialog(options = {}) {
+  return new Promise(async (resolve) => {
+    // Load overlay if needed
+    let overlay = document.getElementById('terraformWarningOverlay');
+    if (!overlay) {
+      await loadTerraformWarningOverlay();
+      overlay = document.getElementById('terraformWarningOverlay');
+    }
+
+    // Set values
+    document.getElementById('terraformWarningCount').textContent = options.total_files.toLocaleString();
+    document.getElementById('terraformWarningEta').textContent = options.estimated_time || 'calculating...';
+
+    const closeBtn = document.getElementById('terraformWarningCloseBtn');
+    const continueBtn = document.getElementById('terraformWarningContinueBtn');
+    const backBtn = document.getElementById('terraformWarningBackBtn');
+
+    const handleClose = () => {
+      overlay.style.display = 'none';
+      resolve(false);
+    };
+
+    const handleContinue = () => {
+      overlay.style.display = 'none';
+      resolve(true);
+    };
+
+    const handleBack = () => {
+      overlay.style.display = 'none';
+      resolve(false);
+    };
+
+    closeBtn.onclick = handleClose;
+    continueBtn.onclick = handleContinue;
+    backBtn.onclick = handleBack;
+
+    overlay.style.display = 'flex';
+  });
+}
+
+/**
+ * Load terraform progress overlay
+ */
+async function loadTerraformProgressOverlay() {
+  try {
+    const response = await fetch('/fragments/terraformProgressOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    console.log('✅ Terraform progress overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load terraform progress overlay:', error);
+  }
+}
+
+/**
+ * Load terraform complete overlay
+ */
+async function loadTerraformCompleteOverlay() {
+  try {
+    const response = await fetch('/fragments/terraformCompleteOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+    console.log('✅ Terraform complete overlay loaded');
+  } catch (error) {
+    console.error('❌ Failed to load terraform complete overlay:', error);
+  }
+}
+
+/**
+ * Show terraform complete dialog
+ * @param {Object} results - { processed: number, duplicates: number, errors: number, log_path: string }
+ */
+async function showTerraformCompleteDialog(results = {}) {
+  return new Promise(async (resolve) => {
+    // Load overlay if needed
+    let overlay = document.getElementById('terraformCompleteOverlay');
+    if (!overlay) {
+      await loadTerraformCompleteOverlay();
+      overlay = document.getElementById('terraformCompleteOverlay');
+    }
+
+    // Set values
+    document.getElementById('terraformCompleteProcessed').textContent = results.processed.toLocaleString();
+    document.getElementById('terraformCompleteDuplicates').textContent = results.duplicates.toLocaleString();
+    document.getElementById('terraformCompleteErrors').textContent = results.errors.toLocaleString();
+    document.getElementById('terraformCompleteLogPath').textContent = `A detailed log has been saved to ${results.log_path}`;
+
+    const closeBtn = document.getElementById('terraformCompleteCloseBtn');
+    const doneBtn = document.getElementById('terraformCompleteDoneBtn');
+
+    const handleDone = () => {
+      overlay.style.display = 'none';
+      resolve();
+    };
+
+    closeBtn.onclick = handleDone;
+    doneBtn.onclick = handleDone;
+
+    overlay.style.display = 'flex';
+  });
+}
+
 /**
  * Browse for library (uses custom folder picker)
  * Handles 3 scenarios:
@@ -4923,25 +5167,76 @@ async function browseSwitchLibrary() {
       // SCENARIO 3: No DB, has media - show terraform choice dialog
       console.log(`📸 Found ${checkResult.media_count} media file(s) - showing terraform choice...`);
       
-      // TODO: Show terraform choice dialog
-      // For now, show a toast indicating this feature is coming
-      showToast('Terraform feature coming soon', null);
-      
-      // TEMPORARY: Fall back to old behavior (reset and reload)
-      console.log('📦 [TEMP] Resetting config and reloading...');
-      closeSwitchLibraryOverlay();
-      
-      const response = await fetch('/api/library/reset', {
-        method: 'DELETE',
+      // Show choice dialog
+      const choice = await showTerraformChoiceDialog({
+        path: selectedPath,
+        media_count: checkResult.media_count
       });
 
-      const data = await response.json();
+      if (choice === 'blank') {
+        // User chose to create blank library
+        console.log('User chose: Create new library folder');
+        
+        // Get library name
+        const libraryName = await showNameLibraryDialog({
+          title: 'Name your library',
+          parentPath: selectedPath
+        });
 
-      if (data.status === 'success') {
-        console.log('✅ Configuration reset - reloading to first-run state...');
-        window.location.reload();
-      } else {
-        throw new Error(data.error || 'Reset failed');
+        if (!libraryName) {
+          console.log('User cancelled library naming');
+          return false;
+        }
+
+        // Create library in subfolder
+        const libraryPath = selectedPath + '/' + libraryName;
+        const dbPath = libraryPath + '/photo_library.db';
+
+        console.log('📚 Creating library:', libraryPath);
+
+        const createResponse = await fetch('/api/library/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ library_path: libraryPath, db_path: dbPath }),
+        });
+
+        const createResult = await createResponse.json();
+
+        if (!createResponse.ok) {
+          throw new Error(createResult.error || 'Failed to create library');
+        }
+
+        console.log('✅ Library created');
+
+        // Switch to new library
+        await switchToLibrary(libraryPath, dbPath);
+      }
+      else if (choice === 'terraform') {
+        // User chose to terraform
+        console.log('User chose: Convert this library');
+        
+        // TODO: Implement terraform flow (preview → warning → execute)
+        showToast('Terraform conversion coming soon', null);
+        
+        // TEMPORARY: Fall back to reset
+        console.log('📦 [TEMP] Resetting config and reloading...');
+        const response = await fetch('/api/library/reset', {
+          method: 'DELETE',
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+          console.log('✅ Configuration reset - reloading to first-run state...');
+          window.location.reload();
+        } else {
+          throw new Error(data.error || 'Reset failed');
+        }
+      }
+      else {
+        // User cancelled
+        console.log('User cancelled choice dialog');
+        return false;
       }
     }
 
