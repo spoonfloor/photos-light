@@ -1180,3 +1180,55 @@ video_exts = {
 
 ---
 
+## Session 8: January 24, 2026
+
+### Import Duplicate Categorization
+**Fixed:** Duplicate files during import now correctly categorized and counted  
+**Documentation:** FIX_IMPORT_DUPLICATE_CATEGORIZATION.md  
+**Version:** v157
+
+**Issues resolved:**
+- ✅ Duplicates detected during hash collision (after EXIF write) now categorized as "duplicate" instead of "unsupported"
+- ✅ UI counters now accurate: DUPLICATES shows duplicate count, not lumped into ERRORS
+- ✅ Clear error message: "Duplicate file (detected after processing)" instead of raw SQL constraint
+- ✅ Rejection report shows duplicates under "DUPLICATE" section, not "UNSUPPORTED"
+
+**Root cause:**
+When files were imported and EXIF metadata written, the file content changed and was rehashed. If the new hash matched an existing photo, the database UPDATE failed with `UNIQUE constraint failed: photos.content_hash`. This error wasn't recognized as a duplicate and fell through to "unsupported" category. Additionally, all rejections incremented `error_count` instead of distinguishing duplicates.
+
+**The fix (2 parts):**
+
+**v156:** Added UNIQUE constraint detection to error categorization:
+```python
+elif 'unique constraint' in error_str and 'content_hash' in error_str:
+    category = 'duplicate'
+    user_message = "Duplicate file (detected after processing)"
+```
+
+**v157:** Fixed counter logic to distinguish duplicates from errors:
+```python
+if category == 'duplicate':
+    duplicate_count += 1
+else:
+    error_count += 1
+```
+
+**Testing verified:**
+- Ground truth: 62 files (59 unique, 3 duplicates) hashed with SHA-256
+- Import attempt: 48 imported, 3 duplicates, 10 errors
+- UI counters: IMPORTED: 48, DUPLICATES: 3, ERRORS: 10 ✓
+- Report structure:
+  - 3 files under "DUPLICATE" section with clear message ✓
+  - 8 files under "UNSUPPORTED" (video formats) ✓
+  - 2 files under "CORRUPTED" (test files) ✓
+
+**Investigation:**
+- Full code flow traced from import through EXIF write to rehashing
+- Database and filesystem verified to establish ground truth
+- Error categorization logic analyzed and tested
+- Multiple import attempts with known duplicate sets
+
+**Impact:** Pure UX improvement. Files were always correctly rejected and rolled back. Now users get accurate counts and clear messaging about why files were rejected.
+
+---
+

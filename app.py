@@ -2115,6 +2115,10 @@ def import_from_paths():
                         if 'timeout' in error_str:
                             category = 'timeout'
                             user_message = "Processing timeout (file too large or slow storage)"
+                        # Check for duplicate hash collision (UNIQUE constraint during rehash update)
+                        elif 'unique constraint' in error_str and 'content_hash' in error_str:
+                            category = 'duplicate'
+                            user_message = "Duplicate file (detected after processing)"
                         # Check for corruption BEFORE tool detection (avoid false positives)
                         elif ('not a valid' in error_str or 'corrupt' in error_str or 
                               'invalid data' in error_str or 'moov atom' in error_str):
@@ -2133,8 +2137,11 @@ def import_from_paths():
                             category = 'unsupported'
                             user_message = str(exif_error)
                         
-                        # Track rejection as error
-                        error_count += 1
+                        # Track rejection count (duplicate vs error)
+                        if category == 'duplicate':
+                            duplicate_count += 1
+                        else:
+                            error_count += 1
                         
                         # Yield rejection event (special type of error with extra metadata)
                         yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(exif_error)})}\n\n"
