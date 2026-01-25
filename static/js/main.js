@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v154';
+const MAIN_JS_VERSION = 'v155';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1245,7 +1245,164 @@ function closeDateEditor() {
 }
 
 /**
- * Save date edit
+ * Load date change progress overlay
+ */
+function loadDateChangeProgressOverlay() {
+  const mount = document.createElement('div');
+  mount.id = 'dateChangeProgressOverlayMount';
+  document.body.appendChild(mount);
+
+  return fetch('fragments/dateChangeProgressOverlay.html')
+    .then((r) => {
+      if (!r.ok)
+        throw new Error(
+          `Failed to load date change progress overlay (${r.status})`
+        );
+      return r.text();
+    })
+    .then((html) => {
+      mount.innerHTML = html;
+
+      // Wire up event listeners
+      const closeBtn = document.getElementById('dateChangeProgressCloseBtn');
+      const doneBtn = document.getElementById('dateChangeProgressDoneBtn');
+
+      if (closeBtn)
+        closeBtn.addEventListener('click', hideDateChangeProgressOverlay);
+      if (doneBtn)
+        doneBtn.addEventListener('click', () => {
+          hideDateChangeProgressOverlay();
+          // Reload grid after successful date change
+          loadAndRenderPhotos(false);
+        });
+
+      console.log('✅ Date change progress overlay loaded');
+    })
+    .catch((err) => {
+      console.error('❌ Date change progress overlay load failed:', err);
+    });
+}
+
+/**
+ * Show date change progress overlay
+ */
+function showDateChangeProgressOverlay(photoCount) {
+  const overlay = document.getElementById('dateChangeProgressOverlay');
+  if (!overlay) return;
+
+  const title = document.getElementById('dateChangeProgressTitle');
+  const statusText = document.getElementById('dateChangeProgressStatusText');
+  const stats = document.getElementById('dateChangeProgressStats');
+  const currentEl = document.getElementById('dateChangeProgressCurrent');
+  const totalEl = document.getElementById('dateChangeProgressTotal');
+
+  // Set title based on count
+  if (title) {
+    title.textContent = photoCount === 1 ? 'Updating date' : 'Updating dates';
+  }
+
+  // Reset display
+  if (statusText) {
+    statusText.innerHTML = 'Starting<span class="import-spinner"></span>';
+  }
+
+  // Show stats for multiple photos
+  if (stats && photoCount > 1) {
+    stats.style.display = 'flex';
+    if (currentEl) currentEl.textContent = '0';
+    if (totalEl) totalEl.textContent = photoCount.toString();
+  } else if (stats) {
+    stats.style.display = 'none';
+  }
+
+  // Hide done button initially
+  const doneBtn = document.getElementById('dateChangeProgressDoneBtn');
+  if (doneBtn) doneBtn.style.display = 'none';
+
+  overlay.style.display = 'flex';
+  console.log('📊 Date change progress overlay shown');
+}
+
+/**
+ * Hide date change progress overlay
+ */
+function hideDateChangeProgressOverlay() {
+  const overlay = document.getElementById('dateChangeProgressOverlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+    console.log('✖️ Date change progress overlay hidden');
+  }
+}
+
+/**
+ * Update date change progress
+ */
+function updateDateChangeProgress(current, total) {
+  const currentEl = document.getElementById('dateChangeProgressCurrent');
+  const statusText = document.getElementById('dateChangeProgressStatusText');
+
+  if (currentEl) {
+    currentEl.textContent = current.toString();
+  }
+
+  if (statusText) {
+    if (total === 1) {
+      statusText.innerHTML = 'Updating date<span class="import-spinner"></span>';
+    } else {
+      statusText.innerHTML = `Updating photo ${current} of ${total}<span class="import-spinner"></span>`;
+    }
+  }
+}
+
+/**
+ * Show date change complete
+ */
+function showDateChangeComplete(count) {
+  const statusText = document.getElementById('dateChangeProgressStatusText');
+  const doneBtn = document.getElementById('dateChangeProgressDoneBtn');
+  const title = document.getElementById('dateChangeProgressTitle');
+
+  if (title) {
+    title.textContent = count === 1 ? 'Date updated' : 'Dates updated';
+  }
+
+  if (statusText) {
+    const plural = count > 1 ? 's' : '';
+    statusText.innerHTML = `<p>Successfully updated ${count} photo${plural}.</p>`;
+  }
+
+  if (doneBtn) {
+    doneBtn.style.display = 'block';
+  }
+
+  console.log(`✅ Date change complete: ${count} photo(s)`);
+}
+
+/**
+ * Show date change error
+ */
+function showDateChangeError(errorMsg) {
+  const statusText = document.getElementById('dateChangeProgressStatusText');
+  const closeBtn = document.getElementById('dateChangeProgressCloseBtn');
+  const title = document.getElementById('dateChangeProgressTitle');
+
+  if (title) {
+    title.textContent = 'Update failed';
+  }
+
+  if (statusText) {
+    statusText.innerHTML = `<p>❌ ${errorMsg}</p>`;
+  }
+
+  if (closeBtn) {
+    closeBtn.style.display = 'block';
+  }
+
+  console.error(`❌ Date change error: ${errorMsg}`);
+}
+
+/**
+ * Save date edit (SSE version with progress dialog)
  */
 async function saveDateEdit() {
   const overlay = document.getElementById('dateEditorOverlay');
@@ -1282,150 +1439,148 @@ async function saveDateEdit() {
 
   console.log('💾 Saving date edit:', { photoIds, isBulk, newDate });
 
+  // Capture original dates BEFORE edit for undo
+  const originalDates = photoIds.map(id => {
+    const photo = state.photos.find(p => p.id === id);
+    return { 
+      id: id, 
+      originalDate: photo ? photo.date : null
+    };
+  });
+
+  // Close date editor immediately
+  closeDateEditor();
+  if (state.lightboxOpen) closeLightbox();
+
+  // Show progress dialog immediately (instant feedback!)
+  if (!document.getElementById('dateChangeProgressOverlay')) {
+    await loadDateChangeProgressOverlay();
+  }
+  showDateChangeProgressOverlay(photoIds.length);
+
   try {
+    // Build query parameters for SSE (EventSource only supports GET)
+    const params = new URLSearchParams();
+    
     if (isBulk) {
       // Bulk edit mode
       const mode = document.querySelector(
         'input[name="dateEditorMode"]:checked'
       ).value;
 
-      // Capture original dates BEFORE edit (mapped by ID)
-      const originalDates = photoIds.map(id => {
-        const photo = state.photos.find(p => p.id === id);
-        return { 
-          id: id, 
-          originalDate: photo.date 
-        };
-      });
-
-      // Build request body
-      const requestBody = {
-        photo_ids: photoIds,
-        new_date: newDate,
-        mode: mode, // 'shift', 'same', or 'sequence'
-      };
+      params.append('photo_ids', JSON.stringify(photoIds));
+      params.append('new_date', newDate);
+      params.append('mode', mode);
 
       // Add interval data if sequence mode
       if (mode === 'sequence') {
-        requestBody.interval_amount = parseInt(
+        params.append('interval_amount', 
           document.getElementById('dateEditorIntervalAmount').value
         );
-        requestBody.interval_unit = document.getElementById(
-          'dateEditorIntervalUnit'
-        ).value;
+        params.append('interval_unit', 
+          document.getElementById('dateEditorIntervalUnit').value
+        );
       }
 
-      const response = await fetch('/api/photos/bulk_update_date', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
+      // Use SSE for bulk updates
+      const eventSource = new EventSource(
+        '/api/photos/bulk_update_date/execute?' + params.toString()
+      );
+
+      eventSource.addEventListener('progress', (e) => {
+        const data = JSON.parse(e.data);
+        console.log('📊 Progress:', data);
+        updateDateChangeProgress(data.current, data.total);
       });
 
-      const result = await response.json();
+      eventSource.addEventListener('complete', (e) => {
+        const data = JSON.parse(e.data);
+        console.log('✅ Bulk date update complete:', data);
 
-      if (response.ok) {
-        console.log(`✅ Bulk date update successful (${mode} mode)`);
+        eventSource.close();
 
-        // Close date editor and lightbox
-        closeDateEditor();
-        if (state.lightboxOpen) closeLightbox();
+        // Show completion
+        showDateChangeComplete(data.updated_count);
 
         // Clear selection state
         deselectAllPhotos();
 
-        // Show toast with undo
-        showToast(
-          `Updated ${photoIds.length} photo${
-            photoIds.length > 1 ? 's' : ''
-          }`,
-          () => undoDateEdit(originalDates)
-        );
-
-        // Reload grid
+        // Show toast with undo after a delay
         setTimeout(() => {
-          loadAndRenderPhotos(false);
-        }, 300);
-      } else {
-        console.error('❌ Failed to update dates:', result.error);
-        showToast('Failed to update dates', null);
-      }
-    } else {
-      // Single photo edit
-      const photoId = photoIds[0];
-
-      // Capture original date BEFORE edit
-      const photo = state.photos.find(p => p.id === photoId);
-      const originalDate = photo.date;
-
-      const response = await fetch('/api/photo/update_date', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ photo_id: photoId, new_date: newDate }),
+          showToast(
+            `Updated ${data.updated_count} photo${data.updated_count > 1 ? 's' : ''}`,
+            () => undoDateEdit(originalDates)
+          );
+        }, 500);
       });
 
-      const result = await response.json();
-
-      if (response.ok) {
-        if (result.dry_run) {
-          console.log('🔍 DRY RUN - Date would be updated to:', newDate);
-          showToast('Date updated (DRY RUN)', null);
-          closeDateEditor();
-        } else {
-          console.log('✅ Date updated successfully');
-
-          // Update the photo in state
-          const photoIndex = state.photos.findIndex((p) => p.id === photoId);
-          if (photoIndex !== -1) {
-            state.photos[photoIndex].date = newDate;
-
-            // If in lightbox, update the info panel date display
-            if (state.lightboxOpen && state.lightboxPhotoIndex === photoIndex) {
-              const infoDate = document.getElementById('infoDate');
-              if (infoDate) {
-                const dateStr = newDate.replace(
-                  /^(\d{4}):(\d{2}):(\d{2})/,
-                  '$1-$2-$3'
-                );
-                const date = new Date(dateStr);
-
-                // Format: "Nov 2, 2025 at 3:45 PM"
-                const dateString = date.toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                  year: 'numeric',
-                });
-                const timeString = date.toLocaleTimeString('en-US', {
-                  hour: 'numeric',
-                  minute: '2-digit',
-                  hour12: true,
-                });
-                infoDate.textContent = `${dateString} at ${timeString}`;
-              }
-            }
-          }
-
-          // Close date editor first
-          closeDateEditor();
-
-          // Show toast with undo
-          showToast('Date updated', () => undoDateEdit([{id: photoId, originalDate: originalDate}]));
-
-          // Close lightbox to show updated grid
-          closeLightbox();
-
-          // Reload the entire grid to reflect new sort order
-          setTimeout(() => {
-            loadAndRenderPhotos(false); // false = reset from beginning
-          }, 300); // Longer delay to ensure lightbox is fully closed
+      eventSource.addEventListener('error', (e) => {
+        console.error('❌ Bulk date update failed:', e);
+        
+        let errorMsg = 'Failed to update dates';
+        try {
+          const data = JSON.parse(e.data);
+          errorMsg = data.error || errorMsg;
+        } catch (err) {
+          // Ignore parse errors
         }
-      } else {
-        console.error('❌ Failed to update date:', result.error);
-        showToast('Failed to update date', null);
-      }
+
+        showDateChangeError(errorMsg);
+        eventSource.close();
+      });
+
+    } else {
+      // Single photo edit
+      params.append('photo_id', photoIds[0]);
+      params.append('new_date', newDate);
+
+      // Use SSE for single photo update
+      const eventSource = new EventSource(
+        '/api/photo/update_date/execute?' + params.toString()
+      );
+
+      eventSource.addEventListener('progress', (e) => {
+        const data = JSON.parse(e.data);
+        console.log('📊 Progress:', data);
+        updateDateChangeProgress(data.current || 0, data.total || 1);
+      });
+
+      eventSource.addEventListener('complete', (e) => {
+        const data = JSON.parse(e.data);
+        console.log('✅ Date update complete:', data);
+
+        eventSource.close();
+
+        // Show completion
+        showDateChangeComplete(1);
+
+        // Show toast with undo after a delay
+        setTimeout(() => {
+          showToast(
+            'Date updated',
+            () => undoDateEdit(originalDates)
+          );
+        }, 500);
+      });
+
+      eventSource.addEventListener('error', (e) => {
+        console.error('❌ Date update failed:', e);
+        
+        let errorMsg = 'Failed to update date';
+        try {
+          const data = JSON.parse(e.data);
+          errorMsg = data.error || errorMsg;
+        } catch (err) {
+          // Ignore parse errors
+        }
+
+        showDateChangeError(errorMsg);
+        eventSource.close();
+      });
     }
   } catch (error) {
     console.error('❌ Error updating date:', error);
-    showToast('Error updating date', null);
+    showDateChangeError(error.message || 'Unknown error');
   }
 }
 

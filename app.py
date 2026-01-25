@@ -1389,6 +1389,190 @@ def bulk_update_photo_dates():
         app.logger.error(f"Error bulk updating photo dates: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/photo/update_date/execute', methods=['GET'])
+@handle_db_corruption
+def update_photo_date_execute():
+    """Update single photo date with SSE progress streaming"""
+    def generate():
+        try:
+            # Get request data from query parameters (EventSource only supports GET)
+            photo_id = int(request.args.get('photo_id'))
+            new_date = request.args.get('new_date')  # Format: YYYY:MM:DD HH:MM:SS
+            
+            if not photo_id or not new_date:
+                yield f"event: error\ndata: {json.dumps({'error': 'Missing photo_id or new_date'})}\n\n"
+                return
+            
+            if app.config.get('DRY_RUN_DATE_EDIT'):
+                print(f"\n🔍 DRY RUN - Would update photo {photo_id} date to: {new_date}")
+                yield f"event: complete\ndata: {json.dumps({'dry_run': True, 'updated_count': 1})}\n\n"
+                return
+            
+            # Send initial progress
+            yield f"event: progress\ndata: {json.dumps({'current': 0, 'total': 1, 'phase': 'starting'})}\n\n"
+            
+            # Update with full file operations
+            conn = get_db_connection()
+            success, error, transaction = update_photo_date_with_files(photo_id, new_date, conn)
+            
+            if success:
+                conn.commit()
+                conn.close()
+                print(f"✅ Updated photo {photo_id} with file operations")
+                
+                # Send completion
+                yield f"event: complete\ndata: {json.dumps({'updated_count': 1, 'photo_id': photo_id})}\n\n"
+            else:
+                # Rollback transaction
+                transaction.rollback(LIBRARY_PATH)
+                conn.rollback()
+                conn.close()
+                
+                yield f"event: error\ndata: {json.dumps({'error': error, 'failed_files': transaction.failed_files})}\n\n"
+                
+        except Exception as e:
+            error_logger.error(f"Error updating photo date: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+@app.route('/api/photos/bulk_update_date/execute', methods=['GET'])
+@handle_db_corruption
+def bulk_update_photo_dates_execute():
+    """Bulk update photo dates with SSE progress streaming"""
+    def generate():
+        try:
+            # Get request data from query parameters (EventSource only supports GET)
+            photo_ids_str = request.args.get('photo_ids')
+            new_date = request.args.get('new_date')  # Format: YYYY:MM:DD HH:MM:SS
+            mode = request.args.get('mode', 'shift')  # 'shift', 'same', or 'sequence'
+            
+            if not photo_ids_str or not new_date:
+                yield f"event: error\ndata: {json.dumps({'error': 'Missing photo_ids or new_date'})}\n\n"
+                return
+            
+            photo_ids = json.loads(photo_ids_str)
+            
+            if app.config.get('DRY_RUN_DATE_EDIT'):
+                print(f"\n🔍 DRY RUN - Would update {len(photo_ids)} photos in {mode} mode")
+                yield f"event: complete\ndata: {json.dumps({'dry_run': True, 'updated_count': len(photo_ids)})}\n\n"
+                return
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            from datetime import datetime, timedelta
+            
+            # Calculate target date for each photo based on mode
+            photo_date_map = {}  # photo_id -> target_date_str
+            
+            if mode == 'same':
+                # Set all photos to the same date
+                for photo_id in photo_ids:
+                    photo_date_map[photo_id] = new_date
+            
+            elif mode == 'shift':
+                # Shift all photos by the offset from the first photo
+                cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_ids[0],))
+                row = cursor.fetchone()
+                if not row:
+                    yield f"event: error\ndata: {json.dumps({'error': 'First photo not found'})}\n\n"
+                    return
+                
+                original_date_str = row['date_taken']
+                original_date = datetime.strptime(original_date_str, '%Y:%m:%d %H:%M:%S')
+                new_date_obj = datetime.strptime(new_date, '%Y:%m:%d %H:%M:%S')
+                offset = new_date_obj - original_date
+                
+                # Calculate shifted date for each photo
+                for photo_id in photo_ids:
+                    cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        photo_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
+                        shifted_date = photo_date + offset
+                        photo_date_map[photo_id] = shifted_date.strftime('%Y:%m:%d %H:%M:%S')
+            
+            elif mode == 'sequence':
+                # Sequence photos with interval
+                interval_amount = int(request.args.get('interval_amount', 5))
+                interval_unit = request.args.get('interval_unit', 'minutes')
+                
+                # Convert interval to timedelta
+                if interval_unit == 'seconds':
+                    interval = timedelta(seconds=interval_amount)
+                elif interval_unit == 'minutes':
+                    interval = timedelta(minutes=interval_amount)
+                elif interval_unit == 'hours':
+                    interval = timedelta(hours=interval_amount)
+                else:
+                    yield f"event: error\ndata: {json.dumps({'error': 'Invalid interval unit'})}\n\n"
+                    return
+                
+                # Get all photos with their original dates
+                photo_dates = []
+                for photo_id in photo_ids:
+                    cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        original_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
+                        photo_dates.append((photo_id, original_date))
+                
+                # Sort by original date
+                photo_dates.sort(key=lambda x: x[1])
+                
+                # Apply sequence
+                base_date = datetime.strptime(new_date, '%Y:%m:%d %H:%M:%S')
+                for index, (photo_id, _) in enumerate(photo_dates):
+                    sequenced_date = base_date + (interval * index)
+                    photo_date_map[photo_id] = sequenced_date.strftime('%Y:%m:%d %H:%M:%S')
+            
+            # Now process all photos with file operations and stream progress
+            master_transaction = DateEditTransaction()
+            success_count = 0
+            total = len(photo_date_map)
+            
+            for idx, (photo_id, target_date) in enumerate(photo_date_map.items(), 1):
+                # Send progress update
+                yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'photo_id': photo_id})}\n\n"
+                
+                success, error, transaction = update_photo_date_with_files(photo_id, target_date, conn)
+                
+                if success:
+                    success_count += 1
+                    # Merge this transaction into master
+                    master_transaction.operations.extend(transaction.operations)
+                else:
+                    # Log failure
+                    cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
+                    row = cursor.fetchone()
+                    filename = os.path.basename(row['current_path']) if row else f"photo_{photo_id}"
+                    master_transaction.log_failure(filename, error)
+            
+            # Check results
+            if master_transaction.failed_files:
+                # At least one failure - rollback EVERYTHING
+                print(f"❌ {len(master_transaction.failed_files)} failures - rolling back all changes")
+                master_transaction.rollback(LIBRARY_PATH)
+                conn.rollback()
+                conn.close()
+                
+                yield f"event: error\ndata: {json.dumps({{'error': 'Failed to update some photos', 'failed_count': len(master_transaction.failed_files), 'total_count': total, 'failed_files': master_transaction.failed_files}})}\n\n"
+            else:
+                # All succeeded - commit
+                conn.commit()
+                conn.close()
+                print(f"✅ Updated {success_count} photos with file operations")
+                
+                # Send completion
+                yield f"event: complete\ndata: {json.dumps({'updated_count': success_count, 'total': total})}\n\n"
+                
+        except Exception as e:
+            error_logger.error(f"Error bulk updating photo dates: {e}")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
 @app.route('/api/photos/restore', methods=['POST'])
 @handle_db_corruption
 def restore_photos():

@@ -1,0 +1,40 @@
+<!-- Date Change Progress Overlay -->
+<div class="import-overlay" id="dateChangeProgressOverlay">
+  <div class="import-card">
+    <!-- Header -->
+    <div class="import-header">
+      <span class="import-title" id="dateChangeProgressTitle">Updating dates</span>
+      <button class="import-close-btn" id="dateChangeProgressCloseBtn" aria-label="Close" style="display: none;">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Progress Section -->
+    <div class="import-progress-section">
+      <div class="import-status-text" id="dateChangeProgressStatusText">
+        Starting<span class="import-spinner"></span>
+      </div>
+      
+      <div class="import-stats" id="dateChangeProgressStats" style="display: none;">
+        <span class="import-stat">
+          <span class="import-stat-label">Updated:</span>
+          <span class="import-stat-value" id="dateChangeProgressCurrent">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Total:</span>
+          <span class="import-stat-value" id="dateChangeProgressTotal">0</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="import-actions">
+      <button class="import-btn import-btn-secondary" id="dateChangeProgressCancelBtn" style="display: none;">
+        Cancel
+      </button>
+      <button class="import-btn import-btn-primary" id="dateChangeProgressDoneBtn" style="display: none;">
+        Done
+      </button>
+    </div>
+  </div>
+</div>
