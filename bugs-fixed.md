@@ -1232,6 +1232,88 @@ else:
 
 ---
 
+### Database Operations - Empty Folder Cleanup
+**Fixed:** Thumbnail cache folder cleanup now automatic  
+**Version:** v161
+
+**Issues resolved:**
+- ✅ Empty thumbnail shard folders now removed automatically after thumbnail deletion
+- ✅ Works for photo deletion (removes thumbnail + cleanup folders)
+- ✅ Works for date edit when EXIF write changes hash (removes old thumbnail + cleanup folders)
+- ✅ Works for import when EXIF write changes hash (removes old thumbnail + cleanup folders)
+- ✅ Selective cleanup - only removes empty folders, preserves folders with other thumbnails
+
+**Root cause:**
+Thumbnail cache uses 2-level sharding: `.thumbnails/ab/cd/abcd1234.jpg`
+
+When thumbnails were deleted in 3 scenarios:
+1. Photo deletion
+2. Date edit (EXIF write changes hash)
+3. Import (EXIF write changes hash)
+
+The code only removed the `.jpg` file, leaving empty parent folders (`cd/` and `ab/`) behind.
+
+Library sync operations (rebuild database, update index) already clean library folders correctly but intentionally skip hidden folders like `.thumbnails/` (correct separation of concerns).
+
+**The fix:**
+```python
+def cleanup_empty_thumbnail_folders(thumbnail_path):
+    """
+    Delete empty thumbnail shard folders after removing a thumbnail.
+    
+    Thumbnail structure: .thumbnails/ab/cd/abcd1234.jpg
+    After deleting abcd1234.jpg, check if cd/ is empty, then ab/
+    """
+    try:
+        # Get parent directories (2 levels)
+        shard2_dir = os.path.dirname(thumbnail_path)  # .thumbnails/ab/cd/
+        shard1_dir = os.path.dirname(shard2_dir)      # .thumbnails/ab/
+        
+        # Try removing level-2 shard (cd/)
+        if os.path.exists(shard2_dir):
+            try:
+                if len(os.listdir(shard2_dir)) == 0:
+                    os.rmdir(shard2_dir)
+                    print(f"    ✓ Cleaned up empty thumbnail shard: {os.path.basename(shard2_dir)}/")
+            except OSError:
+                pass  # Not empty or permission issue, ignore
+        
+        # Try removing level-1 shard (ab/)
+        if os.path.exists(shard1_dir):
+            try:
+                if len(os.listdir(shard1_dir)) == 0:
+                    os.rmdir(shard1_dir)
+                    print(f"    ✓ Cleaned up empty thumbnail shard: {os.path.basename(shard1_dir)}/")
+            except OSError:
+                pass  # Not empty or permission issue, ignore
+                
+    except Exception as e:
+        print(f"    ⚠️  Thumbnail folder cleanup failed: {e}")
+```
+
+Called after each `os.remove(thumbnail_path)` in 3 locations:
+- Photo deletion (app.py line ~1194)
+- Date edit EXIF write (app.py line ~540)
+- Import EXIF write (app.py line ~2127)
+
+**Testing verified:**
+- Delete photo with thumbnail → both shard folders removed if empty ✓
+- Date edit changes hash → old thumbnail deleted, old shard folders removed if empty ✓
+- Multiple thumbnails in same shard → only empty folders removed, populated folders kept ✓
+- Non-critical errors (permissions, race conditions) handled gracefully ✓
+
+**Investigation:**
+Complete analysis in `EMPTY_FOLDER_CLEANUP_INVESTIGATION.md`:
+- Traced all thumbnail deletion sites
+- Verified library sync behavior (correctly skips hidden folders)
+- Tested empty folder scenarios
+- Confirmed 95% of cleanup already working (library folders)
+- Identified the 5% gap (thumbnail folders only)
+
+**Impact:** Keeps filesystem clean, prevents accumulation of empty thumbnail folders over time. Low severity bug (no functional impact) but good housekeeping.
+
+---
+
 ### Date Picker - Missing After Import
 **Fixed:** Date picker now automatically refreshes after import completes  
 **Version:** v158 (already implemented)

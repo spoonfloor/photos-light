@@ -537,6 +537,7 @@ def update_photo_date_with_files(photo_id, new_date, conn):
                     old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
                     if os.path.exists(old_thumb_path):
                         os.remove(old_thumb_path)
+                        cleanup_empty_thumbnail_folders(old_thumb_path)
                         print(f"  🗑️  Deleted old thumbnail")
                 
                 # Update database with new hash
@@ -1059,6 +1060,44 @@ def cleanup_empty_folders(file_path, library_root):
             print(f"    ⚠️  Cleanup failed for {os.path.relpath(current_dir, library_root)}: {e}")
             break
 
+def cleanup_empty_thumbnail_folders(thumbnail_path):
+    """
+    Delete empty thumbnail shard folders after removing a thumbnail.
+    
+    Thumbnail structure: .thumbnails/ab/cd/abcd1234.jpg
+    After deleting abcd1234.jpg, check if cd/ is empty, then ab/
+    
+    Args:
+        thumbnail_path: Full path to the deleted thumbnail file
+    """
+    try:
+        # Get parent directories (2 levels)
+        shard2_dir = os.path.dirname(thumbnail_path)  # .thumbnails/ab/cd/
+        shard1_dir = os.path.dirname(shard2_dir)      # .thumbnails/ab/
+        
+        # Try removing level-2 shard (cd/)
+        if os.path.exists(shard2_dir):
+            try:
+                # Check if empty (no files, no subdirs)
+                if len(os.listdir(shard2_dir)) == 0:
+                    os.rmdir(shard2_dir)
+                    print(f"    ✓ Cleaned up empty thumbnail shard: {os.path.basename(shard2_dir)}/")
+            except OSError:
+                pass  # Not empty or permission issue, ignore
+        
+        # Try removing level-1 shard (ab/)
+        if os.path.exists(shard1_dir):
+            try:
+                if len(os.listdir(shard1_dir)) == 0:
+                    os.rmdir(shard1_dir)
+                    print(f"    ✓ Cleaned up empty thumbnail shard: {os.path.basename(shard1_dir)}/")
+            except OSError:
+                pass  # Not empty or permission issue, ignore
+                
+    except Exception as e:
+        # Never fail the operation if cleanup fails
+        print(f"    ⚠️  Thumbnail folder cleanup failed: {e}")
+
 @app.route('/api/photos/delete', methods=['POST'])
 @handle_db_corruption
 def delete_photos():
@@ -1150,6 +1189,7 @@ def delete_photos():
                     
                     if os.path.exists(thumbnail_path):
                         os.remove(thumbnail_path)
+                        cleanup_empty_thumbnail_folders(thumbnail_path)
                         print(f"    ✓ Deleted thumbnail")
                 
                 # Move DB record to deleted_photos table
@@ -2087,6 +2127,7 @@ def import_from_paths():
                             old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4], f"{content_hash}.jpg")
                             if os.path.exists(old_thumb_path):
                                 os.remove(old_thumb_path)
+                                cleanup_empty_thumbnail_folders(old_thumb_path)
                                 print(f"   🗑️  Deleted old thumbnail")
                             
                             # Update database with new hash

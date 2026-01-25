@@ -2,7 +2,7 @@
 
 Last updated: January 24, 2026
 
-**Status:** 17 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import), 2 remaining bugs + 1 deferred feature
+**Status:** 18 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup), 1 remaining bug + 1 deferred feature
 
 ---
 
@@ -81,20 +81,6 @@ Last updated: January 24, 2026
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 2-3 hours  
 **Status:** ✅ FIXED - See bugs-fixed.md
-
----
-
-### Database Operations - Empty Folder Cleanup
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 1 hour  
-**Status:** NOT STARTED
-
-**Issue:** Both rebuild database and update index operations should remove empty folders in library and in thumbnails
-- Operations leave behind empty folders after moving/deleting photos
-- Accumulates clutter over time
-- Should clean up both library folders and thumbnail folders
-
-**Fix approach:** Add cleanup step to both operations that removes empty folders after completion
 
 ---
 
@@ -188,7 +174,7 @@ Based on impact, frequency, and effort:
 13. ✅ **Date Changes - Latency & Feedback Issues** (DONE - v155)
 14. ✅ **Import Duplicate Categorization** (DONE - v156-v157)
 15. ✅ **Date Picker - Missing After Import** (DONE - v158, verified working)
-16. 🟡 **Database Operations - Empty Folder Cleanup** (1 hr, maintenance/cleanup)
+16. ✅ **Database Operations - Empty Folder Cleanup** (DONE - v161)
 17. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
 18. 🔵 **Import Duplicate Detection** (deferred feature work)
 
@@ -203,15 +189,15 @@ Based on impact, frequency, and effort:
 
 ## SUMMARY
 
-**Next up:** Database Operations - Empty Folder Cleanup
+**Next up:** Dialog Spinner - Remove When Realtime Feedback Exists
 
-**Total remaining:** 2 bugs + 1 deferred feature
+**Total remaining:** 1 bug + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 2 bugs (Database Operations Empty Folder Cleanup, Dialog Spinner Removal)
+- 🟡 Polish: 1 bug (Dialog Spinner Removal)
 - 🟢 Edge cases: 0 bugs (Video Format and Import Counts removed - cannot reproduce or low priority)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~1.5 hours for remaining bugs (excluding deferred feature)
+**Estimated total effort:** ~30 minutes for remaining bug (excluding deferred feature)
 
 ---
 
