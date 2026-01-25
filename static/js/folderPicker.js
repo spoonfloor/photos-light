@@ -154,8 +154,12 @@ const FolderPicker = (() => {
       updateButtonText();
 
       if (folders.length === 0 && !currentHasDb) {
-        // Show placeholder boxes for empty folder
+        // Show placeholder boxes to fill vertical space without scrolling
+        // Calculated to fit available folder-list height (~350px / 54px per item = 6)
         folderList.innerHTML = `
+          <div class="folder-placeholder"></div>
+          <div class="folder-placeholder"></div>
+          <div class="folder-placeholder"></div>
           <div class="folder-placeholder"></div>
           <div class="folder-placeholder"></div>
           <div class="folder-placeholder"></div>
