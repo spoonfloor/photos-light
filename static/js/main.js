@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v152';
+const MAIN_JS_VERSION = 'v153';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5489,6 +5489,7 @@ function handleImportEvent(event, data) {
     if (importedPhotos > 0) {
       console.log(`🔄 Reloading ${importedPhotos} newly imported photos...`);
       loadAndRenderPhotos();
+      populateDatePicker(); // Refresh date picker to show years from newly imported photos
     }
   }
 
