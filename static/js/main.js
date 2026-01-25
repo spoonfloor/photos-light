@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v153';
+const MAIN_JS_VERSION = 'v154';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -257,6 +257,12 @@ async function populateDatePicker() {
 
       // Enable photo-related actions
       enablePhotoRelatedActions();
+    } else {
+      // Hide the date picker when there are no photos
+      const datePickerContainer = document.querySelector('.date-picker');
+      if (datePickerContainer) {
+        datePickerContainer.style.visibility = 'hidden';
+      }
     }
 
     console.log(`📅 Loaded ${data.years.length} years`);
@@ -1338,7 +1344,6 @@ async function saveDateEdit() {
         // Reload grid
         setTimeout(() => {
           loadAndRenderPhotos(false);
-          populateDatePicker(); // Refresh year dropdown to include new years
         }, 300);
       } else {
         console.error('❌ Failed to update dates:', result.error);
@@ -1411,7 +1416,6 @@ async function saveDateEdit() {
           // Reload the entire grid to reflect new sort order
           setTimeout(() => {
             loadAndRenderPhotos(false); // false = reset from beginning
-            populateDatePicker(); // Refresh year dropdown to include new years
           }, 300); // Longer delay to ensure lightbox is fully closed
         }
       } else {
@@ -2280,6 +2284,9 @@ async function loadAndRenderPhotos(append = false) {
 
     // Update utility menu availability after loading photos
     updateUtilityMenuAvailability();
+
+    // Update date picker to reflect current photo years (show/hide as needed)
+    await populateDatePicker();
   } catch (error) {
     console.error('❌ Error loading photos:', error);
     state.hasDatabase = false; // Mark database as unavailable on error
@@ -2856,7 +2863,6 @@ async function undoDateEdit(originalDates) {
       
       // Reload grid to reflect restored dates
       await loadAndRenderPhotos(false);
-      await populateDatePicker();
       
       showToast('Date change undone', null);
     } else {
@@ -5489,7 +5495,6 @@ function handleImportEvent(event, data) {
     if (importedPhotos > 0) {
       console.log(`🔄 Reloading ${importedPhotos} newly imported photos...`);
       loadAndRenderPhotos();
-      populateDatePicker(); // Refresh date picker to show years from newly imported photos
     }
   }
 
@@ -5538,8 +5543,7 @@ async function checkLibraryHealthAndInit() {
       case 'healthy':
         console.log('✅ Library is healthy');
         state.hasDatabase = true;
-        // Now it's safe to populate date picker and load photos
-        await populateDatePicker();
+        // Load photos (date picker will be populated automatically)
         await loadAndRenderPhotos();
         return;
 
