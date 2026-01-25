@@ -2,7 +2,7 @@
 
 Last updated: January 25, 2026
 
-**Status:** 19 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal), 1 remaining bug + 1 deferred feature
+**Status:** 19 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal), 3 remaining bugs + 1 deferred feature
 
 ---
 
@@ -80,7 +80,54 @@ Last updated: January 25, 2026
 - Creates confusing UX and potential interaction issues
 - Need modal queue or dialog manager
 
-**Fix approach:** Implement dialog queue/manager system to ensure only one dialog displays at a time
+**Special case - Toast interaction:**
+- Toast needs to show at same time as many dialogs, but should push dialog up so they don't interact (or similar strategy)
+- Toast and dialog should be able to coexist without overlapping
+
+**Fix approach:** Implement dialog queue/manager system to ensure only one dialog displays at a time, with special handling for toast notifications that can coexist with dialogs
+
+---
+
+### Utilities Menu - String and Order Changes
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 15 minutes  
+**Status:** NOT STARTED
+
+**Issue:** Utilities menu items need reordering and renaming
+
+**Required changes:**
+1. "Switch library" → "Open library" (switch is implied when you open another file)
+2. "Rebuild database" → "Clean database"
+3. "Update library index" - keep as is (2nd place)
+4. "Rebuild thumbnails" - move to 3rd place (currently 4th)
+5. "Remove duplicates" → "Show duplicates" (4th place)
+
+**Current order:**
+1. Switch library
+2. Update library index
+3. Rebuild database
+4. Remove duplicates
+5. Rebuild thumbnails
+
+**New order:**
+1. Open library (renamed)
+2. Update library index
+3. Clean database (renamed)
+4. Rebuild thumbnails (moved up)
+5. Show duplicates (renamed, moved down)
+
+---
+
+### Duplicates Feature - Why Show-Only?
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** Research/documentation  
+**Status:** NOT STARTED
+
+**Issue:** Find out why we decided to rewrite the remove dupes feature so that it only shows dupes
+- Original feature removed duplicates
+- Now it only shows them
+- Need to document the reasoning behind this design decision
+- May inform future feature work
 
 ---
 
@@ -184,7 +231,9 @@ Based on impact, frequency, and effort:
 16. ✅ **Database Operations - Empty Folder Cleanup** (DONE - v161)
 17. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
 18. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
-19. 🔵 **Import Duplicate Detection** (deferred feature work)
+19. 🟡 **Utilities Menu - String and Order Changes** (15 min, UX consistency)
+20. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
+21. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Rationale:**
 - **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
@@ -197,15 +246,15 @@ Based on impact, frequency, and effort:
 
 ## SUMMARY
 
-**Next up:** Dialog Framework - Multiple Dialogs Showing Simultaneously
+**Next up:** Utilities Menu - String and Order Changes (15 min quick win)
 
-**Total remaining:** 1 bug + 1 deferred feature
+**Total remaining:** 3 bugs + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 1 bug (Dialog Framework)
+- 🟡 Polish: 3 bugs (Dialog Framework, Utilities Menu Changes, Duplicates Feature Research)
 - 🟢 Edge cases: 0 bugs (All edge cases resolved ✅)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~2 hours for remaining bug (excluding deferred feature)
+**Estimated total effort:** ~2-3 hours for remaining bugs (excluding deferred feature)
 
 ---
 
