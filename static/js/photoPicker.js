@@ -14,6 +14,7 @@ const PhotoPicker = (() => {
   let countingAborted = false; // Flag to abort ongoing counting operations
   let fileListClickHandler = null; // Store reference to event handler for cleanup
   let keyboardHandler = null; // Store keyboard event handler for cleanup
+  let thumbnailObserver = null; // IntersectionObserver for lazy loading thumbnails
 
   // ===========================================================================
   // API Calls
@@ -220,6 +221,67 @@ const PhotoPicker = (() => {
   }
 
   // ===========================================================================
+  // Thumbnail Lazy Loading
+  // ===========================================================================
+
+  function setupThumbnailLazyLoading() {
+    const fileList = document.getElementById('photoPickerFileList');
+    const thumbnails = fileList.querySelectorAll('.photo-picker-thumbnail:not([src])');
+    
+    // Create observer if doesn't exist
+    if (!thumbnailObserver) {
+      thumbnailObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const img = entry.target;
+            loadThumbnail(img);
+            thumbnailObserver.unobserve(img); // Only load once
+          }
+        });
+      }, {
+        root: fileList,
+        rootMargin: '100px', // Load 100px before entering viewport
+        threshold: 0.01
+      });
+    }
+    
+    // Observe all loading thumbnails
+    thumbnails.forEach(img => {
+      thumbnailObserver.observe(img);
+    });
+  }
+
+  async function loadThumbnail(imgElement) {
+    const path = imgElement.dataset.path;
+    
+    try {
+      const response = await fetch('/api/filesystem/preview-thumbnail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        
+        imgElement.src = url;
+        
+        // Clean up blob URL after image loads
+        imgElement.onload = () => {
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        };
+      } else {
+        // Error state
+        imgElement.classList.add('error');
+      }
+    } catch (error) {
+      console.error('Thumbnail load error:', error);
+      imgElement.classList.add('error');
+    }
+  }
+
+  // ===========================================================================
   // UI Updates
   // ===========================================================================
 
@@ -356,15 +418,38 @@ const PhotoPicker = (() => {
         const iconClass = checked ? 'check_box' : baseIcon;
         const stateClass = checked ? 'selected' : '';
 
+        // Format file size
+        const formatSize = (bytes) => {
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+          return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        };
+        
+        // Format dimensions and metadata
+        const dimensionsText = file.dimensions 
+          ? `${file.dimensions.width}×${file.dimensions.height}` 
+          : '';
+        const sizeText = formatSize(file.size || 0);
+        const metaText = dimensionsText ? `${dimensionsText} • ${sizeText}` : sizeText;
+
         html += `
           <div class="photo-picker-item file-item" data-file-path="${filePath}" data-type="file">
             <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${filePath}" data-type="file">${iconClass}</span>
-            <span class="photo-picker-name">${file.name}</span>
+            <div class="photo-picker-thumbnail-container">
+              <img class="photo-picker-thumbnail" data-path="${filePath}" alt="">
+            </div>
+            <div class="photo-picker-file-info">
+              <span class="photo-picker-name">${file.name}</span>
+              <span class="photo-picker-meta">${metaText}</span>
+            </div>
           </div>
         `;
       });
 
       fileList.innerHTML = html;
+
+      // Set up lazy loading for thumbnails
+      setupThumbnailLazyLoading();
 
       // Remove old event listener if it exists to prevent duplicate handlers
       if (fileListClickHandler) {
@@ -468,9 +553,16 @@ const PhotoPicker = (() => {
   }
 
   async function navigateTo(path) {
+    // Disconnect observer before navigating
+    if (thumbnailObserver) {
+      thumbnailObserver.disconnect();
+    }
+    
     currentPath = path || VIRTUAL_ROOT;
     updateBreadcrumb();
     await updateFileList();
+    
+    // Observer will be recreated in updateFileList()
   }
 
   // ===========================================================================

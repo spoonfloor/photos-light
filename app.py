@@ -3063,10 +3063,18 @@ def list_directory():
                     ext = os.path.splitext(item)[1].lower()
                     if ext in ALL_MEDIA_EXTENSIONS:
                         file_type = 'video' if ext in VIDEO_EXTENSIONS else 'photo'
-                        files.append({
+                        
+                        file_info = {
                             'name': item,
-                            'type': file_type
-                        })
+                            'type': file_type,
+                            'size': os.path.getsize(item_path)
+                        }
+                        
+                        # Skip dimension extraction - it blocks on NAS
+                        # Dimensions not critical for picker UX
+                        file_info['dimensions'] = None
+                        
+                        files.append(file_info)
             except (PermissionError, OSError):
                 # Skip items we can't access
                 continue
@@ -3093,6 +3101,121 @@ def list_directory():
         
     except Exception as e:
         app.logger.error(f"Error listing directory: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/filesystem/preview-thumbnail', methods=['POST'])
+def preview_thumbnail():
+    """
+    Generate quick preview thumbnail (80x80px for 2x retina display at 40x40)
+    Returns JPEG binary data or error
+    """
+    try:
+        data = request.json
+        path = data.get('path')
+        
+        # Validate path
+        if not path or not os.path.exists(path):
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Security: Ensure path is absolute and exists
+        path = os.path.abspath(path)
+        
+        if not os.path.isfile(path):
+            return jsonify({'error': 'Not a file'}), 400
+        
+        # Determine file type
+        ext = os.path.splitext(path)[1].lower()
+        
+        # Photo extensions
+        photo_exts = {'.jpg', '.jpeg', '.png', '.heic', '.heif', '.gif', 
+                      '.bmp', '.tiff', '.tif', '.webp', '.avif', '.jp2',
+                      '.raw', '.cr2', '.nef', '.arw', '.dng'}
+        
+        # Video extensions
+        video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mkv', '.wmv', 
+                      '.webm', '.flv', '.3gp', '.mpg', '.mpeg', '.vob', 
+                      '.ts', '.mts'}
+        
+        if ext in photo_exts:
+            return generate_photo_preview(path)
+        elif ext in video_exts:
+            return generate_video_preview(path)
+        else:
+            return jsonify({'error': 'Unsupported file type'}), 400
+            
+    except Exception as e:
+        print(f"❌ Preview thumbnail error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def generate_photo_preview(file_path):
+    """Generate photo thumbnail (80x80px for 2x retina display at 40x40)"""
+    try:
+        with Image.open(file_path) as img:
+            # Apply EXIF orientation
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img)
+            
+            # Convert to RGB if needed
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # Create thumbnail (maintains aspect ratio)
+            img.thumbnail((80, 80), Image.Resampling.LANCZOS)
+            
+            # Save to memory buffer
+            from io import BytesIO
+            buffer = BytesIO()
+            img.save(buffer, format='JPEG', quality=75)
+            buffer.seek(0)
+            
+            return send_file(buffer, mimetype='image/jpeg')
+            
+    except Exception as e:
+        print(f"❌ Photo preview error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def generate_video_preview(file_path):
+    """Generate video thumbnail (80x80px for 2x retina display at 40x40)"""
+    try:
+        import uuid
+        temp_file = f"/tmp/preview_{uuid.uuid4()}.jpg"
+        
+        # Extract first frame at 80px max dimension
+        cmd = [
+            'ffmpeg', '-i', file_path,
+            '-vf', 'scale=80:80:force_original_aspect_ratio=decrease',
+            '-vframes', '1', '-y', temp_file
+        ]
+        
+        result = subprocess.run(
+            cmd, 
+            capture_output=True, 
+            timeout=10  # 10 second timeout
+        )
+        
+        if result.returncode == 0 and os.path.exists(temp_file):
+            response = send_file(temp_file, mimetype='image/jpeg')
+            
+            # Clean up temp file after sending
+            @response.call_on_close
+            def cleanup():
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                except:
+                    pass
+            
+            return response
+        else:
+            return jsonify({'error': 'Video preview failed'}), 500
+            
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Video preview timeout'}), 500
+    except Exception as e:
+        print(f"❌ Video preview error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
