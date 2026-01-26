@@ -1576,7 +1576,12 @@ def bulk_update_photo_dates_execute():
             success_count = 0
             total = len(photo_date_map)
             
+            print(f"🔍 DEBUG: photo_date_map has {total} entries")
+            print(f"🔍 DEBUG: photo_date_map keys type: {type(list(photo_date_map.keys())[0]) if photo_date_map else 'empty'}")
+            
             for idx, (photo_id, target_date) in enumerate(photo_date_map.items(), 1):
+                print(f"🔍 Processing photo_id: {photo_id} (type: {type(photo_id)}), target_date: {target_date}")
+                
                 # Send progress update
                 yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'photo_id': photo_id})}\n\n"
                 
@@ -1597,19 +1602,45 @@ def bulk_update_photo_dates_execute():
             if master_transaction.failed_files:
                 # At least one failure - rollback EVERYTHING
                 print(f"❌ {len(master_transaction.failed_files)} failures - rolling back all changes")
+                print(f"🔍 DEBUG: failed_files content: {master_transaction.failed_files}")
+                print(f"🔍 DEBUG: failed_files types: {[type(f) for f in master_transaction.failed_files]}")
+                
                 master_transaction.rollback(LIBRARY_PATH)
                 conn.rollback()
                 conn.close()
                 
-                yield f"event: error\ndata: {json.dumps({{'error': 'Failed to update some photos', 'failed_count': len(master_transaction.failed_files), 'total_count': total, 'failed_files': master_transaction.failed_files}})}\n\n"
+                # Try to serialize and catch exact error
+                try:
+                    error_data = {
+                        'error': 'Failed to update some photos', 
+                        'failed_count': len(master_transaction.failed_files), 
+                        'total_count': total, 
+                        'failed_files': master_transaction.failed_files
+                    }
+                    error_json = json.dumps(error_data)
+                    yield f"event: error\ndata: {error_json}\n\n"
+                except TypeError as te:
+                    print(f"❌ JSON serialization error in failed_files: {te}")
+                    print(f"  failed_files: {master_transaction.failed_files}")
+                    for i, f in enumerate(master_transaction.failed_files):
+                        print(f"  Item {i}: type={type(f)}, value={f}")
+                    raise
             else:
                 # All succeeded - commit
                 conn.commit()
                 conn.close()
                 print(f"✅ Updated {success_count} photos with file operations")
                 
-                # Send completion
-                yield f"event: complete\ndata: {json.dumps({'updated_count': success_count, 'total': total})}\n\n"
+                # Send completion - debug the response data
+                try:
+                    response_data = {'updated_count': success_count, 'total': total}
+                    response_json = json.dumps(response_data)
+                    yield f"event: complete\ndata: {response_json}\n\n"
+                except TypeError as te:
+                    print(f"❌ JSON serialization error: {te}")
+                    print(f"  success_count type: {type(success_count)}, value: {success_count}")
+                    print(f"  total type: {type(total)}, value: {total}")
+                    raise
                 
         except Exception as e:
             error_logger.error(f"Error bulk updating photo dates: {e}")

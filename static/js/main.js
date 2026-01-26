@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v184';
+const MAIN_JS_VERSION = 'v187';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1308,16 +1308,10 @@ function showDateChangeProgressOverlay(photoCount) {
     }
   }
 
-  // Reset display
-  if (statusText) {
-    statusText.textContent = 'Starting';
-  }
-
   // Show stats for multiple photos
   if (stats && photoCount > 1) {
     stats.style.display = 'flex';
     if (currentEl) currentEl.textContent = '0';
-    if (totalEl) totalEl.textContent = photoCount.toString();
   } else if (stats) {
     stats.style.display = 'none';
   }

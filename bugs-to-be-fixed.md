@@ -2,32 +2,11 @@
 
 Last updated: January 25, 2026
 
-**Status:** 8 remaining bugs + 1 deferred feature
+**Status:** 6 remaining bugs + 1 deferred feature
 
 ---
 
 ## 🔴 TIER 1: CRITICAL - MUST FIX (High Impact, Core Workflows)
-
-### Date Change - JavaScript Error (totalEl not defined)
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 10 minutes  
-**Status:** NOT STARTED
-
-**Issue:** Date change crashes with JavaScript error
-- Error: `Uncaught (in promise) ReferenceError: totalEl is not defined`
-- Occurs in `showDateChangeProgressOverlay` function (main.js:1320)
-- Triggered when saving date edit
-- Prevents date change operation from completing
-
-**Error location:**
-```
-at showDateChangeProgressOverlay (main.js?v=155:1320:5)
-at HTMLButtonElement.saveDateEdit (main.js?v=155:1459:3)
-```
-
-**Fix approach:** Define missing `totalEl` variable in showDateChangeProgressOverlay function
-
----
 
 ### Library Conversion (Terraforming) - Leaves Issues Behind
 **Priority:** 🔴 CRITICAL  
@@ -53,24 +32,6 @@ at HTMLButtonElement.saveDateEdit (main.js?v=155:1459:3)
 ---
 
 ## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
-
-### Dialog Framework - Multiple Dialogs Showing Simultaneously
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 2 hours  
-**Status:** NOT STARTED
-
-**Issue:** Need way to prevent two dialogs from appearing at the same time
-- Multiple dialogs can appear on top of each other
-- Creates confusing UX and potential interaction issues
-- Need modal queue or dialog manager
-
-**Special case - Toast interaction:**
-- Toast needs to show at same time as many dialogs, but should push dialog up so they don't interact (or similar strategy)
-- Toast and dialog should be able to coexist without overlapping
-
-**Fix approach:** Implement dialog queue/manager system to ensure only one dialog displays at a time, with special handling for toast notifications that can coexist with dialogs
-
----
 
 ### Utilities Menu - String and Order Changes
 **Priority:** 🟡 MEDIUM  
@@ -222,14 +183,13 @@ at HTMLButtonElement.saveDateEdit (main.js?v=155:1459:3)
 
 ---
 
-## 📋 RECOMMENDED FIX ORDER
+## Recommended Fix Order
 
 Based on impact, frequency, and effort (quick wins first, then deep work):
 
-1. 🔴 **Date Change - JavaScript Error (totalEl not defined)** (10 min, CRITICAL - hard blocker)
-2. 🟡 **Utilities Menu - String and Order Changes** (5 min, quick win builds momentum)
-3. 🟡 **Library Conversion Scoreboard - Remove Green Text Color** (5 min, quick win same area)
-4. 🔴 **Library Conversion - Leaves Issues Behind** (2-3 hrs, CRITICAL but one-time operation with workaround)
+1. 🟡 **Utilities Menu - String and Order Changes** (5 min, quick win builds momentum)
+2. 🟡 **Library Conversion Scoreboard - Remove Green Text Color** (5 min, quick win same area)
+3. 🔴 **Library Conversion - Leaves Issues Behind** (2-3 hrs, CRITICAL but one-time operation with workaround)
 5. 🟡 **Lightbox - Non-Functional Scrollbar** (30 min, visual polish)
 6. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
 7. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
@@ -237,22 +197,21 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 9. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 10. 🔵 **Import Duplicate Detection** (deferred feature work)
 
-**Strategy:** Clear quick wins (20 min, 3 bugs) before deep work on conversion cleanup
+**Strategy:** Clear quick wins (10 min, 2 bugs) before deep work on conversion cleanup
 
 ---
 
 ## SUMMARY
 
-**Next up:** Date Change - JavaScript Error (10 min, hard blocker)
-**Then:** Utilities Menu + Scoreboard (10 min, quick wins)
+**Next up:** Utilities Menu + Scoreboard (10 min, quick wins)
 **Then:** Library Conversion cleanup (2-3 hrs, deep work)
 
-**Total remaining:** 8 bugs + 1 deferred feature
-- 🔴 Critical: 2 bugs (Date Change JavaScript Error, Library Conversion Cleanup)
-- 🟡 Polish: 6 bugs (Utilities Menu, Scoreboard Color, Lightbox Scrollbar, Dialog Framework, Folder Picker Checkbox, Duplicates Research, Performance Research)
+**Total remaining:** 6 bugs + 1 deferred feature
+- 🔴 Critical: 1 bug (Library Conversion Cleanup)
+- 🟡 Polish: 5 bugs (Utilities Menu, Scoreboard Color, Lightbox Scrollbar, Folder Picker Checkbox, Duplicates Research, Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~8 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~6 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 

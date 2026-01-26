@@ -6,6 +6,78 @@ Issues that have been fixed and verified.
 
 ## Session 9: January 25, 2026
 
+### Date Change - JavaScript Error (totalEl not defined)
+**Fixed:** Removed dead code and fixed status text display  
+**Version:** v186
+
+**Issues resolved:**
+- ✅ Date change no longer crashes with JavaScript error
+- ✅ Progress overlay displays correct status text ("Updating X photos...")
+- ✅ Error "totalEl is not defined" eliminated
+- ✅ "Starting" text no longer overwrites proper status message
+
+**Root causes:**
+1. **Line 1320:** Referenced undefined `totalEl` variable (leftover dead code from previous design)
+2. **Lines 1311-1314:** "Reset display" section immediately overwrote status text with "Starting" (contradictory logic)
+
+**Evidence:**
+- `totalEl` variable was never declared with `getElementById()`
+- HTML fragment has no element with id "dateChangeProgressTotal"
+- Status text was set correctly (lines 1302-1309) then immediately overwritten (lines 1311-1314)
+- Both bugs created confusing/broken UX
+
+**The fix:**
+```javascript
+// Removed line 1320:
+if (totalEl) totalEl.textContent = photoCount.toString(); // ❌ totalEl undefined
+
+// Removed lines 1311-1314:
+// Reset display
+if (statusText) {
+  statusText.textContent = 'Starting'; // ❌ Overwrites correct status
+}
+```
+
+**Flow now correct:**
+1. Set title: "Updating dates"
+2. Set status: "Updating 40 photos..." ✓
+3. Show stats: "UPDATED: 39" counter ✓
+4. Display overlay ✓
+
+**Testing verified:**
+- No linter errors introduced
+- Status text shows correct message from start
+- Counter updates during progress (39/40, etc.)
+- Single photo shows spinner, multiple photos show count
+
+**Impact:** Critical bug fix. Date editing was completely broken - crashed immediately on save. Now works as designed with proper status feedback.
+
+---
+
+### Dialog Framework - Multiple Dialogs Showing Simultaneously
+**Fixed:** Implemented dialog queue/manager system  
+**Version:** (marked as fixed by user)
+
+**Issues resolved:**
+- ✅ Dialog system now prevents multiple dialogs from appearing simultaneously
+- ✅ Dialog queue ensures only one dialog displays at a time
+- ✅ Toast notifications can coexist with dialogs without overlapping
+- ✅ Improved UX consistency and interaction handling
+
+**Root cause:**
+- Multiple dialogs could appear on top of each other
+- Created confusing UX and potential interaction issues
+- No coordination between dialog components
+
+**The fix:**
+- Implemented dialog queue/manager system
+- Special handling for toast notifications (can coexist with dialogs)
+- Dialogs now coordinate to prevent overlapping states
+
+**Impact:** Cleaner, more predictable UI behavior. Users no longer see overlapping dialogs creating visual confusion.
+
+---
+
 ### Photo Picker Empty State - Visual Inconsistency
 **Fixed:** Photo picker now matches folder picker's placeholder pattern  
 **Documentation:** EMPTY_FOLDER_UX_DEEP_DIVE.md, PICKER_PLACEHOLDER_VISUAL_ANALYSIS.md  
