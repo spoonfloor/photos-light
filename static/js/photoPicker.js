@@ -380,7 +380,18 @@ const PhotoPicker = (() => {
       const { folders, files } = await listDirectory(currentPath);
 
       if (folders.length === 0 && files.length === 0) {
-        fileList.innerHTML = '<div class="empty-state">No photos or folders found</div>';
+        // Show placeholder boxes to fill vertical space (matches folder picker pattern)
+        // Calculated to fit available photo-picker-list height without scrolling
+        fileList.innerHTML = `
+          <div class="photo-picker-placeholder-container">
+            <div class="photo-picker-placeholder"></div>
+            <div class="photo-picker-placeholder"></div>
+            <div class="photo-picker-placeholder"></div>
+            <div class="photo-picker-placeholder"></div>
+            <div class="photo-picker-placeholder"></div>
+            <div class="photo-picker-placeholder"></div>
+          </div>
+        `;
         return;
       }
 

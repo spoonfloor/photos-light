@@ -1555,6 +1555,30 @@ body {
   overflow-y: hidden;
 }
 
+/* Photo picker placeholders (empty state) - matches folder picker pattern */
+.photo-picker-placeholder {
+  height: 46px;              /* Match folder-placeholder exactly */
+  margin-bottom: 8px;        /* Same as folder-item and photo-picker-item */
+  background: #252525;       /* Same as folder-placeholder (solid, not rgba) */
+  border: 1px solid #2a2a2a; /* Same as folder-placeholder */
+  border-radius: 6px;
+}
+
+.photo-picker-placeholder:last-child {
+  margin-bottom: 0;
+}
+
+/* Prevent scrolling on empty state placeholders */
+.photo-picker-placeholder-container {
+  overflow: clip;
+  padding: 0;                /* No padding - uses list padding */
+}
+
+/* Disable scroll on photo-picker-list when showing placeholders */
+.photo-picker-list:has(.photo-picker-placeholder-container) {
+  overflow-y: hidden;
+}
+
 .folder-item-db {
   opacity: 1;
   cursor: pointer;

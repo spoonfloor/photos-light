@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v176';
+const MAIN_JS_VERSION = 'v184';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -787,7 +787,6 @@ async function executeRebuildDatabase() {
   const statusText = document.getElementById('rebuildDatabaseStatusText');
   const stats = document.getElementById('rebuildDatabaseStats');
   const indexedCount = document.getElementById('rebuildIndexedCount');
-  const totalCount = document.getElementById('rebuildTotalCount');
   const cancelBtn = document.getElementById('rebuildDatabaseCancelBtn');
   const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
   const doneBtn = document.getElementById('rebuildDatabaseDoneBtn');
@@ -810,8 +809,8 @@ async function executeRebuildDatabase() {
 
       if (data.phase === 'adding_untracked') {
         indexedCount.textContent = data.current.toLocaleString();
-        totalCount.textContent = data.total.toLocaleString();
-        statusText.textContent = 'Indexing files...';
+        // Update status text with total (static)
+        statusText.textContent = `Indexing ${data.total.toLocaleString()} files...`;
       } else if (data.phase === 'removing_empty') {
         statusText.textContent = 'Cleaning up';
       }
@@ -823,7 +822,7 @@ async function executeRebuildDatabase() {
 
       // Update title and status (State 4)
       title.textContent = 'Database rebuilt';
-      const totalIndexed = totalCount.textContent || data.stats.untracked_files.toLocaleString();
+      const totalIndexed = data.stats.untracked_files.toLocaleString();
       statusText.innerHTML = `<p>Database rebuilt successfully.</p><p>Indexed ${totalIndexed} files.</p>`;
       doneBtn.style.display = 'block';
 
@@ -1294,11 +1293,19 @@ function showDateChangeProgressOverlay(photoCount) {
   const statusText = document.getElementById('dateChangeProgressStatusText');
   const stats = document.getElementById('dateChangeProgressStats');
   const currentEl = document.getElementById('dateChangeProgressCurrent');
-  const totalEl = document.getElementById('dateChangeProgressTotal');
 
   // Set title based on count
   if (title) {
     title.textContent = photoCount === 1 ? 'Updating date' : 'Updating dates';
+  }
+
+  // Set static status text with total
+  if (statusText) {
+    if (photoCount === 1) {
+      statusText.innerHTML = 'Updating 1 photo<span class="import-spinner"></span>';
+    } else {
+      statusText.textContent = `Updating ${photoCount} photos...`;
+    }
   }
 
   // Reset display
@@ -1339,19 +1346,12 @@ function hideDateChangeProgressOverlay() {
  */
 function updateDateChangeProgress(current, total) {
   const currentEl = document.getElementById('dateChangeProgressCurrent');
-  const statusText = document.getElementById('dateChangeProgressStatusText');
 
   if (currentEl) {
     currentEl.textContent = current.toString();
   }
-
-  if (statusText) {
-    if (total === 1) {
-      statusText.innerHTML = 'Updating date<span class="import-spinner"></span>';
-    } else {
-      statusText.textContent = `Updating photo ${current} of ${total}`;
-    }
-  }
+  
+  // Status text stays static (no updates during progress)
 }
 
 /**
@@ -2442,6 +2442,9 @@ async function loadAndRenderPhotos(append = false) {
 
     // Update date picker to reflect current photo years (show/hide as needed)
     await populateDatePicker();
+    
+    // Re-enable app bar buttons after transition
+    enableAppBarButtons();
   } catch (error) {
     console.error('❌ Error loading photos:', error);
     state.hasDatabase = false; // Mark database as unavailable on error
@@ -5191,10 +5194,10 @@ async function executeTerraformFlow(options = {}) {
             log_path = data.log_path;
           }
           
-          // Update status
-          if (data.current && data.total) {
+          // Update status (static - shows total)
+          if (data.total) {
             const statusEl = document.getElementById('terraformProgressStatus');
-            statusEl.textContent = `Processing files (${data.current} / ${data.total})...`;
+            statusEl.textContent = `Processing ${data.total} files...`;
           }
         }
       }
@@ -5233,6 +5236,81 @@ async function executeTerraformFlow(options = {}) {
 }
 
 /**
+ * Show transition state while switching/creating library
+ * Clears grid and disables interactive buttons
+ */
+function showLibraryTransitionState() {
+  console.log('🔄 Entering library transition state...');
+  
+  // Clear photo container
+  const container = document.getElementById('photoContainer');
+  if (container) {
+    container.innerHTML = `
+      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-secondary);">
+        <div style="font-size: 14px;">Loading library...</div>
+      </div>
+    `;
+  }
+  
+  // Disable app bar interactive buttons
+  const interactiveButtons = [
+    'addPhotoBtn',
+    'sortToggleBtn',
+    'deleteBtn',
+    'editDateBtn',
+    'deselectAllBtn'
+  ];
+  
+  interactiveButtons.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) {
+      btn.style.opacity = '0.3';
+      btn.style.pointerEvents = 'none';
+    }
+  });
+  
+  // Disable date picker
+  const monthPicker = document.getElementById('monthPicker');
+  const yearPicker = document.getElementById('yearPicker');
+  if (monthPicker) {
+    monthPicker.disabled = true;
+    monthPicker.style.opacity = '0.3';
+  }
+  if (yearPicker) {
+    yearPicker.disabled = true;
+    yearPicker.style.opacity = '0.3';
+  }
+  
+  // Disable utility menu items (except utilities button itself stays enabled)
+  updateUtilityMenuAvailability(); // This will disable based on state
+}
+
+/**
+ * Re-enable app bar buttons after library transition completes
+ * Called by loadAndRenderPhotos() after successful library load
+ */
+function enableAppBarButtons() {
+  // Re-enable add photo button (always available)
+  const addPhotoBtn = document.getElementById('addPhotoBtn');
+  if (addPhotoBtn) {
+    addPhotoBtn.style.opacity = '1';
+    addPhotoBtn.style.pointerEvents = 'auto';
+  }
+  
+  // Re-enable sort button (enabled when photos exist, managed by enablePhotoRelatedActions)
+  const sortToggleBtn = document.getElementById('sortToggleBtn');
+  if (sortToggleBtn && state.photos && state.photos.length > 0) {
+    sortToggleBtn.style.opacity = '1';
+    sortToggleBtn.style.pointerEvents = 'auto';
+  }
+  
+  // Delete, edit date, deselect buttons are managed by selection state (updateButtonVisibility)
+  // Date pickers are re-enabled when populateDatePicker() runs
+  // Utility menu items are re-enabled by updateUtilityMenuAvailability()
+}
+
+
+/**
  * Browse for library (uses custom folder picker)
  * Handles 3 scenarios:
  * 1. Folder has DB → open it
@@ -5248,7 +5326,7 @@ async function browseSwitchLibrary() {
 
     const selectedPath = await FolderPicker.show({
       title: 'Open library',
-      subtitle: 'Select an existing library folder or choose where to create one'
+      subtitle: 'Select an existing library folder (or choose where to create one).'
     });
 
     if (!selectedPath) {
@@ -5257,6 +5335,9 @@ async function browseSwitchLibrary() {
     }
 
     console.log('📂 Selected path:', selectedPath);
+    
+    // Enter transition state immediately (clears grid, disables buttons)
+    showLibraryTransitionState();
 
     // Check if path has a database and/or media
     const potentialDbPath = selectedPath + '/photo_library.db';
@@ -5988,7 +6069,7 @@ function handleImportEvent(event, data) {
   const doneBtn = document.getElementById('importDoneBtn');
 
   if (event === 'start') {
-    statusText.textContent = `Importing ${data.total} files`;
+    statusText.textContent = `Importing ${data.total} files...`;
     stats.style.display = 'flex';
 
     // Initialize error tracking

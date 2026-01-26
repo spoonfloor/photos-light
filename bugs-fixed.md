@@ -4,6 +4,51 @@ Issues that have been fixed and verified.
 
 ---
 
+## Session 9: January 25, 2026
+
+### Photo Picker Empty State - Visual Inconsistency
+**Fixed:** Photo picker now matches folder picker's placeholder pattern  
+**Documentation:** EMPTY_FOLDER_UX_DEEP_DIVE.md, PICKER_PLACEHOLDER_VISUAL_ANALYSIS.md  
+**Version:** v184
+
+**Issues resolved:**
+- ✅ Photo picker empty folders now show placeholder boxes (not text message)
+- ✅ Visual parity with folder picker's intentional design pattern
+- ✅ 5 CSS property corrections for pixel-perfect alignment
+
+**Root cause:**
+- Photo picker showed text message "No photos or folders found" in empty folders
+- Folder picker used silent placeholder boxes (intentional design with mockup file)
+- Created inconsistent user experience across similar navigation contexts
+
+**The fix:**
+- Changed photo picker to use 6 placeholder boxes matching folder picker
+- Corrected CSS properties:
+  1. Height: 64px → 46px
+  2. Margin: `4px 24px` → `margin-bottom: 8px`
+  3. Background: `rgba(255,255,255,0.03)` → `#252525` (solid)
+  4. Added border: `1px solid #2a2a2a`
+  5. Container padding: `8px 0` → `0`
+
+**CSS alignment achieved:**
+```css
+/* Both pickers now identical */
+height: 46px;
+margin-bottom: 8px;
+background: #252525;
+border: 1px solid #2a2a2a;
+border-radius: 6px;
+```
+
+**Testing verified:**
+- Empty folder in photo picker shows 6 gray placeholder boxes
+- Visual appearance matches folder picker exactly
+- No scrollbar appears (overflow: hidden works)
+- Can navigate up or cancel from empty state
+- Error states still show text messages (separate code path)
+
+---
+
 ## Session 1: January 19, 2026
 
 ### Database Backup System
@@ -1311,6 +1356,36 @@ Complete analysis in `EMPTY_FOLDER_CLEANUP_INVESTIGATION.md`:
 - Identified the 5% gap (thumbnail folders only)
 
 **Impact:** Keeps filesystem clean, prevents accumulation of empty thumbnail folders over time. Low severity bug (no functional impact) but good housekeeping.
+
+---
+
+## Session 9: January 25, 2026
+
+### Manual Restore & Rebuild
+**Status:** ✅ CANNOT REPRODUCE  
+**Issue closed:** Photo organizes correctly during rebuild
+
+**Reported issue:** Manually restore deleted photo to root level (no date folder) → rebuild database → photo reappears (good) but still at root level (bad)
+- Files should be organized into date folders during rebuild
+- Very specific edge case requiring intentional user action
+
+**Testing results:** Cannot reproduce issue. Photos automatically organize into date folders during rebuild as expected. Library sync (`library_sync.py`) properly moves files to date-organized folder structure during rebuild operations.
+
+**Resolution:** Working as designed. Marked as cannot reproduce.
+
+---
+
+### Database Missing Prompt
+**Status:** ✅ CANNOT REPRODUCE  
+**Issue closed:** First-run flow handles missing DB
+
+**Reported issue:** Database missing → should prompt to rebuild, but no prompt appears
+- Can't reliably reproduce (possibly deleted .db manually)
+- May already be handled by existing first-run flow
+
+**Testing results:** First-run and library switching flows properly handle missing database. Health check detects missing database and triggers appropriate UI states (first-run overlay for new libraries, rebuild prompt for corrupted/missing databases in existing libraries).
+
+**Resolution:** Working as designed. Marked as cannot reproduce.
 
 ---
 
