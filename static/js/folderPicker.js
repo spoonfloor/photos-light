@@ -243,11 +243,8 @@ const FolderPicker = (() => {
   function updateButtonText() {
     const chooseBtn = document.getElementById('folderPickerChooseBtn');
     if (chooseBtn) {
-      if (currentHasDb) {
-        chooseBtn.textContent = 'Choose';
-      } else {
-        chooseBtn.textContent = 'Select this location';
-      }
+      // Button text is always "Continue" - context-agnostic
+      chooseBtn.textContent = 'Continue';
     }
   }
 
@@ -310,8 +307,8 @@ const FolderPicker = (() => {
         }
 
         // Configure picker
-        const title = options.title || 'Library location';
-        const subtitle = options.subtitle || "Choose where you'd like to create your new library";
+        const title = options.title || 'Open library';
+        const subtitle = options.subtitle || 'Select an existing library folder or choose where to create a new one';
 
         document.getElementById('folderPickerTitle').textContent = title;
         document.getElementById('folderPickerSubtitle').textContent = subtitle;
