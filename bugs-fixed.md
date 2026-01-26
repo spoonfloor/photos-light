@@ -1459,3 +1459,54 @@ with Image.open(file_path) as img:
 
 ---
 
+### Utilities Menu - Language Consistency
+**Fixed:** Menu renamed "Switch library" to "Open library"  
+**Version:** v164-v175
+
+**Issues resolved:**
+- ✅ "Switch library" → "Open library" (opening another file implies switching)
+- ✅ Menu item wiring updated to bypass intermediate dialog
+- ✅ Direct folder picker flow (one less click)
+- ✅ Updated all button text in error modals to "Open library"
+- ✅ Consistent language throughout app
+
+**Root cause:**
+"Switch" implied an action that needed confirmation or intermediate steps. "Open" is simpler and matches user mental model (like opening a different document).
+
+**The fix:**
+```html
+<!-- utilitiesMenu.html -->
+<span>Open library</span>
+```
+
+```javascript
+// main.js - utilities menu handler
+switchLibraryBtn.addEventListener('click', () => {
+  console.log('🔧 Open Library clicked');
+  hideUtilitiesMenu();
+  browseSwitchLibrary();  // Goes straight to folder picker
+});
+
+// Critical error modals
+switchBtn.textContent = 'Open library';
+switchBtn.onclick = async () => {
+  hideCriticalErrorModal();
+  await browseSwitchLibrary();
+};
+```
+
+**Additional changes:**
+- Removed intermediate "Switch Library" dialog entirely
+- Empty state button now also says "Open library" (unified language)
+- All error recovery flows use "Open library" consistently
+
+**Testing verified:**
+- Utilities menu: Click "Open library" → folder picker opens immediately ✓
+- Error modal: Click "Open library" → folder picker opens ✓
+- Empty state: Click "Open library" → folder picker opens ✓
+- No intermediate confirmation dialog ✓
+
+**Note:** Menu order changes (Clean database, Rebuild thumbnails position, Show duplicates rename) deferred for separate feature work. This fix addresses the "Switch" → "Open" language consistency issue.
+
+---
+
