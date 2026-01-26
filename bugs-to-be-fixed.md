@@ -2,73 +2,57 @@
 
 Last updated: January 25, 2026
 
-**Status:** 20 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal, Utilities Menu Language), 3 remaining bugs + 1 deferred feature
+**Status:** 8 remaining bugs + 1 deferred feature
 
 ---
 
 ## 🔴 TIER 1: CRITICAL - MUST FIX (High Impact, Core Workflows)
 
-### ✅ Photo Picker - Checkbox Toggle Bug (FIXED v123-v124)
+### Date Change - JavaScript Error (totalEl not defined)
 **Priority:** 🔴 CRITICAL  
-**Estimated effort:** 1 hour  
-**Status:** ✅ FIXED - See bugs-fixed.md
+**Estimated effort:** 10 minutes  
+**Status:** NOT STARTED
+
+**Issue:** Date change crashes with JavaScript error
+- Error: `Uncaught (in promise) ReferenceError: totalEl is not defined`
+- Occurs in `showDateChangeProgressOverlay` function (main.js:1320)
+- Triggered when saving date edit
+- Prevents date change operation from completing
+
+**Error location:**
+```
+at showDateChangeProgressOverlay (main.js?v=155:1320:5)
+at HTMLButtonElement.saveDateEdit (main.js?v=155:1459:3)
+```
+
+**Fix approach:** Define missing `totalEl` variable in showDateChangeProgressOverlay function
 
 ---
 
-### ✅ Photo Picker - Count Display (FIXED v125)
+### Library Conversion (Terraforming) - Leaves Issues Behind
 **Priority:** 🔴 CRITICAL  
-**Estimated effort:** 30 minutes  
-**Status:** ✅ FIXED - See bugs-fixed.md
+**Estimated effort:** 2-3 hours  
+**Status:** NOT STARTED
 
----
+**Issue:** Terraforming leaves empty folders behind, and other errors
+- After library conversion completes, Update Index shows problems:
+  - Missing files (6 in screenshot)
+  - Untracked files (20 in screenshot)
+  - Empty folders (4 in screenshot)
+- Conversion should leave library in clean state
+- Requires running Update Index after every conversion (bad UX)
 
-### ✅ Photo Picker - Background Counting Completion (FIXED v126)
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 30 minutes  
-**Status:** ✅ FIXED - See bugs-fixed.md
+**Impact:** User must manually clean up after conversion, defeats purpose of automated organization
 
----
-
-### ✅ Photo Picker - Button Rename & Confirmation Dialog (FIXED v127)
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 1 hour  
-**Status:** ✅ FIXED - See bugs-fixed.md
+**Fix approach:** 
+- Ensure conversion process properly tracks all file moves
+- Clean up empty folders during conversion
+- Verify all files are registered in database
+- Add post-conversion cleanup/validation step
 
 ---
 
 ## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
-
-### ✅ Date Changes - Survive Database Rebuild (FIXED v146-v150)
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 1-2 hours  
-**Status:** ✅ FIXED - See bugs-fixed.md
-
----
-
-### ✅ Date Picker - Missing After Import (FIXED v158)
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 30 minutes  
-**Status:** ✅ FIXED - Already implemented, verified working
-
-**Issue:** Blank library → import photos → app bar date picker absent (bad)
-
-**Resolution:** Investigation revealed this was already fixed in v158. Import completion automatically calls `loadAndRenderPhotos()` which refreshes the date picker via `populateDatePicker()`. Verified working correctly.
-
----
-
-### ✅ Month Dividers During Scroll (FIXED v129)
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 30 minutes  
-**Status:** ✅ FIXED - See bugs-fixed.md
-
----
-
-### ✅ Dialog Spinner - Remove When Realtime Feedback Exists (FIXED v162)
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 30 minutes  
-**Status:** ✅ FIXED - See bugs-fixed.md
-
----
 
 ### Dialog Framework - Multiple Dialogs Showing Simultaneously
 **Priority:** 🟡 MEDIUM  
@@ -90,31 +74,32 @@ Last updated: January 25, 2026
 
 ### Utilities Menu - String and Order Changes
 **Priority:** 🟡 MEDIUM  
-**Estimated effort:** 15 minutes  
-**Status:** NOT STARTED
+**Estimated effort:** 5 minutes  
+**Status:** PARTIALLY COMPLETE (v164-v175)
 
 **Issue:** Utilities menu items need reordering and renaming
 
-**Required changes:**
-1. "Switch library" → "Open library" (switch is implied when you open another file)
-2. "Rebuild database" → "Clean database"
-3. "Update library index" - keep as is (2nd place)
-4. "Rebuild thumbnails" - move to 3rd place (currently 4th)
-5. "Remove duplicates" → "Show duplicates" (4th place)
+**What's done:**
+- ✅ "Switch library" → "Open library" (v164-v175)
+
+**What remains:**
+1. "Rebuild database" → "Clean database"
+2. "Remove duplicates" → "Show duplicates"
+3. Move "Rebuild thumbnails" to 3rd place (currently 5th)
 
 **Current order:**
-1. Switch library
-2. Update library index
-3. Rebuild database
-4. Remove duplicates
-5. Rebuild thumbnails
+1. Open library ✅
+2. Update library index ✅
+3. Rebuild database ❌ (should be "Clean database")
+4. Remove duplicates ❌ (should be "Show duplicates")
+5. Rebuild thumbnails ❌ (should be 3rd)
 
-**New order:**
-1. Open library (renamed)
-2. Update library index
-3. Clean database (renamed)
+**Target order:**
+1. Open library ✅
+2. Update library index ✅
+3. Clean database (renamed + moved up)
 4. Rebuild thumbnails (moved up)
-5. Show duplicates (renamed, moved down)
+5. Show duplicates (renamed + moved down)
 
 ---
 
@@ -156,48 +141,51 @@ Last updated: January 25, 2026
 
 ---
 
-### ✅ Date Changes - Latency & Feedback Issues (FIXED v155)
+### Folder Picker - Add Folder Selection via Checkbox
 **Priority:** 🟡 MEDIUM  
-**Estimated effort:** 2-3 hours  
-**Status:** ✅ FIXED - See bugs-fixed.md
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
+
+**Issue:** Add ability to select a folder in folder picker by toggling checkmark
+- Currently must click "Select this location" button
+- Would be more intuitive to click folder checkbox to select it
+- Checkbox toggle should immediately select that folder location
+- Improves UX consistency with file selection patterns
+
+**Fix approach:** Add click handler to folder checkbox that selects the folder location directly
 
 ---
 
-## 🟢 TIER 3: NICE TO HAVE (Low Impact, Edge Cases)
+### Library Conversion Scoreboard - Remove Green Text Color
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 5 minutes  
+**Status:** NOT STARTED
 
-All edge case bugs resolved or moved to backlog.
+**Issue:** Kill green text color from library conversion scoreboard
+- "PROCESSED" count displays in green (e.g., 251 in green)
+- Inconsistent with other counts (DUPLICATES, ERRORS in white)
+- Green color is unnecessary emphasis
 
----
-
-### Manual Restore & Rebuild
-**Priority:** 🟢 LOW  
-**Estimated effort:** 1 hour  
-**Status:** ✅ CANNOT REPRODUCE - Photo organizes correctly during rebuild
-
-**Issue:** Manually restore deleted photo to root level (no date folder) → rebuild database → photo reappears (good) but still at root level (bad)
-- Files should be organized into date folders during rebuild
-- Very specific edge case requiring intentional user action
-- Manual workaround exists
-
-**Testing notes:** Cannot reproduce issue. Photos automatically organize into date folders during rebuild as expected.
+**Fix approach:** Remove green color styling from PROCESSED count, use consistent white text
 
 ---
 
-### Database Missing Prompt
-**Priority:** 🟢 LOW  
+### Lightbox - Non-Functional Scrollbar
+**Priority:** 🟡 MEDIUM  
 **Estimated effort:** 30 minutes  
-**Status:** ✅ CANNOT REPRODUCE - First-run flow handles missing DB
+**Status:** NOT STARTED
 
-**Issue:** Database missing → should prompt to rebuild, but no prompt appears
-- Can't reliably reproduce (possibly deleted .db manually)
-- May already be handled by existing first-run flow
-- Need to verify if this is actually a bug
+**Issue:** Lightbox has a scrollbar that does nothing
+- Scrollbar appears in lightbox view
+- Scrollbar is non-functional/doesn't scroll
+- Creates visual clutter and confusion
+- Likely CSS overflow issue
 
-**Testing notes:** First-run and library switching flows properly handle missing database. Cannot reproduce missing prompt scenario.
+**Fix approach:** Remove scrollbar by fixing CSS (overflow: hidden or proper height constraints)
 
 ---
 
-## 🔵 TIER 4: DEFERRED FEATURE WORK (Not Bugs)
+## 🔵 TIER 3: DEFERRED FEATURE WORK (Not Bugs)
 
 ### Import Duplicate Detection + Migration Infrastructure
 **Priority:** 🔵 DEFERRED  
@@ -229,57 +217,42 @@ All edge case bugs resolved or moved to backlog.
 
 **Sub-issues from original bug bash:**
 - Import dupe counts don't reflect reality - Will work with new definition
-- Import count bounces around - Separate issue (see Tier 3, #8)
+- Import count bounces around - Separate issue (see backlog)
 - Duplicates utility shows zero - Will be fixed by schema change
 
 ---
 
 ## 📋 RECOMMENDED FIX ORDER
 
-Based on impact, frequency, and effort:
+Based on impact, frequency, and effort (quick wins first, then deep work):
 
-1. ✅ **Date Picker Duplicate Years** (DONE - v85)
-2. ✅ **Date Editor - Year Dropdown Missing New Year** (DONE - v86)
-3. ✅ **Error Message Wording** (DONE - v88)
-4. ✅ **Toast Timing + Date Edit Undo** (DONE - v89-v94)
-5. ✅ **Database Rebuild - Empty Grid** (DONE - v99-v100)
-6. ✅ **Corrupted DB Detection During Operations** (DONE - v101-v110)
-7. ✅ **Photo Picker - Checkbox Toggle Bug** (DONE - v123-v124)
-8. ✅ **Photo Picker - Count Display** (DONE - v125)
-9. ✅ **Photo Picker - Background Counting** (DONE - v126)
-10. ✅ **Photo Picker - Button Rename & Confirmation Dialog** (DONE - v127)
-11. ✅ **Month Dividers During Scroll** (DONE - v129)
-12. ✅ **Date Changes - Don't Survive Database Rebuild** (DONE - v146-v150)
-13. ✅ **Date Changes - Latency & Feedback Issues** (DONE - v155)
-14. ✅ **Import Duplicate Categorization** (DONE - v156-v157)
-15. ✅ **Date Picker - Missing After Import** (DONE - v158, verified working)
-16. ✅ **Database Operations - Empty Folder Cleanup** (DONE - v161)
-17. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
-18. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
-19. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
-20. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-21. 🔵 **Import Duplicate Detection** (deferred feature work)
+1. 🔴 **Date Change - JavaScript Error (totalEl not defined)** (10 min, CRITICAL - hard blocker)
+2. 🟡 **Utilities Menu - String and Order Changes** (5 min, quick win builds momentum)
+3. 🟡 **Library Conversion Scoreboard - Remove Green Text Color** (5 min, quick win same area)
+4. 🔴 **Library Conversion - Leaves Issues Behind** (2-3 hrs, CRITICAL but one-time operation with workaround)
+5. 🟡 **Lightbox - Non-Functional Scrollbar** (30 min, visual polish)
+6. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
+7. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
+8. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
+9. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+10. 🔵 **Import Duplicate Detection** (deferred feature work)
 
-**Rationale:**
-- **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
-- **Data integrity (#5-6):** Database rebuild and corruption detection - ALL DONE ✅
-- **Critical checkbox bug (#7):** Photo picker toggle - DONE ✅
-- **Then polish (#8-12):** Visual glitches and edge cases after critical issues resolved
-- **Deferred (#13):** Feature work, not bug fixes - save for dedicated feature development
+**Strategy:** Clear quick wins (20 min, 3 bugs) before deep work on conversion cleanup
 
 ---
 
 ## SUMMARY
 
-**Next up:** Dialog Framework - Multiple Dialogs Showing Simultaneously (2 hours)
+**Next up:** Date Change - JavaScript Error (10 min, hard blocker)
+**Then:** Utilities Menu + Scoreboard (10 min, quick wins)
+**Then:** Library Conversion cleanup (2-3 hrs, deep work)
 
-**Total remaining:** 3 bugs + 1 deferred feature
-- 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
-- 🟡 Polish: 4 bugs (Dialog Framework, Utilities Menu Changes, Duplicates Feature Research, Performance Optimization Research)
-- 🟢 Edge cases: 0 bugs (All edge cases resolved ✅)
+**Total remaining:** 8 bugs + 1 deferred feature
+- 🔴 Critical: 2 bugs (Date Change JavaScript Error, Library Conversion Cleanup)
+- 🟡 Polish: 6 bugs (Utilities Menu, Scoreboard Color, Lightbox Scrollbar, Dialog Framework, Folder Picker Checkbox, Duplicates Research, Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~2-3 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~8 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 
@@ -288,8 +261,6 @@ Based on impact, frequency, and effort:
 These are enhancement ideas, not bugs. To be considered for future feature work.
 
 ### Library Management
-- ~~Hide Time Machine BU folders from list~~ ✅ FIXED v117 (also hides backup/archive folders and system volumes)
-- ~~Make last-used path sticky~~ ✅ FIXED v118-v122 (persists across sessions, shared between pickers, saves on cancel)
 - Add rescan button to folder picker
 - Add keyboard shortcut for desktop (command-shift D)
 - Photo picker is a bit sluggish

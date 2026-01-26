@@ -308,7 +308,7 @@ const FolderPicker = (() => {
 
         // Configure picker
         const title = options.title || 'Open library';
-        const subtitle = options.subtitle || 'Select an existing library folder or choose where to create a new one';
+        const subtitle = options.subtitle || 'Select an existing library folder (or choose where to create one).';
 
         document.getElementById('folderPickerTitle').textContent = title;
         document.getElementById('folderPickerSubtitle').textContent = subtitle;
