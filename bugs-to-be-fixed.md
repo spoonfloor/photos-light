@@ -2,7 +2,7 @@
 
 Last updated: January 25, 2026
 
-**Status:** 19 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal), 4 remaining bugs + 1 deferred feature
+**Status:** 20 items complete (Date Picker Duplicates, Date Editor Year Dropdown, Error Wording, Toast Timing, Database Rebuild, Corrupted DB Detection x2, Photo Picker Checkbox Toggle, Photo Picker Count Display, Photo Picker Background Counting, Photo Picker Button Rename, Photo Picker Confirmation Dialog Removal, Month Dividers During Scroll, Date Changes Survive Rebuild, Date Changes Latency & Feedback, Import Duplicate Categorization, Date Picker Missing After Import, Database Operations Empty Folder Cleanup, Dialog Spinner Removal, Utilities Menu Language), 3 remaining bugs + 1 deferred feature
 
 ---
 
@@ -256,10 +256,9 @@ Based on impact, frequency, and effort:
 16. ✅ **Database Operations - Empty Folder Cleanup** (DONE - v161)
 17. 🟡 **Dialog Spinner - Remove When Realtime Feedback Exists** (30 min, visual clutter)
 18. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
-19. 🟡 **Utilities Menu - String and Order Changes** (15 min, UX consistency)
-20. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
-21. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-22. 🔵 **Import Duplicate Detection** (deferred feature work)
+19. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
+20. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+21. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Rationale:**
 - **Quick wins first (#1-4):** Combined 30 min, immediate visible improvements - ALL DONE ✅
@@ -272,9 +271,9 @@ Based on impact, frequency, and effort:
 
 ## SUMMARY
 
-**Next up:** Utilities Menu - String and Order Changes (15 min quick win)
+**Next up:** Dialog Framework - Multiple Dialogs Showing Simultaneously (2 hours)
 
-**Total remaining:** 4 bugs + 1 deferred feature
+**Total remaining:** 3 bugs + 1 deferred feature
 - 🔴 Critical: 0 bugs (All Photo Picker bugs FIXED ✅)
 - 🟡 Polish: 4 bugs (Dialog Framework, Utilities Menu Changes, Duplicates Feature Research, Performance Optimization Research)
 - 🟢 Edge cases: 0 bugs (All edge cases resolved ✅)
