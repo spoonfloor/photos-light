@@ -4,6 +4,111 @@ Issues that have been fixed and verified.
 
 ---
 
+## Session 10: January 26, 2026
+
+### Library Conversion (Terraform) - Crashes and Leaves Empty Folders
+**Fixed:** Database row_factory bug and aggressive source folder cleanup  
+**Version:** v188
+
+**Issues resolved:**
+- ✅ Terraform no longer crashes when processing duplicate files
+- ✅ Source folders are now deleted after successful terraform
+- ✅ Hidden folders (.thumbnails, .DS_Store) no longer prevent cleanup
+- ✅ Organized folders (YYYY/YYYY-MM-DD) are preserved correctly
+
+**Root causes:**
+
+**Bug #1: Missing row_factory (CRASH)**
+- **Line 3751:** Database connection created without `conn.row_factory = sqlite3.Row`
+- Result: `cursor.fetchone()` returns tuples instead of Row objects
+- **Line 3782:** Code tries `existing['id']` on a tuple
+- Error: "tuple indices must be integers or slices, not str"
+- All duplicate detection crashed, files moved to `.trash/errors/` instead of `.trash/duplicates/`
+
+**Bug #2: Passive cleanup fails (EMPTY FOLDERS)**
+Three related problems:
+1. Cleanup function skips hidden directories (line 3596)
+2. Uses `os.rmdir()` which fails if subdirectories exist
+3. No tracking of which folders were SOURCE folders vs ORGANIZED folders
+
+Result:
+- `terraform-me/.thumbnails/` never cleaned (hidden folder skipped)
+- Parent `terraform-me/` never empty (contains `.thumbnails/`)
+- Can't distinguish `terraform-me/2026/2026-01-22/` (delete) from `2026/2026-01-22/` (keep)
+
+**The fix:**
+
+**Fix #1: Add row_factory (line 3807)**
+```python
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row  # ADD THIS LINE
+cursor = conn.cursor()
+```
+
+**Fix #2: Track and aggressively clean source folders**
+
+New function: `cleanup_terraform_source_folders()`
+- Uses `shutil.rmtree()` to delete entire trees (including hidden folders)
+- Only deletes folders that had media files before terraform
+- Checks no media remains before deletion (safety)
+
+Updated scan (lines 3782-3814):
+```python
+source_folders = set()  # Track non-organized folders
+
+for root, dirs, files in os.walk(library_path):
+    for media_file in files:
+        # Check if folder matches organized pattern
+        # Pattern: library_path/YYYY/YYYY-MM-DD/
+        relative_path = os.path.relpath(root, library_path)
+        parts = relative_path.split(os.sep)
+        
+        is_organized = (
+            len(parts) == 2 and
+            len(parts[0]) == 4 and parts[0].isdigit() and  # YYYY
+            len(parts[1]) == 10 and parts[1][4] == '-'      # YYYY-MM-DD
+        )
+        
+        if not is_organized:
+            source_folders.add(root)  # Track for cleanup
+```
+
+Updated cleanup (lines 4003-4015):
+```python
+# Two-pass cleanup:
+# 1. Aggressive: Delete tracked source folders
+source_removed = cleanup_terraform_source_folders(source_folders, library_path)
+
+# 2. Passive: Clean up any remaining empties  
+remaining_removed = cleanup_empty_folders_recursive(library_path)
+```
+
+**Why this works:**
+- **Explicit tracking:** Remembers source folders during scan, not guessed later
+- **Pattern matching:** Only `library_path/YYYY/YYYY-MM-DD/` is organized
+  - `terraform-me/2026/2026-01-22/` → NOT organized (nested) → deleted ✓
+  - `2026/2026-01-22/` → organized (at root) → preserved ✓
+- **Aggressive deletion:** `shutil.rmtree()` removes entire trees
+  - Deletes `.thumbnails/`, `.DS_Store`, everything
+- **Safety check:** Only deletes if no media remains
+
+**Edge cases handled:**
+- ✅ Nested organized structure in source folders
+- ✅ Source folders containing hidden subdirectories
+- ✅ Partially processed folders (media remains → not deleted)
+- ✅ Library root never deleted (explicit check)
+
+**Testing required:**
+- [ ] Terraform fresh files (no duplicates)
+- [ ] Terraform with duplicates (move to `.trash/duplicates/` not `.trash/errors/`)
+- [ ] Terraform already-terraformed library (source folders deleted, organized preserved)
+- [ ] Verify `terraform-me/`, `blank-lib-for-import-test/` deleted
+- [ ] Verify `2026/2026-01-22/` preserved with files
+
+**Impact:** Critical bug fix. Terraform was completely broken - crashed on duplicates and left source folders behind. Now processes duplicates correctly and cleans up properly.
+
+---
+
 ## Session 9: January 25, 2026
 
 ### Date Change - JavaScript Error (totalEl not defined)

@@ -1,33 +1,8 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: January 25, 2026
+Last updated: January 26, 2026
 
-**Status:** 6 remaining bugs + 1 deferred feature
-
----
-
-## 🔴 TIER 1: CRITICAL - MUST FIX (High Impact, Core Workflows)
-
-### Library Conversion (Terraforming) - Leaves Issues Behind
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 2-3 hours  
-**Status:** NOT STARTED
-
-**Issue:** Terraforming leaves empty folders behind, and other errors
-- After library conversion completes, Update Index shows problems:
-  - Missing files (6 in screenshot)
-  - Untracked files (20 in screenshot)
-  - Empty folders (4 in screenshot)
-- Conversion should leave library in clean state
-- Requires running Update Index after every conversion (bad UX)
-
-**Impact:** User must manually clean up after conversion, defeats purpose of automated organization
-
-**Fix approach:** 
-- Ensure conversion process properly tracks all file moves
-- Clean up empty folders during conversion
-- Verify all files are registered in database
-- Add post-conversion cleanup/validation step
+**Status:** 5 remaining bugs + 1 deferred feature
 
 ---
 
@@ -189,13 +164,11 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 1. 🟡 **Utilities Menu - String and Order Changes** (5 min, quick win builds momentum)
 2. 🟡 **Library Conversion Scoreboard - Remove Green Text Color** (5 min, quick win same area)
-3. 🔴 **Library Conversion - Leaves Issues Behind** (2-3 hrs, CRITICAL but one-time operation with workaround)
-5. 🟡 **Lightbox - Non-Functional Scrollbar** (30 min, visual polish)
-6. 🟡 **Dialog Framework - Multiple Dialogs Showing Simultaneously** (2 hrs, UX consistency)
-7. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
-8. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
-9. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-10. 🔵 **Import Duplicate Detection** (deferred feature work)
+3. 🟡 **Lightbox - Non-Functional Scrollbar** (30 min, visual polish)
+4. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
+5. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
+6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+7. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Strategy:** Clear quick wins (10 min, 2 bugs) before deep work on conversion cleanup
 
@@ -204,14 +177,12 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 ## SUMMARY
 
 **Next up:** Utilities Menu + Scoreboard (10 min, quick wins)
-**Then:** Library Conversion cleanup (2-3 hrs, deep work)
 
-**Total remaining:** 6 bugs + 1 deferred feature
-- 🔴 Critical: 1 bug (Library Conversion Cleanup)
+**Total remaining:** 5 bugs + 1 deferred feature
 - 🟡 Polish: 5 bugs (Utilities Menu, Scoreboard Color, Lightbox Scrollbar, Folder Picker Checkbox, Duplicates Research, Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~6 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~4 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 

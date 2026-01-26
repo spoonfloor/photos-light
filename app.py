@@ -3631,6 +3631,61 @@ def cleanup_empty_folders_recursive(root_path):
     return removed_count
 
 
+def cleanup_terraform_source_folders(source_folders, library_path):
+    """
+    Aggressively remove source folders after terraform completes.
+    Uses shutil.rmtree to delete entire directory trees, including hidden folders.
+    Only deletes if no media files remain.
+    
+    Args:
+        source_folders: Set of folder paths that contained media before terraform
+        library_path: Root library path (never deleted)
+    
+    Returns:
+        Number of folders deleted
+    """
+    MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
+                  '.bmp', '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
+                  '.avi', '.mpg', '.mpeg', '.3gp', '.mkv',
+                  '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2'}
+    
+    removed_count = 0
+    
+    for folder in sorted(source_folders, reverse=True):  # Process deepest first
+        # Safety check - never delete root
+        if os.path.abspath(folder) == os.path.abspath(library_path):
+            continue
+        
+        # Safety check - folder must still exist
+        if not os.path.exists(folder):
+            continue
+        
+        # Check if any media files remain in this tree
+        media_remaining = []
+        try:
+            for root, dirs, files in os.walk(folder):
+                for filename in files:
+                    _, ext = os.path.splitext(filename)
+                    if ext.lower() in MEDIA_EXTS:
+                        media_remaining.append(os.path.join(root, filename))
+        except Exception as e:
+            print(f"    ⚠️  Error checking {folder}: {e}")
+            continue
+        
+        # If no media remains, delete entire tree
+        if not media_remaining:
+            try:
+                shutil.rmtree(folder)
+                removed_count += 1
+                print(f"    🗑️  Removed source folder: {os.path.relpath(folder, library_path)}")
+            except Exception as e:
+                print(f"    ⚠️  Could not remove {folder}: {e}")
+        else:
+            print(f"    ⚠️  Skipped {folder} - {len(media_remaining)} media file(s) remain")
+    
+    return removed_count
+
+
 @app.route('/api/library/terraform', methods=['POST'])
 def terraform_library():
     """
@@ -3727,6 +3782,7 @@ def terraform_library():
             # SCAN for all media files recursively
             print("📂 Scanning for media files...")
             media_files = []
+            source_folders = set()  # Track folders that contain media (for cleanup)
             
             for root, dirs, files in os.walk(library_path):
                 # Skip hidden directories
@@ -3738,6 +3794,26 @@ def terraform_library():
                     if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
                         full_path = os.path.join(root, filename)
                         media_files.append(full_path)
+                        
+                        # Track this folder as a source folder (for cleanup)
+                        # But only if it's NOT in the organized structure (YYYY/YYYY-MM-DD)
+                        relative_path = os.path.relpath(root, library_path)
+                        
+                        # Check if folder matches organized pattern at root level
+                        # Pattern: YYYY/YYYY-MM-DD where YYYY is 4 digits and MM-DD is date
+                        parts = relative_path.split(os.sep)
+                        is_organized = False
+                        
+                        if len(parts) == 2:
+                            year_part = parts[0]
+                            date_part = parts[1]
+                            # Check: YYYY (4 digits) and YYYY-MM-DD (10 chars with dashes at positions 4 and 7)
+                            if (len(year_part) == 4 and year_part.isdigit() and
+                                len(date_part) == 10 and date_part[4] == '-' and date_part[7] == '-'):
+                                is_organized = True
+                        
+                        if not is_organized and root != library_path:
+                            source_folders.add(root)
             
             total_files = len(media_files)
             print(f"✅ Found {total_files} media files\n")
@@ -3749,6 +3825,7 @@ def terraform_library():
             # Create database
             db_path = os.path.join(library_path, 'photo_library.db')
             conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row  # Return rows as dictionaries
             cursor = conn.cursor()
             
             # Create schema
@@ -3924,9 +4001,18 @@ def terraform_library():
                     yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': str(e), 'category': 'error'})}\n\n"
             
             # Cleanup empty folders recursively
-            print("\n🧹 Cleaning up empty folders...")
-            removed_count = cleanup_empty_folders_recursive(library_path)
-            print(f"✅ Cleanup complete - removed {removed_count} empty folder(s)")
+            print("\n🧹 Cleaning up folders...")
+            
+            # First pass: Remove source folders (aggressive)
+            print(f"  📍 Found {len(source_folders)} source folder(s)")
+            source_removed = cleanup_terraform_source_folders(source_folders, library_path)
+            print(f"  ✅ Removed {source_removed} source folder(s)")
+            
+            # Second pass: Clean up any remaining empty folders (passive)
+            remaining_removed = cleanup_empty_folders_recursive(library_path)
+            print(f"  ✅ Removed {remaining_removed} empty folder(s)")
+            
+            print(f"✅ Cleanup complete - removed {source_removed + remaining_removed} folder(s) total")
             
             # Close DB
             conn.close()
