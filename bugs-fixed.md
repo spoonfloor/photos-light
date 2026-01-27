@@ -152,6 +152,63 @@ This fix mirrors the existing terraform duplicate detection logic:
 
 ---
 
+## Session 12: January 27, 2026
+
+### Terraform Choice Dialog - Radio Button Styling
+**Fixed:** Radio buttons now match design spec  
+**Version:** v192
+
+**Issues resolved:**
+- ✅ Radio buttons now 18px × 18px (was browser default ~12px)
+- ✅ Radio buttons now purple #6d49ff (was browser default blue)
+- ✅ Radio buttons properly aligned with text (first option centered, second option optically balanced)
+- ✅ Applied globally - all radio buttons use consistent styling
+
+**Root cause:**
+- No global CSS rule for radio button styling
+- Inline styles in terraform overlay didn't include accent color
+- Browser default styling (blue, ~12px, inconsistent alignment) didn't match design spec
+
+**The fix:**
+```css
+/* styles.css - Global radio button styling */
+input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+```
+
+```html
+<!-- terraformChoiceOverlay.html - Alignment -->
+<!-- Single-line option: align-items: center (perfectly centered) -->
+<label style="display: flex; align-items: center; gap: 12px; ...">
+  <input type="radio" name="terraformChoice" value="blank" checked style="flex-shrink: 0;" />
+  <div>Create new library folder in this location</div>
+</label>
+
+<!-- Multi-line option: align-items: start with margin-top: 2px (optically balanced) -->
+<label style="display: flex; align-items: start; gap: 12px; ...">
+  <input type="radio" name="terraformChoice" value="terraform" style="margin-top: 2px; flex-shrink: 0;" />
+  <div>
+    <div>Convert this library</div>
+    <div>Create new database and update all files and folders</div>
+  </div>
+</label>
+```
+
+**Testing verified:**
+- Radio buttons display at 18px × 18px ✓
+- Radio buttons use purple accent color ✓
+- Single-line option perfectly centered ✓
+- Multi-line option optically balanced with text ✓
+- Consistent styling across all radio buttons in app ✓
+
+**Impact:** Visual polish. Radio buttons now match design spec across the entire application.
+
+---
+
 ## Session 10: January 26, 2026
 
 ### Library Conversion (Terraform) - Incomplete Folder Cleanup

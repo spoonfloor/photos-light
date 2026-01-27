@@ -75,6 +75,14 @@ body {
   -webkit-user-select: none;
 }
 
+/* --- Radio Buttons (Global) --- */
+input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+
 /* --- Page Layout --- */
 .page-main {
   padding-top: calc(var(--app-bar-height) + var(--page-top-gap));
@@ -653,10 +661,6 @@ body {
 .date-editor-radio input[type="radio"] {
   margin-top: 4px;
   margin-right: 12px;
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
-  accent-color: var(--accent-color);
 }
 
 .date-editor-radio label {
