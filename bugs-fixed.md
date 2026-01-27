@@ -154,6 +154,94 @@ This fix mirrors the existing terraform duplicate detection logic:
 
 ## Session 12: January 27, 2026
 
+### Toast Notifications - Close Button
+**Fixed:** Added close button to all toast notifications  
+**Version:** v193
+
+**Issues resolved:**
+- ✅ All toasts now have close button in top-right corner (Google Photos style)
+- ✅ User can dismiss toasts immediately without waiting for auto-hide
+- ✅ Close button works with both undo and non-undo toasts
+- ✅ Corner positioning matches design mockup
+
+**Root cause:**
+Toasts only had auto-dismiss after timeout (3s or 7s). No manual dismiss option for users who wanted to clear notifications immediately.
+
+**The fix:**
+
+**Part 1: Add close button to HTML**
+```html
+<!-- toast.html -->
+<div class="toast" id="toast" style="display: none;">
+  <span class="toast-message" id="toastMessage"></span>
+  <button class="toast-button" id="toastUndoBtn">Undo</button>
+  <button class="toast-close-btn" id="toastCloseBtn">
+    <span class="material-symbols-outlined">close</span>
+  </button>
+</div>
+```
+
+**Part 2: Update CSS for corner positioning and styling**
+```css
+.toast {
+  background: #2d2d2d;  /* Darker for contrast */
+  padding: 16px 40px 16px 20px;  /* Extra right padding for close button */
+  border-radius: 8px;  /* Rounder corners */
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);  /* Deeper shadow */
+  gap: 20px;  /* More spacing */
+}
+
+.toast-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+}
+
+.toast-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e8e8e8;
+}
+```
+
+**Part 3: Wire up click handler**
+```javascript
+// Wire up close button
+const newCloseBtn = closeBtn.cloneNode(true);
+closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+newCloseBtn.addEventListener('click', () => {
+  hideToast();
+});
+```
+
+**Design:**
+- Close button positioned absolutely at top-right corner (8px from edges)
+- Subtle gray (#999) that brightens to white on hover
+- Small click target (24x24px) doesn't compete with Undo action
+- Works with all toast types (with/without Undo button)
+
+**Testing verified:**
+- Toast with Undo: Both buttons work correctly ✓
+- Toast without Undo: Close button works correctly ✓
+- Close button dismisses toast immediately ✓
+- Hover state provides visual feedback ✓
+
+**Impact:** UX improvement. Users can now dismiss toasts immediately instead of waiting for auto-hide timeout.
+
+---
+
+## Session 12: January 27, 2026
+
 ### Terraform Choice Dialog - Radio Button Styling
 **Fixed:** Radio buttons now match design spec  
 **Version:** v192

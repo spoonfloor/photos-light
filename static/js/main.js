@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v192';
+const MAIN_JS_VERSION = 'v193';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1608,6 +1608,7 @@ function showToast(message, onUndo, duration) {
   const toast = document.getElementById('toast');
   const messageEl = document.getElementById('toastMessage');
   const undoBtn = document.getElementById('toastUndoBtn');
+  const closeBtn = document.getElementById('toastCloseBtn');
 
   if (!toast) return;
 
@@ -1636,6 +1637,13 @@ function showToast(message, onUndo, duration) {
     // Hide undo button
     newUndoBtn.style.display = 'none';
   }
+
+  // Wire up close button
+  const newCloseBtn = closeBtn.cloneNode(true);
+  closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+  newCloseBtn.addEventListener('click', () => {
+    hideToast();
+  });
 
   toast.style.display = 'flex';
 
