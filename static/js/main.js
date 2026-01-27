@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v193';
+const MAIN_JS_VERSION = 'v201';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -3408,7 +3408,7 @@ async function loadUtilitiesMenu() {
 
     if (cleanOrganizeBtn) {
       cleanOrganizeBtn.addEventListener('click', () => {
-        console.log('🔧 Update library index clicked');
+        console.log('🔧 Update database clicked');
         hideUtilitiesMenu();
         openUpdateIndexOverlay();
       });
@@ -3513,7 +3513,7 @@ function hideUtilitiesMenu() {
  * 
  * Requirements:
  * - Switch library: ALWAYS available
- * - Update library index: requires database (doesn't need photos)
+ * - Update database: requires database (doesn't need photos)
  * - Rebuild database: requires database
  * - Remove duplicates: requires database AND 1+ photos
  * - Rebuild thumbnails: requires database AND 1+ photos
@@ -3527,7 +3527,7 @@ function updateUtilityMenuAvailability() {
   // Switch library - ALWAYS available (never disabled)
   enableMenuItem('switchLibraryBtn', true);
 
-  // Update library index - requires database (doesn't need photos)
+  // Update database - requires database (doesn't need photos)
   enableMenuItem('cleanOrganizeBtn', hasDatabase);
 
   // Rebuild database - requires database
@@ -3915,7 +3915,7 @@ function closeDuplicatesOverlay() {
 window.toggleDuplicateSelection = toggleDuplicateSelection;
 
 // ==========================
-// UPDATE LIBRARY INDEX OVERLAY
+// UPDATE DATABASE OVERLAY
 // ==========================
 
 let updateIndexState = {
@@ -3927,7 +3927,7 @@ let updateIndexState = {
 };
 
 /**
- * Load Update Library Index overlay fragment
+ * Load Update Database overlay fragment
  */
 async function loadUpdateIndexOverlay() {
   // Check if already loaded
@@ -3938,7 +3938,7 @@ async function loadUpdateIndexOverlay() {
   try {
     const response = await fetch('fragments/updateIndexOverlay.html');
     if (!response.ok)
-      throw new Error('Failed to load Update Library Index overlay');
+      throw new Error('Failed to load Update Database overlay');
 
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
@@ -3974,7 +3974,7 @@ async function loadUpdateIndexOverlay() {
       });
     }
   } catch (error) {
-    console.error('❌ Failed to load Update Library Index overlay:', error);
+    console.error('❌ Failed to load Update Database overlay:', error);
   }
 }
 
@@ -3985,7 +3985,7 @@ async function openUpdateIndexOverlay() {
   // Check if already open
   const existingOverlay = document.getElementById('updateIndexOverlay');
   if (existingOverlay && existingOverlay.style.display === 'flex') {
-    console.log('⚠️ Update library index overlay already open');
+    console.log('⚠️ Update database overlay already open');
     return;
   }
 
@@ -4038,7 +4038,7 @@ async function openUpdateIndexOverlay() {
 
     if (hasChanges) {
       // Phase 2: Review (has changes - show proceed)
-      updateUpdateIndexUI('Scan complete. Ready to proceed?', false);
+      updateUpdateIndexUI('Scan complete. Ready to continue?', false);
       showUpdateIndexStats();
       showUpdateIndexButtons('cancel', 'proceed');
     } else {
@@ -4054,13 +4054,13 @@ async function openUpdateIndexOverlay() {
 }
 
 /**
- * Phase 3: Execute update (after user clicks Proceed)
+ * Phase 3: Execute update (after user clicks Continue)
  */
 async function executeUpdateIndex() {
-  console.log('🚀 Executing update library index...');
+  console.log('🚀 Executing update database...');
 
   // Phase 3: Execution
-  updateUpdateIndexUI('Removing missing files', true);
+  updateUpdateIndexUI('Removing missing files...', false);
   showUpdateIndexButtons('cancel-disabled');
 
   try {
@@ -4098,22 +4098,13 @@ async function executeUpdateIndex() {
           // Progress updates
           if (data.phase) {
             if (data.phase === 'removing_deleted') {
-              updateUpdateIndexUI(
-                `Removing missing files... ${data.current}/${data.total}`,
-                true
-              );
+              updateUpdateIndexUI('Removing missing files...', false);
             } else if (data.phase === 'adding_untracked') {
-              updateUpdateIndexUI(
-                `Adding untracked files... ${data.current}/${data.total}`,
-                true
-              );
+              updateUpdateIndexUI('Adding untracked files...', false);
             } else if (data.phase === 'updating_names') {
-              updateUpdateIndexUI('Updating names...', true);
+              updateUpdateIndexUI('Updating names...', false);
             } else if (data.phase === 'removing_empty') {
-              updateUpdateIndexUI(
-                `Removing empty folders... ${data.current}`,
-                true
-              );
+              updateUpdateIndexUI('Removing empty folders...', false);
             }
           }
 
@@ -4155,8 +4146,8 @@ async function executeUpdateIndex() {
     await loadAndRenderPhotos(false);
   } catch (error) {
     console.error('❌ Failed to execute update:', error);
-    updateUpdateIndexUI('Failed to update library index', false);
-    showToast('Failed to update library index', null);
+    updateUpdateIndexUI('Failed to update database', false);
+    showToast('Failed to update database', null);
     showUpdateIndexButtons('cancel');
   }
 }
@@ -4328,7 +4319,7 @@ function renderUpdateIndexDetails() {
 }
 
 /**
- * Close Update Library Index overlay
+ * Close Update Database overlay
  */
 function closeUpdateIndexOverlay() {
   const overlay = document.getElementById('updateIndexOverlay');

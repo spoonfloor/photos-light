@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Toast with Close Button v2 - Mockup</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+  <style>
+    :root {
+      --main-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --app-bar-bg: #1f1f1f;
+      --body-bg: #121212;
+      --text-primary: #e8e8e8;
+      --text-secondary: #b3b3b3;
+      --z-toast: 21000;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--main-font);
+      font-size: 15.5px;
+      font-weight: 400;
+      line-height: 1.6;
+      color: var(--text-primary);
+      background: var(--body-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .demo-container {
+      max-width: 1200px;
+      width: 100%;
+    }
+
+    .demo-header {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+
+    .demo-header h1 {
+      font-size: 24px;
+      font-weight: 500;
+      margin-bottom: 12px;
+    }
+
+    .demo-header p {
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+
+    .demo-section {
+      margin-bottom: 60px;
+    }
+
+    .demo-section h2 {
+      font-size: 18px;
+      font-weight: 500;
+      margin-bottom: 24px;
+      color: var(--text-secondary);
+    }
+
+    .toast-examples {
+      display: flex;
+      flex-direction: column;
+      gap: 40px;
+      align-items: center;
+    }
+
+    /* NEW TOAST WITH CORNER CLOSE BUTTON */
+    .toast {
+      position: relative;
+      background: #2d2d2d;
+      color: var(--text-primary);
+      padding: 16px 40px 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      z-index: var(--z-toast);
+      min-width: 320px;
+    }
+
+    .toast-message {
+      font-size: 15px;
+      font-weight: 400;
+      color: #ffffff;
+    }
+
+    .toast-button {
+      background: transparent;
+      border: none;
+      color: #64b5f6;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 0;
+      margin-left: auto;
+    }
+
+    .toast-button:hover {
+      color: #90caf9;
+    }
+
+    .toast-close-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: none;
+      border: none;
+      color: #999;
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      width: 24px;
+      height: 24px;
+    }
+
+    .toast-close-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e8e8e8;
+    }
+
+    .toast-close-btn .material-symbols-outlined {
+      font-size: 18px;
+      font-weight: 300;
+    }
+
+    /* Toast without undo button */
+    .toast-simple {
+      position: relative;
+      background: #2d2d2d;
+      color: var(--text-primary);
+      padding: 16px 40px 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      z-index: var(--z-toast);
+      min-width: 320px;
+    }
+
+    .toast-simple .toast-message {
+      font-size: 15px;
+      font-weight: 400;
+      color: #ffffff;
+      flex: 1;
+    }
+
+    .toast-simple .toast-close-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: none;
+      border: none;
+      color: #999;
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      width: 24px;
+      height: 24px;
+    }
+
+    .toast-simple .toast-close-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e8e8e8;
+    }
+
+    .toast-simple .toast-close-btn .material-symbols-outlined {
+      font-size: 18px;
+      font-weight: 300;
+    }
+
+    /* Longer message toast */
+    .toast-long {
+      position: relative;
+      background: #2d2d2d;
+      color: var(--text-primary);
+      padding: 16px 40px 16px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      z-index: var(--z-toast);
+      max-width: 500px;
+    }
+
+    .toast-long .toast-message {
+      font-size: 15px;
+      font-weight: 400;
+      color: #ffffff;
+    }
+
+    .toast-long .toast-button {
+      background: transparent;
+      border: none;
+      color: #64b5f6;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 0;
+      margin-left: auto;
+      white-space: nowrap;
+    }
+
+    .toast-long .toast-button:hover {
+      color: #90caf9;
+    }
+
+    .toast-long .toast-close-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: none;
+      border: none;
+      color: #999;
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      width: 24px;
+      height: 24px;
+    }
+
+    .toast-long .toast-close-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e8e8e8;
+    }
+
+    .toast-long .toast-close-btn .material-symbols-outlined {
+      font-size: 18px;
+      font-weight: 300;
+    }
+
+    .example-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+
+    .notes {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 20px;
+      margin-top: 40px;
+    }
+
+    .notes h3 {
+      font-size: 16px;
+      font-weight: 500;
+      margin-bottom: 12px;
+    }
+
+    .notes ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .notes li {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      padding-left: 20px;
+      position: relative;
+    }
+
+    .notes li::before {
+      content: '•';
+      position: absolute;
+      left: 0;
+    }
+
+    .comparison-container {
+      display: flex;
+      gap: 60px;
+      justify-content: center;
+      align-items: center;
+      margin-top: 40px;
+    }
+
+    .comparison-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .comparison-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Original toast for comparison */
+    .toast-original {
+      background: var(--app-bar-bg);
+      color: var(--text-primary);
+      padding: 12px 16px;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .toast-original .toast-message {
+      font-size: 14px;
+    }
+
+    .toast-original .toast-button {
+      background: transparent;
+      border: none;
+      color: #64b5f6;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-container">
+    <div class="demo-header">
+      <h1>Toast with Corner Close Button</h1>
+      <p>Close button positioned at top-right corner like Google Photos</p>
+    </div>
+
+    <div class="demo-section">
+      <h2>Primary Design</h2>
+      <div class="toast-examples">
+        <div>
+          <div class="example-label">With Undo Action</div>
+          <div class="toast">
+            <span class="toast-message">3 photos deleted</span>
+            <button class="toast-button">Undo</button>
+            <button class="toast-close-btn">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div class="example-label">Simple Notification</div>
+          <div class="toast-simple">
+            <span class="toast-message">Import completed: 47 photos added</span>
+            <button class="toast-close-btn">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <div class="example-label">Longer Message</div>
+          <div class="toast-long">
+            <span class="toast-message">Date updated for 142 photos</span>
+            <button class="toast-button">Undo</button>
+            <button class="toast-close-btn">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-section">
+      <h2>Before & After</h2>
+      <div class="comparison-container">
+        <div class="comparison-item">
+          <div class="comparison-label">Current Design</div>
+          <div class="toast-original">
+            <span class="toast-message">3 photos deleted</span>
+            <button class="toast-button">Undo</button>
+          </div>
+        </div>
+
+        <div class="comparison-item">
+          <div class="comparison-label">New Design</div>
+          <div class="toast">
+            <span class="toast-message">3 photos deleted</span>
+            <button class="toast-button">Undo</button>
+            <button class="toast-close-btn">
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h3>Design Details</h3>
+      <ul>
+        <li><strong>Close button position:</strong> Absolutely positioned at top-right corner (8px from top/right)</li>
+        <li><strong>Background:</strong> Slightly darker (#2d2d2d) for better contrast with close button</li>
+        <li><strong>Padding:</strong> Extra right padding (40px) to ensure message doesn't overlap with close button</li>
+        <li><strong>Border radius:</strong> Increased to 8px for more modern appearance</li>
+        <li><strong>Shadow:</strong> Deeper shadow (0 4px 16px) for better elevation</li>
+        <li><strong>Close button:</strong> Subtle gray (#999) that brightens on hover, small 24x24px hit target</li>
+        <li><strong>Icon:</strong> Material Symbols close icon at 18px with lighter weight (300)</li>
+        <li><strong>Layout:</strong> Message and Undo button remain in flexbox flow, close button floats above</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

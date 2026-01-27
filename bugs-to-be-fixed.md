@@ -8,47 +8,25 @@ Last updated: January 27, 2026
 
 ## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
 
-### Utilities Menu - String and Order Changes
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 5 minutes  
-**Status:** PARTIALLY COMPLETE (v164-v175)
-
-**Issue:** Utilities menu items need reordering and renaming
-
-**What's done:**
-- ✅ "Switch library" → "Open library" (v164-v175)
-
-**What remains:**
-1. "Rebuild database" → "Clean database"
-2. "Remove duplicates" → "Show duplicates"
-3. Move "Rebuild thumbnails" to 3rd place (currently 5th)
-
-**Current order:**
-1. Open library ✅
-2. Update library index ✅
-3. Rebuild database ❌ (should be "Clean database")
-4. Remove duplicates ❌ (should be "Show duplicates")
-5. Rebuild thumbnails ❌ (should be 3rd)
-
-**Target order:**
-1. Open library ✅
-2. Update library index ✅
-3. Clean database (renamed + moved up)
-4. Rebuild thumbnails (moved up)
-5. Show duplicates (renamed + moved down)
-
----
-
-### Duplicates Feature - Why Show-Only?
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** Research/documentation  
+### Update Database - Stuck on Removing Untracked Files
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 2-3 hours  
 **Status:** NOT STARTED
 
-**Issue:** Find out why we decided to rewrite the remove dupes feature so that it only shows dupes
-- Original feature removed duplicates
-- Now it only shows them
-- Need to document the reasoning behind this design decision
-- May inform future feature work
+**Issue:** Update database is stuck on removing untracked files, falsely reporting untracked files
+- Operation gets stuck during "removing untracked files" phase
+- Reports untracked files that don't actually exist or are false positives
+- Blocks completion of update index operation
+- May be related to file path detection or database query logic
+
+**Impact:** Prevents users from cleaning up their library index, can leave database in inconsistent state
+
+**Fix approach:** 
+- Debug untracked file detection logic
+- Check if file paths are being compared correctly
+- Verify database query for untracked files
+- Add timeout or skip mechanism for problematic files
+- Improve error handling and reporting
 
 ---
 
@@ -113,20 +91,6 @@ Last updated: January 27, 2026
 
 ---
 
-### Library Conversion Scoreboard - Remove Green Text Color
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 5 minutes  
-**Status:** NOT STARTED
-
-**Issue:** Kill green text color from library conversion scoreboard
-- "PROCESSED" count displays in green (e.g., 251 in green)
-- Inconsistent with other counts (DUPLICATES, ERRORS in white)
-- Green color is unnecessary emphasis
-
-**Fix approach:** Remove green color styling from PROCESSED count, use consistent white text
-
----
-
 ### Lightbox - Non-Functional Scrollbar
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 30 minutes  
@@ -139,6 +103,21 @@ Last updated: January 27, 2026
 - Likely CSS overflow issue
 
 **Fix approach:** Remove scrollbar by fixing CSS (overflow: hidden or proper height constraints)
+
+---
+
+### Braille Spinner - Still in Update Library Index (and possibly others)
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 30 minutes  
+**Status:** NOT STARTED
+
+**Issue:** Update library index has a braille spinner, maybe others
+- Despite removal in v162, spinners remain in some dialogs
+- Confirmed: Update Library Index dialog has spinner
+- Need to check other dialogs for remaining spinners
+- Should be removed where realtime feedback already exists
+
+**Fix approach:** Audit Update Library Index and other dialogs/overlays to find and remove remaining spinners
 
 ---
 
@@ -183,28 +162,26 @@ Last updated: January 27, 2026
 
 Based on impact, frequency, and effort (quick wins first, then deep work):
 
-1. 🟡 **Utilities Menu - String and Order Changes** (5 min, quick win builds momentum)
-2. 🟡 **Library Conversion Scoreboard - Remove Green Text Color** (5 min, quick win same area)
+1. 🔴 **Update Database - Stuck on Removing Untracked Files** (2-3 hrs, CRITICAL - blocks index cleanup)
+2. 🟡 **Braille Spinner - Still in Update Library Index (and possibly others)** (30 min, find and remove)
 3. 🟡 **Lightbox - Non-Functional Scrollbar** (30 min, visual polish)
 4. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
 5. 🟡 **Image Rotation - Bake Metadata into Pixels** (3-4 hrs, compatibility improvement)
-6. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
-7. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-8. 🔵 **Import Duplicate Detection** (deferred feature work)
-
-**Strategy:** Clear quick wins (10 min, 2 bugs) before deep work on conversion cleanup
+6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+7. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 ---
 
 ## SUMMARY
 
-**Next up:** Utilities Menu + Scoreboard (10 min, quick wins)
+**Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
 
 **Total remaining:** 6 bugs + 1 deferred feature
-- 🟡 Polish: 6 bugs (Utilities Menu, Scoreboard Color, Lightbox Scrollbar, Folder Picker Checkbox, Image Rotation Baking, Duplicates Research, Performance Research)
+- 🔴 Critical: 1 bug (Update Database Stuck)
+- 🟡 Polish: 5 bugs (Braille Spinner, Lightbox Scrollbar, Folder Picker Checkbox, Image Rotation Baking, Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~7-8 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~9-10 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 

@@ -4,6 +4,162 @@ Issues that have been fixed and verified.
 
 ---
 
+## Session 13: January 27, 2026
+
+### Utilities Menu & Dialog Improvements (v194-v201)
+**Fixed:** Menu renamed, dialogs standardized, spinners removed  
+**Version:** v194-v201
+
+**Issues resolved:**
+- ✅ "Update library index" → "Update database" (v195)
+- ✅ "Remove duplicates" → "Show duplicates" (v194)
+- ✅ Rebuild thumbnails moved to 3rd position (v194)
+- ✅ All "Proceed" buttons → "Continue" (v196)
+- ✅ "Ready to proceed?" → "Ready to continue?" (v199)
+- ✅ Rebuild thumbnails: "Delete & Rebuild" → "Delete and rebuild" (v198)
+- ✅ Update database: Removed spinners during execution phases (v200)
+- ✅ Update database: Removed n/total counters, just "Verb..." (v201)
+
+**Root causes:**
+1. **Menu naming issues:**
+   - "Update library index" was unclear about what operation does (grooms/syncs without rebuilding)
+   - "Remove duplicates" implied deletion when feature only shows duplicates
+   - Menu ordering separated related database operations
+
+2. **Inconsistent button labels:**
+   - Mix of "Proceed" and "Continue" across dialogs
+   - "Delete & Rebuild" was title case instead of sentence case
+
+3. **Redundant spinners:**
+   - Spinners showing alongside counters during Update database execution
+   - Violates v162 canonical pattern (remove spinners where realtime feedback exists)
+
+4. **Counter clutter:**
+   - "Removing missing files... 5/10" was too verbose
+   - Counters weren't providing value, just visual noise
+
+**The fixes:**
+
+**Phase 1: Menu rename and reorder (v194-v195)**
+```html
+<!-- Final menu order -->
+1. Open library
+2. Update database (renamed from "Update library index")
+3. Rebuild database
+4. Rebuild thumbnails (moved from 5th to 4th)
+5. Show duplicates (renamed from "Remove duplicates")
+```
+
+**Phase 2: Button standardization (v196-v199)**
+- All "Proceed" → "Continue" (Update database, Rebuild database)
+- "Ready to proceed?" → "Ready to continue?"
+- "Delete & Rebuild" → "Delete and rebuild" (sentence case)
+
+**Phase 3: Spinner removal (v200)**
+Following v162 canonical pattern:
+```javascript
+// Keep spinner ONLY for initial scan (no other feedback)
+updateUpdateIndexUI('Scanning library', true);
+
+// Remove spinners during execution (counters provide feedback)
+updateUpdateIndexUI('Removing missing files...', false);
+updateUpdateIndexUI('Adding untracked files...', false);
+```
+
+**Phase 4: Counter removal (v201)**
+```javascript
+// Before: Counter clutter
+`Removing missing files... ${data.current}/${data.total}`
+
+// After: Clean verb + ellipsis
+'Removing missing files...'
+```
+
+**Rationale:**
+- **"Update database"** clearly describes sync/groom operation (not a rebuild)
+- **"Rebuild database"** accurately describes destructive rebuild from scratch
+- **"Show duplicates"** matches actual functionality (no deletion)
+- **"Continue"** is gentler, more intuitive than "Proceed"
+- **Sentence case** matches modern UI conventions
+- **No spinners with counters** follows established pattern (v162)
+- **No counters** reduces visual noise when operation is fast
+
+**Testing verified:**
+- Menu displays in correct order ✓
+- All labels use correct naming ✓
+- All buttons say "Continue" (except "Delete and rebuild") ✓
+- Update database shows spinner only during scan ✓
+- Execution phases show clean "Verb..." messages ✓
+- No linter errors ✓
+
+**Impact:** Comprehensive UX polish. Menu uses accurate descriptive language, dialogs have consistent button labels, and visual feedback is clean without redundant spinners or counters.
+
+---
+
+### Duplicates Feature Research - Why Show-Only?
+**Research complete:** Documented incomplete implementation history  
+**Version:** v194
+
+**Issue investigated:**
+Why did the "Remove duplicates" feature become show-only instead of actually removing duplicates?
+
+**Research findings:**
+The feature was **never completed**, not intentionally changed to show-only.
+
+**Current state:**
+- ✅ Frontend: Full UI exists with checkboxes and "Remove Selected" button
+- ✅ Backend: GET endpoint `/api/utilities/duplicates` returns duplicate info
+- ❌ Backend: No DELETE endpoint implemented
+- ❌ Frontend function `removeSelectedDuplicates()` tries to call non-existent endpoint
+
+**Historical context (from archive docs):**
+- New schema v2 was designed with `UNIQUE(content_hash, date_taken)`
+- Decision was to prevent duplicates at import time via UNIQUE constraint
+- "Phase 4" planned to remove the utility entirely (rely on constraint instead)
+- Manual removal feature was deprioritized in favor of prevention
+
+**Conclusion:**
+Show-only is the result of incomplete implementation. The UI skeleton exists but backend deletion was never built because the strategy shifted to prevention over cleanup.
+
+**Recommendation:** Keep as show-only utility. It serves a useful purpose (finding duplicates to review) without the complexity of safe deletion logic.
+
+**Impact:** Documentation complete. Now understood why feature is show-only and decision to keep it that way is documented.
+
+---
+
+### Library Conversion Scoreboard - Green Text Color Removed
+**Fixed:** All scoreboard counts now use consistent white text  
+**Version:** Already fixed (no version change needed)
+
+**Issues resolved:**
+- ✅ PROCESSED count no longer displays in green
+- ✅ All three counts (PROCESSED, DUPLICATES, ERRORS) use consistent white text
+- ✅ Uses `color: var(--text-primary)` for all stat values
+
+**Root cause:**
+The green color was originally added for emphasis on the PROCESSED count in the terraform scoreboard. This created visual inconsistency with the other counts (DUPLICATES and ERRORS) which displayed in white.
+
+**The fix:**
+CSS already uses consistent styling:
+```css
+.import-stat-value {
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--text-primary); /* White, consistent for all counts */
+}
+```
+
+No JavaScript inline styles applying green color to terraform progress or complete overlays.
+
+**Testing verified:**
+- Terraform progress overlay: All counts display in white ✓
+- Terraform complete overlay: All counts display in white ✓
+- No green color applied anywhere in scoreboard ✓
+
+**Impact:** Visual consistency. All scoreboard statistics now use the same styling, creating a cleaner, more professional appearance.
+
+---
+
 ## Session 11: January 27, 2026
 
 ### Bulk Date Change - Hash Collision (UNIQUE constraint failed)
