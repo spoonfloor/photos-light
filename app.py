@@ -210,6 +210,80 @@ def extract_exif_date(file_path):
         mtime = os.path.getmtime(file_path)
         return datetime.fromtimestamp(mtime).strftime('%Y:%m:%d %H:%M:%S')
 
+def convert_to_rgb_properly(img):
+    """
+    Convert image to RGB mode with proper handling of different color spaces.
+    
+    Fixes washed-out thumbnails caused by:
+    - RGBA/LA: Alpha channel composited over black (makes images darker)
+    - I/F: 32-bit integer/float modes without normalization
+    - I;16: 16-bit modes from RAW files without proper scaling
+    
+    Args:
+        img: PIL Image object
+    
+    Returns:
+        PIL Image in RGB mode with proper color conversion
+    """
+    mode = img.mode
+    
+    # Already RGB - nothing to do
+    if mode == 'RGB':
+        return img
+    
+    # Capture ICC profile before any conversions (will restore after)
+    icc_profile = img.info.get('icc_profile')
+    
+    # Modes with alpha channel - composite over white background
+    # This prevents dark/muddy thumbnails from transparent PNGs
+    if mode in ('RGBA', 'LA', 'PA', 'RGBa', 'La'):
+        if mode in ('RGBA', 'RGBa'):
+            # Create white background and paste with alpha mask
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[-1])  # Use alpha channel as mask
+            result = background
+        elif mode in ('LA', 'La'):
+            # Grayscale with alpha
+            background = Image.new('L', img.size, 255)
+            background.paste(img, mask=img.split()[-1])
+            result = background.convert('RGB')
+        elif mode == 'PA':
+            # Palette with alpha - convert to RGBA first
+            img = img.convert('RGBA')
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[-1])
+            result = background
+    # High bit-depth modes - need normalization to prevent washed-out appearance
+    # These include 32-bit (I, F) and 16-bit (I;16) images
+    elif mode in ('I', 'F', 'I;16', 'I;16B', 'I;16L', 'I;16N'):
+        import numpy as np
+        # Convert to numpy array for normalization
+        arr = np.array(img)
+        
+        # Normalize to 0-255 range
+        if arr.size > 0:
+            min_val = arr.min()
+            max_val = arr.max()
+            if max_val > min_val:
+                # Scale to 0-255 range
+                arr = ((arr - min_val) / (max_val - min_val) * 255).astype(np.uint8)
+            else:
+                # All pixels same value
+                arr = np.zeros_like(arr, dtype=np.uint8)
+        
+        # Create new image from normalized array
+        normalized_img = Image.fromarray(arr, mode='L')
+        result = normalized_img.convert('RGB')
+    else:
+        # All other modes (L, P, CMYK, YCbCr, etc.) - standard conversion works fine
+        result = img.convert('RGB')
+    
+    # Restore ICC profile to converted image
+    if icc_profile and result.mode == 'RGB':
+        result.info['icc_profile'] = icc_profile
+    
+    return result
+
 def create_db_backup():
     """Create a timestamped database backup, maintain max 20 backups"""
     try:
@@ -665,8 +739,11 @@ def generate_thumbnail_for_file(file_path, content_hash, file_type):
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0 and os.path.exists(temp_frame):
                 with Image.open(temp_frame) as img:
-                    if img.mode != 'RGB':
-                        img = img.convert('RGB')
+                    # Capture ICC profile before any conversions
+                    icc_profile = img.info.get('icc_profile')
+                    
+                    # Convert to RGB with proper color space handling
+                    img = convert_to_rgb_properly(img)
                     
                     # Center-crop to 400x400 square
                     target_size = 400
@@ -687,7 +764,11 @@ def generate_thumbnail_for_file(file_path, content_hash, file_type):
                     top = (img.height - target_size) // 2
                     img = img.crop((left, top, left + target_size, top + target_size))
                     
-                    img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
+                    # Save with ICC profile preserved
+                    save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
+                    if icc_profile:
+                        save_kwargs['icc_profile'] = icc_profile
+                    img.save(thumbnail_path, **save_kwargs)
                 os.remove(temp_frame)
                 return True
             return False
@@ -697,8 +778,11 @@ def generate_thumbnail_for_file(file_path, content_hash, file_type):
                 from PIL import ImageOps
                 img = ImageOps.exif_transpose(img)
                 
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
+                # Capture ICC profile before any conversions (prevents washed-out thumbnails)
+                icc_profile = img.info.get('icc_profile')
+                
+                # Convert to RGB with proper color space handling
+                img = convert_to_rgb_properly(img)
                 
                 target_size = 400
                 
@@ -718,7 +802,11 @@ def generate_thumbnail_for_file(file_path, content_hash, file_type):
                 top = (img.height - target_size) // 2
                 img = img.crop((left, top, left + target_size, top + target_size))
                 
-                img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
+                # Save with ICC profile preserved (critical for color accuracy)
+                save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
+                if icc_profile:
+                    save_kwargs['icc_profile'] = icc_profile
+                img.save(thumbnail_path, **save_kwargs)
                 return True
     except Exception as e:
         print(f"❌ Error generating thumbnail: {e}")
@@ -911,8 +999,11 @@ def get_photo_thumbnail(photo_id):
             
             # Center-crop to 400x400 square
             with Image.open(temp_frame) as img:
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
+                # Capture ICC profile before any conversions
+                icc_profile = img.info.get('icc_profile')
+                
+                # Convert to RGB with proper color space handling
+                img = convert_to_rgb_properly(img)
                 
                 target_size = 400
                 
@@ -932,7 +1023,11 @@ def get_photo_thumbnail(photo_id):
                 top = (img.height - target_size) // 2
                 img = img.crop((left, top, left + target_size, top + target_size))
                 
-                img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
+                # Save with ICC profile preserved
+                save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
+                if icc_profile:
+                    save_kwargs['icc_profile'] = icc_profile
+                img.save(thumbnail_path, **save_kwargs)
             
             # Clean up temp file
             os.remove(temp_frame)
@@ -950,9 +1045,11 @@ def get_photo_thumbnail(photo_id):
             except Exception:
                 pass  # If no EXIF or error, continue without rotation fix
             
-            # Convert to RGB if needed
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
+            # Capture ICC profile BEFORE any conversions (prevents washed-out thumbnails)
+            icc_profile = img.info.get('icc_profile')
+            
+            # Convert to RGB with proper color space handling
+            img = convert_to_rgb_properly(img)
             
             target_size = 400
             
@@ -972,8 +1069,11 @@ def get_photo_thumbnail(photo_id):
             top = (img.height - target_size) // 2
             img = img.crop((left, top, left + target_size, top + target_size))
             
-            # Save to cache
-            img.save(thumbnail_path, format='JPEG', quality=85, optimize=True)
+            # Save to cache WITH ICC profile preserved (critical for color accuracy)
+            save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
+            if icc_profile:
+                save_kwargs['icc_profile'] = icc_profile
+            img.save(thumbnail_path, **save_kwargs)
             
             # Serve the newly generated thumbnail
             return send_file(thumbnail_path, mimetype='image/jpeg')

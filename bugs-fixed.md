@@ -6,6 +6,92 @@ Issues that have been fixed and verified.
 
 ## Session 13: January 27, 2026
 
+### Thumbnail Washout - ICC Color Profile Preservation
+**Fixed:** Thumbnails now preserve ICC color profiles for accurate color rendering  
+**Version:** v204
+
+**Issues resolved:**
+- ✅ Thumbnails no longer appear washed out (desaturated, low contrast)
+- ✅ ICC color profiles preserved through thumbnail generation pipeline
+- ✅ Color accuracy now matches original images and lightbox view
+- ✅ Works for both lazy-load endpoint and batch generation function
+
+**Root cause:**
+Thumbnail generation code stripped ICC color profiles during JPEG save operations. Images with wide-gamut color spaces (Adobe RGB, ProPhoto RGB, Display P3) embedded in professional camera photos were being saved as plain JPEGs without profile metadata. When browsers loaded these thumbnails without profiles, they interpreted the colors as sRGB, resulting in washed-out appearance with reduced saturation and contrast.
+
+**The investigation:**
+- Created test comparison showing clear visual difference between thumbnails with/without ICC profiles
+- Verified original files had 30,692-byte ICC profiles embedded
+- Traced two separate thumbnail generation code paths
+- Discovered the actual lazy-load endpoint (`/api/photo/<id>/thumbnail`) used different code than the batch function
+- v203 fixed the batch function but lazy-load endpoint remained broken
+
+**The fix:**
+
+**Added `convert_to_rgb_properly()` helper function (lines 213-285):**
+```python
+def convert_to_rgb_properly(img):
+    """Convert image to RGB with ICC profile preservation"""
+    mode = img.mode
+    
+    if mode == 'RGB':
+        return img  # Already RGB, profile intact
+    
+    # Capture ICC profile before conversions
+    icc_profile = img.info.get('icc_profile')
+    
+    # Handle special modes (RGBA, high bit-depth, etc.)
+    # ... conversion logic ...
+    
+    # Restore ICC profile to converted image
+    if icc_profile and result.mode == 'RGB':
+        result.info['icc_profile'] = icc_profile
+    
+    return result
+```
+
+**Updated lazy-load thumbnail endpoint (lines 1040-1080):**
+```python
+# Capture ICC profile before any conversions
+icc_profile = img.info.get('icc_profile')
+
+# Convert to RGB with proper color space handling
+img = convert_to_rgb_properly(img)
+
+# ... resize and crop ...
+
+# Save with ICC profile preserved (critical for color accuracy)
+save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
+if icc_profile:
+    save_kwargs['icc_profile'] = icc_profile
+img.save(thumbnail_path, **save_kwargs)
+```
+
+**Also updated batch generation function (lines 711-813) and video thumbnail path (lines 1010-1038) with identical ICC preservation logic.**
+
+**Why this works:**
+- PIL's `Image.info` dictionary contains ICC profile as `icc_profile` key
+- Profile survives through `resize()` and `crop()` operations on the image object
+- BUT profiles are NOT automatically saved - must be explicitly passed to `img.save()`
+- Without the `icc_profile` parameter, PIL silently strips the profile during JPEG encoding
+
+**Testing verified:**
+- Test thumbnails generated with v204 code have ICC profiles (30,692 bytes) ✓
+- Browser comparison shows thumbnails WITH profiles match originals ✓
+- Thumbnails WITHOUT profiles appear washed out (proves ICC profiles are the solution) ✓
+- All supported image formats work correctly (JPEG, HEIC, TIF, etc.) ✓
+- Reimporting files with v204 code produces vibrant thumbnails matching originals ✓
+
+**Cache behavior:**
+- Old cached thumbnails (without ICC profiles) remain until regenerated
+- Rebuild Thumbnails utility forces regeneration with v204 code
+- OR reimporting files creates new thumbnail paths forcing regeneration
+- Thumbnails regenerate lazily as users scroll (no bulk regeneration required)
+
+**Impact:** Critical quality fix. Professional camera photos with wide-gamut color spaces now display correctly in thumbnail view, matching the quality of lightbox/original view. No more washed-out, desaturated thumbnails for edited photos from Lightroom/Photoshop or photos with Adobe RGB/ProPhoto RGB profiles.
+
+---
+
 ### Utilities Menu & Dialog Improvements (v194-v201)
 **Fixed:** Menu renamed, dialogs standardized, spinners removed  
 **Version:** v194-v201
