@@ -1,8 +1,8 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: January 26, 2026
+Last updated: January 27, 2026
 
-**Status:** 5 remaining bugs + 1 deferred feature
+**Status:** 6 remaining bugs + 1 deferred feature
 
 ---
 
@@ -92,6 +92,27 @@ Last updated: January 26, 2026
 
 ---
 
+### Image Rotation - Bake Metadata into Pixels
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 3-4 hours  
+**Status:** NOT STARTED
+
+**Issue:** Consider baking rotation metadata into the file
+- If a portrait file is relying on metadata to display properly, rotate the pixels and ditch the rotation flag
+- Some viewers don't respect EXIF rotation flags properly
+- Causes images to display incorrectly in other applications
+- Better compatibility if rotation is applied to actual pixel data
+
+**Impact:** Improves interoperability with other photo viewers/editors that don't respect EXIF orientation
+
+**Fix approach:** 
+- Detect images with EXIF rotation flags
+- Rotate pixel data to match intended orientation
+- Remove/reset EXIF rotation flag
+- Possibly offer as optional operation (could be part of import, rebuild, or manual utility)
+
+---
+
 ### Library Conversion Scoreboard - Remove Green Text Color
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 5 minutes  
@@ -166,9 +187,10 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 2. 🟡 **Library Conversion Scoreboard - Remove Green Text Color** (5 min, quick win same area)
 3. 🟡 **Lightbox - Non-Functional Scrollbar** (30 min, visual polish)
 4. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
-5. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
-6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-7. 🔵 **Import Duplicate Detection** (deferred feature work)
+5. 🟡 **Image Rotation - Bake Metadata into Pixels** (3-4 hrs, compatibility improvement)
+6. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
+7. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+8. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 **Strategy:** Clear quick wins (10 min, 2 bugs) before deep work on conversion cleanup
 
@@ -178,11 +200,11 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Utilities Menu + Scoreboard (10 min, quick wins)
 
-**Total remaining:** 5 bugs + 1 deferred feature
-- 🟡 Polish: 5 bugs (Utilities Menu, Scoreboard Color, Lightbox Scrollbar, Folder Picker Checkbox, Duplicates Research, Performance Research)
+**Total remaining:** 6 bugs + 1 deferred feature
+- 🟡 Polish: 6 bugs (Utilities Menu, Scoreboard Color, Lightbox Scrollbar, Folder Picker Checkbox, Image Rotation Baking, Duplicates Research, Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~4 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~7-8 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 

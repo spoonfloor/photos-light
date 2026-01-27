@@ -532,6 +532,46 @@ def update_photo_date_with_files(photo_id, new_date, conn):
             if new_hash != old_hash:
                 print(f"  📝 Hash changed: {old_hash[:8] if old_hash else 'N/A'} → {new_hash[:8]}")
                 
+                # Check if new hash already exists (collision detection)
+                cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?", 
+                               (new_hash, photo_id))
+                existing = cursor.fetchone()
+                
+                if existing:
+                    # Hash collision - this photo is now a duplicate
+                    print(f"  ⚠️  Duplicate detected after rehash (existing ID: {existing['id']})")
+                    
+                    # Move to trash
+                    dup_dir = os.path.join(TRASH_DIR, 'duplicates')
+                    os.makedirs(dup_dir, exist_ok=True)
+                    dup_filename = os.path.basename(old_full_path)
+                    dup_path = os.path.join(dup_dir, dup_filename)
+                    
+                    # Handle filename collision in trash
+                    counter = 1
+                    while os.path.exists(dup_path):
+                        base, ext = os.path.splitext(dup_filename)
+                        dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
+                        counter += 1
+                    
+                    shutil.move(old_full_path, dup_path)
+                    print(f"  🗑️  Moved to trash: {os.path.basename(dup_path)}")
+                    
+                    # Delete old thumbnail if exists
+                    if old_hash:
+                        old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
+                        if os.path.exists(old_thumb_path):
+                            os.remove(old_thumb_path)
+                            cleanup_empty_thumbnail_folders(old_thumb_path)
+                            print(f"  🗑️  Deleted old thumbnail")
+                    
+                    # Delete from database
+                    cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+                    
+                    # Return special status for duplicate (success, but marked as duplicate)
+                    return True, "DUPLICATE", transaction
+                
+                # No collision - safe to update hash
                 # Delete old thumbnail if hash changed (keep DB squeaky clean)
                 if old_hash:
                     old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
@@ -1577,6 +1617,7 @@ def bulk_update_photo_dates_execute():
             # Now process all photos with file operations and stream progress
             master_transaction = DateEditTransaction()
             success_count = 0
+            duplicate_count = 0
             total = len(photo_date_map)
             
             print(f"🔍 DEBUG: photo_date_map has {total} entries")
@@ -1591,9 +1632,15 @@ def bulk_update_photo_dates_execute():
                 success, error, transaction = update_photo_date_with_files(photo_id, target_date, conn)
                 
                 if success:
-                    success_count += 1
-                    # Merge this transaction into master
-                    master_transaction.operations.extend(transaction.operations)
+                    if error == "DUPLICATE":
+                        # Photo became a duplicate during date change
+                        duplicate_count += 1
+                        print(f"  ⏭️  Photo {photo_id} is now a duplicate (moved to trash)")
+                    else:
+                        # Normal success
+                        success_count += 1
+                        # Merge this transaction into master
+                        master_transaction.operations.extend(transaction.operations)
                 else:
                     # Log failure
                     cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
@@ -1632,16 +1679,21 @@ def bulk_update_photo_dates_execute():
                 # All succeeded - commit
                 conn.commit()
                 conn.close()
-                print(f"✅ Updated {success_count} photos with file operations")
+                
+                if duplicate_count > 0:
+                    print(f"✅ Updated {success_count} photos, {duplicate_count} duplicates moved to trash")
+                else:
+                    print(f"✅ Updated {success_count} photos with file operations")
                 
                 # Send completion - debug the response data
                 try:
-                    response_data = {'updated_count': success_count, 'total': total}
+                    response_data = {'updated_count': success_count, 'duplicate_count': duplicate_count, 'total': total}
                     response_json = json.dumps(response_data)
                     yield f"event: complete\ndata: {response_json}\n\n"
                 except TypeError as te:
                     print(f"❌ JSON serialization error: {te}")
                     print(f"  success_count type: {type(success_count)}, value: {success_count}")
+                    print(f"  duplicate_count type: {type(duplicate_count)}, value: {duplicate_count}")
                     print(f"  total type: {type(total)}, value: {total}")
                     raise
                 
@@ -4037,6 +4089,33 @@ def terraform_library():
                     if new_hash != content_hash:
                         print(f"   📝 Hash changed: {content_hash[:8]} → {new_hash[:8]}")
                         content_hash = new_hash
+                    
+                    # 6b. Check for duplicates AGAIN after EXIF write (hash may have changed)
+                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
+                    existing = cursor.fetchone()
+                    
+                    if existing:
+                        print(f"   ⏭️  Duplicate detected after EXIF write (existing ID: {existing['id']})")
+                        
+                        # Move to .trash/duplicates/
+                        dup_dir = os.path.join(trash_dir, 'duplicates')
+                        os.makedirs(dup_dir, exist_ok=True)
+                        dup_path = os.path.join(dup_dir, filename)
+                        
+                        counter = 1
+                        while os.path.exists(dup_path):
+                            base, ext = os.path.splitext(filename)
+                            dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
+                            counter += 1
+                        
+                        shutil.move(source_path, dup_path)
+                        print(f"   🗑️  Moved to: {os.path.relpath(dup_path, library_path)}")
+                        
+                        log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
+                        
+                        duplicate_count += 1
+                        yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        continue
                     
                     # 7. Build target path
                     date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')

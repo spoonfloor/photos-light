@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v189';
+const MAIN_JS_VERSION = 'v191';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1501,8 +1501,12 @@ async function saveDateEdit() {
 
         // Show toast with undo after a delay
         setTimeout(() => {
+          let message = `Updated ${data.updated_count} photo${data.updated_count !== 1 ? 's' : ''}`;
+          if (data.duplicate_count > 0) {
+            message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
+          }
           showToast(
-            `Updated ${data.updated_count} photo${data.updated_count > 1 ? 's' : ''}`,
+            message,
             () => undoDateEdit(originalDates)
           );
         }, 500);

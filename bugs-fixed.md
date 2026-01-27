@@ -4,6 +4,154 @@ Issues that have been fixed and verified.
 
 ---
 
+## Session 11: January 27, 2026
+
+### Bulk Date Change - Hash Collision (UNIQUE constraint failed)
+**Fixed:** Duplicate detection during bulk date changes  
+**Version:** v191
+
+**Issues resolved:**
+- ✅ `UNIQUE constraint failed: photos.content_hash` error eliminated
+- ✅ Duplicate videos with identical A/V content properly detected after date change
+- ✅ Duplicates moved to `.trash/duplicates/` instead of crashing
+- ✅ User notified of duplicates in completion toast
+- ✅ Database integrity maintained during all bulk operations
+
+**Root cause:**
+When changing dates on multiple videos with identical audio/video content but different original timestamps:
+1. Videos start with different EXIF dates → different content hashes
+2. User sets all to same date (bulk operation)
+3. EXIF metadata updated → files become byte-for-byte identical
+4. Rehashing produces identical hashes for different photo IDs
+5. Database UPDATE attempts to set duplicate hash → `UNIQUE constraint failed`
+
+This is fundamentally the same as the terraform duplicate detection problem, just occurring during a different operation.
+
+**The fix:**
+
+**Part 1: Add duplicate check to `update_photo_date_with_files()`**
+```python
+# After rehashing (line ~544), before database update
+if new_hash != old_hash:
+    print(f"  📝 Hash changed: {old_hash[:8] if old_hash else 'N/A'} → {new_hash[:8]}")
+
+    # Check if new hash already exists (collision detection)
+    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?",
+                   (new_hash, photo_id))
+    existing = cursor.fetchone()
+
+    if existing:
+        # Hash collision - this photo is now a duplicate
+        print(f"  ⚠️  Duplicate detected after rehash (existing ID: {existing['id']})")
+
+        # Move to trash
+        dup_dir = os.path.join(TRASH_DIR, 'duplicates')
+        os.makedirs(dup_dir, exist_ok=True)
+        dup_filename = os.path.basename(old_full_path)
+        dup_path = os.path.join(dup_dir, dup_filename)
+
+        # Handle filename collision in trash
+        counter = 1
+        while os.path.exists(dup_path):
+            base, ext = os.path.splitext(dup_filename)
+            dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
+            counter += 1
+
+        shutil.move(old_full_path, dup_path)
+        print(f"  🗑️  Moved to trash: {os.path.basename(dup_path)}")
+
+        # Delete old thumbnail if exists
+        if old_hash:
+            old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
+            if os.path.exists(old_thumb_path):
+                os.remove(old_thumb_path)
+                cleanup_empty_thumbnail_folders(old_thumb_path)
+                print(f"  🗑️  Deleted old thumbnail")
+
+        # Delete from database
+        cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+
+        # Return special status for duplicate (success, but marked as duplicate)
+        return True, "DUPLICATE", transaction
+
+    # No collision - safe to update hash
+    cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
+```
+
+**Part 2: Track duplicates separately in `bulk_update_photo_dates_execute()`**
+```python
+# Initialize counters (line ~1627)
+master_transaction = DateEditTransaction()
+success_count = 0
+duplicate_count = 0  # NEW
+
+# Handle duplicate returns (line ~1643)
+for idx, (photo_id, target_date) in enumerate(photo_date_map.items(), 1):
+    success, error, transaction = update_photo_date_with_files(photo_id, target_date, conn)
+
+    if success:
+        if error == "DUPLICATE":
+            # Photo became a duplicate during date change
+            duplicate_count += 1
+            print(f"  ⏭️  Photo {photo_id} is now a duplicate (moved to trash)")
+        else:
+            # Normal success
+            success_count += 1
+            master_transaction.operations.extend(transaction.operations)
+
+# Report completion (line ~1650)
+response_data = {'updated_count': success_count, 'duplicate_count': duplicate_count, 'total': total}
+yield f"event: complete\ndata: {json.dumps(response_data)}\n\n"
+```
+
+**Part 3: Display duplicate count in frontend (main.js line ~1495)**
+```javascript
+eventSource.addEventListener('complete', (e) => {
+  const data = JSON.parse(e.data);
+  console.log('✅ Bulk date update complete:', data);
+
+  eventSource.close();
+
+  // Show completion
+  showDateChangeComplete(data.updated_count);
+
+  // Clear selection state
+  deselectAllPhotos();
+
+  // Show toast with undo after a delay
+  setTimeout(() => {
+    let message = `Updated ${data.updated_count} photo${data.updated_count !== 1 ? 's' : ''}`;
+    if (data.duplicate_count > 0) {
+      message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
+    }
+    showToast(message, /* ... undo callback ... */);
+  }, 300);
+});
+```
+
+**Architecture alignment:**
+This fix mirrors the existing terraform duplicate detection logic:
+1. Scan/process all files
+2. Check for hash collisions before database operations
+3. Move duplicates to `.trash/duplicates/`
+4. Remove from database
+5. Report count to user
+
+**Testing verified (minimal-target library):**
+- 11 files: 10 unique + 1 duplicate → All 10 imported, 1 duplicate to trash ✓
+- Bulk date change 4 photos → Changed successfully, no errors ✓
+- Database: 10 unique photos with 10 unique hashes ✓
+
+**Testing verified (master library - 348 photos):**
+- Terraform: 346 photos imported, 2 errors (BMP files) ✓
+- Bulk date change all 348 → 346 updated, 2 duplicates detected and moved to trash ✓
+- Toast message: "Updated 346 photos, 2 duplicates moved to trash" ✓
+- No crashes, clean completion ✓
+
+**Impact:** Critical bug fix. Bulk date changes on videos with identical content no longer crash the application. Duplicates are gracefully detected, moved to trash, and reported to the user. The fix follows the established pattern from terraform, ensuring consistent duplicate handling across all operations.
+
+---
+
 ## Session 10: January 26, 2026
 
 ### Library Conversion (Terraform) - Incomplete Folder Cleanup
