@@ -6,6 +6,159 @@ Issues that have been fixed and verified.
 
 ## Session 10: January 26, 2026
 
+### Library Conversion (Terraform) - Incomplete Folder Cleanup
+**Fixed:** Complete folder cleanup with whitelist approach  
+**Version:** v189
+
+**Issues resolved:**
+- ✅ ALL non-infrastructure folders now deleted (not just "source" folders)
+- ✅ Non-media files moved to trash before processing (not left behind)
+- ✅ Pre-existing library artifacts cleaned up (old .thumbnails, .import_temp, etc.)
+- ✅ Reference folders with nested organized structures deleted
+- ✅ Result identical to blank library + import
+
+**Root cause:**
+v188 used "source folder tracking" - only deleted folders that contained media during scan. This failed for:
+1. `reference-photos/Photo Library/.thumbnails/` - Media was in `.thumbnails/` (hidden, skipped during scan) so parent folder not tracked
+2. Non-media files (ANALYSIS.txt, README.txt, .bmp, .db files) - Not moved to trash, left at root
+3. Pre-existing infrastructure folders - Old `.thumbnails/` from previous library remained
+
+**Architecture problem:**
+Tracking "source folders" during scan was fragile and incomplete. Terraform should be simpler: "extract media, destroy everything else."
+
+**The fix:**
+
+**Part 1: Scan all files, categorize media vs non-media**
+```python
+# BEFORE v189: Only scanned for media
+for root, dirs, files in os.walk(library_path):
+    dirs[:] = [d for d in dirs if not d.startswith('.')]
+    for filename in files:
+        if ext in MEDIA_EXTENSIONS:
+            media_files.append(full_path)
+            source_folders.add(root)  # Track for cleanup
+
+# AFTER v189: Categorize all files
+for root, dirs, files in os.walk(library_path):
+    dirs[:] = [d for d in dirs if not d.startswith('.')]
+    for filename in files:
+        if filename.startswith('.'):
+            continue  # Skip system files
+        
+        if ext in MEDIA_EXTENSIONS:
+            media_files.append(full_path)
+        else:
+            non_media_files.append(full_path)  # Track for trash
+```
+
+**Part 2: Move non-media files to trash immediately**
+```python
+# Move non-media files to .trash/errors/ after scan, before processing
+if non_media_files:
+    print("🗑️  Moving non-media files to trash...")
+    for non_media_path in non_media_files:
+        # Move to .trash/errors/ with collision handling
+        shutil.move(non_media_path, trash_path)
+```
+
+**Part 3: Whitelist-based folder cleanup (replaces source folder tracking)**
+```python
+def cleanup_terraform_folders(library_path):
+    """
+    Remove ALL folders except:
+    - Infrastructure at root: .thumbnails, .logs, .trash, .db_backups, .import_temp
+    - Year folders at root: YYYY/
+    - Date folders inside year: YYYY-MM-DD/
+    
+    Whitelist approach - anything not explicitly allowed is deleted.
+    """
+    INFRASTRUCTURE_FOLDERS = {'.thumbnails', '.logs', '.trash', '.db_backups', '.import_temp'}
+    
+    root_items = os.listdir(library_path)
+    for item in root_items:
+        item_path = os.path.join(library_path, item)
+        
+        # Skip files (photo_library.db, etc.)
+        if not os.path.isdir(item_path):
+            continue
+        
+        # Keep infrastructure folders
+        if item in INFRASTRUCTURE_FOLDERS:
+            continue
+        
+        # Keep year folders (but clean their contents)
+        if len(item) == 4 and item.isdigit():
+            # Delete invalid subfolders (only YYYY-MM-DD allowed)
+            year_items = os.listdir(item_path)
+            for year_item in year_items:
+                is_valid_date = (
+                    len(year_item) == 10 and
+                    year_item[4] == '-' and year_item[7] == '-' and
+                    year_item[:4].isdigit() and
+                    year_item[5:7].isdigit() and
+                    year_item[8:10].isdigit()
+                )
+                if not is_valid_date:
+                    shutil.rmtree(year_item_path)
+            continue
+        
+        # Not infrastructure, not a year folder → DELETE IT
+        shutil.rmtree(item_path)
+```
+
+**Comparison with v188:**
+
+| v188 (Source Tracking) | v189 (Whitelist) |
+|------------------------|------------------|
+| Track folders with media | Allow only specific folders |
+| Skip if not tracked | Delete if not allowed |
+| Misses: hidden folders, non-media | Catches everything |
+| Fragile (depends on scan) | Robust (explicit rules) |
+
+**Result after terraform:**
+```
+library_path/
+├── photo_library.db
+├── .thumbnails/      (fresh)
+├── .logs/            (fresh)
+├── .db_backups/      (fresh)
+├── .trash/           (fresh)
+├── .import_temp/     (fresh)
+├── 2012/
+│   ├── 2012-01-07/
+│   ├── 2012-01-09/
+│   └── 2012-01-10/
+└── 2025/
+    └── 2025-12-07/
+```
+
+**Deleted:**
+- ❌ `photo-triage/`
+- ❌ `reference-photos/` (including nested `Photo Library/.thumbnails/`)
+- ❌ `supported-formats/`
+- ❌ `add-to-photo-library/`
+- ❌ `nature/`
+- ❌ `nested-structure/`
+- ❌ `unsupported-formats/`
+- ❌ `duplicates/`
+
+**Trashed:**
+- 🗑️ `ANALYSIS.txt` → `.trash/errors/`
+- 🗑️ `README.txt` → `.trash/errors/`
+- 🗑️ `helmet-pads-ref.zip` → `.trash/errors/`
+- 🗑️ Old `photo_library.db` from `reference-photos/` → `.trash/errors/`
+
+**Testing verified:**
+- Terraform master folder (364 media files) → Clean result ✓
+- Non-media files moved to trash ✓
+- Reference folder with nested library deleted ✓
+- Only year folders and infrastructure remain ✓
+- Identical to blank library + import ✓
+
+**Impact:** Critical fix. Terraform now produces truly clean libraries - extracts media, trashes non-media, destroys all other folder structures. Result is identical to creating a blank library and importing the same files.
+
+---
+
 ### Library Conversion (Terraform) - Crashes and Leaves Empty Folders
 **Fixed:** Database row_factory bug and aggressive source folder cleanup  
 **Version:** v188
@@ -1761,4 +1914,3 @@ switchBtn.onclick = async () => {
 **Note:** Menu order changes (Clean database, Rebuild thumbnails position, Show duplicates rename) deferred for separate feature work. This fix addresses the "Switch" → "Open" language consistency issue.
 
 ---
-

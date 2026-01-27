@@ -608,6 +608,9 @@ def generate_thumbnail_for_file(file_path, content_hash, file_type):
         os.makedirs(shard_dir, exist_ok=True)
         
         if file_type == 'video':
+            # Create temp directory on-demand for video frame extraction
+            os.makedirs(IMPORT_TEMP_DIR, exist_ok=True)
+            
             # Extract video frame - get larger size first for better quality
             temp_frame = os.path.join(IMPORT_TEMP_DIR, f"temp_frame_{content_hash[:16]}.jpg")
             cmd = [
@@ -2714,7 +2717,7 @@ def execute_rebuild_database():
             
             # Ensure library directory structure exists (Tier 1: silent auto-fix)
             print(f"📁 Ensuring library directory structure...")
-            for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR]:
+            for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, LOG_DIR]:
                 try:
                     os.makedirs(directory, exist_ok=True)
                 except (PermissionError, OSError) as e:
@@ -2847,7 +2850,7 @@ def update_app_paths(library_path, db_path):
     LOG_DIR = os.path.join(LIBRARY_PATH, '.logs')
     
     # Ensure directories exist (Tier 1: silent auto-fix)
-    for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR]:
+    for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, LOG_DIR]:
         try:
             os.makedirs(directory, exist_ok=True)
         except (PermissionError, OSError) as e:
@@ -3458,7 +3461,6 @@ def create_library():
         os.makedirs(os.path.join(library_path, '.thumbnails'), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.trash'), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.db_backups'), exist_ok=True)
-        os.makedirs(os.path.join(library_path, '.import_temp'), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.logs'), exist_ok=True)
         
         # Create empty database with schema
@@ -3577,11 +3579,99 @@ def reset_library():
         return jsonify({'error': str(e)}), 500
 
 
+def cleanup_terraform_folders(library_path):
+    """
+    Remove ALL folders after terraform except:
+    - Infrastructure folders at root: .thumbnails, .logs, .trash, .db_backups
+    - Year folders at root: YYYY/ (4-digit folders)
+    - Date folders inside year folders: YYYY-MM-DD/
+    
+    This is a whitelist approach - anything not explicitly allowed is deleted.
+    """
+    removed_count = 0
+    
+    # Get all items in library root
+    try:
+        root_items = os.listdir(library_path)
+    except Exception as e:
+        print(f"⚠️  Could not list library path: {e}")
+        return 0
+    
+    # Whitelist: allowed folder names at root level
+    INFRASTRUCTURE_FOLDERS = {'.thumbnails', '.logs', '.trash', '.db_backups'}
+    
+    for item in root_items:
+        item_path = os.path.join(library_path, item)
+        
+        # Skip files (like photo_library.db)
+        if not os.path.isdir(item_path):
+            continue
+        
+        # Check if this is an allowed infrastructure folder
+        if item in INFRASTRUCTURE_FOLDERS:
+            continue
+        
+        # Check if this is a year folder (YYYY - 4 digits)
+        if len(item) == 4 and item.isdigit():
+            # Year folder is allowed - but clean up its contents
+            # Only YYYY-MM-DD subfolders should remain
+            try:
+                year_items = os.listdir(item_path)
+                for year_item in year_items:
+                    year_item_path = os.path.join(item_path, year_item)
+                    
+                    if not os.path.isdir(year_item_path):
+                        # Files in year folder not allowed - delete
+                        try:
+                            os.remove(year_item_path)
+                            print(f"    🗑️  Removed file: {os.path.relpath(year_item_path, library_path)}")
+                            removed_count += 1
+                        except Exception as e:
+                            print(f"    ⚠️  Could not remove {year_item_path}: {e}")
+                        continue
+                    
+                    # Check if this is a valid date folder (YYYY-MM-DD)
+                    is_valid_date_folder = (
+                        len(year_item) == 10 and
+                        year_item[4] == '-' and
+                        year_item[7] == '-' and
+                        year_item[:4].isdigit() and
+                        year_item[5:7].isdigit() and
+                        year_item[8:10].isdigit()
+                    )
+                    
+                    if not is_valid_date_folder:
+                        # Not a valid date folder - delete it
+                        try:
+                            shutil.rmtree(year_item_path)
+                            print(f"    🗑️  Removed folder: {os.path.relpath(year_item_path, library_path)}")
+                            removed_count += 1
+                        except Exception as e:
+                            print(f"    ⚠️  Could not remove {year_item_path}: {e}")
+            except Exception as e:
+                print(f"    ⚠️  Could not clean year folder {item}: {e}")
+            
+            continue
+        
+        # Not infrastructure, not a year folder - DELETE IT
+        try:
+            shutil.rmtree(item_path)
+            print(f"    🗑️  Removed folder: {os.path.relpath(item_path, library_path)}")
+            removed_count += 1
+        except Exception as e:
+            print(f"    ⚠️  Could not remove {item_path}: {e}")
+    
+    return removed_count
+
+
 def cleanup_empty_folders_recursive(root_path):
     """
     Recursively remove empty directories from a library after terraform.
     Walks bottom-up to ensure deepest directories are checked first.
     Skips hidden directories (.trash, .thumbnails, etc).
+    
+    NOTE: This function is deprecated for terraform and kept only for backward compatibility
+    with other operations (import, date change, etc.). Use cleanup_terraform_folders() instead.
     """
     MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
                   '.bmp', '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
@@ -3633,6 +3723,9 @@ def cleanup_empty_folders_recursive(root_path):
 
 def cleanup_terraform_source_folders(source_folders, library_path):
     """
+    DEPRECATED: This function is no longer used by terraform.
+    Use cleanup_terraform_folders() instead.
+    
     Aggressively remove source folders after terraform completes.
     Uses shutil.rmtree to delete entire directory trees, including hidden folders.
     Only deletes if no media files remain.
@@ -3756,10 +3849,9 @@ def terraform_library():
             trash_dir = os.path.join(library_path, '.trash')
             thumbnails_dir = os.path.join(library_path, '.thumbnails')
             db_backups_dir = os.path.join(library_path, '.db_backups')
-            import_temp_dir = os.path.join(library_path, '.import_temp')
             logs_dir = os.path.join(library_path, '.logs')
             
-            for directory in [trash_dir, thumbnails_dir, db_backups_dir, import_temp_dir, logs_dir]:
+            for directory in [trash_dir, thumbnails_dir, db_backups_dir, logs_dir]:
                 os.makedirs(directory, exist_ok=True)
             
             # Create manifest log
@@ -3779,46 +3871,61 @@ def terraform_library():
             
             log_manifest('start', {'library_path': library_path})
             
-            # SCAN for all media files recursively
-            print("📂 Scanning for media files...")
+            # SCAN for all files recursively
+            print("📂 Scanning for files...")
             media_files = []
-            source_folders = set()  # Track folders that contain media (for cleanup)
+            non_media_files = []
             
             for root, dirs, files in os.walk(library_path):
                 # Skip hidden directories
                 dirs[:] = [d for d in dirs if not d.startswith('.')]
                 
                 for filename in files:
+                    # Skip .DS_Store and other system files
+                    if filename.startswith('.'):
+                        continue
+                    
+                    full_path = os.path.join(root, filename)
                     _, ext = os.path.splitext(filename)
                     ext_lower = ext.lower()
+                    
                     if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
-                        full_path = os.path.join(root, filename)
                         media_files.append(full_path)
-                        
-                        # Track this folder as a source folder (for cleanup)
-                        # But only if it's NOT in the organized structure (YYYY/YYYY-MM-DD)
-                        relative_path = os.path.relpath(root, library_path)
-                        
-                        # Check if folder matches organized pattern at root level
-                        # Pattern: YYYY/YYYY-MM-DD where YYYY is 4 digits and MM-DD is date
-                        parts = relative_path.split(os.sep)
-                        is_organized = False
-                        
-                        if len(parts) == 2:
-                            year_part = parts[0]
-                            date_part = parts[1]
-                            # Check: YYYY (4 digits) and YYYY-MM-DD (10 chars with dashes at positions 4 and 7)
-                            if (len(year_part) == 4 and year_part.isdigit() and
-                                len(date_part) == 10 and date_part[4] == '-' and date_part[7] == '-'):
-                                is_organized = True
-                        
-                        if not is_organized and root != library_path:
-                            source_folders.add(root)
+                    else:
+                        # Non-media file - will be moved to trash
+                        non_media_files.append(full_path)
             
             total_files = len(media_files)
-            print(f"✅ Found {total_files} media files\n")
+            print(f"✅ Found {total_files} media files")
+            print(f"✅ Found {len(non_media_files)} non-media files (will be moved to trash)\n")
             
-            log_manifest('scan_complete', {'total_files': total_files})
+            log_manifest('scan_complete', {'total_files': total_files, 'non_media_files': len(non_media_files)})
+            
+            # Move non-media files to trash immediately
+            if non_media_files:
+                print("🗑️  Moving non-media files to trash...")
+                error_dir = os.path.join(trash_dir, 'errors')
+                os.makedirs(error_dir, exist_ok=True)
+                
+                for non_media_path in non_media_files:
+                    try:
+                        filename = os.path.basename(non_media_path)
+                        trash_path = os.path.join(error_dir, filename)
+                        
+                        # Handle naming collisions
+                        counter = 1
+                        while os.path.exists(trash_path):
+                            base, ext = os.path.splitext(filename)
+                            trash_path = os.path.join(error_dir, f"{base}_{counter}{ext}")
+                            counter += 1
+                        
+                        shutil.move(non_media_path, trash_path)
+                        log_manifest('non_media', {'original': non_media_path, 'moved_to': trash_path})
+                        print(f"   🗑️  {os.path.relpath(non_media_path, library_path)} → trash")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not move {non_media_path}: {e}")
+                
+                print(f"✅ Moved {len(non_media_files)} non-media files to trash\n")
             
             yield f"event: start\ndata: {json.dumps({'total': total_files})}\n\n"
             
@@ -4000,19 +4107,11 @@ def terraform_library():
                     yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
                     yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': str(e), 'category': 'error'})}\n\n"
             
-            # Cleanup empty folders recursively
+            # Cleanup ALL folders except allowed ones
             print("\n🧹 Cleaning up folders...")
             
-            # First pass: Remove source folders (aggressive)
-            print(f"  📍 Found {len(source_folders)} source folder(s)")
-            source_removed = cleanup_terraform_source_folders(source_folders, library_path)
-            print(f"  ✅ Removed {source_removed} source folder(s)")
-            
-            # Second pass: Clean up any remaining empty folders (passive)
-            remaining_removed = cleanup_empty_folders_recursive(library_path)
-            print(f"  ✅ Removed {remaining_removed} empty folder(s)")
-            
-            print(f"✅ Cleanup complete - removed {source_removed + remaining_removed} folder(s) total")
+            removed_count = cleanup_terraform_folders(library_path)
+            print(f"✅ Cleanup complete - removed {removed_count} folder(s)\n")
             
             # Close DB
             conn.close()
