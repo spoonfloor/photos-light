@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v204';
+const MAIN_JS_VERSION = 'v206';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -2162,6 +2162,9 @@ async function openLightbox(photoIndex) {
 
   overlay.style.display = 'flex';
 
+  // Prevent body scroll while lightbox is open
+  document.body.style.overflow = 'hidden';
+
   // Update info panel with photo details
   const infoDate = document.getElementById('infoDate');
   const infoFilename = document.getElementById('infoFilename');
@@ -2305,6 +2308,9 @@ function closeLightbox() {
   state.lightboxOpen = false;
   state.lightboxPhotoIndex = null;
   overlay.style.display = 'none';
+
+  // Restore body scroll
+  document.body.style.overflow = '';
 
   // Clear UI timeout
   if (state.lightboxUITimeout) {

@@ -377,6 +377,7 @@ input[type="radio"] {
   z-index: var(--z-dialog);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .lightbox-top-bar {

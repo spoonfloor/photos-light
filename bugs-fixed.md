@@ -6,6 +6,115 @@ Issues that have been fixed and verified.
 
 ## Session 13: January 27, 2026
 
+### Lightbox - Non-Functional Scrollbar
+**Fixed:** Lightbox scrollbar removed by hiding body scroll  
+**Version:** v206
+
+**Issues resolved:**
+- ✅ Scrollbar no longer appears when lightbox is open
+- ✅ Body scroll disabled while lightbox is active
+- ✅ Body scroll restored when lightbox closes
+- ✅ Visual clutter eliminated
+
+**Root causes:**
+The scrollbar was from the body element, not the lightbox itself. When the lightbox opened, the page grid behind it remained scrollable, keeping the body's scrollbar visible but non-functional (since the lightbox overlay blocked interaction with the grid). The v205 fix added `overflow: hidden` to `.lightbox-overlay` but this didn't solve the issue since the scrollbar was on the body, not the overlay.
+
+**The investigation:**
+- Initial attempt (v205): Added `overflow: hidden` to `.lightbox-overlay` CSS - didn't work
+- Hypothesis: The scrollbar wasn't from the lightbox, but from the body element
+- Verified: Body scrollbar remained visible and non-functional when lightbox was open
+- Solution: Hide body scrollbar when lightbox opens, restore when it closes
+
+**The fix:**
+
+**Part 1: CSS (v205) - Added overflow: hidden to overlay**
+```css
+.lightbox-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+  z-index: var(--z-dialog);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;  /* Added but not sufficient */
+}
+```
+
+**Part 2: JavaScript (v206) - Hide body scroll**
+```javascript
+// openLightbox() - After showing overlay
+overlay.style.display = 'flex';
+
+// Prevent body scroll while lightbox is open
+document.body.style.overflow = 'hidden';
+
+// closeLightbox() - After hiding overlay
+overlay.style.display = 'none';
+
+// Restore body scroll
+document.body.style.overflow = '';
+```
+
+**Why this works:**
+- The scrollbar was on the `body` element, not the lightbox
+- Setting `document.body.style.overflow = 'hidden'` hides the body scrollbar
+- Standard pattern for modal overlays - prevent background scroll
+- Restoring `overflow = ''` returns body to its default state
+
+**Testing verified:**
+- Open lightbox → body scrollbar disappears ✓
+- Close lightbox → body scrollbar returns ✓
+- No visual clutter from non-functional scrollbar ✓
+- Standard modal overlay behavior ✓
+
+**Impact:** Visual polish. Lightbox no longer shows a confusing non-functional scrollbar. Users see a clean full-screen image view without distraction.
+
+---
+
+### Braille Spinner - Still in Update Library Index (and possibly others)
+**Fixed:** Spinners already removed in v200-v201  
+**Status:** ✅ VERIFIED WORKING
+
+**Issues resolved:**
+- ✅ Update Library Index has no spinners during execution phases
+- ✅ Only shows spinner during initial scan (no other feedback)
+- ✅ Execution phases show clean "Verb..." messages without spinners
+- ✅ Follows v162 canonical pattern (spinners only when no other feedback)
+
+**Investigation:**
+This bug was reported as still present, but verification showed it was already fixed in v200-v201. The Update Library Index dialog correctly follows the canonical pattern:
+- Shows spinner ONLY during "Scanning library" (no other feedback available)
+- Removes spinners during execution phases ("Removing missing files...", "Adding untracked files...")
+- Counters were also removed in v201 for cleaner UI
+
+**Code verification:**
+```javascript
+// v200: Spinners removed during execution
+updateUpdateIndexUI('Scanning library', true);  // Spinner shown
+// ... scan completes ...
+updateUpdateIndexUI('Removing missing files...', false);  // No spinner
+updateUpdateIndexUI('Adding untracked files...', false);  // No spinner
+
+// v201: Counters also removed
+// Before: 'Removing missing files... 5/10'
+// After: 'Removing missing files...'
+```
+
+**Testing verified:**
+- Update Library Index dialog opens correctly ✓
+- Scan phase shows spinner (warranted - no other feedback) ✓
+- Execution phases show no spinners (realtime operations visible) ✓
+- Clean UI with simple "Verb..." messages ✓
+
+**Resolution:** Bug was already fixed in previous sessions. Verified as working correctly and moved to fixed list for documentation.
+
+**Impact:** This confirms the v162 canonical pattern is correctly implemented across all dialogs. Update Library Index matches the design standard.
+
+---
+
 ### Thumbnail Washout - ICC Color Profile Preservation
 **Fixed:** Thumbnails now preserve ICC color profiles for accurate color rendering  
 **Version:** v204

@@ -2,7 +2,7 @@
 
 Last updated: January 27, 2026
 
-**Status:** 6 remaining bugs + 1 deferred feature
+**Status:** 5 remaining bugs + 1 deferred feature
 
 ---
 
@@ -27,6 +27,28 @@ Last updated: January 27, 2026
 - Verify database query for untracked files
 - Add timeout or skip mechanism for problematic files
 - Improve error handling and reporting
+
+---
+
+### Date Change to Single Date - Not Working
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 2-3 hours  
+**Status:** NOT STARTED
+
+**Issue:** Date change to single date still not working (nature photos used for test)
+- User attempts to change date on photos
+- Operation fails or doesn't apply changes
+- Core functionality that should be working
+- May be related to previous totalEl error or separate issue
+
+**Impact:** Prevents users from correcting photo dates, core organizational feature
+
+**Fix approach:** 
+- Debug date change operation for single date changes
+- Check if backend is receiving/processing request correctly
+- Verify file system operations are completing
+- Check database updates are being applied
+- Review any error logs or console output
 
 ---
 
@@ -91,36 +113,6 @@ Last updated: January 27, 2026
 
 ---
 
-### Lightbox - Non-Functional Scrollbar
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 30 minutes  
-**Status:** NOT STARTED
-
-**Issue:** Lightbox has a scrollbar that does nothing
-- Scrollbar appears in lightbox view
-- Scrollbar is non-functional/doesn't scroll
-- Creates visual clutter and confusion
-- Likely CSS overflow issue
-
-**Fix approach:** Remove scrollbar by fixing CSS (overflow: hidden or proper height constraints)
-
----
-
-### Braille Spinner - Still in Update Library Index (and possibly others)
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 30 minutes  
-**Status:** NOT STARTED
-
-**Issue:** Update library index has a braille spinner, maybe others
-- Despite removal in v162, spinners remain in some dialogs
-- Confirmed: Update Library Index dialog has spinner
-- Need to check other dialogs for remaining spinners
-- Should be removed where realtime feedback already exists
-
-**Fix approach:** Audit Update Library Index and other dialogs/overlays to find and remove remaining spinners
-
----
-
 ## 🔵 TIER 3: DEFERRED FEATURE WORK (Not Bugs)
 
 ### Import Duplicate Detection + Migration Infrastructure
@@ -163,12 +155,11 @@ Last updated: January 27, 2026
 Based on impact, frequency, and effort (quick wins first, then deep work):
 
 1. 🔴 **Update Database - Stuck on Removing Untracked Files** (2-3 hrs, CRITICAL - blocks index cleanup)
-2. 🟡 **Braille Spinner - Still in Update Library Index (and possibly others)** (30 min, find and remove)
-3. 🟡 **Lightbox - Non-Functional Scrollbar** (30 min, visual polish)
-4. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
-5. 🟡 **Image Rotation - Bake Metadata into Pixels** (3-4 hrs, compatibility improvement)
-6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-7. 🔵 **Import Duplicate Detection** (deferred feature work)
+2. 🔴 **Date Change to Single Date - Not Working** (2-3 hrs, CRITICAL - core functionality)
+3. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
+4. 🟡 **Image Rotation - Bake Metadata into Pixels** (3-4 hrs, compatibility improvement)
+5. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+6. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 ---
 
@@ -176,9 +167,9 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
 
-**Total remaining:** 6 bugs + 1 deferred feature
-- 🔴 Critical: 1 bug (Update Database Stuck)
-- 🟡 Polish: 5 bugs (Braille Spinner, Lightbox Scrollbar, Folder Picker Checkbox, Image Rotation Baking, Performance Research)
+**Total remaining:** 5 bugs + 1 deferred feature
+- 🔴 Critical: 2 bugs (Update Database Stuck, Date Change Not Working)
+- 🟡 Polish: 3 bugs (Folder Picker Checkbox, Image Rotation Baking, Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
 **Estimated total effort:** ~9-10 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
