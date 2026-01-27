@@ -2,7 +2,7 @@
 
 Last updated: January 27, 2026
 
-**Status:** 5 remaining bugs + 1 deferred feature
+**Status:** 4 remaining bugs + 1 deferred feature
 
 ---
 
@@ -77,21 +77,6 @@ Last updated: January 27, 2026
 
 ---
 
-### Folder Picker - Add Folder Selection via Checkbox
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 1-2 hours  
-**Status:** NOT STARTED
-
-**Issue:** Add ability to select a folder in folder picker by toggling checkmark
-- Currently must click "Select this location" button
-- Would be more intuitive to click folder checkbox to select it
-- Checkbox toggle should immediately select that folder location
-- Improves UX consistency with file selection patterns
-
-**Fix approach:** Add click handler to folder checkbox that selects the folder location directly
-
----
-
 ### Image Rotation - Bake Metadata into Pixels
 **Priority:** 🟡 MEDIUM  
 **Estimated effort:** 3-4 hours  
@@ -156,10 +141,9 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 1. 🔴 **Update Database - Stuck on Removing Untracked Files** (2-3 hrs, CRITICAL - blocks index cleanup)
 2. 🔴 **Date Change to Single Date - Not Working** (2-3 hrs, CRITICAL - core functionality)
-3. 🟡 **Folder Picker - Add Folder Selection via Checkbox** (1-2 hrs, UX improvement)
-4. 🟡 **Image Rotation - Bake Metadata into Pixels** (3-4 hrs, compatibility improvement)
-5. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-6. 🔵 **Import Duplicate Detection** (deferred feature work)
+3. 🟡 **Image Rotation - Bake Metadata into Pixels** (3-4 hrs, compatibility improvement)
+4. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+5. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 ---
 
@@ -167,12 +151,12 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
 
-**Total remaining:** 5 bugs + 1 deferred feature
+**Total remaining:** 4 bugs + 1 deferred feature
 - 🔴 Critical: 2 bugs (Update Database Stuck, Date Change Not Working)
-- 🟡 Polish: 3 bugs (Folder Picker Checkbox, Image Rotation Baking, Performance Research)
+- 🟡 Polish: 2 bugs (Image Rotation Baking, Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~9-10 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~7-8 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 

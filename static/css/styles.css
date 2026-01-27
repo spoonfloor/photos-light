@@ -1626,6 +1626,26 @@ input[type="radio"] {
   color: #a8a8a8;
 }
 
+.folder-checkbox {
+  font-size: 20px;
+  font-family: 'Material Symbols Outlined';
+  font-weight: 200;
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.folder-checkbox:hover {
+  color: #999;
+}
+
+.folder-checkbox.selected {
+  color: #765fff;
+}
+
+/* Legacy folder-icon class for database items */
 .folder-icon {
   font-size: 20px;
   font-family: 'Material Symbols Outlined';

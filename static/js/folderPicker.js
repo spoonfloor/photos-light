@@ -7,13 +7,14 @@ const FolderPicker = (() => {
   // State
   const VIRTUAL_ROOT = '__LOCATIONS__';
   let currentPath = VIRTUAL_ROOT;
-  let selectedPath = VIRTUAL_ROOT;
+  let selectedPath = VIRTUAL_ROOT; // Explicitly selected folder (via checkbox)
   let currentHasDb = false; // Track if current selected folder has database
   let topLevelLocations = [];
   let resolveCallback = null; // Store resolve callback for database click handler
   let onSelectCallback = null;
   let onCancelCallback = null;
   let keyboardHandler = null; // Store keyboard event handler for cleanup
+  let folderListClickHandler = null; // Store reference to event handler for cleanup
 
   // ===========================================================================
   // API Calls
@@ -135,12 +136,19 @@ const FolderPicker = (() => {
         )
         .join('');
 
-      // Add click handlers
-      folderList.querySelectorAll('.folder-item').forEach((item) => {
-        item.addEventListener('click', () => {
-          navigateTo(item.dataset.realPath);
-        });
-      });
+      // Remove old event listener if it exists
+      if (folderListClickHandler) {
+        folderList.removeEventListener('click', folderListClickHandler);
+      }
+
+      // Wire up handlers using EVENT DELEGATION for top-level locations
+      folderListClickHandler = (e) => {
+        const item = e.target.closest('.folder-item[data-real-path]');
+        if (!item) return;
+        navigateTo(item.dataset.realPath);
+      };
+      
+      folderList.addEventListener('click', folderListClickHandler);
       return;
     }
 
@@ -172,17 +180,20 @@ const FolderPicker = (() => {
       let html = '';
       
       // Add folders first
-      html += folders
-        .map(
-          (folder) => `
-        <div class="folder-item" data-folder="${folder}">
-          <span class="folder-icon material-symbols-outlined">folder</span>
-          <span class="folder-name">${folder}</span>
-          <span class="folder-arrow">→</span>
-        </div>
-      `
-        )
-        .join('');
+      folders.forEach((folder) => {
+        const folderPath = currentPath + '/' + folder;
+        const isSelected = selectedPath === folderPath;
+        const iconClass = isSelected ? 'check_box' : 'folder';
+        const selectedClass = isSelected ? 'selected' : '';
+        
+        html += `
+          <div class="folder-item" data-folder="${folder}" data-folder-path="${folderPath}">
+            <span class="folder-checkbox material-symbols-outlined ${selectedClass}" data-path="${folderPath}">${iconClass}</span>
+            <span class="folder-name">${folder}</span>
+            <span class="folder-arrow">→</span>
+          </div>
+        `;
+      });
 
       // Show database file at bottom if it exists
       if (currentHasDb) {
@@ -196,33 +207,50 @@ const FolderPicker = (() => {
 
       folderList.innerHTML = html;
 
-      // Add click handlers to folders
-      folderList.querySelectorAll('.folder-item[data-folder]').forEach((item) => {
-        item.addEventListener('click', () => {
-          const folder = item.dataset.folder;
-          const newPath = currentPath + '/' + folder;
-          navigateTo(newPath);
-        });
-      });
-
-      // Add click handler to database file (acts like "Choose" button)
-      const dbItem = folderList.querySelector('.folder-item[data-is-db]');
-      if (dbItem) {
-        dbItem.addEventListener('click', () => {
-          // Same action as clicking "Choose" button
-          if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
-            // Save selected path to localStorage for next session
-            localStorage.setItem('picker.lastPath', currentPath);
-            console.log('💾 Saved path for next session:', currentPath);
-            
-            const overlay = document.getElementById('folderPickerOverlay');
-            if (overlay) {
-              overlay.style.display = 'none';
-            }
-            resolveCallback(currentPath);
-          }
-        });
+      // Remove old event listener if it exists to prevent duplicate handlers
+      if (folderListClickHandler) {
+        folderList.removeEventListener('click', folderListClickHandler);
       }
+
+      // Wire up handlers using EVENT DELEGATION (single listener on parent)
+      folderListClickHandler = async (e) => {
+        const item = e.target.closest('.folder-item[data-folder]');
+        if (!item) {
+          // Check if database file was clicked
+          const dbItem = e.target.closest('.folder-item[data-is-db]');
+          if (dbItem) {
+            // Same action as clicking "Choose" button
+            if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
+              localStorage.setItem('picker.lastPath', currentPath);
+              console.log('💾 Saved path for next session:', currentPath);
+              
+              const overlay = document.getElementById('folderPickerOverlay');
+              if (overlay) {
+                overlay.style.display = 'none';
+              }
+              resolveCallback(currentPath);
+            }
+          }
+          return;
+        }
+
+        const checkbox = item.querySelector('.folder-checkbox');
+        const folderPath = checkbox?.dataset.path;
+
+        // Checkbox clicked - select this folder
+        if (e.target.classList.contains('folder-checkbox')) {
+          e.stopPropagation();
+          selectFolder(folderPath);
+          return;
+        }
+
+        // Arrow or folder name clicked - navigate into folder
+        const folder = item.dataset.folder;
+        const newPath = currentPath + '/' + folder;
+        navigateTo(newPath);
+      };
+
+      folderList.addEventListener('click', folderListClickHandler);
     } catch (error) {
       folderList.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
       currentHasDb = false;
@@ -248,9 +276,25 @@ const FolderPicker = (() => {
     }
   }
 
+  function selectFolder(path) {
+    // Toggle behavior - clicking same folder deselects it
+    if (selectedPath === path) {
+      selectedPath = currentPath; // Revert to current location
+      console.log('📂 Folder deselected, reverting to current path:', currentPath);
+    } else {
+      selectedPath = path; // Select (radio button - clears others)
+      console.log('📂 Folder selected:', path);
+    }
+    
+    // Re-render folder list to update checkbox states
+    updateFolderList();
+    updateSelectedPath();
+  }
+
   async function navigateTo(path) {
     currentPath = path || VIRTUAL_ROOT;
-    selectedPath = path || VIRTUAL_ROOT;
+    // When navigating, selected path becomes where you are (unless you explicitly checked something)
+    selectedPath = currentPath;
     updateBreadcrumb();
     await updateFolderList(); // This now updates currentHasDb and button text
     updateSelectedPath();

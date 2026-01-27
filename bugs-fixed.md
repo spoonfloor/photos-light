@@ -6,6 +6,153 @@ Issues that have been fixed and verified.
 
 ## Session 13: January 27, 2026
 
+### Folder Picker - Add Folder Selection via Checkbox
+**Fixed:** Folders can now be selected using checkbox without navigating into them  
+**Version:** v211
+
+**Issues resolved:**
+- ✅ Folder icon transforms to checkbox when selected (radio button behavior)
+- ✅ Click folder icon → selects that folder (updates "Selected:" path)
+- ✅ Click folder name/arrow → navigates into folder (existing behavior)
+- ✅ Only one folder can be selected at a time (radio button pattern)
+- ✅ Selecting folder in different location clears previous selection
+- ✅ Unchecking folder reverts selection to current location
+- ✅ Navigating into folder updates selection to current location
+
+**Root cause:**
+Original UX required users to navigate INTO a folder to select it. This meant selecting parent folders required:
+1. Navigate into folder
+2. Click "Continue"
+
+Better UX: Stay at parent level, click checkbox on desired folder, selection updates immediately.
+
+**The fix:**
+
+**Part 1: HTML - Folder icon becomes checkbox**
+```javascript
+// Folder rendering with checkbox/folder icon toggle
+const isSelected = selectedPath === folderPath;
+const iconClass = isSelected ? 'check_box' : 'folder';
+const selectedClass = isSelected ? 'selected' : '';
+
+html += `
+  <div class="folder-item" data-folder="${folder}" data-folder-path="${folderPath}">
+    <span class="folder-checkbox material-symbols-outlined ${selectedClass}" 
+          data-path="${folderPath}">${iconClass}</span>
+    <span class="folder-name">${folder}</span>
+    <span class="folder-arrow">→</span>
+  </div>
+`;
+```
+
+**Part 2: Event delegation pattern (matching photo picker)**
+```javascript
+// Remove old event listener if exists
+if (folderListClickHandler) {
+  folderList.removeEventListener('click', folderListClickHandler);
+}
+
+// Wire up handlers using EVENT DELEGATION (single listener on parent)
+folderListClickHandler = async (e) => {
+  const item = e.target.closest('.folder-item[data-folder]');
+  if (!item) return;
+
+  const checkbox = item.querySelector('.folder-checkbox');
+  const folderPath = checkbox?.dataset.path;
+
+  // Checkbox clicked - select this folder
+  if (e.target.classList.contains('folder-checkbox')) {
+    e.stopPropagation();
+    selectFolder(folderPath);
+    return;
+  }
+
+  // Arrow or folder name clicked - navigate into folder
+  const folder = item.dataset.folder;
+  const newPath = currentPath + '/' + folder;
+  navigateTo(newPath);
+};
+
+folderList.addEventListener('click', folderListClickHandler);
+```
+
+**Part 3: Selection logic**
+```javascript
+function selectFolder(path) {
+  // Toggle behavior - clicking same folder deselects it
+  if (selectedPath === path) {
+    selectedPath = currentPath; // Revert to current location
+  } else {
+    selectedPath = path; // Select (radio button - clears others)
+  }
+  
+  // Re-render folder list to update checkbox states
+  updateFolderList();
+  updateSelectedPath();
+}
+
+async function navigateTo(path) {
+  currentPath = path || VIRTUAL_ROOT;
+  // When navigating, selected path becomes where you are
+  selectedPath = currentPath;
+  updateBreadcrumb();
+  await updateFolderList();
+  updateSelectedPath();
+}
+```
+
+**Part 4: CSS for checkbox styling**
+```css
+.folder-checkbox {
+  font-size: 20px;
+  font-family: 'Material Symbols Outlined';
+  font-weight: 200;
+  cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.folder-checkbox:hover {
+  color: #999;
+}
+
+.folder-checkbox.selected {
+  color: #765fff;
+}
+```
+
+**Behavior:**
+1. **Unchecked state:** Shows `folder` icon (gray)
+2. **Checked state:** Shows `check_box` icon (purple #765fff)
+3. **Click checkbox:** Toggles selection on/off
+4. **Click folder name/arrow:** Navigates into folder, selection updates to current location
+5. **Uncheck:** Selection reverts to current location (not "No path selected")
+
+**Pattern alignment:**
+Follows photo picker established pattern:
+- Event delegation (single listener on parent container)
+- Handler reference stored for cleanup
+- Icon transforms based on state (folder ↔ check_box)
+- Re-render on state change (no manual DOM manipulation)
+- Click handlers separated (checkbox vs navigation)
+
+**Testing verified:**
+- Navigate to Desktop → Selected shows Desktop
+- Check "photos" subfolder → Selected shows Desktop/photos ✓
+- Uncheck "photos" → Selected reverts to Desktop ✓
+- Navigate into "photos" → Selected shows Desktop/photos ✓
+- Checkbox toggles on/off correctly ✓
+- Only one folder checked at a time (radio button behavior) ✓
+- Event delegation prevents duplicate handlers ✓
+
+**Impact:** Significant UX improvement. Users can now select parent folders without navigating into them. Matches intuitive checkbox pattern from photo picker. Reduces clicks required for common workflows (selecting parent folder to create new library).
+
+---
+
+## Session 13: January 27, 2026
+
 ### Lightbox - Non-Functional Scrollbar
 **Fixed:** Lightbox scrollbar removed by hiding body scroll  
 **Version:** v206
