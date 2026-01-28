@@ -692,6 +692,24 @@ def update_photo_date_with_files(photo_id, new_date, conn):
         if not os.path.exists(old_full_path):
             return False, "File not found on disk", transaction
         
+        # Phase 0: Bake orientation (before EXIF write to preserve it)
+        try:
+            print(f"  🔄 Checking orientation...")
+            bake_success, bake_message, orient_value = bake_orientation(old_full_path)
+            
+            if bake_success:
+                print(f"  ✅ {bake_message}")
+                # Dimensions may have changed - will be updated later if needed
+                # Hash will change - will be detected after EXIF write
+            else:
+                if orient_value is not None:
+                    # Orientation exists but couldn't be baked
+                    print(f"  ⚠️  {bake_message}")
+                # else: No orientation, continue normally
+        except Exception as bake_error:
+            print(f"  ⚠️  Orientation baking failed: {bake_error}")
+            # Continue anyway - not critical for date change operation
+        
         # Phase 1: Write EXIF
         try:
             if file_type in ('photo', 'image'):  # Handle both for backward compatibility
@@ -2406,12 +2424,7 @@ def import_from_paths():
                         target_path = os.path.join(target_dir, canonical_name)
                         counter += 1
                     
-                    # Get dimensions
-                    dimensions = get_image_dimensions(source_path)
-                    width = dimensions[0] if dimensions else None
-                    height = dimensions[1] if dimensions else None
-                    
-                    # Insert into DB FIRST (atomic)
+                    # Insert into DB FIRST (atomic) - dimensions will be updated after baking
                     relative_path = os.path.relpath(target_path, LIBRARY_PATH)
                     file_size = os.path.getsize(source_path)
                     file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
@@ -2419,7 +2432,7 @@ def import_from_paths():
                     cursor.execute('''
                         INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, width, height))
+                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, None, None))
                     
                     photo_id = cursor.lastrowid
                     conn.commit()
@@ -2428,6 +2441,44 @@ def import_from_paths():
                     # Copy file to library
                     shutil.copy2(source_path, target_path)
                     print(f"   ✅ Copied to: {relative_path}")
+                    
+                    # Bake orientation into pixels (before EXIF write to avoid flag stripping)
+                    print(f"   🔄 Checking orientation for: {os.path.basename(target_path)}")
+                    
+                    # Check dimensions BEFORE baking
+                    import subprocess
+                    before_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', target_path], 
+                                                 capture_output=True, text=True, timeout=5)
+                    before_info = before_check.stdout.strip().split('\n')
+                    print(f"   📊 BEFORE baking: {before_info}")
+                    
+                    bake_success, bake_message, orient_value = bake_orientation(target_path)
+                    
+                    print(f"   🎯 Baking result: success={bake_success}, message='{bake_message}', orient={orient_value}")
+                    
+                    if bake_success:
+                        print(f"   ✅ {bake_message}")
+                    else:
+                        if orient_value is not None:
+                            # Orientation exists but couldn't be baked (e.g., JPEG not divisible by 16)
+                            print(f"   ⚠️  {bake_message}")
+                        # else: No orientation flag, nothing to report
+                    
+                    # Check dimensions AFTER baking
+                    after_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', target_path], 
+                                                capture_output=True, text=True, timeout=5)
+                    after_info = after_check.stdout.strip().split('\n')
+                    print(f"   📊 AFTER baking: {after_info}")
+                    
+                    # Get dimensions AFTER baking (pixels may have been rotated)
+                    dimensions = get_image_dimensions(target_path)
+                    width = dimensions[0] if dimensions else None
+                    height = dimensions[1] if dimensions else None
+                    print(f"   📏 Final dimensions for DB: {width}×{height}")
+                    
+                    # Update DB with dimensions
+                    cursor.execute("UPDATE photos SET width = ?, height = ? WHERE id = ?", (width, height, photo_id))
+                    conn.commit()
                     
                     # Write EXIF metadata to file
                     try:
@@ -4298,17 +4349,33 @@ def terraform_library():
                     height = dimensions[1] if dimensions else None
                     
                     # 4b. Bake orientation into pixels (only when lossless)
-                    print(f"   🔄 Checking orientation...")
+                    print(f"   🔄 Checking orientation for: {filename}")
+                    
+                    # Check dimensions BEFORE baking
+                    before_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', source_path], 
+                                                 capture_output=True, text=True, timeout=5)
+                    before_info = before_check.stdout.strip().split('\n')
+                    print(f"   📊 BEFORE baking: {before_info}")
+                    
                     bake_success, bake_message, orient_value = bake_orientation(source_path)
+                    
+                    print(f"   🎯 Baking result: success={bake_success}, message='{bake_message}', orient={orient_value}")
                     
                     if bake_success:
                         print(f"   ✅ {bake_message}")
                         log_manifest('orientation_baked', {'file': source_path, 'message': bake_message})
                         
+                        # Check dimensions AFTER baking
+                        after_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', source_path], 
+                                                    capture_output=True, text=True, timeout=5)
+                        after_info = after_check.stdout.strip().split('\n')
+                        print(f"   📊 AFTER baking: {after_info}")
+                        
                         # Dimensions may have changed after rotation - re-read
                         dimensions = get_image_dimensions(source_path)
                         width = dimensions[0] if dimensions else None
                         height = dimensions[1] if dimensions else None
+                        print(f"   📏 get_image_dimensions() returned: {width}×{height}")
                         
                         # Hash changed after rotation - re-hash
                         content_hash = compute_hash(source_path)

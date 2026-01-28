@@ -1,8 +1,8 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: January 27, 2026
+Last updated: January 28, 2026
 
-**Status:** 4 remaining bugs + 1 deferred feature
+**Status:** 3 remaining bugs + 1 deferred feature
 
 ---
 
@@ -96,6 +96,8 @@ Last updated: January 27, 2026
 - Remove/reset EXIF rotation flag
 - Possibly offer as optional operation (could be part of import, rebuild, or manual utility)
 
+**STATUS:** ✅ FIXED in v218 (moved to bugs-fixed.md)
+
 ---
 
 ## 🔵 TIER 3: DEFERRED FEATURE WORK (Not Bugs)
@@ -141,9 +143,8 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 1. 🔴 **Update Database - Stuck on Removing Untracked Files** (2-3 hrs, CRITICAL - blocks index cleanup)
 2. 🔴 **Date Change to Single Date - Not Working** (2-3 hrs, CRITICAL - core functionality)
-3. 🟡 **Image Rotation - Bake Metadata into Pixels** (3-4 hrs, compatibility improvement)
-4. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-5. 🔵 **Import Duplicate Detection** (deferred feature work)
+3. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+4. 🔵 **Import Duplicate Detection** (deferred feature work)
 
 ---
 
@@ -151,12 +152,12 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
 
-**Total remaining:** 4 bugs + 1 deferred feature
+**Total remaining:** 3 bugs + 1 deferred feature
 - 🔴 Critical: 2 bugs (Update Database Stuck, Date Change Not Working)
-- 🟡 Polish: 2 bugs (Image Rotation Baking, Performance Research)
+- 🟡 Polish: 1 bug (Performance Research)
 - 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
 
-**Estimated total effort:** ~7-8 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~4-5 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
 
 ---
 

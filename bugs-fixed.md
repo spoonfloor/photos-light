@@ -4,6 +4,46 @@ Issues that have been fixed and verified.
 
 ---
 
+## Session 14: January 28, 2026
+
+### Image Rotation - Bake Orientation Metadata into Pixels
+**Fixed:** Orientation flags are now baked into pixels during import, date change, and terraform  
+**Version:** v218
+
+**Issues resolved:**
+- ✅ Import now bakes orientation before EXIF write (prevents flag stripping)
+- ✅ Date change now bakes orientation before EXIF write
+- ✅ Terraform already had baking, now with enhanced logging
+- ✅ JPEG: Lossless rotation via jpegtran -perfect (requires dimensions divisible by 16)
+- ✅ PNG/TIFF: Lossless rotation via PIL
+- ✅ Files that can't be baked losslessly keep their orientation flag
+- ✅ Database stores correct post-baking dimensions
+
+**Root cause:**
+Files with EXIF orientation flags (e.g., Orientation=6 "Rotate 90 CW") rely on viewer support. Import/date-change operations wrote EXIF metadata which could strip orientation flags, leaving files with unbaked pixels and no flag. This caused incorrect display in rotation-ignorant viewers and dimension mismatches in the database.
+
+**The fix:**
+Added `bake_orientation()` function that:
+1. Detects EXIF orientation flags
+2. For JPEG: Uses `jpegtran -perfect` for lossless rotation (only if dimensions divisible by 16)
+3. For PNG/TIFF: Uses PIL for lossless pixel rotation
+4. Removes orientation flag after baking
+5. Returns success/failure with detailed message
+
+Integrated baking into three workflows:
+- **Import**: Bakes after copy, before EXIF write
+- **Date change**: Bakes before EXIF write  
+- **Terraform**: Already had baking, added detailed logging
+
+**Testing:**
+- Test file: 1200×1600 pixels with Orientation=6 flag
+- After terraform: Pixels rotated to 1600×1200, flag removed
+- Displays correctly as landscape in all viewers
+
+**Impact:** Photos now display correctly in all viewers, not just rotation-aware ones. Database stores accurate display dimensions. Orientation is normalized at entry point (import) rather than accumulating technical debt.
+
+---
+
 ## Session 13: January 27, 2026
 
 ### Folder Picker - Add Folder Selection via Checkbox
