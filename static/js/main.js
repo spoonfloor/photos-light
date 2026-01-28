@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v211';
+const MAIN_JS_VERSION = 'v215';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -39,13 +39,18 @@ function checkForDatabaseCorruption(responseData) {
   if (responseData && responseData.error) {
     const errorMsg = responseData.error.toLowerCase();
     // Check for corruption keywords in error message
-    if (errorMsg.includes('database_corrupted') || 
-        errorMsg.includes('not a database') ||
-        errorMsg.includes('malformed') ||
-        errorMsg.includes('corrupt')) {
+    if (
+      errorMsg.includes('database_corrupted') ||
+      errorMsg.includes('not a database') ||
+      errorMsg.includes('malformed') ||
+      errorMsg.includes('corrupt')
+    ) {
       console.error('🚨 Database corruption detected:', responseData.error);
       // Show rebuild dialog using existing critical error modal
-      showCriticalErrorModal('db_corrupted', responseData.message || 'Database appears corrupted');
+      showCriticalErrorModal(
+        'db_corrupted',
+        responseData.message || 'Database appears corrupted',
+      );
       return true;
     }
   }
@@ -149,7 +154,7 @@ function wireAppBar() {
         `Are you sure you want to delete ${count} photo${
           count > 1 ? 's' : ''
         }?`,
-        () => deletePhotos(Array.from(state.selectedPhotos))
+        () => deletePhotos(Array.from(state.selectedPhotos)),
       );
     });
   }
@@ -337,7 +342,7 @@ function wireDatePicker() {
 
       try {
         const nearestResponse = await fetch(
-          `/api/photos/nearest_month?month=${targetMonth}&sort=${state.currentSortOrder}`
+          `/api/photos/nearest_month?month=${targetMonth}&sort=${state.currentSortOrder}`,
         );
         const nearestData = await nearestResponse.json();
 
@@ -358,7 +363,7 @@ function wireDatePicker() {
           window.scrollTo({ top: targetY, behavior: 'smooth' });
         } else {
           console.log(
-            `⚠️ Month ${actualMonth} not in DOM yet - may not have photos`
+            `⚠️ Month ${actualMonth} not in DOM yet - may not have photos`,
           );
         }
       } catch (error) {
@@ -392,10 +397,10 @@ function wireDatePicker() {
 
       // Get all month sections in DOM order, find first visible one
       const allSections = document.querySelectorAll('.month-section');
-      const topmostVisibleSection = Array.from(allSections).find(section => 
-        sectionVisibility.has(section.dataset.month)
+      const topmostVisibleSection = Array.from(allSections).find((section) =>
+        sectionVisibility.has(section.dataset.month),
       );
-      
+
       if (!topmostVisibleSection) return;
 
       const monthId = topmostVisibleSection.dataset.month;
@@ -419,7 +424,7 @@ function wireDatePicker() {
     {
       threshold: [0], // Just detect ANY visibility (entering or leaving viewport)
       rootMargin: '-60px 0px 0px 0px', // Offset for app bar height
-    }
+    },
   );
 
   // Observe all month sections
@@ -579,7 +584,7 @@ function loadRebuildDatabaseOverlay() {
     .then((r) => {
       if (!r.ok)
         throw new Error(
-          `Failed to load rebuild database overlay (${r.status})`
+          `Failed to load rebuild database overlay (${r.status})`,
         );
       return r.text();
     })
@@ -652,7 +657,7 @@ function showCriticalError(title, message, buttons) {
             data-action="${btn.action}">
       ${btn.text}
     </button>
-  `
+  `,
     )
     .join('');
 
@@ -680,7 +685,7 @@ function showCriticalError(title, message, buttons) {
             showToast(
               `Library still not accessible: ${status.message}`,
               'error',
-              5000
+              5000,
             );
           }
         } catch (error) {
@@ -748,8 +753,8 @@ async function startRebuildDatabase() {
         }. Keep the app open until rebuilding is complete.`,
         [
           { text: 'Cancel', value: false, primary: false },
-          { text: 'Continue', value: true, primary: true }
-        ]
+          { text: 'Continue', value: true, primary: true },
+        ],
       );
 
       if (!confirmed) {
@@ -759,7 +764,9 @@ async function startRebuildDatabase() {
     }
 
     // Update UI to show ready state
-    const estimateText = data.estimated_display ? `<p>Estimated time: ${data.estimated_display}</p>` : '';
+    const estimateText = data.estimated_display
+      ? `<p>Estimated time: ${data.estimated_display}</p>`
+      : '';
     statusText.innerHTML = `<p>Ready to rebuild database.</p><p>Found ${data.file_count.toLocaleString()} files.</p>${estimateText}`;
     proceedBtn.style.display = 'block';
   } catch (error) {
@@ -800,7 +807,7 @@ async function executeRebuildDatabase() {
 
   try {
     const eventSource = new EventSource(
-      '/api/recovery/rebuild-database/execute'
+      '/api/recovery/rebuild-database/execute',
     );
 
     eventSource.addEventListener('progress', (e) => {
@@ -830,10 +837,9 @@ async function executeRebuildDatabase() {
 
       // Check library health and reload photos
       console.log('🔄 Refreshing library status after rebuild...');
-      checkLibraryHealthAndInit()
-        .catch((err) => {
-          console.error('❌ Failed to reload after rebuild:', err);
-        });
+      checkLibraryHealthAndInit().catch((err) => {
+        console.error('❌ Failed to reload after rebuild:', err);
+      });
     });
 
     eventSource.addEventListener('error', (e) => {
@@ -1063,16 +1069,16 @@ function wireDateEditor() {
     const yearSelect = document.getElementById('dateEditorYear');
     const monthSelect = document.getElementById('dateEditorMonth');
     const daySelect = document.getElementById('dateEditorDay');
-    
+
     if (!yearSelect || !monthSelect || !daySelect) return;
-    
+
     const year = parseInt(yearSelect.value);
     const month = parseInt(monthSelect.value);
     const currentDay = parseInt(daySelect.value);
-    
+
     // Get days in month
     const daysInMonth = new Date(year, month, 0).getDate();
-    
+
     // Clear and repopulate day options
     daySelect.innerHTML = '';
     for (let day = 1; day <= daysInMonth; day++) {
@@ -1081,7 +1087,7 @@ function wireDateEditor() {
       option.textContent = day;
       daySelect.appendChild(option);
     }
-    
+
     // Restore selected day if still valid, otherwise set to last day of month
     if (currentDay <= daysInMonth) {
       daySelect.value = currentDay;
@@ -1089,10 +1095,14 @@ function wireDateEditor() {
       daySelect.value = daysInMonth;
     }
   };
-  
+
   // Add listeners to month/year to update valid days
-  document.getElementById('dateEditorYear').addEventListener('change', window.updateDateEditorDayOptions);
-  document.getElementById('dateEditorMonth').addEventListener('change', window.updateDateEditorDayOptions);
+  document
+    .getElementById('dateEditorYear')
+    .addEventListener('change', window.updateDateEditorDayOptions);
+  document
+    .getElementById('dateEditorMonth')
+    .addEventListener('change', window.updateDateEditorDayOptions);
 
   // Populate hour options (1-12)
   const hourSelect = document.getElementById('dateEditorHour');
@@ -1114,7 +1124,7 @@ function wireDateEditor() {
 
   // Populate interval amount options (1-60)
   const intervalAmountSelect = document.getElementById(
-    'dateEditorIntervalAmount'
+    'dateEditorIntervalAmount',
   );
   if (intervalAmountSelect) {
     for (let amount = 1; amount <= 60; amount++) {
@@ -1173,12 +1183,12 @@ function openDateEditor(photoIdOrIds) {
   // Populate fields
   document.getElementById('dateEditorYear').value = date.getFullYear();
   document.getElementById('dateEditorMonth').value = date.getMonth() + 1;
-  
+
   // Update day options based on selected month/year before setting day
   if (window.updateDateEditorDayOptions) {
     window.updateDateEditorDayOptions();
   }
-  
+
   document.getElementById('dateEditorDay').value = date.getDate();
 
   let hours = date.getHours();
@@ -1225,7 +1235,7 @@ function openDateEditor(photoIdOrIds) {
 
   console.log(
     '📅 Opened date editor for:',
-    isBulk ? `${photoIds.length} photos` : `photo ${firstPhotoId}`
+    isBulk ? `${photoIds.length} photos` : `photo ${firstPhotoId}`,
   );
 }
 
@@ -1255,7 +1265,7 @@ function loadDateChangeProgressOverlay() {
     .then((r) => {
       if (!r.ok)
         throw new Error(
-          `Failed to load date change progress overlay (${r.status})`
+          `Failed to load date change progress overlay (${r.status})`,
         );
       return r.text();
     })
@@ -1302,7 +1312,8 @@ function showDateChangeProgressOverlay(photoCount) {
   // Set static status text with total
   if (statusText) {
     if (photoCount === 1) {
-      statusText.innerHTML = 'Updating 1 photo<span class="import-spinner"></span>';
+      statusText.innerHTML =
+        'Updating 1 photo<span class="import-spinner"></span>';
     } else {
       statusText.textContent = `Updating ${photoCount} photos...`;
     }
@@ -1344,7 +1355,7 @@ function updateDateChangeProgress(current, total) {
   if (currentEl) {
     currentEl.textContent = current.toString();
   }
-  
+
   // Status text stays static (no updates during progress)
 }
 
@@ -1408,15 +1419,15 @@ async function saveDateEdit() {
   // Get values
   const year = document.getElementById('dateEditorYear').value;
   const month = String(
-    document.getElementById('dateEditorMonth').value
+    document.getElementById('dateEditorMonth').value,
   ).padStart(2, '0');
   const day = String(document.getElementById('dateEditorDay').value).padStart(
     2,
-    '0'
+    '0',
   );
   let hour = parseInt(document.getElementById('dateEditorHour').value);
   const minute = String(
-    document.getElementById('dateEditorMinute').value
+    document.getElementById('dateEditorMinute').value,
   ).padStart(2, '0');
   const ampm = document.getElementById('dateEditorAmPm').value;
 
@@ -1434,11 +1445,11 @@ async function saveDateEdit() {
   console.log('💾 Saving date edit:', { photoIds, isBulk, newDate });
 
   // Capture original dates BEFORE edit for undo
-  const originalDates = photoIds.map(id => {
-    const photo = state.photos.find(p => p.id === id);
-    return { 
-      id: id, 
-      originalDate: photo ? photo.date : null
+  const originalDates = photoIds.map((id) => {
+    const photo = state.photos.find((p) => p.id === id);
+    return {
+      id: id,
+      originalDate: photo ? photo.date : null,
     };
   });
 
@@ -1455,11 +1466,11 @@ async function saveDateEdit() {
   try {
     // Build query parameters for SSE (EventSource only supports GET)
     const params = new URLSearchParams();
-    
+
     if (isBulk) {
       // Bulk edit mode
       const mode = document.querySelector(
-        'input[name="dateEditorMode"]:checked'
+        'input[name="dateEditorMode"]:checked',
       ).value;
 
       params.append('photo_ids', JSON.stringify(photoIds));
@@ -1468,17 +1479,19 @@ async function saveDateEdit() {
 
       // Add interval data if sequence mode
       if (mode === 'sequence') {
-        params.append('interval_amount', 
-          document.getElementById('dateEditorIntervalAmount').value
+        params.append(
+          'interval_amount',
+          document.getElementById('dateEditorIntervalAmount').value,
         );
-        params.append('interval_unit', 
-          document.getElementById('dateEditorIntervalUnit').value
+        params.append(
+          'interval_unit',
+          document.getElementById('dateEditorIntervalUnit').value,
         );
       }
 
       // Use SSE for bulk updates
       const eventSource = new EventSource(
-        '/api/photos/bulk_update_date/execute?' + params.toString()
+        '/api/photos/bulk_update_date/execute?' + params.toString(),
       );
 
       eventSource.addEventListener('progress', (e) => {
@@ -1505,16 +1518,13 @@ async function saveDateEdit() {
           if (data.duplicate_count > 0) {
             message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
           }
-          showToast(
-            message,
-            () => undoDateEdit(originalDates)
-          );
+          showToast(message, () => undoDateEdit(originalDates));
         }, 500);
       });
 
       eventSource.addEventListener('error', (e) => {
         console.error('❌ Bulk date update failed:', e);
-        
+
         let errorMsg = 'Failed to update dates';
         try {
           const data = JSON.parse(e.data);
@@ -1526,7 +1536,6 @@ async function saveDateEdit() {
         showDateChangeError(errorMsg);
         eventSource.close();
       });
-
     } else {
       // Single photo edit
       params.append('photo_id', photoIds[0]);
@@ -1534,7 +1543,7 @@ async function saveDateEdit() {
 
       // Use SSE for single photo update
       const eventSource = new EventSource(
-        '/api/photo/update_date/execute?' + params.toString()
+        '/api/photo/update_date/execute?' + params.toString(),
       );
 
       eventSource.addEventListener('progress', (e) => {
@@ -1554,16 +1563,13 @@ async function saveDateEdit() {
 
         // Show toast with undo after a delay
         setTimeout(() => {
-          showToast(
-            'Date updated',
-            () => undoDateEdit(originalDates)
-          );
+          showToast('Date updated', () => undoDateEdit(originalDates));
         }, 500);
       });
 
       eventSource.addEventListener('error', (e) => {
         console.error('❌ Date update failed:', e);
-        
+
         let errorMsg = 'Failed to update date';
         try {
           const data = JSON.parse(e.data);
@@ -1676,7 +1682,7 @@ async function loadCriticalErrorModal() {
     const response = await fetch('fragments/criticalErrorModal.html');
     if (!response.ok)
       throw new Error(
-        `Failed to load critical error modal (${response.status})`
+        `Failed to load critical error modal (${response.status})`,
       );
     mount.insertAdjacentHTML('beforeend', await response.text());
     console.log('✅ Critical error modal loaded');
@@ -1873,7 +1879,7 @@ function wireLightbox() {
           deletePhotos([photoId]);
           // Close lightbox after delete
           closeLightbox();
-        }
+        },
       );
     });
   }
@@ -1962,28 +1968,30 @@ function calculateMediaDimensions(photo) {
     return {
       width: '100vw',
       height: '75vw',
-      maxHeight: '100vh'
+      maxHeight: '100vh',
     };
   }
 
   const photoAR = photo.width / photo.height;
   const viewportAR = window.innerWidth / window.innerHeight;
 
-  console.log(`📐 Photo ${photo.id}: ${photo.width}x${photo.height} (AR ${photoAR.toFixed(3)}) | Viewport AR: ${viewportAR.toFixed(3)}`);
+  console.log(
+    `📐 Photo ${photo.id}: ${photo.width}x${photo.height} (AR ${photoAR.toFixed(3)}) | Viewport AR: ${viewportAR.toFixed(3)}`,
+  );
 
   if (photoAR > viewportAR) {
     // Photo is wider than viewport → constrain by width
     console.log(`  → Fill WIDTH (photo wider than viewport)`);
     return {
       width: '100vw',
-      height: `calc(100vw / ${photoAR})`
+      height: `calc(100vw / ${photoAR})`,
     };
   } else {
     // Photo is narrower than viewport → constrain by height
     console.log(`  → Fill HEIGHT (photo narrower than viewport)`);
     return {
       height: '100vh',
-      width: `calc(100vh * ${photoAR})`
+      width: `calc(100vh * ${photoAR})`,
     };
   }
 }
@@ -1994,7 +2002,7 @@ function calculateMediaDimensions(photo) {
 function createPlaceholder(photo, dims, isDebug = false) {
   const placeholder = document.createElement('div');
   placeholder.style.position = 'absolute';
-  
+
   if (isDebug) {
     placeholder.style.backgroundColor = 'rgba(255, 192, 203, 0.3)'; // Pink overlay for debug
     placeholder.style.zIndex = '10';
@@ -2002,11 +2010,11 @@ function createPlaceholder(photo, dims, isDebug = false) {
   } else {
     placeholder.style.backgroundColor = '#2a2a2a'; // Same as grid
   }
-  
+
   if (dims.width) placeholder.style.width = dims.width;
   if (dims.height) placeholder.style.height = dims.height;
   if (dims.maxHeight) placeholder.style.maxHeight = dims.maxHeight;
-  
+
   return placeholder;
 }
 
@@ -2015,98 +2023,100 @@ function createPlaceholder(photo, dims, isDebug = false) {
  */
 function loadMediaIntoContent(content, photo, isVideo) {
   const dims = calculateMediaDimensions(photo);
-  
+
   if (isVideo) {
     // For video, show placeholder and load
     const placeholder = createPlaceholder(photo, dims);
     content.appendChild(placeholder);
-    
+
     const video = document.createElement('video');
     video.src = `/api/photo/${photo.id}/file`;
     video.controls = true;
     video.autoplay = true;
     video.style.position = 'absolute';
-    
+
     if (dims.width) video.style.width = dims.width;
     if (dims.height) video.style.height = dims.height;
     if (dims.maxHeight) video.style.maxHeight = dims.maxHeight;
-    
+
     video.style.objectFit = 'contain';
     video.style.backgroundColor = '#2a2a2a';
-    
+
     video.addEventListener('loadeddata', () => {
       if (placeholder.parentNode) {
         content.removeChild(placeholder);
       }
       video.style.backgroundColor = 'transparent';
     });
-    
+
     content.appendChild(video);
-    
   } else {
     // For images, preload in memory first
     const img = new Image();
     img.src = `/api/photo/${photo.id}/file`;
-    
+
     // Check if already cached
     if (img.complete && img.naturalWidth > 0) {
       // Already loaded - add directly
       console.log(`✅ Image ${photo.id} cached, showing immediately`);
       img.style.position = 'absolute';
-      
+
       if (dims.width) img.style.width = dims.width;
       if (dims.height) img.style.height = dims.height;
       if (dims.maxHeight) img.style.maxHeight = dims.maxHeight;
-      
+
       img.style.objectFit = 'contain';
-      const filename = photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
+      const filename =
+        photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
       img.alt = filename;
-      
+
       content.appendChild(img);
-      
     } else {
       // Not cached - show placeholder while loading
       console.log(`⏳ Image ${photo.id} loading...`);
       const placeholder = createPlaceholder(photo, dims);
       content.appendChild(placeholder);
-      
+
       img.onload = () => {
         console.log(`✅ Image ${photo.id} loaded`);
         // Remove placeholder
         if (placeholder.parentNode) {
           content.removeChild(placeholder);
         }
-        
+
         // Add loaded image
         img.style.position = 'absolute';
-        
+
         if (dims.width) img.style.width = dims.width;
         if (dims.height) img.style.height = dims.height;
         if (dims.maxHeight) img.style.maxHeight = dims.maxHeight;
-        
+
         img.style.objectFit = 'contain';
-        const filename = photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
+        const filename =
+          photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
         img.alt = filename;
-        
+
         content.appendChild(img);
       };
-      
+
       img.onerror = async () => {
         console.error(`❌ Image ${photo.id} failed to load`);
-        
+
         // Check if failure was due to database corruption
         try {
           const response = await fetch(`/api/photo/${photo.id}/file`);
-          console.log(`🔍 Corruption check - Status: ${response.status}, OK: ${response.ok}`);
-          
+          console.log(
+            `🔍 Corruption check - Status: ${response.status}, OK: ${response.ok}`,
+          );
+
           if (!response.ok) {
             const contentType = response.headers.get('content-type');
             console.log(`🔍 Content-Type: ${contentType}`);
-            
+
             if (contentType && contentType.includes('application/json')) {
               const data = await response.json();
               console.log(`🔍 Response data:`, data);
-              
+
               if (checkForDatabaseCorruption(data)) {
                 return; // Corruption dialog shown, stop here
               }
@@ -2116,7 +2126,7 @@ function loadMediaIntoContent(content, photo, isVideo) {
           console.error('🔍 Error checking for corruption:', e);
           // Ignore fetch errors, keep placeholder
         }
-        
+
         // Keep placeholder, show error state
       };
     }
@@ -2150,7 +2160,7 @@ async function openLightbox(photoIndex) {
   if (DEBUG_CLICK_TO_LOAD) {
     // Load media normally (with preload logic)
     loadMediaIntoContent(content, photo, isVideo);
-    
+
     // Add pink debug overlay on top
     const dims = calculateMediaDimensions(photo);
     const debugOverlay = createPlaceholder(photo, dims, true);
@@ -2329,7 +2339,7 @@ function closeLightbox() {
       console.log(
         '🔍 Looking for month section:',
         `month-${month}`,
-        monthSection
+        monthSection,
       );
       if (monthSection) {
         const monthHeader = monthSection.querySelector('.month-header');
@@ -2454,7 +2464,7 @@ async function loadAndRenderPhotos(append = false) {
 
     // Update date picker to reflect current photo years (show/hide as needed)
     await populateDatePicker();
-    
+
     // Re-enable app bar buttons after transition
     enableAppBarButtons();
   } catch (error) {
@@ -2514,7 +2524,7 @@ function setupThumbnailLazyLoading() {
     },
     {
       rootMargin: '1000px', // Load 1000px before entering viewport for smoother experience
-    }
+    },
   );
 
   // Observe all thumbnail images that don't have src yet
@@ -2522,7 +2532,7 @@ function setupThumbnailLazyLoading() {
   thumbnails.forEach((thumb) => thumbnailObserver.observe(thumb));
 
   console.log(
-    `👁️ Observing ${thumbnails.length.toLocaleString()} thumbnails for lazy loading`
+    `👁️ Observing ${thumbnails.length.toLocaleString()} thumbnails for lazy loading`,
   );
 }
 
@@ -2612,7 +2622,7 @@ function renderPhotoGrid(photos, append = false) {
     const [year, monthNum] = month.split('-');
     const monthName = new Date(
       parseInt(year),
-      parseInt(monthNum) - 1
+      parseInt(monthNum) - 1,
     ).toLocaleString('default', { month: 'long' });
 
     // Check if this month section already exists (for append mode)
@@ -2742,37 +2752,49 @@ function togglePhotoSelection(card, e) {
     const start = Math.min(state.lastClickedIndex, index);
     const end = Math.max(state.lastClickedIndex, index);
 
-    console.log(`🔍 Shift-select: clicking index ${index}, last was ${state.lastClickedIndex}`);
-    console.log(`🔍 Range: ${start} to ${end} (${end - start + 1} photos expected)`);
-    
+    console.log(
+      `🔍 Shift-select: clicking index ${index}, last was ${state.lastClickedIndex}`,
+    );
+    console.log(
+      `🔍 Range: ${start} to ${end} (${end - start + 1} photos expected)`,
+    );
+
     // Get all photo cards in the DOM
     const allCards = Array.from(document.querySelectorAll('.photo-card'));
     console.log(`📊 Total cards in DOM: ${allCards.length}`);
-    
+
     // Debug: show sample of indices
-    const sampleIndices = allCards.slice(0, 10).map(c => parseInt(c.dataset.index));
-    console.log(`📊 Sample indices (first 10 cards): ${sampleIndices.join(', ')}`);
-    
+    const sampleIndices = allCards
+      .slice(0, 10)
+      .map((c) => parseInt(c.dataset.index));
+    console.log(
+      `📊 Sample indices (first 10 cards): ${sampleIndices.join(', ')}`,
+    );
+
     // Filter to cards within the range
-    const cardsInRange = allCards.filter(c => {
+    const cardsInRange = allCards.filter((c) => {
       const cardIndex = parseInt(c.dataset.index);
       return cardIndex >= start && cardIndex <= end;
     });
-    
+
     console.log(`📋 Cards in range: ${cardsInRange.length}`);
-    
+
     // Debug: if we found fewer than expected, show what's missing
-    if (cardsInRange.length < (end - start + 1)) {
-      const foundIndices = new Set(cardsInRange.map(c => parseInt(c.dataset.index)));
+    if (cardsInRange.length < end - start + 1) {
+      const foundIndices = new Set(
+        cardsInRange.map((c) => parseInt(c.dataset.index)),
+      );
       const missing = [];
       for (let i = start; i <= end && missing.length < 10; i++) {
         if (!foundIndices.has(i)) missing.push(i);
       }
-      console.warn(`⚠️ Missing ${(end - start + 1) - cardsInRange.length} cards. First missing indices: ${missing.join(', ')}`);
+      console.warn(
+        `⚠️ Missing ${end - start + 1 - cardsInRange.length} cards. First missing indices: ${missing.join(', ')}`,
+      );
     }
-    
+
     // Select all cards in range
-    cardsInRange.forEach(rangeCard => {
+    cardsInRange.forEach((rangeCard) => {
       const rangeId = parseInt(rangeCard.dataset.id);
       rangeCard.classList.add('selected');
       state.selectedPhotos.add(rangeId);
@@ -2780,7 +2802,7 @@ function togglePhotoSelection(card, e) {
 
     updateDeleteButtonVisibility();
     console.log(
-      `📷 Shift-selected ${cardsInRange.length} photos (${state.selectedPhotos.size} total selected)`
+      `📷 Shift-selected ${cardsInRange.length} photos (${state.selectedPhotos.size} total selected)`,
     );
   }
   // NORMAL CLICK: Toggle single
@@ -2789,13 +2811,13 @@ function togglePhotoSelection(card, e) {
       card.classList.remove('selected');
       state.selectedPhotos.delete(id);
       console.log(
-        `📷 Deselected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`
+        `📷 Deselected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`,
       );
     } else {
       card.classList.add('selected');
       state.selectedPhotos.add(id);
       console.log(
-        `📷 Selected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`
+        `📷 Selected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`,
       );
     }
 
@@ -2819,37 +2841,41 @@ function wireMonthSelectors() {
     circle.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault(); // Prevent text selection on shift-click
-      
+
       // Get all photos in this month
       const monthPhotoCards = monthSection.querySelectorAll('.photo-card');
       if (monthPhotoCards.length === 0) return;
-      
+
       // Use first photo as anchor for normal clicks, last photo for shift-clicks
       const firstPhotoIndex = parseInt(monthPhotoCards[0].dataset.index);
-      const lastPhotoIndex = parseInt(monthPhotoCards[monthPhotoCards.length - 1].dataset.index);
-      
+      const lastPhotoIndex = parseInt(
+        monthPhotoCards[monthPhotoCards.length - 1].dataset.index,
+      );
+
       if (e.shiftKey && state.lastClickedIndex !== null) {
         // SHIFT-SELECT: Select range from last clicked to this month's LAST photo
         const start = Math.min(state.lastClickedIndex, lastPhotoIndex);
         const end = Math.max(state.lastClickedIndex, lastPhotoIndex);
-        
+
         console.log(`🔍 Month shift-select: range ${start} to ${end}`);
-        
+
         // Get all photo cards and select those in range
         const allCards = Array.from(document.querySelectorAll('.photo-card'));
-        const cardsInRange = allCards.filter(c => {
+        const cardsInRange = allCards.filter((c) => {
           const cardIndex = parseInt(c.dataset.index);
           return cardIndex >= start && cardIndex <= end;
         });
-        
-        cardsInRange.forEach(card => {
+
+        cardsInRange.forEach((card) => {
           const cardId = parseInt(card.dataset.id);
           card.classList.add('selected');
           state.selectedPhotos.add(cardId);
         });
-        
-        console.log(`📷 Selected ${cardsInRange.length} photos via month shift-select`);
-        
+
+        console.log(
+          `📷 Selected ${cardsInRange.length} photos via month shift-select`,
+        );
+
         // Update anchor to this month's last photo
         state.lastClickedIndex = lastPhotoIndex;
         updateDeleteButtonVisibility();
@@ -2857,7 +2883,7 @@ function wireMonthSelectors() {
       } else {
         // NORMAL CLICK: Toggle entire month
         toggleMonthSelection(month);
-        
+
         // Update anchor to this month's last photo for next shift-select
         state.lastClickedIndex = lastPhotoIndex;
       }
@@ -2874,7 +2900,7 @@ function toggleMonthSelection(month) {
 
   const photoCards = monthSection.querySelectorAll('.photo-card');
   const photoIds = Array.from(photoCards).map((card) =>
-    parseInt(card.dataset.id)
+    parseInt(card.dataset.id),
   );
 
   // Check if all photos in this month are already selected
@@ -2911,7 +2937,7 @@ function updateMonthCircleStates() {
   monthSections.forEach((section) => {
     const photoCards = section.querySelectorAll('.photo-card');
     const photoIds = Array.from(photoCards).map((card) =>
-      parseInt(card.dataset.id)
+      parseInt(card.dataset.id),
     );
     const allSelected =
       photoIds.length > 0 &&
@@ -2970,9 +2996,8 @@ async function deletePhotos(photoIds) {
 
     // Show success toast with undo
     const count = result.deleted;
-    showToast(
-      `Deleted ${count} photo${count > 1 ? 's' : ''}`,
-      () => undoDelete(photoIds)
+    showToast(`Deleted ${count} photo${count > 1 ? 's' : ''}`, () =>
+      undoDelete(photoIds),
     );
   } catch (error) {
     console.error('❌ Delete error:', error);
@@ -2988,27 +3013,27 @@ async function deletePhotos(photoIds) {
 async function undoDateEdit(originalDates) {
   try {
     console.log('↩️ Undoing date edit for', originalDates.length, 'photos');
-    
+
     // Restore each photo to its original date
-    const promises = originalDates.map(({id, originalDate}) => 
+    const promises = originalDates.map(({ id, originalDate }) =>
       fetch('/api/photo/update_date', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ photo_id: id, new_date: originalDate }),
-      })
+      }),
     );
 
     const responses = await Promise.all(promises);
-    
+
     // Check if all succeeded
-    const allSucceeded = responses.every(r => r.ok);
-    
+    const allSucceeded = responses.every((r) => r.ok);
+
     if (allSucceeded) {
       console.log('✅ Date edit undone successfully');
-      
+
       // Reload grid to reflect restored dates
       await loadAndRenderPhotos(false);
-      
+
       showToast('Date change undone', null);
     } else {
       throw new Error('Some updates failed');
@@ -3210,7 +3235,7 @@ function scrollToImportedPhoto(photoIds) {
 
   if (firstVisibleId) {
     const element = document.querySelector(
-      `[data-photo-id="${firstVisibleId}"]`
+      `[data-photo-id="${firstVisibleId}"]`,
     );
     if (element) {
       console.log(`📍 Scrolling to imported photo ID ${firstVisibleId}`);
@@ -3256,7 +3281,7 @@ async function showImportComplete() {
   ) {
     // Get the date of the first successfully imported photo
     const firstImported = importState.results.find(
-      (r) => r.status === 'success' && r.photo_id
+      (r) => r.status === 'success' && r.photo_id,
     );
 
     if (firstImported && firstImported.date) {
@@ -3341,7 +3366,7 @@ async function undoImport() {
 
   try {
     console.log(
-      `⏪ Undoing import of ${importState.importedPhotoIds.length} photos`
+      `⏪ Undoing import of ${importState.importedPhotoIds.length} photos`,
     );
 
     // Delete all imported photos
@@ -3393,7 +3418,7 @@ async function loadUtilitiesMenu() {
     const removeDuplicatesBtn = document.getElementById('removeDuplicatesBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
     const rebuildThumbnailsBtn = document.getElementById(
-      'rebuildThumbnailsBtn'
+      'rebuildThumbnailsBtn',
     );
 
     if (switchLibraryBtn) {
@@ -3488,7 +3513,7 @@ async function toggleUtilitiesMenu() {
       '🔧 Setting menu position - top:',
       btnRect.bottom + 8,
       'right:',
-      window.innerWidth - btnRect.right
+      window.innerWidth - btnRect.right,
     );
 
     menu.style.top = `${btnRect.bottom + 8}px`;
@@ -3499,7 +3524,7 @@ async function toggleUtilitiesMenu() {
       '🔧 Menu style after:',
       menu.style.top,
       menu.style.right,
-      menu.style.display
+      menu.style.display,
     );
   }
 }
@@ -3516,7 +3541,7 @@ function hideUtilitiesMenu() {
 
 /**
  * Update utility menu item availability based on current state
- * 
+ *
  * Requirements:
  * - Switch library: ALWAYS available
  * - Update database: requires database (doesn't need photos)
@@ -3528,7 +3553,12 @@ function updateUtilityMenuAvailability() {
   const hasDatabase = state.hasDatabase;
   const hasPhotos = state.photos && state.photos.length > 0;
 
-  console.log('🔧 Updating menu availability - DB:', hasDatabase, 'Photos:', hasPhotos ? state.photos.length : 0);
+  console.log(
+    '🔧 Updating menu availability - DB:',
+    hasDatabase,
+    'Photos:',
+    hasPhotos ? state.photos.length : 0,
+  );
 
   // Switch library - ALWAYS available (never disabled)
   enableMenuItem('switchLibraryBtn', true);
@@ -3696,7 +3726,7 @@ async function openDuplicatesOverlay() {
     } else {
       updateDuplicatesUI(
         `Found ${data.total_duplicate_sets} items with duplicates`,
-        false
+        false,
       );
       showDuplicatesStats();
       renderDuplicatesList();
@@ -3760,8 +3790,8 @@ function renderDuplicatesList() {
       <div class="duplicate-set">
         <div class="duplicate-set-header">
           <strong>${baseFilename}</strong> (${numDuplicates} duplicate${
-      numDuplicates > 1 ? 's' : ''
-    })
+            numDuplicates > 1 ? 's' : ''
+          })
         </div>
         <div class="duplicate-files">
     `;
@@ -3866,7 +3896,7 @@ async function removeSelectedDuplicates() {
     // Show removing state with spinner
     updateDuplicatesUI(
       `Removing ${photoIds.length} duplicate${photoIds.length > 1 ? 's' : ''}`,
-      true
+      true,
     );
 
     // Hide action buttons during removal
@@ -3891,7 +3921,7 @@ async function removeSelectedDuplicates() {
     // Show final confirmation state
     updateDuplicatesUI(
       `Removed ${result.deleted} duplicate${result.deleted > 1 ? 's' : ''}`,
-      false
+      false,
     );
     showDuplicatesComplete();
 
@@ -3943,8 +3973,7 @@ async function loadUpdateIndexOverlay() {
 
   try {
     const response = await fetch('fragments/updateIndexOverlay.html');
-    if (!response.ok)
-      throw new Error('Failed to load Update Database overlay');
+    if (!response.ok) throw new Error('Failed to load Update Database overlay');
 
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
@@ -4495,7 +4524,7 @@ async function executeRebuildThumbnails() {
     // Visual confirmation: Clear all thumbnail images
     if (result.cleared_count > 0) {
       console.log('🎨 Clearing visible thumbnails for visual confirmation...');
-      
+
       // Clear the grid to show user that purge happened
       const container = document.getElementById('photoContainer');
       if (container) {
@@ -4546,7 +4575,7 @@ async function loadRebuildDatabaseOverlay() {
     const response = await fetch('fragments/rebuildDatabaseOverlay.html');
     if (!response.ok)
       throw new Error(
-        `Failed to load rebuild database overlay (${response.status})`
+        `Failed to load rebuild database overlay (${response.status})`,
       );
     mount.insertAdjacentHTML('beforeend', await response.text());
 
@@ -4652,21 +4681,22 @@ async function showNameLibraryDialog(options = {}) {
     const cancelBtn = document.getElementById('nameLibraryCancelBtn');
     const confirmBtn = document.getElementById('nameLibraryConfirmBtn');
     const closeBtn = document.getElementById('nameLibraryCloseBtn');
-    
+
     // Update dialog title and subtitle if provided
     const titleEl = overlay.querySelector('.import-title');
     const subtitleEl = overlay.querySelector('.import-status-text p');
-    
+
     if (titleEl && options.title) {
       titleEl.textContent = options.title;
     } else if (titleEl) {
       titleEl.textContent = 'Create new library';
     }
-    
+
     if (subtitleEl && options.subtitle) {
       subtitleEl.textContent = options.subtitle;
     } else if (subtitleEl) {
-      subtitleEl.textContent = 'Your new library needs its own folder. Please give it a name.';
+      subtitleEl.textContent =
+        'Your new library needs its own folder. Please give it a name.';
     }
 
     // Reset state
@@ -4716,8 +4746,10 @@ async function showNameLibraryDialog(options = {}) {
 
           if (response.ok) {
             const data = await response.json();
-            const existingFolders = data.folders.map(f => typeof f === 'string' ? f : f.name);
-            
+            const existingFolders = data.folders.map((f) =>
+              typeof f === 'string' ? f : f.name,
+            );
+
             if (existingFolders.includes(sanitized)) {
               errorDiv.textContent = `A folder named "${sanitized}" already exists here`;
               errorDiv.style.visibility = 'visible';
@@ -4781,10 +4813,10 @@ async function showNameLibraryDialog(options = {}) {
       if (debounceTimeout) {
         clearTimeout(debounceTimeout);
       }
-      
+
       // Hide error immediately while typing
       errorDiv.style.visibility = 'hidden';
-      
+
       // Schedule validation after 150ms of no typing
       debounceTimeout = setTimeout(async () => {
         await validateName(input.value);
@@ -4876,11 +4908,14 @@ async function showTerraformChoiceDialog(options = {}) {
     }
 
     // Set values
-    document.getElementById('terraformChoiceCount').textContent = options.media_count.toLocaleString();
+    document.getElementById('terraformChoiceCount').textContent =
+      options.media_count.toLocaleString();
     document.getElementById('terraformChoicePath').textContent = options.path;
 
     // Reset radio selection to "blank" by default
-    const blankRadio = document.querySelector('input[name="terraformChoice"][value="blank"]');
+    const blankRadio = document.querySelector(
+      'input[name="terraformChoice"][value="blank"]',
+    );
     if (blankRadio) blankRadio.checked = true;
 
     const closeBtn = document.getElementById('terraformChoiceCloseBtn');
@@ -4893,7 +4928,9 @@ async function showTerraformChoiceDialog(options = {}) {
     };
 
     const handleContinue = () => {
-      const selected = document.querySelector('input[name="terraformChoice"]:checked');
+      const selected = document.querySelector(
+        'input[name="terraformChoice"]:checked',
+      );
       overlay.style.display = 'none';
       resolve(selected ? selected.value : null);
     };
@@ -4936,8 +4973,10 @@ async function showTerraformPreviewDialog(options = {}) {
 
     // Set values
     document.getElementById('terraformPreviewPath').textContent = options.path;
-    document.getElementById('terraformPreviewPhotos').textContent = options.photo_count.toLocaleString();
-    document.getElementById('terraformPreviewVideos').textContent = options.video_count.toLocaleString();
+    document.getElementById('terraformPreviewPhotos').textContent =
+      options.photo_count.toLocaleString();
+    document.getElementById('terraformPreviewVideos').textContent =
+      options.video_count.toLocaleString();
 
     const closeBtn = document.getElementById('terraformPreviewCloseBtn');
     const continueBtn = document.getElementById('terraformPreviewContinueBtn');
@@ -4995,8 +5034,10 @@ async function showTerraformWarningDialog(options = {}) {
     }
 
     // Set values
-    document.getElementById('terraformWarningCount').textContent = options.total_files.toLocaleString();
-    document.getElementById('terraformWarningEta').textContent = options.estimated_time || 'calculating...';
+    document.getElementById('terraformWarningCount').textContent =
+      options.total_files.toLocaleString();
+    document.getElementById('terraformWarningEta').textContent =
+      options.estimated_time || 'calculating...';
 
     const closeBtn = document.getElementById('terraformWarningCloseBtn');
     const continueBtn = document.getElementById('terraformWarningContinueBtn');
@@ -5067,10 +5108,14 @@ async function showTerraformCompleteDialog(results = {}) {
     }
 
     // Set values
-    document.getElementById('terraformCompleteProcessed').textContent = results.processed.toLocaleString();
-    document.getElementById('terraformCompleteDuplicates').textContent = results.duplicates.toLocaleString();
-    document.getElementById('terraformCompleteErrors').textContent = results.errors.toLocaleString();
-    document.getElementById('terraformCompleteLogPath').textContent = `A detailed log has been saved to ${results.log_path}`;
+    document.getElementById('terraformCompleteProcessed').textContent =
+      results.processed.toLocaleString();
+    document.getElementById('terraformCompleteDuplicates').textContent =
+      results.duplicates.toLocaleString();
+    document.getElementById('terraformCompleteErrors').textContent =
+      results.errors.toLocaleString();
+    document.getElementById('terraformCompleteLogPath').textContent =
+      `A detailed log has been saved to ${results.log_path}`;
 
     const closeBtn = document.getElementById('terraformCompleteCloseBtn');
     const doneBtn = document.getElementById('terraformCompleteDoneBtn');
@@ -5093,110 +5138,135 @@ async function showTerraformCompleteDialog(results = {}) {
  */
 async function executeTerraformFlow(options = {}) {
   try {
-    const { path, media_count } = options;
-    
-    // TODO: Get photo/video breakdown from backend
-    // For now, estimate 90% photos, 10% videos
-    const photo_count = Math.floor(media_count * 0.9);
-    const video_count = media_count - photo_count;
-    
+    const { path, media_count, photo_count = 0, video_count = 0 } = options;
+
+    // Use counts from checkResult if provided, otherwise query database
+    let finalPhotoCount = photo_count;
+    let finalVideoCount = video_count;
+
+    // If counts weren't provided (shouldn't happen), try database
+    if (photo_count === 0 && video_count === 0 && media_count > 0) {
+      try {
+        const response = await fetch('/api/file-counts');
+        if (response.ok) {
+          const data = await response.json();
+          finalPhotoCount = data.photo_count;
+          finalVideoCount = data.video_count;
+        } else {
+          // Fallback to estimate if API fails
+          console.warn('Failed to get file counts, using estimate');
+          finalPhotoCount = Math.floor(media_count * 0.9);
+          finalVideoCount = media_count - finalPhotoCount;
+        }
+      } catch (error) {
+        console.error('Error fetching file counts:', error);
+        // Fallback to estimate
+        finalPhotoCount = Math.floor(media_count * 0.9);
+        finalVideoCount = media_count - finalPhotoCount;
+      }
+    }
+
     // Step 1: Preview
     console.log('📊 Showing preview...');
     const continuePreview = await showTerraformPreviewDialog({
       path,
-      photo_count,
-      video_count
+      photo_count: finalPhotoCount,
+      video_count: finalVideoCount,
     });
-    
+
     if (!continuePreview) {
       console.log('User cancelled at preview');
       return false;
     }
-    
+
     // Step 2: Warning
     console.log('⚠️  Showing warning...');
-    
+
     // Estimate time: ~2 seconds per file
     const estimated_seconds = Math.ceil(media_count * 2);
     const estimated_minutes = Math.ceil(estimated_seconds / 60);
-    const estimated_time = estimated_minutes < 60 
-      ? `${estimated_minutes}-${estimated_minutes + 2} minutes`
-      : `${Math.floor(estimated_minutes / 60)}-${Math.ceil(estimated_minutes / 60)} hours`;
-    
+    const estimated_time =
+      estimated_minutes < 60
+        ? `${estimated_minutes}-${estimated_minutes + 2} minutes`
+        : `${Math.floor(estimated_minutes / 60)}-${Math.ceil(estimated_minutes / 60)} hours`;
+
     const continueWarning = await showTerraformWarningDialog({
       total_files: media_count,
-      estimated_time
+      estimated_time,
     });
-    
+
     if (!continueWarning) {
       console.log('User cancelled at warning');
       return false;
     }
-    
+
     // Step 3: Execute terraform
     console.log('🔄 Starting terraform...');
-    
+
     // Load progress overlay
     let progressOverlay = document.getElementById('terraformProgressOverlay');
     if (!progressOverlay) {
       await loadTerraformProgressOverlay();
       progressOverlay = document.getElementById('terraformProgressOverlay');
     }
-    
+
     progressOverlay.style.display = 'flex';
-    
+
     // Start SSE
     const response = await fetch('/api/library/terraform', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_path: path })
+      body: JSON.stringify({ library_path: path }),
     });
-    
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    
+
     let processed = 0;
     let duplicates = 0;
     let errors = 0;
     let log_path = '';
-    
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
-      
+
       for (const line of lines) {
         if (!line.trim()) continue;
-        
+
         if (line.startsWith('event: ')) {
           const event = line.substring(7);
           continue;
         }
-        
+
         if (line.startsWith('data: ')) {
           const data = JSON.parse(line.substring(6));
-          
+
           // Update progress UI
           if (data.processed !== undefined) {
             processed = data.processed;
-            document.getElementById('terraformProgressProcessed').textContent = processed.toLocaleString();
+            document.getElementById('terraformProgressProcessed').textContent =
+              processed.toLocaleString();
           }
           if (data.duplicates !== undefined) {
             duplicates = data.duplicates;
-            document.getElementById('terraformProgressDuplicates').textContent = duplicates.toLocaleString();
+            document.getElementById('terraformProgressDuplicates').textContent =
+              duplicates.toLocaleString();
           }
           if (data.errors !== undefined) {
             errors = data.errors;
-            document.getElementById('terraformProgressErrors').textContent = errors.toLocaleString();
+            document.getElementById('terraformProgressErrors').textContent =
+              errors.toLocaleString();
           }
           if (data.log_path) {
             log_path = data.log_path;
           }
-          
+
           // Update status (static - shows total)
           if (data.total) {
             const statusEl = document.getElementById('terraformProgressStatus');
@@ -5205,35 +5275,34 @@ async function executeTerraformFlow(options = {}) {
         }
       }
     }
-    
+
     // Hide progress overlay
     progressOverlay.style.display = 'none';
-    
+
     // Step 4: Show completion
     console.log('✅ Terraform complete');
     await showTerraformCompleteDialog({
       processed,
       duplicates,
       errors,
-      log_path
+      log_path,
     });
-    
+
     // Step 5: Switch to this library
     const dbPath = path + '/photo_library.db';
     await switchToLibrary(path, dbPath);
-    
+
     return true;
-    
   } catch (error) {
     console.error('❌ Terraform failed:', error);
     showToast(`Terraform failed: ${error.message}`, 'error');
-    
+
     // Hide progress overlay if showing
     const progressOverlay = document.getElementById('terraformProgressOverlay');
     if (progressOverlay) {
       progressOverlay.style.display = 'none';
     }
-    
+
     return false;
   }
 }
@@ -5244,7 +5313,7 @@ async function executeTerraformFlow(options = {}) {
  */
 function showLibraryTransitionState() {
   console.log('🔄 Entering library transition state...');
-  
+
   // Clear photo container
   const container = document.getElementById('photoContainer');
   if (container) {
@@ -5254,24 +5323,24 @@ function showLibraryTransitionState() {
       </div>
     `;
   }
-  
+
   // Disable app bar interactive buttons
   const interactiveButtons = [
     'addPhotoBtn',
     'sortToggleBtn',
     'deleteBtn',
     'editDateBtn',
-    'deselectAllBtn'
+    'deselectAllBtn',
   ];
-  
-  interactiveButtons.forEach(id => {
+
+  interactiveButtons.forEach((id) => {
     const btn = document.getElementById(id);
     if (btn) {
       btn.style.opacity = '0.3';
       btn.style.pointerEvents = 'none';
     }
   });
-  
+
   // Disable date picker
   const monthPicker = document.getElementById('monthPicker');
   const yearPicker = document.getElementById('yearPicker');
@@ -5283,7 +5352,7 @@ function showLibraryTransitionState() {
     yearPicker.disabled = true;
     yearPicker.style.opacity = '0.3';
   }
-  
+
   // Disable utility menu items (except utilities button itself stays enabled)
   updateUtilityMenuAvailability(); // This will disable based on state
 }
@@ -5299,19 +5368,18 @@ function enableAppBarButtons() {
     addPhotoBtn.style.opacity = '1';
     addPhotoBtn.style.pointerEvents = 'auto';
   }
-  
+
   // Re-enable sort button (enabled when photos exist, managed by enablePhotoRelatedActions)
   const sortToggleBtn = document.getElementById('sortToggleBtn');
   if (sortToggleBtn && state.photos && state.photos.length > 0) {
     sortToggleBtn.style.opacity = '1';
     sortToggleBtn.style.pointerEvents = 'auto';
   }
-  
+
   // Delete, edit date, deselect buttons are managed by selection state (updateButtonVisibility)
   // Date pickers are re-enabled when populateDatePicker() runs
   // Utility menu items are re-enabled by updateUtilityMenuAvailability()
 }
-
 
 /**
  * Browse for library (uses custom folder picker)
@@ -5329,7 +5397,8 @@ async function browseSwitchLibrary() {
 
     const selectedPath = await FolderPicker.show({
       title: 'Open library',
-      subtitle: 'Select an existing library folder (or choose where to create one).'
+      subtitle:
+        'Select an existing library folder (or choose where to create one).',
     });
 
     if (!selectedPath) {
@@ -5338,13 +5407,13 @@ async function browseSwitchLibrary() {
     }
 
     console.log('📂 Selected path:', selectedPath);
-    
+
     // Enter transition state immediately (clears grid, disables buttons)
     showLibraryTransitionState();
 
     // Check if path has a database and/or media
     const potentialDbPath = selectedPath + '/photo_library.db';
-    
+
     // Try to check if library exists via backend
     const checkResponse = await fetch('/api/library/check', {
       method: 'POST',
@@ -5359,15 +5428,14 @@ async function browseSwitchLibrary() {
       console.log('✅ Found existing library:', selectedPath);
       closeSwitchLibraryOverlay();
       await switchToLibrary(selectedPath, potentialDbPath);
-    }
-    else if (!checkResult.has_media) {
+    } else if (!checkResult.has_media) {
       // SCENARIO 2: No DB, no media - create blank library here
       console.log('📦 Empty folder - creating blank library...');
-      
+
       // Get library name
       const libraryName = await showNameLibraryDialog({
         title: 'Name your library',
-        parentPath: selectedPath
+        parentPath: selectedPath,
       });
 
       if (!libraryName) {
@@ -5397,25 +5465,26 @@ async function browseSwitchLibrary() {
 
       // Switch to new library
       await switchToLibrary(libraryPath, dbPath);
-    }
-    else {
+    } else {
       // SCENARIO 3: No DB, has media - show terraform choice dialog
-      console.log(`📸 Found ${checkResult.media_count} media file(s) - showing terraform choice...`);
-      
+      console.log(
+        `📸 Found ${checkResult.media_count} media file(s) - showing terraform choice...`,
+      );
+
       // Show choice dialog
       const choice = await showTerraformChoiceDialog({
         path: selectedPath,
-        media_count: checkResult.media_count
+        media_count: checkResult.media_count,
       });
 
       if (choice === 'blank') {
         // User chose to create blank library
         console.log('User chose: Create new library folder');
-        
+
         // Get library name
         const libraryName = await showNameLibraryDialog({
           title: 'Name your library',
-          parentPath: selectedPath
+          parentPath: selectedPath,
         });
 
         if (!libraryName) {
@@ -5445,23 +5514,23 @@ async function browseSwitchLibrary() {
 
         // Switch to new library
         await switchToLibrary(libraryPath, dbPath);
-      }
-      else if (choice === 'terraform') {
+      } else if (choice === 'terraform') {
         // User chose to terraform
         console.log('User chose: Convert this library');
-        
+
         // Execute full terraform flow
         const success = await executeTerraformFlow({
           path: selectedPath,
-          media_count: checkResult.media_count
+          media_count: checkResult.media_count,
+          photo_count: checkResult.photo_count || 0,
+          video_count: checkResult.video_count || 0,
         });
-        
+
         if (!success) {
           console.log('Terraform flow failed or was cancelled');
           return false;
         }
-      }
-      else {
+      } else {
         // User cancelled
         console.log('User cancelled choice dialog');
         return false;
@@ -5485,10 +5554,10 @@ async function createNewLibraryWithName(dialogOptions = {}) {
     while (true) {
       // Step 1: Choose parent location using custom folder picker
       console.log('🔍 Opening custom folder picker for parent location...');
-      
+
       const parentPath = await FolderPicker.show({
         title: 'Library location',
-        subtitle: "Choose where you'd like to create your new library"
+        subtitle: "Choose where you'd like to create your new library",
       });
 
       if (!parentPath) {
@@ -5502,11 +5571,13 @@ async function createNewLibraryWithName(dialogOptions = {}) {
       console.log('📝 Asking for library name...');
       const libraryName = await showNameLibraryDialog({
         ...dialogOptions,
-        parentPath: parentPath
+        parentPath: parentPath,
       });
 
       if (!libraryName) {
-        console.log('User cancelled library naming - going back to folder picker');
+        console.log(
+          'User cancelled library naming - going back to folder picker',
+        );
         // null means cancelled - loop back to folder picker
         continue;
       }
@@ -5524,7 +5595,10 @@ async function createNewLibraryWithName(dialogOptions = {}) {
       const createResponse = await fetch('/api/library/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
+        body: JSON.stringify({
+          library_path: fullLibraryPath,
+          db_path: dbPath,
+        }),
       });
 
       const createResult = await createResponse.json();
@@ -5539,7 +5613,10 @@ async function createNewLibraryWithName(dialogOptions = {}) {
       const switchResponse = await fetch('/api/library/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ library_path: fullLibraryPath, db_path: dbPath }),
+        body: JSON.stringify({
+          library_path: fullLibraryPath,
+          db_path: dbPath,
+        }),
       });
 
       const switchResult = await switchResponse.json();
@@ -5690,9 +5767,10 @@ async function switchToLibrary(libraryPath, dbPath) {
     }
 
     console.log('✅ Switched to:', result.library_path);
-    
+
     // Get folder name for toast message
-    const folderName = libraryPath.split('/').filter(Boolean).pop() || 'library';
+    const folderName =
+      libraryPath.split('/').filter(Boolean).pop() || 'library';
     showToast(`Opened ${folderName}`);
 
     // Close overlays
@@ -5730,7 +5808,8 @@ async function triggerImportWithLibraryCheck() {
       // Create new library with naming (custom copy for Add photos flow)
       const created = await createNewLibraryWithName({
         title: 'Add photos',
-        subtitle: "Adding photos will create a new library. Please give your library folder a name."
+        subtitle:
+          'Adding photos will create a new library. Please give your library folder a name.',
       });
 
       // If user cancelled at any point, show empty state
@@ -5762,7 +5841,7 @@ async function triggerImport() {
 
     const selectedPaths = await PhotoPicker.show({
       title: 'Select photos',
-      subtitle: 'Choose photos and folders to import'
+      subtitle: 'Choose photos and folders to import',
     });
 
     if (!selectedPaths || selectedPaths.length === 0) {
@@ -5771,7 +5850,7 @@ async function triggerImport() {
     }
 
     console.log(`✅ Selected ${selectedPaths.length} item(s)`);
-    
+
     // Scan paths to expand folders into file list (without confirmation dialog)
     await scanAndImport(selectedPaths);
   } catch (error) {
@@ -6135,13 +6214,13 @@ function handleImportEvent(event, data) {
       source_path: data.source_path,
       reason: data.reason,
       category: data.category,
-      technical_error: data.technical_error
+      technical_error: data.technical_error,
     });
   }
 
   if (event === 'complete') {
     const totalErrors = data.errors || 0;
-    
+
     if (totalErrors > 0) {
       statusText.innerHTML = `<p>Import complete with ${totalErrors} error${
         totalErrors > 1 ? 's' : ''
@@ -6290,16 +6369,19 @@ function showUnifiedErrorDetails() {
   const detailsSection = document.getElementById('importDetailsSection');
   const detailsList = document.getElementById('importDetailsList');
   const toggleBtn = document.getElementById('importDetailsToggle');
-  
+
   if (!detailsSection || !detailsList) return;
-  
+
   detailsSection.style.display = 'block';
   detailsList.innerHTML = '';
-  
-  const hasGeneralErrors = window.importErrors && window.importErrors.length > 0;
-  const hasRejections = window.importRejections && window.importRejections.length > 0;
-  const totalErrors = (window.importErrors?.length || 0) + (window.importRejections?.length || 0);
-  
+
+  const hasGeneralErrors =
+    window.importErrors && window.importErrors.length > 0;
+  const hasRejections =
+    window.importRejections && window.importRejections.length > 0;
+  const totalErrors =
+    (window.importErrors?.length || 0) + (window.importRejections?.length || 0);
+
   // Section 1: General errors (if any)
   if (hasGeneralErrors) {
     const header = document.createElement('div');
@@ -6309,8 +6391,8 @@ function showUnifiedErrorDetails() {
       <strong>Import Errors</strong> (${window.importErrors.length})
     `;
     detailsList.appendChild(header);
-    
-    window.importErrors.forEach(err => {
+
+    window.importErrors.forEach((err) => {
       const item = document.createElement('div');
       item.className = 'import-detail-item';
       item.innerHTML = `
@@ -6323,19 +6405,19 @@ function showUnifiedErrorDetails() {
       detailsList.appendChild(item);
     });
   }
-  
+
   // Section 2: Rejections - flat list without header
   if (hasRejections) {
     const MAX_DISPLAY = 20;
-    
+
     // Show first 20 rejections
     const itemsToShow = window.importRejections.slice(0, MAX_DISPLAY);
-    
-    itemsToShow.forEach(item => {
+
+    itemsToShow.forEach((item) => {
       const div = document.createElement('div');
       div.className = 'import-detail-item';
       div.style.marginTop = hasGeneralErrors ? '16px' : '0';
-      
+
       // Universal error icon for all rejection types
       div.innerHTML = `
         <span class="material-symbols-outlined import-detail-icon error">error</span>
@@ -6346,7 +6428,7 @@ function showUnifiedErrorDetails() {
       `;
       detailsList.appendChild(div);
     });
-    
+
     // Show "and N more" if capped
     if (window.importRejections.length > MAX_DISPLAY) {
       const remaining = window.importRejections.length - MAX_DISPLAY;
@@ -6359,7 +6441,7 @@ function showUnifiedErrorDetails() {
       moreDiv.textContent = `... and ${remaining} more`;
       detailsList.appendChild(moreDiv);
     }
-    
+
     // Add action buttons for rejections
     const actions = document.createElement('div');
     actions.className = 'import-rejection-actions';
@@ -6374,12 +6456,16 @@ function showUnifiedErrorDetails() {
       </button>
     `;
     detailsList.appendChild(actions);
-    
+
     // Wire up buttons
-    document.getElementById('copyRejectedBtn')?.addEventListener('click', copyRejectedFiles);
-    document.getElementById('exportRejectionListBtn')?.addEventListener('click', exportRejectionList);
+    document
+      .getElementById('copyRejectedBtn')
+      ?.addEventListener('click', copyRejectedFiles);
+    document
+      .getElementById('exportRejectionListBtn')
+      ?.addEventListener('click', exportRejectionList);
   }
-  
+
   // Keep collapsed initially
   detailsList.style.display = 'none';
   if (toggleBtn) {
@@ -6388,14 +6474,14 @@ function showUnifiedErrorDetails() {
       <span class="material-symbols-outlined">expand_more</span>
       <span>Show details</span>
     `;
-    
+
     // Wire up toggle
     const newToggleBtn = toggleBtn.cloneNode(true);
     toggleBtn.parentNode.replaceChild(newToggleBtn, toggleBtn);
-    
+
     newToggleBtn.addEventListener('click', () => {
       const isExpanded = detailsList.style.display !== 'none';
-      
+
       if (isExpanded) {
         detailsList.style.display = 'none';
         newToggleBtn.classList.remove('expanded');
@@ -6432,49 +6518,48 @@ async function copyRejectedFiles() {
       showToast('No rejected files to copy', 'error');
       return;
     }
-    
+
     // Hide import overlay to show folder picker cleanly
     const importOverlay = document.getElementById('importOverlay');
     if (importOverlay) {
       importOverlay.style.display = 'none';
     }
-    
+
     // Show folder picker
     const destFolder = await FolderPicker.show({
       title: 'Copy rejected files',
-      subtitle: 'Choose destination folder for rejected files'
+      subtitle: 'Choose destination folder for rejected files',
     });
-    
+
     // Restore import overlay
     if (importOverlay) {
       importOverlay.style.display = 'block';
     }
-    
+
     if (!destFolder) {
       console.log('User cancelled folder selection');
       return;
     }
-    
+
     showToast('Copying files...', 'info');
-    
+
     // Call backend
     const response = await fetch('/api/import/copy-rejected-files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         files: window.importRejections,
-        destination: destFolder
-      })
+        destination: destFolder,
+      }),
     });
-    
+
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || 'Copy failed');
     }
-    
+
     const result = await response.json();
     showToast(`Copied ${result.copied} files to ${result.folder}`, null, 3000);
-    
   } catch (error) {
     console.error('Copy rejected files failed:', error);
     showToast(`Copy failed: ${error.message}`, 'error');
@@ -6489,14 +6574,14 @@ function exportRejectionList() {
     showToast('No rejected files to export', 'error');
     return;
   }
-  
+
   // Build report text
   const timestamp = new Date().toISOString();
   let report = `Import Rejection Report\n`;
   report += `Generated: ${timestamp}\n`;
   report += `Total rejected: ${window.importRejections.length}\n\n`;
   report += `${'='.repeat(70)}\n\n`;
-  
+
   window.importRejections.forEach((item, i) => {
     report += `${i + 1}. ${item.file}\n`;
     report += `   Reason: ${item.reason}\n`;
@@ -6507,7 +6592,7 @@ function exportRejectionList() {
     }
     report += `\n`;
   });
-  
+
   // Download as text file
   const blob = new Blob([report], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
@@ -6518,7 +6603,7 @@ function exportRejectionList() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  
+
   showToast('Report downloaded', null, 3000);
 }
 

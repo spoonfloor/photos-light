@@ -41,7 +41,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
-from PIL import Image
+from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 from io import BytesIO
 from db_schema import create_database_schema
@@ -306,6 +306,118 @@ def create_db_backup():
     except Exception as e:
         print(f"❌ Error creating DB backup: {e}")
         return None
+
+def bake_orientation(file_path):
+    """
+    Bake EXIF/metadata orientation into pixel data (only when truly lossless).
+    
+    Strategy:
+    - JPEG: Use jpegtran -perfect (fails if trim required) - keeps orientation metadata if not lossless
+    - PNG/TIFF: Use PIL (always lossless)
+    - HEIC/Video: Skip (lossy re-encode required)
+    
+    Returns:
+        (success: bool, message: str, orientation_value: int or None)
+    """
+    _, ext = os.path.splitext(file_path)
+    ext_lower = ext.lower()
+    
+    # Skip videos and HEIC (lossy re-encode required)
+    if ext_lower in VIDEO_EXTENSIONS or ext_lower in {'.heic', '.heif'}:
+        return (False, "Skipped (video/HEIC - lossy re-encode required)", None)
+    
+    try:
+        # JPEG: Use jpegtran for lossless rotation
+        if ext_lower in {'.jpg', '.jpeg'}:
+            # Check orientation with exiftool
+            result = subprocess.run(
+                ['exiftool', '-Orientation', '-n', '-s3', file_path],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            orientation = result.stdout.strip()
+            
+            if not orientation or orientation == '1':
+                return (False, "No rotation needed (orientation=1 or missing)", None)
+            
+            # Map EXIF orientation to jpegtran transform
+            transform_map = {
+                '2': ['flip', 'horizontal'],
+                '3': ['rotate', '180'],
+                '4': ['flip', 'vertical'],
+                '5': ['transpose'],
+                '6': ['rotate', '90'],
+                '7': ['transverse'],
+                '8': ['rotate', '270'],
+            }
+            
+            transform = transform_map.get(orientation)
+            if not transform:
+                return (False, f"Unknown orientation: {orientation}", int(orientation))
+            
+            # Try jpegtran -perfect (fails if trim would be required)
+            temp_output = file_path + '.baked.jpg'
+            
+            cmd = ['jpegtran', '-perfect'] + [f'-{arg}' if i == 0 else arg for i, arg in enumerate(transform)] + ['-copy', 'all', '-outfile', temp_output, file_path]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                # Failed - would need trim, so skip
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+                return (False, f"Kept orientation {orientation} (trim would be required)", int(orientation))
+            
+            # Success - now remove orientation tag
+            result = subprocess.run(
+                ['exiftool', '-Orientation=', '-overwrite_original', '-P', temp_output],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode != 0:
+                os.remove(temp_output)
+                return (False, f"Failed to remove orientation tag", int(orientation))
+            
+            # Replace original with rotated version
+            os.replace(temp_output, file_path)
+            
+            return (True, f"Baked orientation {orientation}→1 (lossless JPEG)", int(orientation))
+        
+        # PNG/TIFF: Use PIL (lossless)
+        elif ext_lower in {'.png', '.tiff', '.tif'}:
+            with Image.open(file_path) as img:
+                # Check if rotation needed
+                exif = img.getexif()
+                orientation = exif.get(0x0112, 1)
+                
+                if orientation == 1:
+                    return (False, "No rotation needed (orientation=1)", None)
+                
+                # Apply rotation
+                img_rotated = ImageOps.exif_transpose(img)
+                
+                # Preserve ICC profile
+                icc = img.info.get('icc_profile')
+                
+                # Save (lossless for PNG/TIFF)
+                save_kwargs = {}
+                if icc:
+                    save_kwargs['icc_profile'] = icc
+                
+                img_rotated.save(file_path, **save_kwargs)
+                
+                format_name = "PNG" if ext_lower == '.png' else "TIFF"
+                return (True, f"Baked orientation {orientation}→1 (lossless {format_name})", orientation)
+        
+        else:
+            return (False, f"Unsupported format: {ext_lower}", None)
+            
+    except subprocess.TimeoutExpired:
+        return (False, "Timeout during orientation baking", None)
+    except FileNotFoundError as e:
+        return (False, f"Tool not found: {e}", None)
+    except Exception as e:
+        return (False, f"Error: {e}", None)
 
 def write_photo_exif(file_path, new_date):
     """Write EXIF date to photo using exiftool"""
@@ -582,7 +694,7 @@ def update_photo_date_with_files(photo_id, new_date, conn):
         
         # Phase 1: Write EXIF
         try:
-            if file_type == 'image':
+            if file_type in ('photo', 'image'):  # Handle both for backward compatibility
                 write_photo_exif(old_full_path, new_date)
             elif file_type == 'video':
                 write_video_metadata(old_full_path, new_date)
@@ -817,6 +929,36 @@ def generate_thumbnail_for_file(file_path, content_hash, file_type):
 def index():
     """Serve the main page"""
     return send_from_directory(STATIC_DIR, 'index.html')
+
+@app.route('/api/file-counts')
+@handle_db_corruption
+def get_file_counts():
+    """
+    Get count of photos and videos in database.
+    Handles both 'photo'/'image' for backward compatibility.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Handle both 'photo' and 'image' for backward compatibility
+        cursor.execute("""
+            SELECT 
+                SUM(CASE WHEN file_type IN ('photo', 'image') THEN 1 ELSE 0 END) as photos,
+                SUM(CASE WHEN file_type = 'video' THEN 1 ELSE 0 END) as videos
+            FROM photos
+        """)
+        row = cursor.fetchone()
+        conn.close()
+        
+        return jsonify({
+            'photo_count': row['photos'] or 0,
+            'video_count': row['videos'] or 0
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting file counts: {e}")
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/photos')
 @handle_db_corruption
@@ -2272,7 +2414,7 @@ def import_from_paths():
                     # Insert into DB FIRST (atomic)
                     relative_path = os.path.relpath(target_path, LIBRARY_PATH)
                     file_size = os.path.getsize(source_path)
-                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'image'
+                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
                     
                     cursor.execute('''
                         INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
@@ -2290,7 +2432,7 @@ def import_from_paths():
                     # Write EXIF metadata to file
                     try:
                         print(f"   🔧 Writing EXIF metadata...")
-                        if file_type == 'image':
+                        if file_type == 'photo':
                             write_photo_exif(target_path, date_taken)
                         elif file_type == 'video':
                             write_video_metadata(target_path, date_taken)
@@ -3562,14 +3704,19 @@ def check_library():
         # If no database, scan for media files
         has_media = False
         media_count = 0
+        photo_count = 0
+        video_count = 0
         
         if not exists:
             print(f"  📊 No database found, scanning for media files...")
-            from library_sync import count_media_files
+            from library_sync import count_media_files_by_type
             try:
-                media_count = count_media_files(library_path)
+                counts = count_media_files_by_type(library_path)
+                photo_count = counts['photo_count']
+                video_count = counts['video_count']
+                media_count = counts['total_count']
                 has_media = media_count > 0
-                print(f"  ✅ Found {media_count} media file(s)")
+                print(f"  ✅ Found {photo_count} photo(s) and {video_count} video(s)")
             except Exception as e:
                 print(f"  ⚠️  Error counting media files: {e}")
                 # Continue with has_media=False if counting fails
@@ -3578,6 +3725,8 @@ def check_library():
             'exists': exists,
             'has_media': has_media,
             'media_count': media_count,
+            'photo_count': photo_count,
+            'video_count': video_count,
             'library_path': library_path,
             'db_path': db_path
         })
@@ -4148,13 +4297,67 @@ def terraform_library():
                     width = dimensions[0] if dimensions else None
                     height = dimensions[1] if dimensions else None
                     
+                    # 4b. Bake orientation into pixels (only when lossless)
+                    print(f"   🔄 Checking orientation...")
+                    bake_success, bake_message, orient_value = bake_orientation(source_path)
+                    
+                    if bake_success:
+                        print(f"   ✅ {bake_message}")
+                        log_manifest('orientation_baked', {'file': source_path, 'message': bake_message})
+                        
+                        # Dimensions may have changed after rotation - re-read
+                        dimensions = get_image_dimensions(source_path)
+                        width = dimensions[0] if dimensions else None
+                        height = dimensions[1] if dimensions else None
+                        
+                        # Hash changed after rotation - re-hash
+                        content_hash = compute_hash(source_path)
+                        print(f"   📝 Hash updated after baking: {content_hash[:16]}...")
+                        
+                        # Check for duplicates again after baking
+                        cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
+                        existing = cursor.fetchone()
+                        
+                        if existing:
+                            print(f"   ⏭️  Duplicate detected after baking (existing ID: {existing['id']})")
+                            
+                            # Move to .trash/duplicates/
+                            dup_dir = os.path.join(trash_dir, 'duplicates')
+                            os.makedirs(dup_dir, exist_ok=True)
+                            dup_path = os.path.join(dup_dir, filename)
+                            
+                            counter = 1
+                            while os.path.exists(dup_path):
+                                base, ext = os.path.splitext(filename)
+                                dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
+                                counter += 1
+                            
+                            shutil.move(source_path, dup_path)
+                            print(f"   🗑️  Moved to: {os.path.relpath(dup_path, library_path)}")
+                            
+                            log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
+                            
+                            duplicate_count += 1
+                            yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                            continue
+                    else:
+                        if orient_value:
+                            # Orientation exists but couldn't be baked losslessly
+                            print(f"   ⚠️  {bake_message}")
+                            log_manifest('orientation_kept', {'file': source_path, 'message': bake_message})
+                        elif bake_message and "Error:" in bake_message:
+                            # Error occurred during baking attempt
+                            print(f"   ⚠️  {bake_message}")
+                            log_manifest('orientation_error', {'file': source_path, 'message': bake_message})
+                        # else: No orientation or not applicable, no message needed
+                    
                     # 5. Write EXIF (IN PLACE)
                     _, ext = os.path.splitext(source_path)
-                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'image'
+                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
                     
                     print(f"   🔧 Writing EXIF metadata...")
                     try:
-                        if file_type == 'image':
+                        if file_type == 'photo':
                             write_photo_exif(source_path, date_taken)
                         else:
                             write_video_metadata(source_path, date_taken)

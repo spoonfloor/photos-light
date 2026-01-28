@@ -44,6 +44,45 @@ def count_media_files(library_path):
     return count
 
 
+def count_media_files_by_type(library_path):
+    """
+    Count media files in library broken down by type.
+    
+    Returns:
+        dict: {'photo_count': int, 'video_count': int, 'total_count': int}
+    """
+    photo_exts = {
+        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+        '.webp', '.avif', '.jp2',
+        '.raw', '.cr2', '.nef', '.arw', '.dng'
+    }
+    video_exts = {
+        '.mov', '.mp4', '.m4v', '.mkv',
+        '.wmv', '.webm', '.flv', '.3gp',
+        '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
+    }
+    
+    photo_count = 0
+    video_count = 0
+    
+    for root, dirs, filenames in os.walk(library_path, followlinks=False):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for filename in filenames:
+            if filename.startswith('.'):
+                continue
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in photo_exts:
+                photo_count += 1
+            elif ext in video_exts:
+                video_count += 1
+    
+    return {
+        'photo_count': photo_count,
+        'video_count': video_count,
+        'total_count': photo_count + video_count
+    }
+
+
 def estimate_duration(file_count):
     """
     Estimate processing time based on file count.
