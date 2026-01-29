@@ -438,6 +438,13 @@ input[type="radio"] {
   flex: 0 0 calc(100vh - 100px);
 }
 
+/* Force images/videos to respect reduced height when info panel is open */
+.lightbox-overlay.info-open .lightbox-content img,
+.lightbox-overlay.info-open .lightbox-content video {
+  max-height: calc(100vh - 100px) !important;
+  height: auto !important;
+}
+
 .lightbox-content img,
 .lightbox-content video {
   max-width: 100vw;

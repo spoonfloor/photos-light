@@ -6,6 +6,46 @@ Issues that have been fixed and verified.
 
 ## Session 14: January 28, 2026
 
+### Lightbox Info Panel - Image Cropping Issue
+
+**Fixed:** Images now properly resize when info panel opens instead of being cropped  
+**Version:** v226  
+**Testing completed:** January 28, 2026
+
+**Issue:**
+When the info panel opened at the bottom of the lightbox, images would be cropped at the top instead of resizing to fit the available space. The entire image was not visible.
+
+**Root cause:**
+JavaScript set explicit `height: 100vh` on images for height-constrained photos. When the info panel opened:
+1. The container's height was reduced via CSS (`flex: 0 0 calc(100vh - 100px)`)
+2. But the image still had explicit `height: 100vh` from JavaScript
+3. The explicit inline style overrode CSS `max-height: 100%`
+4. Result: Image was taller than container, causing top to be cropped
+
+**The fix:**
+Added CSS rules to override JavaScript-set dimensions when info panel is open:
+
+```css
+.lightbox-overlay.info-open .lightbox-content img,
+.lightbox-overlay.info-open .lightbox-content video {
+  max-height: calc(100vh - 100px) !important;
+  height: auto !important;
+}
+```
+
+This forces images to:
+- Respect the reduced container height via `max-height`
+- Let `max-height` control sizing instead of explicit `height`
+- Maintain aspect ratio via existing `object-fit: contain`
+
+**Testing:**
+- ✅ Tall photos with info panel open (no longer cropped)
+- ✅ Wide photos with info panel open (still display correctly)
+- ✅ Navigation between photos with info panel open
+- ✅ Videos with info panel open
+
+---
+
 ### Import Duplicate Detection + Migration Infrastructure
 
 **Status:** WILL NOT FIX (Deferred Feature)  
