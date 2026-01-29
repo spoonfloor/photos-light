@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v251';
+const MAIN_JS_VERSION = 'v252';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -72,7 +72,7 @@ function loadAppBar() {
   const mount = document.getElementById('appBarMount');
 
   // Check session cache first (with version check)
-  const APP_BAR_VERSION = '46'; // Increment this when appBar changes
+  const APP_BAR_VERSION = '47'; // Increment this when appBar changes
   try {
     const cachedVersion = sessionStorage.getItem('photoViewer_appBarVersion');
     const cached = sessionStorage.getItem('photoViewer_appBarShell');
@@ -86,7 +86,7 @@ function loadAppBar() {
   }
 
   // Fetch fragment
-  return fetch('fragments/appBar.html?v=20')
+  return fetch('fragments/appBar.html?v=21')
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load app bar (${r.status})`);
       return r.text();
