@@ -313,6 +313,11 @@ input[type="radio"] {
   pointer-events: none;
 }
 
+/* More options button - narrower width for narrow icon */
+#utilitiesBtn {
+  width: 24px;
+}
+
 /* --- Photo Grid --- */
 .month-section {
   margin-bottom: 48px; /* Reduced from 60px (20% less spacing) */
