@@ -7,10 +7,12 @@ Issues that have been fixed and verified.
 ## Session 14: January 28, 2026
 
 ### Image Rotation - Bake Orientation Metadata into Pixels
+
 **Fixed:** Orientation flags are now baked into pixels during import, date change, and terraform  
 **Version:** v218
 
 **Issues resolved:**
+
 - ✅ Import now bakes orientation before EXIF write (prevents flag stripping)
 - ✅ Date change now bakes orientation before EXIF write
 - ✅ Terraform already had baking, now with enhanced logging
@@ -24,6 +26,7 @@ Files with EXIF orientation flags (e.g., Orientation=6 "Rotate 90 CW") rely on v
 
 **The fix:**
 Added `bake_orientation()` function that:
+
 1. Detects EXIF orientation flags
 2. For JPEG: Uses `jpegtran -perfect` for lossless rotation (only if dimensions divisible by 16)
 3. For PNG/TIFF: Uses PIL for lossless pixel rotation
@@ -31,11 +34,13 @@ Added `bake_orientation()` function that:
 5. Returns success/failure with detailed message
 
 Integrated baking into three workflows:
+
 - **Import**: Bakes after copy, before EXIF write
-- **Date change**: Bakes before EXIF write  
+- **Date change**: Bakes before EXIF write
 - **Terraform**: Already had baking, added detailed logging
 
 **Testing:**
+
 - Test file: 1200×1600 pixels with Orientation=6 flag
 - After terraform: Pixels rotated to 1600×1200, flag removed
 - Displays correctly as landscape in all viewers
@@ -47,10 +52,12 @@ Integrated baking into three workflows:
 ## Session 13: January 27, 2026
 
 ### Folder Picker - Add Folder Selection via Checkbox
+
 **Fixed:** Folders can now be selected using checkbox without navigating into them  
 **Version:** v211
 
 **Issues resolved:**
+
 - ✅ Folder icon transforms to checkbox when selected (radio button behavior)
 - ✅ Click folder icon → selects that folder (updates "Selected:" path)
 - ✅ Click folder name/arrow → navigates into folder (existing behavior)
@@ -61,6 +68,7 @@ Integrated baking into three workflows:
 
 **Root cause:**
 Original UX required users to navigate INTO a folder to select it. This meant selecting parent folders required:
+
 1. Navigate into folder
 2. Click "Continue"
 
@@ -69,6 +77,7 @@ Better UX: Stay at parent level, click checkbox on desired folder, selection upd
 **The fix:**
 
 **Part 1: HTML - Folder icon becomes checkbox**
+
 ```javascript
 // Folder rendering with checkbox/folder icon toggle
 const isSelected = selectedPath === folderPath;
@@ -86,6 +95,7 @@ html += `
 ```
 
 **Part 2: Event delegation pattern (matching photo picker)**
+
 ```javascript
 // Remove old event listener if exists
 if (folderListClickHandler) {
@@ -117,6 +127,7 @@ folderList.addEventListener('click', folderListClickHandler);
 ```
 
 **Part 3: Selection logic**
+
 ```javascript
 function selectFolder(path) {
   // Toggle behavior - clicking same folder deselects it
@@ -125,7 +136,7 @@ function selectFolder(path) {
   } else {
     selectedPath = path; // Select (radio button - clears others)
   }
-  
+
   // Re-render folder list to update checkbox states
   updateFolderList();
   updateSelectedPath();
@@ -142,6 +153,7 @@ async function navigateTo(path) {
 ```
 
 **Part 4: CSS for checkbox styling**
+
 ```css
 .folder-checkbox {
   font-size: 20px;
@@ -164,6 +176,7 @@ async function navigateTo(path) {
 ```
 
 **Behavior:**
+
 1. **Unchecked state:** Shows `folder` icon (gray)
 2. **Checked state:** Shows `check_box` icon (purple #765fff)
 3. **Click checkbox:** Toggles selection on/off
@@ -172,6 +185,7 @@ async function navigateTo(path) {
 
 **Pattern alignment:**
 Follows photo picker established pattern:
+
 - Event delegation (single listener on parent container)
 - Handler reference stored for cleanup
 - Icon transforms based on state (folder ↔ check_box)
@@ -179,6 +193,7 @@ Follows photo picker established pattern:
 - Click handlers separated (checkbox vs navigation)
 
 **Testing verified:**
+
 - Navigate to Desktop → Selected shows Desktop
 - Check "photos" subfolder → Selected shows Desktop/photos ✓
 - Uncheck "photos" → Selected reverts to Desktop ✓
@@ -194,10 +209,12 @@ Follows photo picker established pattern:
 ## Session 13: January 27, 2026
 
 ### Lightbox - Non-Functional Scrollbar
+
 **Fixed:** Lightbox scrollbar removed by hiding body scroll  
 **Version:** v206
 
 **Issues resolved:**
+
 - ✅ Scrollbar no longer appears when lightbox is open
 - ✅ Body scroll disabled while lightbox is active
 - ✅ Body scroll restored when lightbox closes
@@ -207,6 +224,7 @@ Follows photo picker established pattern:
 The scrollbar was from the body element, not the lightbox itself. When the lightbox opened, the page grid behind it remained scrollable, keeping the body's scrollbar visible but non-functional (since the lightbox overlay blocked interaction with the grid). The v205 fix added `overflow: hidden` to `.lightbox-overlay` but this didn't solve the issue since the scrollbar was on the body, not the overlay.
 
 **The investigation:**
+
 - Initial attempt (v205): Added `overflow: hidden` to `.lightbox-overlay` CSS - didn't work
 - Hypothesis: The scrollbar wasn't from the lightbox, but from the body element
 - Verified: Body scrollbar remained visible and non-functional when lightbox was open
@@ -215,6 +233,7 @@ The scrollbar was from the body element, not the lightbox itself. When the light
 **The fix:**
 
 **Part 1: CSS (v205) - Added overflow: hidden to overlay**
+
 ```css
 .lightbox-overlay {
   position: fixed;
@@ -226,11 +245,12 @@ The scrollbar was from the body element, not the lightbox itself. When the light
   z-index: var(--z-dialog);
   display: flex;
   flex-direction: column;
-  overflow: hidden;  /* Added but not sufficient */
+  overflow: hidden; /* Added but not sufficient */
 }
 ```
 
 **Part 2: JavaScript (v206) - Hide body scroll**
+
 ```javascript
 // openLightbox() - After showing overlay
 overlay.style.display = 'flex';
@@ -246,12 +266,14 @@ document.body.style.overflow = '';
 ```
 
 **Why this works:**
+
 - The scrollbar was on the `body` element, not the lightbox
 - Setting `document.body.style.overflow = 'hidden'` hides the body scrollbar
 - Standard pattern for modal overlays - prevent background scroll
 - Restoring `overflow = ''` returns body to its default state
 
 **Testing verified:**
+
 - Open lightbox → body scrollbar disappears ✓
 - Close lightbox → body scrollbar returns ✓
 - No visual clutter from non-functional scrollbar ✓
@@ -262,10 +284,12 @@ document.body.style.overflow = '';
 ---
 
 ### Braille Spinner - Still in Update Library Index (and possibly others)
+
 **Fixed:** Spinners already removed in v200-v201  
 **Status:** ✅ VERIFIED WORKING
 
 **Issues resolved:**
+
 - ✅ Update Library Index has no spinners during execution phases
 - ✅ Only shows spinner during initial scan (no other feedback)
 - ✅ Execution phases show clean "Verb..." messages without spinners
@@ -273,17 +297,19 @@ document.body.style.overflow = '';
 
 **Investigation:**
 This bug was reported as still present, but verification showed it was already fixed in v200-v201. The Update Library Index dialog correctly follows the canonical pattern:
+
 - Shows spinner ONLY during "Scanning library" (no other feedback available)
 - Removes spinners during execution phases ("Removing missing files...", "Adding untracked files...")
 - Counters were also removed in v201 for cleaner UI
 
 **Code verification:**
+
 ```javascript
 // v200: Spinners removed during execution
-updateUpdateIndexUI('Scanning library', true);  // Spinner shown
+updateUpdateIndexUI('Scanning library', true); // Spinner shown
 // ... scan completes ...
-updateUpdateIndexUI('Removing missing files...', false);  // No spinner
-updateUpdateIndexUI('Adding untracked files...', false);  // No spinner
+updateUpdateIndexUI('Removing missing files...', false); // No spinner
+updateUpdateIndexUI('Adding untracked files...', false); // No spinner
 
 // v201: Counters also removed
 // Before: 'Removing missing files... 5/10'
@@ -291,6 +317,7 @@ updateUpdateIndexUI('Adding untracked files...', false);  // No spinner
 ```
 
 **Testing verified:**
+
 - Update Library Index dialog opens correctly ✓
 - Scan phase shows spinner (warranted - no other feedback) ✓
 - Execution phases show no spinners (realtime operations visible) ✓
@@ -303,10 +330,12 @@ updateUpdateIndexUI('Adding untracked files...', false);  // No spinner
 ---
 
 ### Thumbnail Washout - ICC Color Profile Preservation
+
 **Fixed:** Thumbnails now preserve ICC color profiles for accurate color rendering  
 **Version:** v204
 
 **Issues resolved:**
+
 - ✅ Thumbnails no longer appear washed out (desaturated, low contrast)
 - ✅ ICC color profiles preserved through thumbnail generation pipeline
 - ✅ Color accuracy now matches original images and lightbox view
@@ -316,6 +345,7 @@ updateUpdateIndexUI('Adding untracked files...', false);  // No spinner
 Thumbnail generation code stripped ICC color profiles during JPEG save operations. Images with wide-gamut color spaces (Adobe RGB, ProPhoto RGB, Display P3) embedded in professional camera photos were being saved as plain JPEGs without profile metadata. When browsers loaded these thumbnails without profiles, they interpreted the colors as sRGB, resulting in washed-out appearance with reduced saturation and contrast.
 
 **The investigation:**
+
 - Created test comparison showing clear visual difference between thumbnails with/without ICC profiles
 - Verified original files had 30,692-byte ICC profiles embedded
 - Traced two separate thumbnail generation code paths
@@ -325,28 +355,30 @@ Thumbnail generation code stripped ICC color profiles during JPEG save operation
 **The fix:**
 
 **Added `convert_to_rgb_properly()` helper function (lines 213-285):**
+
 ```python
 def convert_to_rgb_properly(img):
     """Convert image to RGB with ICC profile preservation"""
     mode = img.mode
-    
+
     if mode == 'RGB':
         return img  # Already RGB, profile intact
-    
+
     # Capture ICC profile before conversions
     icc_profile = img.info.get('icc_profile')
-    
+
     # Handle special modes (RGBA, high bit-depth, etc.)
     # ... conversion logic ...
-    
+
     # Restore ICC profile to converted image
     if icc_profile and result.mode == 'RGB':
         result.info['icc_profile'] = icc_profile
-    
+
     return result
 ```
 
 **Updated lazy-load thumbnail endpoint (lines 1040-1080):**
+
 ```python
 # Capture ICC profile before any conversions
 icc_profile = img.info.get('icc_profile')
@@ -366,12 +398,14 @@ img.save(thumbnail_path, **save_kwargs)
 **Also updated batch generation function (lines 711-813) and video thumbnail path (lines 1010-1038) with identical ICC preservation logic.**
 
 **Why this works:**
+
 - PIL's `Image.info` dictionary contains ICC profile as `icc_profile` key
 - Profile survives through `resize()` and `crop()` operations on the image object
 - BUT profiles are NOT automatically saved - must be explicitly passed to `img.save()`
 - Without the `icc_profile` parameter, PIL silently strips the profile during JPEG encoding
 
 **Testing verified:**
+
 - Test thumbnails generated with v204 code have ICC profiles (30,692 bytes) ✓
 - Browser comparison shows thumbnails WITH profiles match originals ✓
 - Thumbnails WITHOUT profiles appear washed out (proves ICC profiles are the solution) ✓
@@ -379,6 +413,7 @@ img.save(thumbnail_path, **save_kwargs)
 - Reimporting files with v204 code produces vibrant thumbnails matching originals ✓
 
 **Cache behavior:**
+
 - Old cached thumbnails (without ICC profiles) remain until regenerated
 - Rebuild Thumbnails utility forces regeneration with v204 code
 - OR reimporting files creates new thumbnail paths forcing regeneration
@@ -389,10 +424,12 @@ img.save(thumbnail_path, **save_kwargs)
 ---
 
 ### Utilities Menu & Dialog Improvements (v194-v201)
+
 **Fixed:** Menu renamed, dialogs standardized, spinners removed  
 **Version:** v194-v201
 
 **Issues resolved:**
+
 - ✅ "Update library index" → "Update database" (v195)
 - ✅ "Remove duplicates" → "Show duplicates" (v194)
 - ✅ Rebuild thumbnails moved to 3rd position (v194)
@@ -403,6 +440,7 @@ img.save(thumbnail_path, **save_kwargs)
 - ✅ Update database: Removed n/total counters, just "Verb..." (v201)
 
 **Root causes:**
+
 1. **Menu naming issues:**
    - "Update library index" was unclear about what operation does (grooms/syncs without rebuilding)
    - "Remove duplicates" implied deletion when feature only shows duplicates
@@ -423,22 +461,23 @@ img.save(thumbnail_path, **save_kwargs)
 **The fixes:**
 
 **Phase 1: Menu rename and reorder (v194-v195)**
+
 ```html
 <!-- Final menu order -->
-1. Open library
-2. Update database (renamed from "Update library index")
-3. Rebuild database
-4. Rebuild thumbnails (moved from 5th to 4th)
-5. Show duplicates (renamed from "Remove duplicates")
+1. Open library 2. Update database (renamed from "Update library index") 3.
+Rebuild database 4. Rebuild thumbnails (moved from 5th to 4th) 5. Show
+duplicates (renamed from "Remove duplicates")
 ```
 
 **Phase 2: Button standardization (v196-v199)**
+
 - All "Proceed" → "Continue" (Update database, Rebuild database)
 - "Ready to proceed?" → "Ready to continue?"
 - "Delete & Rebuild" → "Delete and rebuild" (sentence case)
 
 **Phase 3: Spinner removal (v200)**
 Following v162 canonical pattern:
+
 ```javascript
 // Keep spinner ONLY for initial scan (no other feedback)
 updateUpdateIndexUI('Scanning library', true);
@@ -449,15 +488,17 @@ updateUpdateIndexUI('Adding untracked files...', false);
 ```
 
 **Phase 4: Counter removal (v201)**
+
 ```javascript
 // Before: Counter clutter
-`Removing missing files... ${data.current}/${data.total}`
+`Removing missing files... ${data.current}/${data.total}`;
 
 // After: Clean verb + ellipsis
-'Removing missing files...'
+('Removing missing files...');
 ```
 
 **Rationale:**
+
 - **"Update database"** clearly describes sync/groom operation (not a rebuild)
 - **"Rebuild database"** accurately describes destructive rebuild from scratch
 - **"Show duplicates"** matches actual functionality (no deletion)
@@ -467,6 +508,7 @@ updateUpdateIndexUI('Adding untracked files...', false);
 - **No counters** reduces visual noise when operation is fast
 
 **Testing verified:**
+
 - Menu displays in correct order ✓
 - All labels use correct naming ✓
 - All buttons say "Continue" (except "Delete and rebuild") ✓
@@ -479,6 +521,7 @@ updateUpdateIndexUI('Adding untracked files...', false);
 ---
 
 ### Duplicates Feature Research - Why Show-Only?
+
 **Research complete:** Documented incomplete implementation history  
 **Version:** v194
 
@@ -489,12 +532,14 @@ Why did the "Remove duplicates" feature become show-only instead of actually rem
 The feature was **never completed**, not intentionally changed to show-only.
 
 **Current state:**
+
 - ✅ Frontend: Full UI exists with checkboxes and "Remove Selected" button
 - ✅ Backend: GET endpoint `/api/utilities/duplicates` returns duplicate info
 - ❌ Backend: No DELETE endpoint implemented
 - ❌ Frontend function `removeSelectedDuplicates()` tries to call non-existent endpoint
 
 **Historical context (from archive docs):**
+
 - New schema v2 was designed with `UNIQUE(content_hash, date_taken)`
 - Decision was to prevent duplicates at import time via UNIQUE constraint
 - "Phase 4" planned to remove the utility entirely (rely on constraint instead)
@@ -510,10 +555,12 @@ Show-only is the result of incomplete implementation. The UI skeleton exists but
 ---
 
 ### Library Conversion Scoreboard - Green Text Color Removed
+
 **Fixed:** All scoreboard counts now use consistent white text  
 **Version:** Already fixed (no version change needed)
 
 **Issues resolved:**
+
 - ✅ PROCESSED count no longer displays in green
 - ✅ All three counts (PROCESSED, DUPLICATES, ERRORS) use consistent white text
 - ✅ Uses `color: var(--text-primary)` for all stat values
@@ -523,6 +570,7 @@ The green color was originally added for emphasis on the PROCESSED count in the 
 
 **The fix:**
 CSS already uses consistent styling:
+
 ```css
 .import-stat-value {
   font-size: 24px;
@@ -534,6 +582,7 @@ CSS already uses consistent styling:
 No JavaScript inline styles applying green color to terraform progress or complete overlays.
 
 **Testing verified:**
+
 - Terraform progress overlay: All counts display in white ✓
 - Terraform complete overlay: All counts display in white ✓
 - No green color applied anywhere in scoreboard ✓
@@ -545,10 +594,12 @@ No JavaScript inline styles applying green color to terraform progress or comple
 ## Session 11: January 27, 2026
 
 ### Bulk Date Change - Hash Collision (UNIQUE constraint failed)
+
 **Fixed:** Duplicate detection during bulk date changes  
 **Version:** v191
 
 **Issues resolved:**
+
 - ✅ `UNIQUE constraint failed: photos.content_hash` error eliminated
 - ✅ Duplicate videos with identical A/V content properly detected after date change
 - ✅ Duplicates moved to `.trash/duplicates/` instead of crashing
@@ -557,6 +608,7 @@ No JavaScript inline styles applying green color to terraform progress or comple
 
 **Root cause:**
 When changing dates on multiple videos with identical audio/video content but different original timestamps:
+
 1. Videos start with different EXIF dates → different content hashes
 2. User sets all to same date (bulk operation)
 3. EXIF metadata updated → files become byte-for-byte identical
@@ -568,6 +620,7 @@ This is fundamentally the same as the terraform duplicate detection problem, jus
 **The fix:**
 
 **Part 1: Add duplicate check to `update_photo_date_with_files()`**
+
 ```python
 # After rehashing (line ~544), before database update
 if new_hash != old_hash:
@@ -617,6 +670,7 @@ if new_hash != old_hash:
 ```
 
 **Part 2: Track duplicates separately in `bulk_update_photo_dates_execute()`**
+
 ```python
 # Initialize counters (line ~1627)
 master_transaction = DateEditTransaction()
@@ -643,6 +697,7 @@ yield f"event: complete\ndata: {json.dumps(response_data)}\n\n"
 ```
 
 **Part 3: Display duplicate count in frontend (main.js line ~1495)**
+
 ```javascript
 eventSource.addEventListener('complete', (e) => {
   const data = JSON.parse(e.data);
@@ -662,13 +717,14 @@ eventSource.addEventListener('complete', (e) => {
     if (data.duplicate_count > 0) {
       message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
     }
-    showToast(message, /* ... undo callback ... */);
+    showToast(message /* ... undo callback ... */);
   }, 300);
 });
 ```
 
 **Architecture alignment:**
 This fix mirrors the existing terraform duplicate detection logic:
+
 1. Scan/process all files
 2. Check for hash collisions before database operations
 3. Move duplicates to `.trash/duplicates/`
@@ -676,11 +732,13 @@ This fix mirrors the existing terraform duplicate detection logic:
 5. Report count to user
 
 **Testing verified (minimal-target library):**
+
 - 11 files: 10 unique + 1 duplicate → All 10 imported, 1 duplicate to trash ✓
 - Bulk date change 4 photos → Changed successfully, no errors ✓
 - Database: 10 unique photos with 10 unique hashes ✓
 
 **Testing verified (master library - 348 photos):**
+
 - Terraform: 346 photos imported, 2 errors (BMP files) ✓
 - Bulk date change all 348 → 346 updated, 2 duplicates detected and moved to trash ✓
 - Toast message: "Updated 346 photos, 2 duplicates moved to trash" ✓
@@ -693,10 +751,12 @@ This fix mirrors the existing terraform duplicate detection logic:
 ## Session 12: January 27, 2026
 
 ### Toast Notifications - Close Button
+
 **Fixed:** Added close button to all toast notifications  
 **Version:** v193
 
 **Issues resolved:**
+
 - ✅ All toasts now have close button in top-right corner (Google Photos style)
 - ✅ User can dismiss toasts immediately without waiting for auto-hide
 - ✅ Close button works with both undo and non-undo toasts
@@ -708,6 +768,7 @@ Toasts only had auto-dismiss after timeout (3s or 7s). No manual dismiss option 
 **The fix:**
 
 **Part 1: Add close button to HTML**
+
 ```html
 <!-- toast.html -->
 <div class="toast" id="toast" style="display: none;">
@@ -720,13 +781,14 @@ Toasts only had auto-dismiss after timeout (3s or 7s). No manual dismiss option 
 ```
 
 **Part 2: Update CSS for corner positioning and styling**
+
 ```css
 .toast {
-  background: #2d2d2d;  /* Darker for contrast */
-  padding: 16px 40px 16px 20px;  /* Extra right padding for close button */
-  border-radius: 8px;  /* Rounder corners */
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);  /* Deeper shadow */
-  gap: 20px;  /* More spacing */
+  background: #2d2d2d; /* Darker for contrast */
+  padding: 16px 40px 16px 20px; /* Extra right padding for close button */
+  border-radius: 8px; /* Rounder corners */
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6); /* Deeper shadow */
+  gap: 20px; /* More spacing */
 }
 
 .toast-close-btn {
@@ -753,6 +815,7 @@ Toasts only had auto-dismiss after timeout (3s or 7s). No manual dismiss option 
 ```
 
 **Part 3: Wire up click handler**
+
 ```javascript
 // Wire up close button
 const newCloseBtn = closeBtn.cloneNode(true);
@@ -763,12 +826,14 @@ newCloseBtn.addEventListener('click', () => {
 ```
 
 **Design:**
+
 - Close button positioned absolutely at top-right corner (8px from edges)
 - Subtle gray (#999) that brightens to white on hover
 - Small click target (24x24px) doesn't compete with Undo action
 - Works with all toast types (with/without Undo button)
 
 **Testing verified:**
+
 - Toast with Undo: Both buttons work correctly ✓
 - Toast without Undo: Close button works correctly ✓
 - Close button dismisses toast immediately ✓
@@ -781,24 +846,28 @@ newCloseBtn.addEventListener('click', () => {
 ## Session 12: January 27, 2026
 
 ### Terraform Choice Dialog - Radio Button Styling
+
 **Fixed:** Radio buttons now match design spec  
 **Version:** v192
 
 **Issues resolved:**
+
 - ✅ Radio buttons now 18px × 18px (was browser default ~12px)
 - ✅ Radio buttons now purple #6d49ff (was browser default blue)
 - ✅ Radio buttons properly aligned with text (first option centered, second option optically balanced)
 - ✅ Applied globally - all radio buttons use consistent styling
 
 **Root cause:**
+
 - No global CSS rule for radio button styling
 - Inline styles in terraform overlay didn't include accent color
 - Browser default styling (blue, ~12px, inconsistent alignment) didn't match design spec
 
 **The fix:**
+
 ```css
 /* styles.css - Global radio button styling */
-input[type="radio"] {
+input[type='radio'] {
   width: 18px;
   height: 18px;
   accent-color: var(--accent-color);
@@ -810,13 +879,24 @@ input[type="radio"] {
 <!-- terraformChoiceOverlay.html - Alignment -->
 <!-- Single-line option: align-items: center (perfectly centered) -->
 <label style="display: flex; align-items: center; gap: 12px; ...">
-  <input type="radio" name="terraformChoice" value="blank" checked style="flex-shrink: 0;" />
+  <input
+    type="radio"
+    name="terraformChoice"
+    value="blank"
+    checked
+    style="flex-shrink: 0;"
+  />
   <div>Create new library folder in this location</div>
 </label>
 
 <!-- Multi-line option: align-items: start with margin-top: 2px (optically balanced) -->
 <label style="display: flex; align-items: start; gap: 12px; ...">
-  <input type="radio" name="terraformChoice" value="terraform" style="margin-top: 2px; flex-shrink: 0;" />
+  <input
+    type="radio"
+    name="terraformChoice"
+    value="terraform"
+    style="margin-top: 2px; flex-shrink: 0;"
+  />
   <div>
     <div>Convert this library</div>
     <div>Create new database and update all files and folders</div>
@@ -825,6 +905,7 @@ input[type="radio"] {
 ```
 
 **Testing verified:**
+
 - Radio buttons display at 18px × 18px ✓
 - Radio buttons use purple accent color ✓
 - Single-line option perfectly centered ✓
@@ -838,10 +919,12 @@ input[type="radio"] {
 ## Session 10: January 26, 2026
 
 ### Library Conversion (Terraform) - Incomplete Folder Cleanup
+
 **Fixed:** Complete folder cleanup with whitelist approach  
 **Version:** v189
 
 **Issues resolved:**
+
 - ✅ ALL non-infrastructure folders now deleted (not just "source" folders)
 - ✅ Non-media files moved to trash before processing (not left behind)
 - ✅ Pre-existing library artifacts cleaned up (old .thumbnails, .import_temp, etc.)
@@ -850,6 +933,7 @@ input[type="radio"] {
 
 **Root cause:**
 v188 used "source folder tracking" - only deleted folders that contained media during scan. This failed for:
+
 1. `reference-photos/Photo Library/.thumbnails/` - Media was in `.thumbnails/` (hidden, skipped during scan) so parent folder not tracked
 2. Non-media files (ANALYSIS.txt, README.txt, .bmp, .db files) - Not moved to trash, left at root
 3. Pre-existing infrastructure folders - Old `.thumbnails/` from previous library remained
@@ -860,6 +944,7 @@ Tracking "source folders" during scan was fragile and incomplete. Terraform shou
 **The fix:**
 
 **Part 1: Scan all files, categorize media vs non-media**
+
 ```python
 # BEFORE v189: Only scanned for media
 for root, dirs, files in os.walk(library_path):
@@ -875,7 +960,7 @@ for root, dirs, files in os.walk(library_path):
     for filename in files:
         if filename.startswith('.'):
             continue  # Skip system files
-        
+
         if ext in MEDIA_EXTENSIONS:
             media_files.append(full_path)
         else:
@@ -883,6 +968,7 @@ for root, dirs, files in os.walk(library_path):
 ```
 
 **Part 2: Move non-media files to trash immediately**
+
 ```python
 # Move non-media files to .trash/errors/ after scan, before processing
 if non_media_files:
@@ -893,6 +979,7 @@ if non_media_files:
 ```
 
 **Part 3: Whitelist-based folder cleanup (replaces source folder tracking)**
+
 ```python
 def cleanup_terraform_folders(library_path):
     """
@@ -900,23 +987,23 @@ def cleanup_terraform_folders(library_path):
     - Infrastructure at root: .thumbnails, .logs, .trash, .db_backups, .import_temp
     - Year folders at root: YYYY/
     - Date folders inside year: YYYY-MM-DD/
-    
+
     Whitelist approach - anything not explicitly allowed is deleted.
     """
     INFRASTRUCTURE_FOLDERS = {'.thumbnails', '.logs', '.trash', '.db_backups', '.import_temp'}
-    
+
     root_items = os.listdir(library_path)
     for item in root_items:
         item_path = os.path.join(library_path, item)
-        
+
         # Skip files (photo_library.db, etc.)
         if not os.path.isdir(item_path):
             continue
-        
+
         # Keep infrastructure folders
         if item in INFRASTRUCTURE_FOLDERS:
             continue
-        
+
         # Keep year folders (but clean their contents)
         if len(item) == 4 and item.isdigit():
             # Delete invalid subfolders (only YYYY-MM-DD allowed)
@@ -932,21 +1019,22 @@ def cleanup_terraform_folders(library_path):
                 if not is_valid_date:
                     shutil.rmtree(year_item_path)
             continue
-        
+
         # Not infrastructure, not a year folder → DELETE IT
         shutil.rmtree(item_path)
 ```
 
 **Comparison with v188:**
 
-| v188 (Source Tracking) | v189 (Whitelist) |
-|------------------------|------------------|
-| Track folders with media | Allow only specific folders |
-| Skip if not tracked | Delete if not allowed |
-| Misses: hidden folders, non-media | Catches everything |
-| Fragile (depends on scan) | Robust (explicit rules) |
+| v188 (Source Tracking)            | v189 (Whitelist)            |
+| --------------------------------- | --------------------------- |
+| Track folders with media          | Allow only specific folders |
+| Skip if not tracked               | Delete if not allowed       |
+| Misses: hidden folders, non-media | Catches everything          |
+| Fragile (depends on scan)         | Robust (explicit rules)     |
 
 **Result after terraform:**
+
 ```
 library_path/
 ├── photo_library.db
@@ -964,6 +1052,7 @@ library_path/
 ```
 
 **Deleted:**
+
 - ❌ `photo-triage/`
 - ❌ `reference-photos/` (including nested `Photo Library/.thumbnails/`)
 - ❌ `supported-formats/`
@@ -974,12 +1063,14 @@ library_path/
 - ❌ `duplicates/`
 
 **Trashed:**
+
 - 🗑️ `ANALYSIS.txt` → `.trash/errors/`
 - 🗑️ `README.txt` → `.trash/errors/`
 - 🗑️ `helmet-pads-ref.zip` → `.trash/errors/`
 - 🗑️ Old `photo_library.db` from `reference-photos/` → `.trash/errors/`
 
 **Testing verified:**
+
 - Terraform master folder (364 media files) → Clean result ✓
 - Non-media files moved to trash ✓
 - Reference folder with nested library deleted ✓
@@ -991,10 +1082,12 @@ library_path/
 ---
 
 ### Library Conversion (Terraform) - Crashes and Leaves Empty Folders
+
 **Fixed:** Database row_factory bug and aggressive source folder cleanup  
 **Version:** v188
 
 **Issues resolved:**
+
 - ✅ Terraform no longer crashes when processing duplicate files
 - ✅ Source folders are now deleted after successful terraform
 - ✅ Hidden folders (.thumbnails, .DS_Store) no longer prevent cleanup
@@ -1003,6 +1096,7 @@ library_path/
 **Root causes:**
 
 **Bug #1: Missing row_factory (CRASH)**
+
 - **Line 3751:** Database connection created without `conn.row_factory = sqlite3.Row`
 - Result: `cursor.fetchone()` returns tuples instead of Row objects
 - **Line 3782:** Code tries `existing['id']` on a tuple
@@ -1011,11 +1105,13 @@ library_path/
 
 **Bug #2: Passive cleanup fails (EMPTY FOLDERS)**
 Three related problems:
+
 1. Cleanup function skips hidden directories (line 3596)
 2. Uses `os.rmdir()` which fails if subdirectories exist
 3. No tracking of which folders were SOURCE folders vs ORGANIZED folders
 
 Result:
+
 - `terraform-me/.thumbnails/` never cleaned (hidden folder skipped)
 - Parent `terraform-me/` never empty (contains `.thumbnails/`)
 - Can't distinguish `terraform-me/2026/2026-01-22/` (delete) from `2026/2026-01-22/` (keep)
@@ -1023,6 +1119,7 @@ Result:
 **The fix:**
 
 **Fix #1: Add row_factory (line 3807)**
+
 ```python
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row  # ADD THIS LINE
@@ -1032,11 +1129,13 @@ cursor = conn.cursor()
 **Fix #2: Track and aggressively clean source folders**
 
 New function: `cleanup_terraform_source_folders()`
+
 - Uses `shutil.rmtree()` to delete entire trees (including hidden folders)
 - Only deletes folders that had media files before terraform
 - Checks no media remains before deletion (safety)
 
 Updated scan (lines 3782-3814):
+
 ```python
 source_folders = set()  # Track non-organized folders
 
@@ -1046,28 +1145,30 @@ for root, dirs, files in os.walk(library_path):
         # Pattern: library_path/YYYY/YYYY-MM-DD/
         relative_path = os.path.relpath(root, library_path)
         parts = relative_path.split(os.sep)
-        
+
         is_organized = (
             len(parts) == 2 and
             len(parts[0]) == 4 and parts[0].isdigit() and  # YYYY
             len(parts[1]) == 10 and parts[1][4] == '-'      # YYYY-MM-DD
         )
-        
+
         if not is_organized:
             source_folders.add(root)  # Track for cleanup
 ```
 
 Updated cleanup (lines 4003-4015):
+
 ```python
 # Two-pass cleanup:
 # 1. Aggressive: Delete tracked source folders
 source_removed = cleanup_terraform_source_folders(source_folders, library_path)
 
-# 2. Passive: Clean up any remaining empties  
+# 2. Passive: Clean up any remaining empties
 remaining_removed = cleanup_empty_folders_recursive(library_path)
 ```
 
 **Why this works:**
+
 - **Explicit tracking:** Remembers source folders during scan, not guessed later
 - **Pattern matching:** Only `library_path/YYYY/YYYY-MM-DD/` is organized
   - `terraform-me/2026/2026-01-22/` → NOT organized (nested) → deleted ✓
@@ -1077,12 +1178,14 @@ remaining_removed = cleanup_empty_folders_recursive(library_path)
 - **Safety check:** Only deletes if no media remains
 
 **Edge cases handled:**
+
 - ✅ Nested organized structure in source folders
 - ✅ Source folders containing hidden subdirectories
 - ✅ Partially processed folders (media remains → not deleted)
 - ✅ Library root never deleted (explicit check)
 
 **Testing required:**
+
 - [ ] Terraform fresh files (no duplicates)
 - [ ] Terraform with duplicates (move to `.trash/duplicates/` not `.trash/errors/`)
 - [ ] Terraform already-terraformed library (source folders deleted, organized preserved)
@@ -1096,26 +1199,31 @@ remaining_removed = cleanup_empty_folders_recursive(library_path)
 ## Session 9: January 25, 2026
 
 ### Date Change - JavaScript Error (totalEl not defined)
+
 **Fixed:** Removed dead code and fixed status text display  
 **Version:** v186
 
 **Issues resolved:**
+
 - ✅ Date change no longer crashes with JavaScript error
 - ✅ Progress overlay displays correct status text ("Updating X photos...")
 - ✅ Error "totalEl is not defined" eliminated
 - ✅ "Starting" text no longer overwrites proper status message
 
 **Root causes:**
+
 1. **Line 1320:** Referenced undefined `totalEl` variable (leftover dead code from previous design)
 2. **Lines 1311-1314:** "Reset display" section immediately overwrote status text with "Starting" (contradictory logic)
 
 **Evidence:**
+
 - `totalEl` variable was never declared with `getElementById()`
 - HTML fragment has no element with id "dateChangeProgressTotal"
 - Status text was set correctly (lines 1302-1309) then immediately overwritten (lines 1311-1314)
 - Both bugs created confusing/broken UX
 
 **The fix:**
+
 ```javascript
 // Removed line 1320:
 if (totalEl) totalEl.textContent = photoCount.toString(); // ❌ totalEl undefined
@@ -1128,12 +1236,14 @@ if (statusText) {
 ```
 
 **Flow now correct:**
+
 1. Set title: "Updating dates"
 2. Set status: "Updating 40 photos..." ✓
 3. Show stats: "UPDATED: 39" counter ✓
 4. Display overlay ✓
 
 **Testing verified:**
+
 - No linter errors introduced
 - Status text shows correct message from start
 - Counter updates during progress (39/40, etc.)
@@ -1144,21 +1254,25 @@ if (statusText) {
 ---
 
 ### Dialog Framework - Multiple Dialogs Showing Simultaneously
+
 **Fixed:** Implemented dialog queue/manager system  
 **Version:** (marked as fixed by user)
 
 **Issues resolved:**
+
 - ✅ Dialog system now prevents multiple dialogs from appearing simultaneously
 - ✅ Dialog queue ensures only one dialog displays at a time
 - ✅ Toast notifications can coexist with dialogs without overlapping
 - ✅ Improved UX consistency and interaction handling
 
 **Root cause:**
+
 - Multiple dialogs could appear on top of each other
 - Created confusing UX and potential interaction issues
 - No coordination between dialog components
 
 **The fix:**
+
 - Implemented dialog queue/manager system
 - Special handling for toast notifications (can coexist with dialogs)
 - Dialogs now coordinate to prevent overlapping states
@@ -1168,21 +1282,25 @@ if (statusText) {
 ---
 
 ### Photo Picker Empty State - Visual Inconsistency
+
 **Fixed:** Photo picker now matches folder picker's placeholder pattern  
 **Documentation:** EMPTY_FOLDER_UX_DEEP_DIVE.md, PICKER_PLACEHOLDER_VISUAL_ANALYSIS.md  
 **Version:** v184
 
 **Issues resolved:**
+
 - ✅ Photo picker empty folders now show placeholder boxes (not text message)
 - ✅ Visual parity with folder picker's intentional design pattern
 - ✅ 5 CSS property corrections for pixel-perfect alignment
 
 **Root cause:**
+
 - Photo picker showed text message "No photos or folders found" in empty folders
 - Folder picker used silent placeholder boxes (intentional design with mockup file)
 - Created inconsistent user experience across similar navigation contexts
 
 **The fix:**
+
 - Changed photo picker to use 6 placeholder boxes matching folder picker
 - Corrected CSS properties:
   1. Height: 64px → 46px
@@ -1192,6 +1310,7 @@ if (statusText) {
   5. Container padding: `8px 0` → `0`
 
 **CSS alignment achieved:**
+
 ```css
 /* Both pickers now identical */
 height: 46px;
@@ -1202,6 +1321,7 @@ border-radius: 6px;
 ```
 
 **Testing verified:**
+
 - Empty folder in photo picker shows 6 gray placeholder boxes
 - Visual appearance matches folder picker exactly
 - No scrollbar appears (overflow: hidden works)
@@ -1213,32 +1333,38 @@ border-radius: 6px;
 ## Session 1: January 19, 2026
 
 ### Database Backup System
+
 **Fixed:** All backup functionality  
 **Documentation:** FIX_DATABASE_BACKUP.md
 
 **Issues resolved:**
+
 - ✅ Database auto-backup before destructive operations
 - ✅ Backups now created with timestamped filenames: `photo_library_YYYYMMDD_HHMMSS.db`
 - ✅ Max 20 backups kept (cleanup logic now active)
 - ✅ Backups created before: delete photos, rebuild database, update library index
 
 **Testing verified:**
+
 - Delete operation creates backup in `.db_backups/` folder
 - Backup file is valid SQLite database with correct timestamp format
 
 ---
 
 ### Database Rebuild Dialog
+
 **Fixed:** JavaScript errors and missing UI elements  
 **Documentation:** FIX_REBUILD_DIALOG.md
 
 **Issues resolved:**
+
 - ✅ **Estimated duration display** - Now shows for all library sizes (e.g., "less than a minute", "7-8 minutes")
 - ✅ **JavaScript error fixed** - `buttons.forEach is not a function` error resolved
 - ✅ **Warning dialog for 1000+ files** - Now displays correctly with proper button array format
 - ✅ **Completion message** - Now shows correct indexed count instead of "Indexed 0 files"
 
 **Testing verified:**
+
 - Small library (69 files): Shows estimate, completes correctly
 - Large library (1,100 files): Warning dialog appears, no JS errors, completion message accurate
 - All buttons render correctly (Cancel/Continue, Proceed, Done)
@@ -1246,16 +1372,19 @@ border-radius: 6px;
 ---
 
 ### Invalid Date Handling
+
 **Fixed:** Date validation in date editor  
 **Documentation:** FIX_INVALID_DATES.md
 
 **Issues resolved:**
+
 - ✅ Prevents selection of invalid dates (e.g., February 31st)
 - ✅ Day dropdown dynamically updates based on selected month and year
 - ✅ Handles leap years correctly (Feb 29 only in leap years)
 - ✅ Auto-adjusts selected day if it becomes invalid (e.g., Jan 31 → Feb changes day to 28/29)
 
 **Testing verified:**
+
 - February 2024 (leap year): Shows 1-29 days only
 - February 2025 (non-leap year): Shows 1-28 days only
 - 30-day months (April, June, etc.): Shows 1-30 days only
@@ -1265,23 +1394,27 @@ border-radius: 6px;
 ---
 
 ### Lazy Loading & Thumbnail Issues
+
 **Fixed:** Done button corrupting unloaded image src attributes  
 **Documentation:** FIX_LAZY_LOADING.md
 
 **Issues resolved:**
+
 - ✅ **Broken images after thumbnail purge** - Images below fold now load correctly after "Rebuild Thumbnails"
 - ✅ **Done button bug** - Fixed cachebuster code corrupting unloaded images
 - ✅ **IntersectionObserver setup** - Disconnects and recreates observer on grid reload
 
 **Root cause:**
+
 - "Rebuild Thumbnails" dialog's Done button added cachebuster to ALL images
 - For unloaded images (no src attribute), `img.src` returns `""` (empty string)
-- `"".split('?')[0]` returns `""`  
+- `"".split('?')[0]` returns `""`
 - Set `img.src = "?t=timestamp"` (invalid URL)
 - When user scrolled, IntersectionObserver check `!img.src` failed (src was truthy but invalid)
 - Images never loaded proper thumbnail URLs
 
 **The fix:**
+
 ```javascript
 // Only add cachebuster to images with valid thumbnail URLs
 if (img.src && img.src.includes('/api/photo/')) {
@@ -1291,6 +1424,7 @@ if (img.src && img.src.includes('/api/photo/')) {
 ```
 
 **Testing verified:**
+
 - Small library (1,100 photos): All images load correctly after thumbnail rebuild
 - Scroll through entire grid: No broken images
 - Done button only modifies loaded images
@@ -1298,28 +1432,33 @@ if (img.src && img.src.includes('/api/photo/')) {
 ---
 
 ### Date Picker Duplicate Years
+
 **Fixed:** Year dropdown showing duplicate years  
 **Documentation:** FIX_DATE_PICKER_DUPLICATES.md  
 **Version:** v85
 
 **Issues resolved:**
+
 - ✅ Same year no longer appears multiple times in year picker dropdown
 - ✅ Function now clears existing options before repopulating
 - ✅ Works correctly after database rebuild
 - ✅ Works correctly after switching libraries
 
 **Root cause:**
+
 - `populateDatePicker()` was called multiple times (after rebuild, after health check)
 - Function appended new options without clearing existing ones
 - Duplicate years accumulated in the dropdown
 
 **The fix:**
+
 ```javascript
 // Clear existing options before populating (prevents duplicates)
 yearPicker.innerHTML = '';
 ```
 
 **Testing verified:**
+
 - Each year appears exactly once in dropdown
 - Years remain sorted newest to oldest
 - No duplicates after database operations
@@ -1328,22 +1467,26 @@ yearPicker.innerHTML = '';
 ---
 
 ### Date Editor - Year Dropdown Missing New Year
+
 **Fixed:** Date picker dropdown not updating after editing to new year  
 **Version:** v86
 
 **Issues resolved:**
+
 - ✅ Year dropdown now refreshes immediately after date edit saves
 - ✅ Works for single photo edits
 - ✅ Works for bulk photo edits (all modes: same, shift, sequence)
 - ✅ New years appear in dropdown right away
 
 **Root cause:**
+
 - After date edit saved successfully, code reloaded grid (`loadAndRenderPhotos()`)
 - But it didn't refresh the date picker dropdown (`populateDatePicker()`)
 - If user edited photos to a new year, dropdown was stale
 - Navigation dropdown became unusable (couldn't jump to new year)
 
 **The fix:**
+
 ```javascript
 // After both single and bulk date edits:
 setTimeout(() => {
@@ -1353,10 +1496,12 @@ setTimeout(() => {
 ```
 
 Added `populateDatePicker()` call in two locations:
+
 - After single photo date edit (line ~1349)
 - After bulk photo date edit (line ~1281)
 
 **Testing verified:**
+
 - Library with only 2016 photos
 - Edited photo to 2025
 - Year dropdown immediately updated to show both 2016 and 2025
@@ -1365,22 +1510,26 @@ Added `populateDatePicker()` call in two locations:
 ---
 
 ### Error Message Wording - Large Library Dialog
+
 **Fixed:** Improved dialog title for large library rebuilds  
 **Version:** v88
 
 **Issues resolved:**
+
 - ✅ Changed 'Large library detected' to 'Large library'
 - ✅ More concise, less robotic language
 - ✅ Better first impression for rebuild warnings
 
 **The fix:**
+
 ```javascript
 // Before: 'Large library detected'
 // After:  'Large library'
-showDialog('Large library', `Your library contains ${count} photos...`)
+showDialog('Large library', `Your library contains ${count} photos...`);
 ```
 
 **Testing verified:**
+
 - Rebuild database with 1000+ files
 - Warning dialog shows "Large library" title
 - Clean, simple wording
@@ -1388,10 +1537,12 @@ showDialog('Large library', `Your library contains ${count} photos...`)
 ---
 
 ### Toast Timing + Date Edit Undo
+
 **Fixed:** Centralized toast durations and added undo to date edits  
 **Version:** v89-v94
 
 **Issues resolved:**
+
 - ✅ Centralized toast durations (3s for info, 7s with undo)
 - ✅ Auto-selects duration based on whether undo is provided
 - ✅ Added undo to single photo date edits
@@ -1401,11 +1552,13 @@ showDialog('Large library', `Your library contains ${count} photos...`)
 - ✅ Improved "Restored" message to show count
 
 **Root cause:**
+
 - Toast durations were hardcoded inconsistently throughout codebase
 - No undo capability for date edits (destructive operation)
 - Undo button always visible even when no undo callback
 
 **The fix:**
+
 ```javascript
 // Centralized constants
 const TOAST_DURATION = 3000; // 3s for info/error
@@ -1428,8 +1581,8 @@ if (onUndo) {
 }
 
 // Capture original dates before edit
-const originalDates = photoIds.map(id => {
-  const photo = state.photos.find(p => p.id === id);
+const originalDates = photoIds.map((id) => {
+  const photo = state.photos.find((p) => p.id === id);
   return { id: id, originalDate: photo.date };
 });
 
@@ -1438,6 +1591,7 @@ showToast('Date updated', () => undoDateEdit(originalDates));
 ```
 
 **Testing verified:**
+
 - Info toasts display for 3 seconds
 - Delete and date edit toasts display for 7 seconds with undo
 - Undo button only appears when undo callback provided
@@ -1450,27 +1604,32 @@ showToast('Date updated', () => undoDateEdit(originalDates));
 ---
 
 ### Date Picker Duplicate Years
+
 **Fixed:** Year dropdown showing duplicate years  
 **Documentation:** FIX_DATE_PICKER_DUPLICATES.md
 
 **Issues resolved:**
+
 - ✅ Same year no longer appears multiple times in year picker dropdown
 - ✅ Function now clears existing options before repopulating
 - ✅ Works correctly after database rebuild
 - ✅ Works correctly after switching libraries
 
 **Root cause:**
+
 - `populateDatePicker()` was called multiple times (after rebuild, after health check)
 - Function appended new options without clearing existing ones
 - Duplicate years accumulated in the dropdown
 
 **The fix:**
+
 ```javascript
 // Clear existing options before populating (prevents duplicates)
 yearPicker.innerHTML = '';
 ```
 
 **Testing verified:**
+
 - Each year appears exactly once in dropdown
 - Years remain sorted newest to oldest
 - No duplicates after database operations
@@ -1480,20 +1639,24 @@ yearPicker.innerHTML = '';
 ## Session 2: January 21, 2026
 
 ### Database Rebuild - Empty Grid After Corrupted DB
+
 **Fixed:** Database rebuild now properly handles corrupted databases  
 **Version:** v99-v100
 
 **Issues resolved:**
+
 - ✅ Rebuild now always creates fresh database (deletes corrupted file first)
 - ✅ Backend health check called after rebuild completes
 - ✅ Photos appear in grid after rebuild completes
 - ✅ Date picker populated correctly after rebuild
 
 **Root causes:**
+
 1. Backend only created new DB if file didn't exist - skipped creation if corrupted file present
 2. Frontend didn't call library status check after rebuild - backend thought DB still missing
 
 **The fix:**
+
 ```python
 # Backend: Always delete old DB before creating fresh one
 if os.path.exists(DB_PATH):
@@ -1504,10 +1667,11 @@ create_database_schema(cursor)
 
 ```javascript
 // Frontend: Call health check after rebuild completes
-checkLibraryHealthAndInit()
+checkLibraryHealthAndInit();
 ```
 
 **Testing verified:**
+
 - Corrupt database with garbage text → trigger rebuild
 - Rebuild completes successfully with fresh database
 - Photos appear in grid immediately
@@ -1516,10 +1680,12 @@ checkLibraryHealthAndInit()
 ---
 
 ### Corrupted DB Detection During Operations + Rebuild UI Polish
+
 **Fixed:** Database corruption now detected during normal operations with polished rebuild dialog  
 **Version:** v101-v116
 
 **Issues resolved:**
+
 - ✅ Backend detects SQLite corruption errors in all database routes
 - ✅ Returns specific JSON error for corruption keywords
 - ✅ Frontend checks for corruption and shows rebuild dialog
@@ -1534,6 +1700,7 @@ checkLibraryHealthAndInit()
 - ✅ Fixed stale state when reopening rebuild dialog
 
 **Root causes:**
+
 1. Backend routes had individual try/catch blocks that returned generic errors
 2. Frontend corruption detection looked for wrong error format
 3. Lightbox and rebuild overlay at same z-index (20000) - rebuild hidden
@@ -1542,6 +1709,7 @@ checkLibraryHealthAndInit()
 6. Rebuild overlay just hidden (not destroyed), showed stale state on reopen
 
 **The fix:**
+
 ```python
 # Backend: Catch corruption in route exception handlers
 except sqlite3.DatabaseError as e:
@@ -1552,9 +1720,11 @@ except sqlite3.DatabaseError as e:
 
 ```javascript
 // Frontend: Check for corruption keywords
-if (errorMsg.includes('not a database') || 
-    errorMsg.includes('malformed') || 
-    errorMsg.includes('corrupt')) {
+if (
+  errorMsg.includes('not a database') ||
+  errorMsg.includes('malformed') ||
+  errorMsg.includes('corrupt')
+) {
   showCriticalErrorModal('db_corrupted');
 }
 ```
@@ -1583,11 +1753,12 @@ if lower == upper:
     unit = "minute" if lower == 1 else "minutes"
     return (minutes, f"{lower} {unit}")
 ```
-```
+
+````
 
 **Dialog flow now works correctly:**
 1. Corruption detected in lightbox → modal appears (visible above lightbox)
-2. User clicks "Rebuild database" → scan shows (visible above lightbox)  
+2. User clicks "Rebuild database" → scan shows (visible above lightbox)
 3. User clicks "Proceed" → lightbox closes, grid appears, rebuild progresses
 4. Complete → grid with fresh photos
 
@@ -1602,7 +1773,7 @@ if lower == upper:
 - Dialog visible above lightbox (not hidden behind)
 - Click "Rebuild database" → scan completes → "Proceed" button visible
 - Click "Proceed" → lightbox closes, grid appears, rebuild progresses over grid
-- Grid loading with corrupted DB → rebuild dialog  
+- Grid loading with corrupted DB → rebuild dialog
 - Date picker with corrupted DB → rebuild dialog
 - No silent failures, clear user feedback at every step
 - Utilities menu → rebuild after corruption flow → clean UI (no stale state)
@@ -1611,7 +1782,7 @@ if lower == upper:
 ---
 
 ### Folder Picker - Backup/System Volume Filtering
-**Fixed:** Folder picker now filters out backup and system volumes  
+**Fixed:** Folder picker now filters out backup and system volumes
 **Version:** v117
 
 **Issues resolved:**
@@ -1645,9 +1816,10 @@ if os.path.islink(volume_path):
 backup_patterns = ['backup', 'backups', 'archive', 'archives', 'time machine', 'time_machine']
 if any(pattern in item_lower for pattern in backup_patterns):
     continue
-```
+````
 
 **Testing verified:**
+
 - `/Volumes` shows only legitimate external drives (e.g., `eric_files`)
 - `Backups of Eric's MacBook Pro` volumes hidden (3 volumes filtered)
 - `Macintosh HD` symlink hidden
@@ -1658,10 +1830,12 @@ if any(pattern in item_lower for pattern in backup_patterns):
 ---
 
 ### Photo Picker - Checkbox Toggle Bug
+
 **Fixed:** Checkboxes now toggle on/off correctly  
 **Version:** v123-v124
 
 **Issues resolved:**
+
 - ✅ Folder checkboxes toggle properly (check → uncheck → check)
 - ✅ Selection count updates correctly ("1 folder selected" ↔ "No items selected")
 - ✅ Continue button only enabled when items actually selected
@@ -1669,6 +1843,7 @@ if any(pattern in item_lower for pattern in backup_patterns):
 - ✅ No more duplicate click handlers firing
 
 **Root cause:**
+
 - `updateFileList()` was called multiple times during navigation
 - Each call added a NEW click event listener to the file list element
 - Listeners accumulated, causing multiple handlers to fire for single click
@@ -1677,6 +1852,7 @@ if any(pattern in item_lower for pattern in backup_patterns):
 - Result: Checkbox appeared checked but selection was empty
 
 **The fix:**
+
 ```javascript
 // Store handler reference at module level
 let fileListClickHandler = null;
@@ -1687,7 +1863,9 @@ if (fileListClickHandler) {
 }
 
 // Create and store new handler
-fileListClickHandler = async (e) => { /* handler logic */ };
+fileListClickHandler = async (e) => {
+  /* handler logic */
+};
 fileList.addEventListener('click', fileListClickHandler);
 
 // Simplified icon update: Re-render instead of manual DOM manipulation
@@ -1701,6 +1879,7 @@ if (type === 'folder') {
 ```
 
 **Testing verified:**
+
 - Empty folder: Click checkbox → "1 folder selected" → click again → "No items selected"
 - Folder with files: Same behavior, recursive counting works
 - Multiple folders: Each toggles independently
@@ -1710,10 +1889,12 @@ if (type === 'folder') {
 ---
 
 ### Folder Picker - Sticky Last Directory
+
 **Fixed:** Folder picker now remembers last selected location across sessions  
 **Version:** v118
 
 **Issues resolved:**
+
 - ✅ Last selected path saved to localStorage
 - ✅ Picker opens to last location on subsequent uses (across page reloads)
 - ✅ Validates saved path exists and is accessible before using it
@@ -1721,11 +1902,13 @@ if (type === 'folder') {
 - ✅ Works with both "Choose" button and clicking database file
 
 **Root cause:**
+
 - Picker had in-memory persistence within a session (`currentPath` variable)
 - No persistence across page reloads or app restarts
 - Always defaulted to Desktop on fresh load
 
 **The fix:**
+
 ```javascript
 // Save path when user selects it
 localStorage.setItem('folderPicker.lastPath', selectedPath);
@@ -1743,6 +1926,7 @@ if (savedPath) {
 ```
 
 **Path resolution order:**
+
 1. `options.initialPath` (if explicitly provided)
 2. `currentPath` (in-memory, same session)
 3. `localStorage.getItem('folderPicker.lastPath')` (persisted across sessions) ← NEW
@@ -1751,6 +1935,7 @@ if (savedPath) {
 6. First location (if all else fails)
 
 **Testing verified:**
+
 - Navigate to `/Volumes/eric_files` → choose → reload page → picker opens to `eric_files`
 - Navigate to external drive → unmount drive → reload → picker falls back to Desktop
 - Works with "Choose" button selection
@@ -1760,10 +1945,12 @@ if (savedPath) {
 ---
 
 ### Picker Improvements - Shared Path Logic & Cancel Behavior
+
 **Fixed:** Extracted shared default path logic and improved picker UX  
 **Version:** v119-v122
 
 **Issues resolved:**
+
 - ✅ PhotoPicker now has sticky last directory (persists across sessions)
 - ✅ Extracted default path logic to shared `pickerUtils.js` utility
 - ✅ Single place to change default folder (Desktop → Pictures, etc.)
@@ -1773,6 +1960,7 @@ if (savedPath) {
 - ✅ PhotoPicker saves path on cancel (not just on continue)
 
 **Root causes:**
+
 - PhotoPicker reset `currentPath` on every open (no persistence)
 - Default path logic duplicated in both pickers (~80 lines)
 - Separate localStorage keys prevented cross-picker memory
@@ -1780,6 +1968,7 @@ if (savedPath) {
 - PhotoPicker only saved path on "Continue", not "Cancel"
 
 **The fix:**
+
 ```javascript
 // v119: PhotoPicker sticky path (same pattern as FolderPicker)
 // Preserve currentPath between opens, check localStorage, save on continue
@@ -1800,6 +1989,7 @@ if (currentPath !== VIRTUAL_ROOT) {
 ```
 
 **Testing verified:**
+
 - PhotoPicker: Navigate → cancel → reopen → remembers location
 - PhotoPicker: Navigate → continue → refresh → reopen → remembers location
 - FolderPicker: Navigate → cancel → reopen → remembers location
@@ -1813,10 +2003,12 @@ if (currentPath !== VIRTUAL_ROOT) {
 ## Session 3: January 22, 2026
 
 ### Photo Picker - Count Display
+
 **Fixed:** Count readout now shows both folder and file counts  
 **Version:** v125
 
 **Issues resolved:**
+
 - ✅ Count readout always shows both folders and files (e.g., "1 folder, 0 files selected")
 - ✅ Works with empty folders ("1 folder, 0 files selected")
 - ✅ Works with folders containing files ("7 folders, 1,824 files selected")
@@ -1824,11 +2016,13 @@ if (currentPath !== VIRTUAL_ROOT) {
 - ✅ Displays progress state correctly during background counting
 
 **Root cause:**
+
 - Old logic only showed counts that were greater than zero
 - User expected both counts always visible for clarity
 - Counting state didn't show folder count clearly
 
 **The fix:**
+
 ```javascript
 // ALWAYS show both folder and file counts
 const folderText = `${folderCount} folder${folderCount !== 1 ? 's' : ''}`;
@@ -1843,6 +2037,7 @@ if (isCountingInBackground) {
 ```
 
 **Testing verified:**
+
 - Empty folder: "1 folder, 0 files selected"
 - Folder with files: Correct file count displayed
 - Multiple folders: Proper folder and file counts
@@ -1852,22 +2047,26 @@ if (isCountingInBackground) {
 ---
 
 ### Photo Picker - Background Counting Completion
+
 **Fixed:** Folder file count now always resolves to final count  
 **Version:** v126
 
 **Issues resolved:**
+
 - ✅ "Counting files... 1100+" now resolves to final count
 - ✅ Final count always displayed after recursive folder scan completes
 - ✅ Works regardless of how long counting takes
 - ✅ No more hanging "X+" readouts
 
 **Root cause:**
+
 - `selectFolderRecursiveBackground()` had conditional logic for final UI update
 - Only called `updateSelectionCount()` if counting took > 300ms
 - Fast counting operations (< 300ms) never updated UI with final count
 - Folder named "1100" on Desktop matched the "1100+" counting display format, making bug obvious
 
 **The fix:**
+
 ```javascript
 // ALWAYS update UI with final count after counting completes
 if (!countingAborted) {
@@ -1883,6 +2082,7 @@ if (!countingAborted) {
 ```
 
 **Testing verified:**
+
 - Select folder "1100" on Desktop → count resolves correctly
 - Fast counting (< 300ms): Shows final count
 - Slow counting (> 300ms): Shows final count
@@ -1892,10 +2092,12 @@ if (!countingAborted) {
 ---
 
 ### Photo Picker - Button Rename & Confirmation Dialog Removal
+
 **Fixed:** Import button renamed and redundant dialog removed  
 **Version:** v127
 
 **Issues resolved:**
+
 - ✅ Button text changed from "Continue" to "Import"
 - ✅ Button ID updated from `photoPickerContinueBtn` to `photoPickerImportBtn`
 - ✅ Confirmation dialog removed from import flow
@@ -1903,16 +2105,18 @@ if (!countingAborted) {
 - ✅ Streamlined UX - one less click to import
 
 **Root cause:**
+
 - UX feedback indicated confirmation dialog was redundant
 - User already made explicit selection in photo picker
 - Extra "Found X files. Start import?" dialog added unnecessary friction
 
 **The fix:**
+
 ```javascript
 // Created new scanAndImport() function (no confirmation dialog)
 async function scanAndImport(paths) {
   // ... scan paths to expand folders into files ...
-  
+
   if (total_count === 0) {
     showToast('No media files found', null);
     return;
@@ -1927,18 +2131,22 @@ await scanAndImport(selectedPaths); // Instead of scanAndConfirmImport()
 ```
 
 **HTML changes:**
+
 - Button text: "Continue" → "Import"
 - Button ID: `photoPickerContinueBtn` → `photoPickerImportBtn`
 
 **JavaScript changes:**
+
 - All variable references updated: `continueBtn` → `importBtn`
 - Handler renamed: `handleContinue()` → `handleImport()`
 
 **Flow comparison:**
+
 - **Old:** Select → [Continue] → Dialog "Found X files. Start import?" → [Import] → Import starts
 - **New:** Select → [Import] → Import starts ✓
 
 **Testing verified:**
+
 - Button shows "Import" text
 - Button disabled when no selection
 - Click [Import] → scanning toast → import starts immediately
@@ -1954,16 +2162,19 @@ await scanAndImport(selectedPaths); // Instead of scanAndConfirmImport()
 ## Session 5: January 23, 2026
 
 ### Month Dividers During Scroll - Date Picker Flashing
+
 **Fixed:** IntersectionObserver logic for date picker scroll updates  
 **Version:** v129
 
 **Issues resolved:**
+
 - ✅ Date picker no longer flashes between months during slow scroll
 - ✅ Picker switches instantly at exact boundary when month leaves viewport
 - ✅ Rock back/forth over boundary → crisp, instant switches
 - ✅ No oscillation or visual glitches
 
 **Root cause:**
+
 - IntersectionObserver compared sections by intersection ratio to find "most visible"
 - Used 11 threshold points `[0, 0.1, 0.2, ... 1.0]` causing excessive callbacks
 - `entries` array only contained sections that crossed thresholds, not all visible sections
@@ -1977,14 +2188,16 @@ await scanAndImport(selectedPaths); // Instead of scanAndConfirmImport()
   - Result: Flash between Feb and March
 
 **The fix:**
+
 ```javascript
 // OLD (buggy): Compared only sections that crossed thresholds
 const observer = new IntersectionObserver(
   (entries) => {
     let mostVisible = null;
     let maxRatio = 0;
-    
-    entries.forEach((entry) => {  // ⚠️ Only changed sections
+
+    entries.forEach((entry) => {
+      // ⚠️ Only changed sections
       if (entry.intersectionRatio > maxRatio) {
         maxRatio = entry.intersectionRatio;
         mostVisible = entry.target;
@@ -1992,7 +2205,7 @@ const observer = new IntersectionObserver(
     });
     // ...
   },
-  { threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] }
+  { threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0] },
 );
 
 // NEW (fixed): Tracks ALL visible sections, picks topmost in DOM order
@@ -2014,33 +2227,36 @@ const observer = new IntersectionObserver(
 
     // Get topmost visible section in actual DOM order
     const allSections = document.querySelectorAll('.month-section');
-    const topmostVisibleSection = Array.from(allSections).find(section => 
-      sectionVisibility.has(section.dataset.month)
+    const topmostVisibleSection = Array.from(allSections).find((section) =>
+      sectionVisibility.has(section.dataset.month),
     );
-    
+
     if (!topmostVisibleSection) return;
-    
+
     // Update picker to topmost visible section
     const monthId = topmostVisibleSection.dataset.month;
     // ... update pickers
   },
-  { threshold: [0] }  // Single threshold - just detect ANY visibility
+  { threshold: [0] }, // Single threshold - just detect ANY visibility
 );
 ```
 
 **Key improvements:**
+
 1. **Map tracks all visible sections** - Persists state between callbacks
 2. **Single threshold `[0]`** - Only fires when sections enter/leave viewport (not at 10 intermediate points)
 3. **Topmost visible logic** - Query DOM in order, pick first visible section (not "most visible by ratio")
 4. **Newspaper reading model** - "As long as any part of article is showing, you're reading it"
 
 **Behavior:**
+
 - **Before:** March 55%, Feb 30% → Picker could flash to Feb during scroll
 - **After:** March visible (any amount) → Shows "March 2026" ✓
 - **Before:** Oscillated between months at boundaries
 - **After:** Switches instantly when last pixel of month scrolls above fold ✓
 
 **Testing verified:**
+
 - Slow scroll through months with 12 images (2 rows)
 - First row scrolls above fold → picker stays on current month
 - Last row scrolls above fold → instant switch to next month
@@ -2052,10 +2268,12 @@ const observer = new IntersectionObserver(
 ## Session 5: January 23, 2026
 
 ### Month Dividers During Scroll - Date Picker Flashing
+
 **Fixed:** Date picker scroll update logic  
 **Version:** v129
 
 **Issues resolved:**
+
 - ✅ Date picker no longer flashes between months during scroll
 - ✅ Picker switches instantly when month boundary crossed
 - ✅ Rock back/forth test passes - crisp, instant switches
@@ -2065,6 +2283,7 @@ const observer = new IntersectionObserver(
 The IntersectionObserver callback only received `entries` for sections that crossed thresholds since the last callback, not all visible sections. With 11 thresholds `[0, 0.1, 0.2, ... 1.0]`, sections crossing different thresholds could temporarily "win" the visibility comparison even when another section had higher overall visibility.
 
 Example bug scenario:
+
 - March at 55% visible (stable, no threshold crossed)
 - Feb enters viewport, crosses 0.1 threshold
 - `entries = [Feb]` (only Feb in array)
@@ -2073,57 +2292,67 @@ Example bug scenario:
 - Next frame: March crosses 0.5 threshold → picker switches back
 
 **The fix:**
+
 ```javascript
 // OLD: Compared only sections that crossed thresholds
-const observer = new IntersectionObserver((entries) => {
-  let mostVisible = null;
-  let maxRatio = 0;
-  
-  entries.forEach((entry) => {  // ⚠️ Only changed sections
-    if (entry.intersectionRatio > maxRatio) {
-      maxRatio = entry.intersectionRatio;
-      mostVisible = entry.target;
-    }
-  });
-}, {
-  threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-});
+const observer = new IntersectionObserver(
+  (entries) => {
+    let mostVisible = null;
+    let maxRatio = 0;
+
+    entries.forEach((entry) => {
+      // ⚠️ Only changed sections
+      if (entry.intersectionRatio > maxRatio) {
+        maxRatio = entry.intersectionRatio;
+        mostVisible = entry.target;
+      }
+    });
+  },
+  {
+    threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+  },
+);
 
 // NEW: Tracks all visible sections, picks topmost in DOM order
 const sectionVisibility = new Map();
 
-const observer = new IntersectionObserver((entries) => {
-  // Maintain visibility state for all sections
-  entries.forEach((entry) => {
-    const monthId = entry.target.dataset.month;
-    if (monthId) {
-      if (entry.intersectionRatio > 0) {
-        sectionVisibility.set(monthId, entry.target);
-      } else {
-        sectionVisibility.delete(monthId);
+const observer = new IntersectionObserver(
+  (entries) => {
+    // Maintain visibility state for all sections
+    entries.forEach((entry) => {
+      const monthId = entry.target.dataset.month;
+      if (monthId) {
+        if (entry.intersectionRatio > 0) {
+          sectionVisibility.set(monthId, entry.target);
+        } else {
+          sectionVisibility.delete(monthId);
+        }
       }
-    }
-  });
+    });
 
-  // Get topmost visible section in actual DOM order
-  const allSections = document.querySelectorAll('.month-section');
-  const topmostVisibleSection = Array.from(allSections).find(section => 
-    sectionVisibility.has(section.dataset.month)
-  );
-  
-  // Update picker to topmost visible section
-}, {
-  threshold: [0]  // Single threshold - just detect ANY visibility
-});
+    // Get topmost visible section in actual DOM order
+    const allSections = document.querySelectorAll('.month-section');
+    const topmostVisibleSection = Array.from(allSections).find((section) =>
+      sectionVisibility.has(section.dataset.month),
+    );
+
+    // Update picker to topmost visible section
+  },
+  {
+    threshold: [0], // Single threshold - just detect ANY visibility
+  },
+);
 ```
 
 **Key improvements:**
+
 1. **Map tracks all visible sections** - Persists state between callbacks
 2. **Single threshold `[0]`** - Only fires when sections enter/leave viewport
 3. **Topmost visible logic** - Query DOM in order, pick first visible section
 4. **"Newspaper reading" model** - Show month as long as any part is visible
 
 **Testing verified:**
+
 - Slow scroll through months with 12 images (2 rows)
 - First row scrolls above fold → picker stays on current month
 - Last row scrolls above fold → instant switch to next month
@@ -2135,16 +2364,19 @@ const observer = new IntersectionObserver((entries) => {
 ## Session 4: January 22, 2026
 
 ### Import Counting - Duplicate File Path Bug
+
 **Fixed:** Import scan now reports accurate file counts  
 **Version:** v128
 
 **Issues resolved:**
+
 - ✅ Photo picker now sends only root selections to backend (not expanded file lists)
 - ✅ Import scan counts each file once (not multiple times)
 - ✅ Duplicate count now accurate (reflects actual content duplicates)
 - ✅ Preserves UX showing full recursive file count in picker
 
 **Root cause:**
+
 - Photo picker recursively expanded folders into individual file paths
 - When user selected a folder, it sent BOTH the folder AND all individual files to backend
 - Backend scanned the folder (adding all files), then added individual files again
@@ -2154,25 +2386,26 @@ const observer = new IntersectionObserver((entries) => {
 - Duplicate count was wrong: 545 - 250 = 295 duplicates (should be 15)
 
 **The fix:**
+
 ```javascript
 // photoPicker.js: New function to filter expanded paths
 function getRootSelections() {
   const allPaths = Array.from(selectedPaths.keys());
   const rootPaths = [];
-  
+
   for (const path of allPaths) {
     // Check if any OTHER path is a parent of this path
-    const hasParentInSelection = allPaths.some(otherPath => {
+    const hasParentInSelection = allPaths.some((otherPath) => {
       if (otherPath === path) return false; // Skip self
       return path.startsWith(otherPath + '/');
     });
-    
+
     // If no parent found in selection, this is a root selection
     if (!hasParentInSelection) {
       rootPaths.push(path);
     }
   }
-  
+
   return rootPaths;
 }
 
@@ -2182,12 +2415,14 @@ resolve(rootSelections);
 ```
 
 **Data flow (before fix):**
+
 1. User checks folder `import-test` (contains 250 files + `dupes` subfolder with 15 files)
 2. Picker expands: adds folder + all 265 files individually → 267 paths
 3. Backend scans folder (265 files) + processes 265 individual files → 545 file paths
 4. Import: 250 unique → imported, 295 remaining → marked as duplicates
 
 **Data flow (after fix):**
+
 1. User checks folder `import-test`
 2. Picker shows: "2 folders, 265 files selected" (UX preserved)
 3. Picker sends: Only root selections `["/import-test", "/import-test/dupes"]` → 2 paths
@@ -2195,12 +2430,14 @@ resolve(rootSelections);
 5. Import: 250 unique → imported, 15 actual duplicates → rejected
 
 **Architecture improvement:**
+
 - **Separation of concerns:** Frontend handles UI/display, backend handles filesystem scanning
 - **Single source of truth:** Backend is authoritative for file discovery
 - **Clean data contract:** "Here are folders to scan" vs "here's a messy mix of folders AND files"
 - **No hacks:** Fixed root cause instead of adding defensive deduplication
 
 **Testing verified:**
+
 - Folder with 265 files (250 unique + 15 duplicates)
 - Picker displays: "2 folders, 265 files selected" ✓
 - Import reports: "Importing 265 files" ✓ (was 545)
@@ -2213,10 +2450,12 @@ resolve(rootSelections);
 ## Session 6: January 23, 2026
 
 ### Photo Order Instability with Identical Timestamps
+
 **Fixed:** Deterministic ordering when photos have same date  
 **Version:** v133-v134
 
 **Issues resolved:**
+
 - ✅ Photos with identical timestamps now sort consistently
 - ✅ Order stable across database rebuilds
 - ✅ Order stable across page reloads
@@ -2224,6 +2463,7 @@ resolve(rootSelections);
 
 **Root cause:**
 SQL query used `ORDER BY date_taken DESC` with no secondary sort key. When multiple photos had identical `date_taken` values (down to the second), SQLite returned them in arbitrary order. While consistent within a session, the order could change after database rebuild because:
+
 1. Rebuild deletes database → all `id` values lost
 2. Files walked in arbitrary filesystem order
 3. New `id` values assigned based on insertion order
@@ -2231,6 +2471,7 @@ SQL query used `ORDER BY date_taken DESC` with no secondary sort key. When multi
 
 **Edge case trigger:**
 This situation occurs when:
+
 - User manually changes multiple photos to same date/time (e.g., bulk edit to "2026-01-15 12:00:00")
 - Photos from burst mode have identical timestamps (rare, camera dependent)
 
@@ -2240,6 +2481,7 @@ This is **not a bug** - it's expected behavior. When timestamps are identical, s
 If users need specific ordering, they already have the tool: offset photos by 1 second using the date editor.
 
 **The fix:**
+
 ```python
 # app.py: Added current_path as secondary sort key (3 locations)
 ORDER BY date_taken DESC, current_path ASC
@@ -2249,17 +2491,20 @@ untracked_files_list = sorted(list(filesystem_paths))
 ```
 
 **Why `current_path`?**
+
 - Stable across rebuilds (path doesn't change)
 - Contains date and hash: `2026/2026-01-15/img_20260115_hash.jpg`
 - Alphabetical sort is deterministic
 - No schema changes required
 
 **Why not `id`?**
+
 - `id` values are not stable across rebuilds
 - Database rebuild assigns new sequential ids based on insertion order
 - Insertion order varies based on filesystem walk order
 
 **Testing verified:**
+
 - Import 4 photos with different dates
 - Change all to same date → order changes to alphabetical by filename (expected)
 - Rebuild database → order stays identical (stable) ✓
@@ -2267,6 +2512,7 @@ untracked_files_list = sorted(list(filesystem_paths))
 - No random reordering, predictable behavior
 
 **User guidance:**
+
 - When photos have identical timestamps, they sort alphabetically by filename
 - To control exact ordering, use date editor to offset photos by 1 second
 
@@ -2275,10 +2521,12 @@ untracked_files_list = sorted(list(filesystem_paths))
 ## Session 7: January 24, 2026
 
 ### Date Changes - Survive Database Rebuild
+
 **Fixed:** EXIF/metadata writes now persist through rebuilds with clean thumbnail management  
 **Version:** v146-v150
 
 **Issues resolved:**
+
 - ✅ Video dates now persist across rebuilds (ffprobe for reading metadata)
 - ✅ WMV format explicitly rejected (cannot store metadata reliably)
 - ✅ Old thumbnails automatically deleted when hash changes (keeps filesystem clean)
@@ -2286,6 +2534,7 @@ untracked_files_list = sorted(list(filesystem_paths))
 - ✅ Format extension lists synced between app.py and library_sync.py
 
 **Root causes:**
+
 1. **Video metadata not read during rebuild:** `extract_exif_date()` used `exiftool` for all files, which doesn't read video metadata. Fell back to filesystem modification time (unreliable - changes during file operations).
 2. **WMV can't store metadata:** Despite being pickable, WMV format cannot reliably store `creation_time` metadata. Files were accepted on import but dates didn't persist.
 3. **Orphaned thumbnails:** EXIF writes change file hashes, but old thumbnails with old hashes were left on disk, wasting space.
@@ -2294,11 +2543,12 @@ untracked_files_list = sorted(list(filesystem_paths))
 **The fixes:**
 
 **Fix 1: Enhanced `extract_exif_date()` to use ffprobe for videos**
+
 ```python
 def extract_exif_date(file_path):
     ext = os.path.splitext(file_path)[1].lower()
     video_exts = {'.mov', '.mp4', '.m4v', ...}
-    
+
     if ext in video_exts:
         # Try ffprobe for video metadata
         result = subprocess.run(
@@ -2318,6 +2568,7 @@ def extract_exif_date(file_path):
 ```
 
 **Fix 2: Added WMV to unsupported formats**
+
 ```python
 def write_video_metadata(file_path, new_date):
     unsupported_formats = {'.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi', '.wmv'}
@@ -2326,23 +2577,25 @@ def write_video_metadata(file_path, new_date):
 ```
 
 **Fix 3: Auto-delete old thumbnails on hash change**
+
 ```python
 # In both import and date edit flows:
 if new_hash != old_hash:
     print(f"  📝 Hash changed: {old_hash[:8]} → {new_hash[:8]}")
-    
+
     # Delete old thumbnail if hash changed (keep DB squeaky clean)
     if old_hash:
         old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
         if os.path.exists(old_thumb_path):
             os.remove(old_thumb_path)
             print(f"  🗑️  Deleted old thumbnail")
-    
+
     # Update database with new hash
     cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
 ```
 
 **Fix 4: Synced format lists across modules**
+
 ```python
 # library_sync.py: Updated hardcoded lists to match app.py
 photo_exts = {
@@ -2358,22 +2611,22 @@ video_exts = {
 ```
 
 **Workflow verification:**
+
 1. ✅ **Blank library → import with date → rebuild → correct dates**
    - Fresh import to August 2030
    - 17/18 files correctly in `2030/2030-08-24/`
    - 1 WMV stuck at 2026 (expected - can't store metadata)
-   
 2. ✅ **Date edit → rebuild → edited date persists**
    - Photos: EXIF DateTimeOriginal written and read correctly
    - Videos (MOV, MP4, WEBM, etc.): `creation_time` written and read correctly
    - WMV: Rejected on import with clear error
-   
 3. ✅ **Hash consistency**
    - File hash matches database hash after EXIF write
    - Thumbnails regenerate with correct hash
    - No orphaned thumbnails accumulating
 
 **Testing verified:**
+
 - Import test library with mixed formats → all supported formats import correctly
 - Edit dates on photos and videos → dates survive rebuild
 - WMV files rejected on import with message: "Format WMV does not support embedded metadata"
@@ -2381,6 +2634,7 @@ video_exts = {
 - Database rebuild finds all files (no formats ignored due to outdated extension lists)
 
 **Documentation:**
+
 - Added investigation notes to `EXIF_IMPORT_HOMEWORK.md`
 - Captures full diagnosis process and testing results
 
@@ -2389,11 +2643,13 @@ video_exts = {
 ## Session 8: January 24, 2026
 
 ### Import Duplicate Categorization
+
 **Fixed:** Duplicate files during import now correctly categorized and counted  
 **Documentation:** FIX_IMPORT_DUPLICATE_CATEGORIZATION.md  
 **Version:** v157
 
 **Issues resolved:**
+
 - ✅ Duplicates detected during hash collision (after EXIF write) now categorized as "duplicate" instead of "unsupported"
 - ✅ UI counters now accurate: DUPLICATES shows duplicate count, not lumped into ERRORS
 - ✅ Clear error message: "Duplicate file (detected after processing)" instead of raw SQL constraint
@@ -2405,6 +2661,7 @@ When files were imported and EXIF metadata written, the file content changed and
 **The fix (2 parts):**
 
 **v156:** Added UNIQUE constraint detection to error categorization:
+
 ```python
 elif 'unique constraint' in error_str and 'content_hash' in error_str:
     category = 'duplicate'
@@ -2412,6 +2669,7 @@ elif 'unique constraint' in error_str and 'content_hash' in error_str:
 ```
 
 **v157:** Fixed counter logic to distinguish duplicates from errors:
+
 ```python
 if category == 'duplicate':
     duplicate_count += 1
@@ -2420,6 +2678,7 @@ else:
 ```
 
 **Testing verified:**
+
 - Ground truth: 62 files (59 unique, 3 duplicates) hashed with SHA-256
 - Import attempt: 48 imported, 3 duplicates, 10 errors
 - UI counters: IMPORTED: 48, DUPLICATES: 3, ERRORS: 10 ✓
@@ -2429,6 +2688,7 @@ else:
   - 2 files under "CORRUPTED" (test files) ✓
 
 **Investigation:**
+
 - Full code flow traced from import through EXIF write to rehashing
 - Database and filesystem verified to establish ground truth
 - Error categorization logic analyzed and tested
@@ -2439,10 +2699,12 @@ else:
 ---
 
 ### Database Operations - Empty Folder Cleanup
+
 **Fixed:** Thumbnail cache folder cleanup now automatic  
 **Version:** v161
 
 **Issues resolved:**
+
 - ✅ Empty thumbnail shard folders now removed automatically after thumbnail deletion
 - ✅ Works for photo deletion (removes thumbnail + cleanup folders)
 - ✅ Works for date edit when EXIF write changes hash (removes old thumbnail + cleanup folders)
@@ -2453,6 +2715,7 @@ else:
 Thumbnail cache uses 2-level sharding: `.thumbnails/ab/cd/abcd1234.jpg`
 
 When thumbnails were deleted in 3 scenarios:
+
 1. Photo deletion
 2. Date edit (EXIF write changes hash)
 3. Import (EXIF write changes hash)
@@ -2462,11 +2725,12 @@ The code only removed the `.jpg` file, leaving empty parent folders (`cd/` and `
 Library sync operations (rebuild database, update index) already clean library folders correctly but intentionally skip hidden folders like `.thumbnails/` (correct separation of concerns).
 
 **The fix:**
+
 ```python
 def cleanup_empty_thumbnail_folders(thumbnail_path):
     """
     Delete empty thumbnail shard folders after removing a thumbnail.
-    
+
     Thumbnail structure: .thumbnails/ab/cd/abcd1234.jpg
     After deleting abcd1234.jpg, check if cd/ is empty, then ab/
     """
@@ -2474,7 +2738,7 @@ def cleanup_empty_thumbnail_folders(thumbnail_path):
         # Get parent directories (2 levels)
         shard2_dir = os.path.dirname(thumbnail_path)  # .thumbnails/ab/cd/
         shard1_dir = os.path.dirname(shard2_dir)      # .thumbnails/ab/
-        
+
         # Try removing level-2 shard (cd/)
         if os.path.exists(shard2_dir):
             try:
@@ -2483,7 +2747,7 @@ def cleanup_empty_thumbnail_folders(thumbnail_path):
                     print(f"    ✓ Cleaned up empty thumbnail shard: {os.path.basename(shard2_dir)}/")
             except OSError:
                 pass  # Not empty or permission issue, ignore
-        
+
         # Try removing level-1 shard (ab/)
         if os.path.exists(shard1_dir):
             try:
@@ -2492,17 +2756,19 @@ def cleanup_empty_thumbnail_folders(thumbnail_path):
                     print(f"    ✓ Cleaned up empty thumbnail shard: {os.path.basename(shard1_dir)}/")
             except OSError:
                 pass  # Not empty or permission issue, ignore
-                
+
     except Exception as e:
         print(f"    ⚠️  Thumbnail folder cleanup failed: {e}")
 ```
 
 Called after each `os.remove(thumbnail_path)` in 3 locations:
+
 - Photo deletion (app.py line ~1194)
 - Date edit EXIF write (app.py line ~540)
 - Import EXIF write (app.py line ~2127)
 
 **Testing verified:**
+
 - Delete photo with thumbnail → both shard folders removed if empty ✓
 - Date edit changes hash → old thumbnail deleted, old shard folders removed if empty ✓
 - Multiple thumbnails in same shard → only empty folders removed, populated folders kept ✓
@@ -2510,6 +2776,7 @@ Called after each `os.remove(thumbnail_path)` in 3 locations:
 
 **Investigation:**
 Complete analysis in `EMPTY_FOLDER_CLEANUP_INVESTIGATION.md`:
+
 - Traced all thumbnail deletion sites
 - Verified library sync behavior (correctly skips hidden folders)
 - Tested empty folder scenarios
@@ -2523,10 +2790,12 @@ Complete analysis in `EMPTY_FOLDER_CLEANUP_INVESTIGATION.md`:
 ## Session 9: January 25, 2026
 
 ### Manual Restore & Rebuild
+
 **Status:** ✅ CANNOT REPRODUCE  
 **Issue closed:** Photo organizes correctly during rebuild
 
 **Reported issue:** Manually restore deleted photo to root level (no date folder) → rebuild database → photo reappears (good) but still at root level (bad)
+
 - Files should be organized into date folders during rebuild
 - Very specific edge case requiring intentional user action
 
@@ -2537,10 +2806,12 @@ Complete analysis in `EMPTY_FOLDER_CLEANUP_INVESTIGATION.md`:
 ---
 
 ### Database Missing Prompt
+
 **Status:** ✅ CANNOT REPRODUCE  
 **Issue closed:** First-run flow handles missing DB
 
 **Reported issue:** Database missing → should prompt to rebuild, but no prompt appears
+
 - Can't reliably reproduce (possibly deleted .db manually)
 - May already be handled by existing first-run flow
 
@@ -2553,10 +2824,12 @@ Complete analysis in `EMPTY_FOLDER_CLEANUP_INVESTIGATION.md`:
 ## Session 9: January 25, 2026
 
 ### Dialog Spinner - Remove When Realtime Feedback Exists
+
 **Fixed:** Removed redundant spinners from dialogs with live counters  
 **Version:** v162
 
 **Issues resolved:**
+
 - ✅ Import dialog - Removed spinner from "Importing X files" (has 3 live counters)
 - ✅ Date change dialog - Removed spinner from bulk update "Updating photo X of Y" (has counter)
 - ✅ Import dialog - Removed spinner from initial "Preparing import" state (never visible)
@@ -2570,6 +2843,7 @@ Braille spinners (animated ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ characters) were added
 Conducted comprehensive audit of all 11 spinner usages across 6 dialogs. Identified 5 locations where spinners are warranted (scanning/checking phases with no other feedback) and 4 locations where spinners are redundant.
 
 **Spinners kept (5 warranted locations):**
+
 1. **Rebuild Database** - "Scanning library" (filesystem scan, 0.5-2s, no other feedback)
 2. **Update Index** - "Scanning library" (filesystem scan, 0.5-2s, no other feedback)
 3. **Date Change** - "Updating date" single photo (EXIF write, 1-3s, no counter for single photo)
@@ -2577,12 +2851,14 @@ Conducted comprehensive audit of all 11 spinner usages across 6 dialogs. Identif
 5. **Rebuild Thumbnails** - "Checking thumbnails" (filesystem check, 0.1-0.5s, no other feedback)
 
 **Spinners removed (4 redundant locations):**
+
 1. **Import** - "Importing X files" → Has 3 live counters (IMPORTED: X, DUPLICATES: Y, ERRORS: Z)
 2. **Date Change** - "Updating photo X of Y" → Has counter showing progress
 3. **Import** - "Preparing import" → Never visible (replaced immediately)
 4. **Date Change** - "Starting" → Never visible (replaced immediately)
 
 **The fix:**
+
 ```javascript
 // Before (redundant spinner with counter):
 statusText.innerHTML = `Importing ${data.total} files<span class="import-spinner"></span>`;
@@ -2592,11 +2868,13 @@ statusText.textContent = `Importing ${data.total} files`;
 ```
 
 **Changes:**
+
 - 2 HTML fragments updated (removed spinner from default text)
 - 3 JavaScript locations updated (removed spinner span, changed `.innerHTML` to `.textContent`)
 - No layout changes - spinner was purely decorative at end of line
 
 **Testing verified:**
+
 - Import dialog: Counters update correctly, no spinner clutter ✓
 - Date change bulk: "X of Y" counter visible, no spinner ✓
 - Date change single: Spinner still present (warranted - no counter) ✓
@@ -2608,10 +2886,12 @@ statusText.textContent = `Importing ${data.total} files`;
 ---
 
 ### Date Picker - Missing After Import
+
 **Fixed:** Date picker now automatically refreshes after import completes  
 **Version:** v158 (already implemented)
 
 **Issues resolved:**
+
 - ✅ Date picker appears/updates automatically after importing into blank library
 - ✅ No page refresh required to see date navigation after first import
 - ✅ Works for all import scenarios (blank library, additional imports)
@@ -2620,24 +2900,27 @@ statusText.textContent = `Importing ${data.total} files`;
 This bug was reported as missing behavior, but investigation revealed it was already implemented correctly in v158. The import completion flow automatically triggers a photo grid reload, which includes refreshing the date picker.
 
 **The implementation:**
+
 ```javascript
 // handleImportEvent() - when import completes
 if (importedPhotos > 0) {
   console.log(`🔄 Reloading ${importedPhotos} newly imported photos...`);
-  loadAndRenderPhotos();  // Reloads grid
+  loadAndRenderPhotos(); // Reloads grid
 }
 
 // loadAndRenderPhotos() - after loading photos
-await populateDatePicker();  // Refreshes date picker
+await populateDatePicker(); // Refreshes date picker
 ```
 
 **Flow:**
+
 1. Import completes → `handleImportEvent()` receives `'complete'` event
 2. If photos imported > 0 → calls `loadAndRenderPhotos()`
 3. `loadAndRenderPhotos()` → calls `await populateDatePicker()`
 4. Date picker refreshed with new years from database
 
 **Testing verified:**
+
 - Blank library → import photos → date picker appears immediately ✓
 - Existing library → import additional photos to new years → date picker updates ✓
 - No manual refresh required ✓
@@ -2647,17 +2930,20 @@ await populateDatePicker();  // Refreshes date picker
 ---
 
 ### Lightbox Image Sizing - EXIF Orientation
+
 **Fixed:** Portrait images with EXIF rotation now fill lightbox properly  
 **Documentation:** FIX_LIGHTBOX_EXIF_ORIENTATION.md  
 **Version:** v160
 
 **Issues resolved:**
+
 - ✅ Portrait photos with EXIF orientation metadata now fill viewport without letterboxing
 - ✅ Lightbox sizing works correctly at all window sizes
 - ✅ Database stores display dimensions (EXIF-corrected) instead of raw sensor dimensions
 
 **Root cause:**
 Camera sensors are always landscape. When you take a portrait photo, the camera:
+
 1. Captures pixels in landscape (e.g., 3264×2448)
 2. Writes EXIF Orientation tag (e.g., "rotate 90° CW")
 
@@ -2666,6 +2952,7 @@ Browsers/viewers read EXIF and rotate for display (2448×3264). But `get_image_d
 Result: Lightbox used landscape dimensions (3264×2448) to calculate sizing, but image displayed as portrait (2448×3264) → wrong aspect ratio → letterboxing.
 
 **The fix:**
+
 ```python
 # Before (app.py line 133):
 with Image.open(file_path) as img:
@@ -2681,12 +2968,14 @@ with Image.open(file_path) as img:
 `ImageOps.exif_transpose()` reads EXIF Orientation tag and returns image with correct display dimensions.
 
 **Testing verified:**
+
 - Portrait photo with EXIF Orientation = 6 (rotate 90° CW)
 - Before: Database had 3264×2448 (landscape), lightbox letterboxed
 - After rebuild: Database has 2448×3264 (portrait), lightbox fills properly ✓
 - Works at all window sizes ✓
 
 **Migration required:**
+
 - New imports (v160+): Work immediately ✅
 - Existing photos: Need "Rebuild Database" to fix stored dimensions
 - Only affects photos with EXIF orientation tags 5, 6, 7, 8 (~10-40% of phone photo libraries)
@@ -2696,10 +2985,12 @@ with Image.open(file_path) as img:
 ---
 
 ### Utilities Menu - Language Consistency
+
 **Fixed:** Menu renamed "Switch library" to "Open library"  
 **Version:** v164-v175
 
 **Issues resolved:**
+
 - ✅ "Switch library" → "Open library" (opening another file implies switching)
 - ✅ Menu item wiring updated to bypass intermediate dialog
 - ✅ Direct folder picker flow (one less click)
@@ -2710,6 +3001,7 @@ with Image.open(file_path) as img:
 "Switch" implied an action that needed confirmation or intermediate steps. "Open" is simpler and matches user mental model (like opening a different document).
 
 **The fix:**
+
 ```html
 <!-- utilitiesMenu.html -->
 <span>Open library</span>
@@ -2720,7 +3012,7 @@ with Image.open(file_path) as img:
 switchLibraryBtn.addEventListener('click', () => {
   console.log('🔧 Open Library clicked');
   hideUtilitiesMenu();
-  browseSwitchLibrary();  // Goes straight to folder picker
+  browseSwitchLibrary(); // Goes straight to folder picker
 });
 
 // Critical error modals
@@ -2732,11 +3024,13 @@ switchBtn.onclick = async () => {
 ```
 
 **Additional changes:**
+
 - Removed intermediate "Switch Library" dialog entirely
 - Empty state button now also says "Open library" (unified language)
 - All error recovery flows use "Open library" consistently
 
 **Testing verified:**
+
 - Utilities menu: Click "Open library" → folder picker opens immediately ✓
 - Error modal: Click "Open library" → folder picker opens ✓
 - Empty state: Click "Open library" → folder picker opens ✓

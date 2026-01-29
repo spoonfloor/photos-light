@@ -327,6 +327,16 @@ def bake_orientation(file_path):
         return (False, "Skipped (video/HEIC - lossy re-encode required)", None)
     
     try:
+        def strip_orientation_tag(target_path):
+            """Remove Orientation metadata tag (no pixel change)."""
+            result = subprocess.run(
+                ['exiftool', '-Orientation=', '-overwrite_original', '-P', target_path],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                return (False, f"Failed to remove orientation tag: {result.stderr.strip()}")
+            return (True, "Removed orientation tag")
+
         # JPEG: Use jpegtran for lossless rotation
         if ext_lower in {'.jpg', '.jpeg'}:
             # Check orientation with exiftool
@@ -337,8 +347,13 @@ def bake_orientation(file_path):
             
             orientation = result.stdout.strip()
             
-            if not orientation or orientation == '1':
-                return (False, "No rotation needed (orientation=1 or missing)", None)
+            if not orientation:
+                return (False, "No rotation needed (orientation missing)", None)
+            if orientation == '1':
+                stripped, message = strip_orientation_tag(file_path)
+                if not stripped:
+                    return (False, message, 1)
+                return (True, "Removed orientation tag (orientation=1)", 1)
             
             # Map EXIF orientation to jpegtran transform
             transform_map = {
@@ -369,14 +384,10 @@ def bake_orientation(file_path):
                 return (False, f"Kept orientation {orientation} (trim would be required)", int(orientation))
             
             # Success - now remove orientation tag
-            result = subprocess.run(
-                ['exiftool', '-Orientation=', '-overwrite_original', '-P', temp_output],
-                capture_output=True, text=True, timeout=10
-            )
-            
-            if result.returncode != 0:
+            stripped, message = strip_orientation_tag(temp_output)
+            if not stripped:
                 os.remove(temp_output)
-                return (False, f"Failed to remove orientation tag", int(orientation))
+                return (False, message, int(orientation))
             
             # Replace original with rotated version
             os.replace(temp_output, file_path)
@@ -388,10 +399,15 @@ def bake_orientation(file_path):
             with Image.open(file_path) as img:
                 # Check if rotation needed
                 exif = img.getexif()
-                orientation = exif.get(0x0112, 1)
+                orientation = exif.get(0x0112)
                 
+                if orientation is None:
+                    return (False, "No rotation needed (orientation missing)", None)
                 if orientation == 1:
-                    return (False, "No rotation needed (orientation=1)", None)
+                    stripped, message = strip_orientation_tag(file_path)
+                    if not stripped:
+                        return (False, message, 1)
+                    return (True, "Removed orientation tag (orientation=1)", 1)
                 
                 # Apply rotation
                 img_rotated = ImageOps.exif_transpose(img)
