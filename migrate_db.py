@@ -24,7 +24,7 @@ def get_table_columns(cursor, table_name):
 
 
 def check_and_migrate_schema(db_path):
-    """Check schema and add any missing columns"""
+    """Check schema and add any missing columns/tables"""
     
     if not os.path.exists(db_path):
         print(f"❌ Database not found: {db_path}")
@@ -42,15 +42,17 @@ def check_and_migrate_schema(db_path):
         conn.close()
         return False
     
+    # === PHASE 1: Migrate photos table columns ===
+    
     # Get current columns
     current_columns = get_table_columns(cursor, 'photos')
     print("Current columns in 'photos' table:")
     print(f"  {', '.join(sorted(current_columns))}\n")
     
-    # Expected columns based on current schema
+    # Expected columns based on current schema (v2)
     expected_columns = {
         'id', 'original_filename', 'current_path', 'date_taken', 
-        'content_hash', 'file_size', 'file_type', 'width', 'height'
+        'content_hash', 'file_size', 'file_type', 'width', 'height', 'rating'
     }
     
     # Find missing columns
@@ -60,37 +62,71 @@ def check_and_migrate_schema(db_path):
     if extra_columns:
         print(f"ℹ️  Extra columns (not in current schema): {', '.join(extra_columns)}")
     
-    if not missing_columns:
-        print("✅ Schema is up to date! No migration needed.")
-        conn.close()
-        return True
+    if missing_columns:
+        print(f"⚠️  Missing columns: {', '.join(missing_columns)}\n")
+        print("🔧 Adding missing columns...\n")
+        
+        # Add missing columns with appropriate defaults
+        migrations = {
+            'width': 'ALTER TABLE photos ADD COLUMN width INTEGER',
+            'height': 'ALTER TABLE photos ADD COLUMN height INTEGER',
+            'original_filename': 'ALTER TABLE photos ADD COLUMN original_filename TEXT',
+            'content_hash': 'ALTER TABLE photos ADD COLUMN content_hash TEXT',
+            'file_size': 'ALTER TABLE photos ADD COLUMN file_size INTEGER',
+            'file_type': 'ALTER TABLE photos ADD COLUMN file_type TEXT',
+            'date_taken': 'ALTER TABLE photos ADD COLUMN date_taken TEXT',
+            'current_path': 'ALTER TABLE photos ADD COLUMN current_path TEXT',
+            'rating': 'ALTER TABLE photos ADD COLUMN rating INTEGER DEFAULT NULL'
+        }
+        
+        for column in missing_columns:
+            if column in migrations:
+                try:
+                    cursor.execute(migrations[column])
+                    print(f"  ✓ Added column: {column}")
+                except sqlite3.OperationalError as e:
+                    print(f"  ❌ Failed to add {column}: {e}")
+            else:
+                print(f"  ⚠️  No migration defined for: {column}")
+    else:
+        print("✅ Photos table schema is up to date!")
     
-    print(f"⚠️  Missing columns: {', '.join(missing_columns)}\n")
-    print("🔧 Adding missing columns...\n")
+    # === PHASE 2: Add new v2 tables ===
     
-    # Add missing columns with appropriate defaults
-    migrations = {
-        'width': 'ALTER TABLE photos ADD COLUMN width INTEGER',
-        'height': 'ALTER TABLE photos ADD COLUMN height INTEGER',
-        'original_filename': 'ALTER TABLE photos ADD COLUMN original_filename TEXT',
-        'content_hash': 'ALTER TABLE photos ADD COLUMN content_hash TEXT',
-        'file_size': 'ALTER TABLE photos ADD COLUMN file_size INTEGER',
-        'file_type': 'ALTER TABLE photos ADD COLUMN file_type TEXT',
-        'date_taken': 'ALTER TABLE photos ADD COLUMN date_taken TEXT',
-        'current_path': 'ALTER TABLE photos ADD COLUMN current_path TEXT',
-    }
+    print("\n🔍 Checking for v2 infrastructure tables...")
     
-    for column in missing_columns:
-        if column in migrations:
-            try:
-                cursor.execute(migrations[column])
-                print(f"  ✓ Added column: {column}")
-            except sqlite3.OperationalError as e:
-                print(f"  ❌ Failed to add {column}: {e}")
-        else:
-            print(f"  ⚠️  No migration defined for: {column}")
+    # Check for operation_state table
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='operation_state'")
+    if not cursor.fetchone():
+        print("  Adding operation_state table...")
+        from db_schema import OPERATION_STATE_TABLE_SCHEMA, OPERATION_STATE_INDICES
+        try:
+            cursor.execute(OPERATION_STATE_TABLE_SCHEMA)
+            for index_sql in OPERATION_STATE_INDICES:
+                cursor.execute(index_sql)
+            print("  ✓ Added operation_state table with indices")
+        except sqlite3.OperationalError as e:
+            print(f"  ❌ Failed to add operation_state table: {e}")
+    else:
+        print("  ✓ operation_state table exists")
     
-    # Check for missing indices and add them
+    # Check for hash_cache table
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hash_cache'")
+    if not cursor.fetchone():
+        print("  Adding hash_cache table...")
+        from db_schema import HASH_CACHE_TABLE_SCHEMA, HASH_CACHE_INDICES
+        try:
+            cursor.execute(HASH_CACHE_TABLE_SCHEMA)
+            for index_sql in HASH_CACHE_INDICES:
+                cursor.execute(index_sql)
+            print("  ✓ Added hash_cache table with indices")
+        except sqlite3.OperationalError as e:
+            print(f"  ❌ Failed to add hash_cache table: {e}")
+    else:
+        print("  ✓ hash_cache table exists")
+    
+    # === PHASE 3: Check/add indices ===
+    
     print("\n🔍 Checking indices...")
     cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")
     existing_indices = {row[0] for row in cursor.fetchall()}
@@ -98,7 +134,8 @@ def check_and_migrate_schema(db_path):
     expected_indices = {
         'idx_content_hash': 'CREATE INDEX IF NOT EXISTS idx_content_hash ON photos(content_hash)',
         'idx_date_taken': 'CREATE INDEX IF NOT EXISTS idx_date_taken ON photos(date_taken)',
-        'idx_file_type': 'CREATE INDEX IF NOT EXISTS idx_file_type ON photos(file_type)'
+        'idx_file_type': 'CREATE INDEX IF NOT EXISTS idx_file_type ON photos(file_type)',
+        'idx_rating': 'CREATE INDEX IF NOT EXISTS idx_rating ON photos(rating)'
     }
     
     for idx_name, idx_sql in expected_indices.items():
@@ -114,7 +151,10 @@ def check_and_migrate_schema(db_path):
     conn.close()
     
     print("\n✅ Migration complete!")
-    print(f"\nYou can now use this database. Try importing files again.")
+    print(f"\nDatabase is now at schema v2 with:")
+    print(f"  • Photos table with rating column")
+    print(f"  • operation_state table (resumable operations)")
+    print(f"  • hash_cache table (performance optimization)")
     return True
 
 

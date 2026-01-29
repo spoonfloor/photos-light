@@ -2,36 +2,11 @@
 
 Last updated: January 29, 2026
 
-**Status:** 6 remaining bugs
+**Status:** 8 remaining bugs
 
 ---
 
 ## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
-
-### Update Database - Stuck on Removing Untracked Files
-
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 2-3 hours  
-**Status:** NOT STARTED
-
-**Issue:** Update database is stuck on removing untracked files, falsely reporting untracked files
-
-- Operation gets stuck during "removing untracked files" phase
-- Reports untracked files that don't actually exist or are false positives
-- Blocks completion of update index operation
-- May be related to file path detection or database query logic
-
-**Impact:** Prevents users from cleaning up their library index, can leave database in inconsistent state
-
-**Fix approach:**
-
-- Debug untracked file detection logic
-- Check if file paths are being compared correctly
-- Verify database query for untracked files
-- Add timeout or skip mechanism for problematic files
-- Improve error handling and reporting
-
----
 
 ### Terraforming - Cancel/Go Back Causes Stalled State
 
@@ -167,29 +142,107 @@ Last updated: January 29, 2026
 
 ---
 
+### Grid - Show Video Icon on Thumbnails
+
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
+
+**Issue:** Show video icon in grid
+
+- Video files appear the same as photos in grid view
+- No visual indicator to distinguish videos from images
+- User must click to discover if item is video or photo
+- Makes browsing and finding videos difficult
+
+**Impact:** Poor discoverability, user can't identify videos at a glance
+
+**Fix approach:**
+
+- Add video icon overlay to video thumbnails in grid
+- Use subtle icon (play button or video camera symbol)
+- **Position in bottom-left corner of thumbnail**
+- Ensure icon is visible but not obtrusive
+- Consider also showing duration for videos
+
+---
+
+### Grid - Show Star Icon on Thumbnails
+
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
+
+**Issue:** Show star icon in grid
+
+- No visual indicator for favorited/starred photos in grid view
+- User can't see which photos are starred without opening them
+- Makes browsing and finding favorite photos difficult
+
+**Impact:** Poor discoverability of starred/favorite photos
+
+**Fix approach:**
+
+- Add star icon overlay to starred photo thumbnails in grid
+- Use subtle icon (filled or outlined star)
+- **Position in top-right corner of thumbnail**
+- Ensure icon is visible but not obtrusive
+- Coordinates with video icon (bottom-left) to avoid overlap
+- May require adding star/favorite functionality if not already implemented
+
+---
+
+### Picker - Add Shift-Select Support
+
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
+
+**Issue:** Allow shift-select in picker list
+
+- Picker list currently requires clicking each item individually
+- No shift-click to select range of items
+- Makes selecting multiple files/folders tedious
+- Standard UX pattern missing
+
+**Impact:** Inefficient multi-selection workflow, especially for large selections
+
+**Fix approach:**
+
+- Implement shift-click range selection in picker
+- Track last clicked item
+- On shift-click, select all items between last click and current click
+- Works in both folder picker and photo picker
+- Ensure compatibility with existing checkbox selection
+- Test edge cases (shift-select in reverse, across different parents, etc.)
+
+---
+
 ## Recommended Fix Order
 
 Based on impact, frequency, and effort (quick wins first, then deep work):
 
-1. 🔴 **Update Database - Stuck on Removing Untracked Files** (2-3 hrs, CRITICAL - blocks index cleanup)
-2. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access)
-3. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
-4. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
-5. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
-6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+1. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access)
+2. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
+3. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
+4. 🟡 **Grid - Show Video Icon on Thumbnails** (1-2 hrs, discoverability)
+5. 🟡 **Grid - Show Star Icon on Thumbnails** (1-2 hrs, discoverability)
+6. 🟡 **Picker - Add Shift-Select Support** (1-2 hrs, multi-selection efficiency)
+7. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
+8. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 
 ---
 
 ## SUMMARY
 
-**Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
+**Next up:** Terraforming - Cancel/Go Back Causes Stalled State (CRITICAL - 1-2 hrs)
 
-**Total remaining:** 6 bugs
+**Total remaining:** 8 bugs
 
-- 🔴 Critical: 4 bugs (Update Database Stuck, Terraforming Cancel Stall, Lightbox RAW Format, Lightbox MOV Videos)
-- 🟡 Polish: 2 bugs (Lightbox Rotation, Performance Research)
+- 🔴 Critical: 3 bugs (Terraforming Cancel Stall, Lightbox RAW Format, Lightbox MOV Videos)
+- 🟡 Polish: 5 bugs (Grid Video Icon, Grid Star Icon, Picker Shift-Select, Lightbox Rotation, Performance Research)
 
-**Estimated total effort:** ~11-14 hours for remaining bugs + research (excluding performance optimization implementation)
+**Estimated total effort:** ~15-18 hours for remaining bugs + research (excluding performance optimization implementation)
 
 ---
 
@@ -200,6 +253,7 @@ These are enhancement ideas, not bugs. To be considered for future feature work.
 ### Library Management
 
 - Add rescan button to folder picker
+- Picker should refresh on change to disk contents
 - Add keyboard shortcut for desktop (command-shift D)
 - Photo picker is a bit sluggish
 - 'Select this location' should read 'Open' and be disabled for folders without DB

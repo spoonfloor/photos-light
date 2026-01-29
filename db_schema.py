@@ -1,73 +1,35 @@
 """
 Single Source of Truth for Database Schema
-All database creation and migration logic should use these definitions.
+
+This file imports and aliases the current schema version (v3).
+All application code should import from this file, not version-specific files.
+
+Version History:
+- v1: Original schema (photos, deleted_photos)
+- v2: Added hash_cache, operation_state, rating column (overengineered)
+- v3: Removed operation_state, kept hash_cache + rating (recommended)
+
+Current: v3
 """
 
-# Schema version for migrations
-SCHEMA_VERSION = 1
+from db_schema_v3 import (
+    SCHEMA_VERSION,
+    PHOTOS_TABLE_SCHEMA,
+    DELETED_PHOTOS_TABLE_SCHEMA,
+    HASH_CACHE_TABLE_SCHEMA,
+    PHOTOS_INDICES,
+    HASH_CACHE_INDICES,
+    create_database_schema,
+    get_schema_info
+)
 
-# Photos table schema
-PHOTOS_TABLE_SCHEMA = """
-    CREATE TABLE IF NOT EXISTS photos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        original_filename TEXT NOT NULL,
-        current_path TEXT NOT NULL UNIQUE,
-        date_taken TEXT,
-        content_hash TEXT NOT NULL UNIQUE,
-        file_size INTEGER NOT NULL,
-        file_type TEXT NOT NULL,
-        width INTEGER,
-        height INTEGER
-    )
-"""
-
-# Deleted photos table schema
-DELETED_PHOTOS_TABLE_SCHEMA = """
-    CREATE TABLE IF NOT EXISTS deleted_photos (
-        id INTEGER PRIMARY KEY,
-        original_path TEXT NOT NULL,
-        trash_filename TEXT NOT NULL,
-        deleted_at TEXT NOT NULL,
-        photo_data TEXT NOT NULL
-    )
-"""
-
-# Indices for photos table
-PHOTOS_INDICES = [
-    "CREATE INDEX IF NOT EXISTS idx_content_hash ON photos(content_hash)",
-    "CREATE INDEX IF NOT EXISTS idx_date_taken ON photos(date_taken)",
-    "CREATE INDEX IF NOT EXISTS idx_file_type ON photos(file_type)"
+__all__ = [
+    'SCHEMA_VERSION',
+    'PHOTOS_TABLE_SCHEMA',
+    'DELETED_PHOTOS_TABLE_SCHEMA',
+    'HASH_CACHE_TABLE_SCHEMA',
+    'PHOTOS_INDICES',
+    'HASH_CACHE_INDICES',
+    'create_database_schema',
+    'get_schema_info'
 ]
-
-
-def create_database_schema(cursor):
-    """
-    Create all tables and indices in the database.
-    
-    Args:
-        cursor: SQLite cursor object
-    """
-    # Create tables
-    cursor.execute(PHOTOS_TABLE_SCHEMA)
-    cursor.execute(DELETED_PHOTOS_TABLE_SCHEMA)
-    
-    # Create indices
-    for index_sql in PHOTOS_INDICES:
-        cursor.execute(index_sql)
-
-
-def get_schema_info():
-    """
-    Get human-readable schema information for documentation.
-    
-    Returns:
-        dict: Schema information including version and table definitions
-    """
-    return {
-        'version': SCHEMA_VERSION,
-        'tables': {
-            'photos': PHOTOS_TABLE_SCHEMA,
-            'deleted_photos': DELETED_PHOTOS_TABLE_SCHEMA
-        },
-        'indices': PHOTOS_INDICES
-    }

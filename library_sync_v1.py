@@ -10,8 +10,6 @@ import os
 import hashlib
 import json
 from datetime import datetime
-from hash_cache import HashCache
-from operation_state import OperationStateManager, CheckpointHelper, OperationType
 
 
 def count_media_files(library_path):
@@ -119,7 +117,7 @@ def estimate_duration(file_count):
 def synchronize_library_generator(library_path, db_connection, extract_exif_date_func, 
                                    get_image_dimensions_func, mode='incremental'):
     """
-    Core library synchronization with streaming progress and resume capability.
+    Core library synchronization with streaming progress.
     
     Args:
         library_path: Path to photo library folder
@@ -145,23 +143,6 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     all_exts = photo_exts | video_exts
     
     cursor = db_connection.cursor()
-    
-    # Initialize hash cache
-    hash_cache = HashCache(db_connection)
-    print(f"📦 Hash cache initialized")
-    
-    # Initialize operation state tracking
-    op_type = OperationType.REBUILD_DATABASE if mode == 'full' else OperationType.UPDATE_INDEX
-    op_manager = OperationStateManager(db_connection)
-    operation_id = op_manager.start_operation(op_type)
-    
-    # Check for resume
-    checkpoint_data = op_manager.get_checkpoint(operation_id)
-    resume_from = checkpoint_data.get('processed_files', 0) if checkpoint_data else 0
-    
-    if resume_from > 0:
-        print(f"🔄 Resuming from file {resume_from}")
-        yield f"event: resume\ndata: {json.dumps({'resumed_from': resume_from})}\n\n"
     
     # Phase 0: Scan filesystem
     print(f"\n🔄 LIBRARY SYNC ({mode} mode): Scanning filesystem...")
@@ -227,24 +208,9 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     untracked_count = len(untracked_files_list)
     
     if untracked_count > 0:
-        print(f"\n📝 Adding {untracked_count} untracked files (with hash caching)...")
-        
-        # Setup checkpoint helper (checkpoint every 100 files)
-        checkpoint_helper = CheckpointHelper(op_manager, operation_id, checkpoint_interval=100)
-        
+        print(f"\n📝 Adding {untracked_count} untracked files...")
         for idx, mole_path in enumerate(untracked_files_list, 1):
-            # Skip if resuming and already processed
-            if idx <= resume_from:
-                continue
-            
             yield f"event: progress\ndata: {json.dumps({'phase': 'adding_untracked', 'current': idx, 'total': untracked_count})}\n\n"
-            
-            # Checkpoint progress
-            checkpoint_helper.maybe_checkpoint(idx, {
-                'phase': 'adding_untracked',
-                'processed_files': idx,
-                'total_files': untracked_count
-            })
             
             try:
                 full_path = os.path.join(library_path, mole_path)
@@ -253,16 +219,12 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
                 file_type = 'photo' if ext in photo_exts else 'video'
                 file_size = os.path.getsize(full_path)
                 
-                # Compute hash with caching
-                content_hash, cache_hit = hash_cache.get_hash(full_path)
-                if cache_hit:
-                    print(f"  {idx}/{untracked_count}. {filename} (hash from cache)")
-                else:
-                    print(f"  {idx}/{untracked_count}. {filename} (computed hash)")
-                
-                if content_hash is None:
-                    print(f"  ⚠️  Failed to hash {mole_path}")
-                    continue
+                # Compute hash
+                sha256 = hashlib.sha256()
+                with open(full_path, 'rb') as f:
+                    while chunk := f.read(1024 * 1024):
+                        sha256.update(chunk)
+                content_hash = sha256.hexdigest()
                 
                 # Extract EXIF date
                 date_taken = extract_exif_date_func(full_path)
@@ -285,17 +247,6 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
         
         db_connection.commit()
         print(f"  ✓ Added {len(details['untracked_files'])} untracked files")
-        
-        # Show cache statistics
-        cache_stats = hash_cache.get_stats()
-        print(f"  📊 Cache stats: {cache_stats['hit_rate']}% hit rate ({cache_stats['memory_hits']} memory, {cache_stats['db_hits']} DB, {cache_stats['misses']} misses)")
-        
-        # Final checkpoint
-        checkpoint_helper.force_checkpoint({
-            'phase': 'completed',
-            'processed_files': untracked_count,
-            'total_files': untracked_count
-        })
     
     # Phase 3: Remove empty folders (loop until no more found - domino effect)
     print(f"\n🗑️  Removing empty folders...")

@@ -6,6 +6,35 @@ Issues that have been fixed and verified.
 
 ## Session 16: January 29, 2026
 
+### Update Database - Stuck on Removing Untracked Files
+
+**Fixed:** Could not reproduce - appears to be resolved  
+**Version:** v242  
+**Date:** January 29, 2026
+
+**Issue:** Update database reported being stuck on removing untracked files
+
+**Symptoms:**
+
+- Operation appeared stuck during "removing untracked files" phase
+- Reports untracked files that don't actually exist or are false positives
+- Blocks completion of update index operation
+- May be related to file path detection or database query logic
+
+**Impact:** Prevented users from cleaning up their library index, could leave database in inconsistent state
+
+**Resolution:**
+
+- Unable to reproduce issue with standard test cases
+- Tested with 5-10 manually added untracked files
+- Update database operation completed successfully
+- No hang observed, progress updated normally
+- Likely fixed by previous improvements to library sync logic
+
+**Note:** Issue may have been related to very large libraries on NAS storage where operation appeared stuck due to slow performance rather than actual hang. See OPERATIONS_ANALYSIS.md for performance optimization opportunities.
+
+---
+
 ### Terraforming - Now Destroys Current Database
 
 **Fixed:** Terraforming now properly handles existing databases  
@@ -15,11 +44,13 @@ Issues that have been fixed and verified.
 **Issue:** Directories with existing databases were screened out from terraforming
 
 **Symptoms:**
+
 - Couldn't terraform a directory that contained a database (even valid ones)
 - Database should be flushed like other non-media files during terraform
 - Old database was left intact, causing potential conflicts
 
 **Root cause:**
+
 - Backend only scanned for media files when database didn't exist
 - Frontend routed folders with databases directly to "open library" path
 - Terraform choice dialog never appeared for folders with existing databases
@@ -27,6 +58,7 @@ Issues that have been fixed and verified.
 **Impact:** Prevented users from converting libraries with existing databases, left stale database files
 
 **Resolution:**
+
 - Backend: Removed `if not exists:` condition - now always scans for media files
 - Frontend: Changed SCENARIO 1 condition from `if (checkResult.exists)` to `if (checkResult.exists && !checkResult.has_media)`
 - Result: Directories with database + media now show terraform choice dialog
@@ -34,6 +66,7 @@ Issues that have been fixed and verified.
 - Fresh database created after terraform completes
 
 **Files changed:**
+
 - `app.py` (check_library function)
 - `static/js/main.js` (browseSwitchLibrary function)
 

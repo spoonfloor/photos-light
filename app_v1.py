@@ -6,7 +6,6 @@ Photo Viewer - Flask Server with Database API
 from flask import Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
 import sqlite3
 from functools import wraps
-from hash_cache import HashCache
 
 def handle_db_corruption(f):
     """
@@ -105,16 +104,9 @@ error_logger = logging.getLogger('errors')
 error_logger.setLevel(logging.WARNING)
 
 def get_db_connection():
-    """Create database connection with WAL mode enabled"""
+    """Create database connection"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # Return rows as dictionaries
-    
-    # Enable Write-Ahead Logging for better concurrency
-    conn.execute("PRAGMA journal_mode=WAL")
-    
-    # Enable foreign keys for data integrity
-    conn.execute("PRAGMA foreign_keys=ON")
-    
     return conn
 
 def get_image_dimensions(file_path):
@@ -745,7 +737,6 @@ def update_photo_date_with_files(photo_id, new_date, conn):
             # Continue anyway - not critical for date change operation
         
         # Phase 1: Write EXIF
-        exif_write_succeeded = False
         try:
             if file_type in ('photo', 'image'):  # Handle both for backward compatibility
                 write_photo_exif(old_full_path, new_date)
@@ -755,79 +746,48 @@ def update_photo_date_with_files(photo_id, new_date, conn):
                 raise Exception(f"Unknown file type: {file_type}")
             
             transaction.log_exif_write(old_full_path, old_date)
-            exif_write_succeeded = True
             
-        except Exception as e:
-            print(f"  ❌ EXIF write failed: {e}")
-            exif_write_succeeded = False
-            # Continue to check if file was actually modified
-        
-        # Phase 1.5: Rehash file (only if EXIF write succeeded or file might have changed)
-        # Use hash cache to detect if file actually changed
-        try:
-            if exif_write_succeeded:
-                # Initialize hash cache
-                hash_cache = HashCache(conn)
+            # Rehash file after EXIF write (content changed)
+            sha256 = hashlib.sha256()
+            with open(old_full_path, 'rb') as f:
+                while chunk := f.read(1024 * 1024):
+                    sha256.update(chunk)
+            new_hash = sha256.hexdigest()
+            
+            # Get old hash from database
+            cursor.execute("SELECT content_hash FROM photos WHERE id = ?", (photo_id,))
+            row = cursor.fetchone()
+            old_hash = row['content_hash'] if row else None
+            
+            if new_hash != old_hash:
+                print(f"  📝 Hash changed: {old_hash[:8] if old_hash else 'N/A'} → {new_hash[:8]}")
                 
-                # Get new hash (cache will detect if file unchanged despite EXIF write attempt)
-                new_hash, cache_hit = hash_cache.get_hash(old_full_path)
+                # Check if new hash already exists (collision detection)
+                cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?", 
+                               (new_hash, photo_id))
+                existing = cursor.fetchone()
                 
-                if cache_hit:
-                    # File unchanged - EXIF write had no effect (possibly already had this date)
-                    print(f"  ℹ️  File unchanged (cache hit) - skipping hash update")
-                    new_hash = None  # Signal to skip hash-related operations
-                else:
-                    print(f"  📝 Hash computed after EXIF write: {new_hash[:8]}")
-                
-                # Get old hash from database
-                cursor.execute("SELECT content_hash FROM photos WHERE id = ?", (photo_id,))
-                row = cursor.fetchone()
-                old_hash = row['content_hash'] if row else None
-                
-                if new_hash and new_hash != old_hash:
-                    print(f"  📝 Hash changed: {old_hash[:8] if old_hash else 'N/A'} → {new_hash[:8]}")
+                if existing:
+                    # Hash collision - this photo is now a duplicate
+                    print(f"  ⚠️  Duplicate detected after rehash (existing ID: {existing['id']})")
                     
-                    # Check if new hash already exists (collision detection)
-                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?", 
-                                   (new_hash, photo_id))
-                    existing = cursor.fetchone()
+                    # Move to trash
+                    dup_dir = os.path.join(TRASH_DIR, 'duplicates')
+                    os.makedirs(dup_dir, exist_ok=True)
+                    dup_filename = os.path.basename(old_full_path)
+                    dup_path = os.path.join(dup_dir, dup_filename)
                     
-                    if existing:
-                        # Hash collision - this photo is now a duplicate
-                        print(f"  ⚠️  Duplicate detected after rehash (existing ID: {existing['id']})")
-                        
-                        # Move to trash
-                        dup_dir = os.path.join(TRASH_DIR, 'duplicates')
-                        os.makedirs(dup_dir, exist_ok=True)
-                        dup_filename = os.path.basename(old_full_path)
-                        dup_path = os.path.join(dup_dir, dup_filename)
-                        
-                        # Handle filename collision in trash
-                        counter = 1
-                        while os.path.exists(dup_path):
-                            base, ext = os.path.splitext(dup_filename)
-                            dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
-                            counter += 1
-                        
-                        shutil.move(old_full_path, dup_path)
-                        print(f"  🗑️  Moved to trash: {os.path.basename(dup_path)}")
-                        
-                        # Delete old thumbnail if exists
-                        if old_hash:
-                            old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
-                            if os.path.exists(old_thumb_path):
-                                os.remove(old_thumb_path)
-                                cleanup_empty_thumbnail_folders(old_thumb_path)
-                                print(f"  🗑️  Deleted old thumbnail")
-                        
-                        # Delete from database
-                        cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
-                        
-                        # Return special status for duplicate (success, but marked as duplicate)
-                        return True, "DUPLICATE", transaction
+                    # Handle filename collision in trash
+                    counter = 1
+                    while os.path.exists(dup_path):
+                        base, ext = os.path.splitext(dup_filename)
+                        dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
+                        counter += 1
                     
-                    # No collision - safe to update hash
-                    # Delete old thumbnail if hash changed (keep DB squeaky clean)
+                    shutil.move(old_full_path, dup_path)
+                    print(f"  🗑️  Moved to trash: {os.path.basename(dup_path)}")
+                    
+                    # Delete old thumbnail if exists
                     if old_hash:
                         old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
                         if os.path.exists(old_thumb_path):
@@ -835,22 +795,25 @@ def update_photo_date_with_files(photo_id, new_date, conn):
                             cleanup_empty_thumbnail_folders(old_thumb_path)
                             print(f"  🗑️  Deleted old thumbnail")
                     
-                    # Update database with new hash
-                    cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
-                    transaction.log_hash_update(photo_id, old_hash, new_hash)
+                    # Delete from database
+                    cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+                    
+                    # Return special status for duplicate (success, but marked as duplicate)
+                    return True, "DUPLICATE", transaction
                 
-                elif new_hash is None:
-                    # File unchanged - no hash update needed
-                    pass
-                else:
-                    # Hash unchanged - EXIF write had no effect
-                    print(f"  ℹ️  Hash unchanged - file already had this metadata")
+                # No collision - safe to update hash
+                # Delete old thumbnail if hash changed (keep DB squeaky clean)
+                if old_hash:
+                    old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
+                    if os.path.exists(old_thumb_path):
+                        os.remove(old_thumb_path)
+                        cleanup_empty_thumbnail_folders(old_thumb_path)
+                        print(f"  🗑️  Deleted old thumbnail")
+                
+                # Update database with new hash
+                cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
+                # Note: Old thumbnail with old hash will be orphaned, new one generated on-demand
             
-            else:
-                # EXIF write failed - file is unchanged, skip rehashing entirely
-                print(f"  ⚠️  Skipping rehash - EXIF write failed, file unchanged")
-                new_hash = None
-                
         except Exception as e:
             transaction.log_failure(old_filename, e)
             raise
@@ -2434,9 +2397,6 @@ def import_from_paths():
             conn = get_db_connection()
             cursor = conn.cursor()
             
-            # Initialize hash cache for this import
-            hash_cache = HashCache(conn)
-            
             for file_index, source_path in enumerate(file_paths, 1):
                 try:
                     if not os.path.exists(source_path):
@@ -2448,18 +2408,9 @@ def import_from_paths():
                     filename = os.path.basename(source_path)
                     print(f"{file_index}. Processing: {filename}")
                     
-                    # Hash the file (with caching)
-                    content_hash, cache_hit = hash_cache.get_hash(source_path)
-                    if cache_hit:
-                        print(f"   Hash: {content_hash[:16]}... (cached)")
-                    else:
-                        print(f"   Hash: {content_hash[:16]}...")
-                    
-                    if content_hash is None:
-                        print(f"   ❌ Failed to hash file")
-                        error_count += 1
-                        yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                        continue
+                    # Hash the file
+                    content_hash = compute_hash(source_path)
+                    print(f"   Hash: {content_hash[:16]}...")
                     
                     # Check for duplicates
                     cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
@@ -4556,230 +4507,6 @@ def terraform_library():
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 
-# ============================================================================
-# FAVORITES / RATING API
-# ============================================================================
-
-@app.route('/api/photo/<int:photo_id>/favorite', methods=['POST'])
-@handle_db_corruption
-def toggle_favorite(photo_id):
-    """
-    Toggle favorite status for a photo (0 ↔ 5 rating).
-    
-    POST body (optional):
-        {
-            "rating": 5  // Explicit rating (0-5), default toggles 0↔5
-        }
-    
-    Returns:
-        {
-            "photo_id": int,
-            "rating": int,  // New rating (0 or 5)
-            "favorited": bool  // true if now favorited
-        }
-    """
-    from file_operations import extract_exif_rating, write_exif_rating
-    
-    try:
-        data = request.json or {}
-        explicit_rating = data.get('rating')
-        
-        # Get photo path
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
-        row = cursor.fetchone()
-        
-        if not row:
-            return jsonify({'error': 'Photo not found'}), 404
-        
-        rel_path = row['current_path']
-        full_path = os.path.join(LIBRARY_PATH, rel_path)
-        
-        if not os.path.exists(full_path):
-            return jsonify({'error': 'File not found on disk'}), 404
-        
-        # Get current rating
-        current_rating = extract_exif_rating(full_path)
-        if current_rating is None:
-            current_rating = 0
-        
-        # Determine new rating
-        if explicit_rating is not None:
-            # Use explicit rating
-            new_rating = int(explicit_rating)
-            if not 0 <= new_rating <= 5:
-                return jsonify({'error': 'Rating must be 0-5'}), 400
-        else:
-            # Toggle: 0 ↔ 5
-            new_rating = 0 if current_rating == 5 else 5
-        
-        # Write EXIF rating
-        success = write_exif_rating(full_path, new_rating)
-        
-        if not success:
-            return jsonify({'error': 'Failed to write EXIF rating'}), 500
-        
-        # Update database
-        cursor.execute("UPDATE photos SET rating = ? WHERE id = ?", (new_rating, photo_id))
-        conn.commit()
-        conn.close()
-        
-        print(f"⭐ Photo {photo_id}: rating {current_rating} → {new_rating}")
-        
-        return jsonify({
-            'photo_id': photo_id,
-            'rating': new_rating,
-            'favorited': new_rating == 5
-        })
-    
-    except Exception as e:
-        error_logger.error(f"Error toggling favorite: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/photos/favorites', methods=['GET'])
-@handle_db_corruption
-def get_favorites():
-    """
-    Get all favorited photos (rating = 5).
-    
-    Returns:
-        {
-            "photos": [
-                {
-                    "id": int,
-                    "current_path": str,
-                    "date_taken": str,
-                    "rating": int
-                },
-                ...
-            ],
-            "count": int
-        }
-    """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, current_path, date_taken, rating
-            FROM photos
-            WHERE rating = 5
-            ORDER BY date_taken DESC
-        """)
-        
-        photos = []
-        for row in cursor.fetchall():
-            photos.append({
-                'id': row['id'],
-                'current_path': row['current_path'],
-                'date_taken': row['date_taken'],
-                'rating': row['rating']
-            })
-        
-        conn.close()
-        
-        return jsonify({
-            'photos': photos,
-            'count': len(photos)
-        })
-    
-    except Exception as e:
-        error_logger.error(f"Error getting favorites: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/photos/bulk-favorite', methods=['POST'])
-@handle_db_corruption
-def bulk_favorite():
-    """
-    Set favorite status for multiple photos.
-    
-    POST body:
-        {
-            "photo_ids": [1, 2, 3],
-            "rating": 5  // 0-5 (5 = favorite, 0 = unfavorite)
-        }
-    
-    Returns:
-        {
-            "success_count": int,
-            "error_count": int,
-            "errors": [{"photo_id": int, "error": str}, ...]
-        }
-    """
-    from file_operations import write_exif_rating
-    
-    try:
-        data = request.json
-        photo_ids = data.get('photo_ids', [])
-        rating = int(data.get('rating', 5))
-        
-        if not 0 <= rating <= 5:
-            return jsonify({'error': 'Rating must be 0-5'}), 400
-        
-        if not photo_ids:
-            return jsonify({'error': 'No photo_ids provided'}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        success_count = 0
-        error_count = 0
-        errors = []
-        
-        for photo_id in photo_ids:
-            try:
-                # Get photo path
-                cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
-                row = cursor.fetchone()
-                
-                if not row:
-                    errors.append({'photo_id': photo_id, 'error': 'Photo not found'})
-                    error_count += 1
-                    continue
-                
-                rel_path = row['current_path']
-                full_path = os.path.join(LIBRARY_PATH, rel_path)
-                
-                if not os.path.exists(full_path):
-                    errors.append({'photo_id': photo_id, 'error': 'File not found on disk'})
-                    error_count += 1
-                    continue
-                
-                # Write EXIF rating
-                success = write_exif_rating(full_path, rating)
-                
-                if not success:
-                    errors.append({'photo_id': photo_id, 'error': 'Failed to write EXIF'})
-                    error_count += 1
-                    continue
-                
-                # Update database
-                cursor.execute("UPDATE photos SET rating = ? WHERE id = ?", (rating, photo_id))
-                success_count += 1
-            
-            except Exception as e:
-                errors.append({'photo_id': photo_id, 'error': str(e)})
-                error_count += 1
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"⭐ Bulk favorite: {success_count} success, {error_count} errors")
-        
-        return jsonify({
-            'success_count': success_count,
-            'error_count': error_count,
-            'errors': errors
-        })
-    
-    except Exception as e:
-        error_logger.error(f"Error in bulk favorite: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
 if __name__ == '__main__':
     print("\n🖼️  Photos Light Starting...")
     print(f"📁 Static files: {STATIC_DIR}")
@@ -4794,15 +4521,6 @@ if __name__ == '__main__':
         if library_path and db_path and os.path.exists(library_path) and os.path.exists(db_path):
             print(f"✅ Loading library: {library_path}")
             update_app_paths(library_path, db_path)
-            
-            # Auto-migrate database to latest schema
-            print(f"🔍 Checking database schema...")
-            try:
-                from migrate_db import check_and_migrate_schema
-                check_and_migrate_schema(db_path)
-            except Exception as e:
-                print(f"⚠️  Migration check failed: {e}")
-                print(f"   Database may need manual migration")
         else:
             print(f"⚠️  Saved library not found - user will be prompted")
             delete_config()  # Clean up stale config
