@@ -2,7 +2,7 @@
 
 Last updated: January 29, 2026
 
-**Status:** 8 remaining bugs
+**Status:** 6 remaining bugs
 
 ---
 
@@ -30,55 +30,6 @@ Last updated: January 29, 2026
 - Verify database query for untracked files
 - Add timeout or skip mechanism for problematic files
 - Improve error handling and reporting
-
----
-
-### Date Change to Single Date - Not Working
-
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 2-3 hours  
-**Status:** NOT STARTED
-
-**Issue:** Date change to single date still not working (nature photos used for test)
-
-- User attempts to change date on photos
-- Operation fails or doesn't apply changes
-- Core functionality that should be working
-- May be related to previous totalEl error or separate issue
-
-**Impact:** Prevents users from correcting photo dates, core organizational feature
-
-**Fix approach:**
-
-- Debug date change operation for single date changes
-- Check if backend is receiving/processing request correctly
-- Verify file system operations are completing
-- Check database updates are being applied
-- Review any error logs or console output
-
----
-
-### Terraforming - Should Destroy Current Database
-
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 1 hour  
-**Status:** NOT STARTED
-
-**Issue:** Terraforming should destroy current database
-
-- Library conversion (terraforming) creates new organized structure
-- Old database should be removed/replaced
-- Currently may be leaving old database intact
-- Can cause confusion or database conflicts
-
-**Impact:** Leaves stale database files, potential for using wrong database or data inconsistency
-
-**Fix approach:**
-
-- Add database deletion/replacement step to terraforming process
-- Ensure new database is created fresh
-- Verify no remnants of old database remain
-- May need backup/safety checks before deletion
 
 ---
 
@@ -221,13 +172,11 @@ Last updated: January 29, 2026
 Based on impact, frequency, and effort (quick wins first, then deep work):
 
 1. 🔴 **Update Database - Stuck on Removing Untracked Files** (2-3 hrs, CRITICAL - blocks index cleanup)
-2. 🔴 **Date Change to Single Date - Not Working** (2-3 hrs, CRITICAL - core functionality)
-3. 🔴 **Terraforming - Should Destroy Current Database** (1 hr, CRITICAL - data integrity)
-4. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access)
-5. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
-6. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
-7. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
-8. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+2. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access)
+3. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
+4. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
+5. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
+6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 
 ---
 
@@ -235,12 +184,12 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
 
-**Total remaining:** 8 bugs
+**Total remaining:** 6 bugs
 
-- 🔴 Critical: 6 bugs (Update Database Stuck, Date Change Not Working, Terraforming Database Cleanup, Terraforming Cancel Stall, Lightbox RAW Format, Lightbox MOV Videos)
+- 🔴 Critical: 4 bugs (Update Database Stuck, Terraforming Cancel Stall, Lightbox RAW Format, Lightbox MOV Videos)
 - 🟡 Polish: 2 bugs (Lightbox Rotation, Performance Research)
 
-**Estimated total effort:** ~14-18 hours for remaining bugs + research (excluding performance optimization implementation)
+**Estimated total effort:** ~11-14 hours for remaining bugs + research (excluding performance optimization implementation)
 
 ---
 

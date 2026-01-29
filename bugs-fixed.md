@@ -6,6 +6,60 @@ Issues that have been fixed and verified.
 
 ## Session 16: January 29, 2026
 
+### Terraforming - Now Destroys Current Database
+
+**Fixed:** Terraforming now properly handles existing databases  
+**Version:** v242  
+**Date:** January 29, 2026
+
+**Issue:** Directories with existing databases were screened out from terraforming
+
+**Symptoms:**
+- Couldn't terraform a directory that contained a database (even valid ones)
+- Database should be flushed like other non-media files during terraform
+- Old database was left intact, causing potential conflicts
+
+**Root cause:**
+- Backend only scanned for media files when database didn't exist
+- Frontend routed folders with databases directly to "open library" path
+- Terraform choice dialog never appeared for folders with existing databases
+
+**Impact:** Prevented users from converting libraries with existing databases, left stale database files
+
+**Resolution:**
+- Backend: Removed `if not exists:` condition - now always scans for media files
+- Frontend: Changed SCENARIO 1 condition from `if (checkResult.exists)` to `if (checkResult.exists && !checkResult.has_media)`
+- Result: Directories with database + media now show terraform choice dialog
+- Existing terraform code already correctly moves database to `.trash/errors/` with other non-media files
+- Fresh database created after terraform completes
+
+**Files changed:**
+- `app.py` (check_library function)
+- `static/js/main.js` (browseSwitchLibrary function)
+
+---
+
+### Date Change to Single Date - Fixed
+
+**Fixed:** Date change to single date now working  
+**Version:** v241  
+**Date:** January 29, 2026
+
+**Issue:** Date change to single date was not working (tested with nature photos)
+
+**Symptoms:**
+
+- User attempts to change date on photos
+- Operation failed or didn't apply changes
+- Core organizational functionality was broken
+- May have been related to previous totalEl error or separate issue
+
+**Impact:** Core functionality - prevented users from correcting photo dates
+
+**Resolution:** Date change operation fixed and verified working for single date changes
+
+---
+
 ### Show Duplicates Feature - Removed
 
 **Removed:** Show duplicates utility removed from codebase  
@@ -16,6 +70,7 @@ Issues that have been fixed and verified.
 The "Show duplicates" feature was removed because duplicates are prevented at all entry points in the application, making this utility redundant.
 
 **Why duplicates can't exist:**
+
 1. **Import:** Detects duplicate `content_hash` before importing, rejects duplicates
 2. **Date change:** Detects hash collisions after rehashing, moves to `.trash/duplicates/`
 3. **Terraform:** Checks for duplicates 3 times (before orientation baking, after baking, after EXIF write), moves to `.trash/duplicates/`
@@ -23,6 +78,7 @@ The "Show duplicates" feature was removed because duplicates are prevented at al
 5. **Update index:** Uses `INSERT OR IGNORE` to silently skip duplicates
 
 **Why removal makes sense:**
+
 - ✅ **Prevention is better than cleanup** - All operations already prevent duplicates via UNIQUE constraint
 - ✅ **Edge case feature** - Solves a problem that shouldn't exist in normal usage
 - ✅ **Hard to test** - Testing would require manual SQL manipulation to bypass UNIQUE constraint
@@ -30,6 +86,7 @@ The "Show duplicates" feature was removed because duplicates are prevented at al
 - ✅ **No loss of functionality** - Duplicate detection/handling already built into all operations
 
 **Investigation findings:**
+
 - Feature was fully functional (could scan and remove duplicates)
 - Button renamed "Show duplicates" (v194) to reflect review-first UX
 - Historical docs suggested eventual removal (Phase 4) once prevention was solid
@@ -37,6 +94,7 @@ The "Show duplicates" feature was removed because duplicates are prevented at al
 - Current v1 schema uses strict `content_hash UNIQUE` constraint
 
 **Code removed:**
+
 - Backend: `/api/utilities/duplicates` endpoint (97 lines)
 - Frontend HTML: `duplicatesOverlay.html` fragment (73 lines)
 - Frontend JS: All duplicate functions and state (367 lines)
@@ -67,6 +125,7 @@ The Enter key handler used `document.querySelector('.btn-primary:not([style*="di
 Replaced the CSS selector approach with `offsetParent` check. The `offsetParent` property returns `null` if an element or ANY of its ancestors has `display: none`, making it the standard DOM API for visibility detection.
 
 Changed from:
+
 ```javascript
 const primaryBtn = document.querySelector(
   '.btn-primary:not([style*="display: none"]):not(:disabled)',
@@ -74,6 +133,7 @@ const primaryBtn = document.querySelector(
 ```
 
 To:
+
 ```javascript
 const allPrimaryBtns = document.querySelectorAll('.btn-primary:not(:disabled)');
 let primaryBtn = null;
@@ -89,6 +149,7 @@ for (const btn of allPrimaryBtns) {
 Fixes Enter key behavior across ALL overlays—not just Delete dialog. Any scenario with multiple overlays in DOM (even if hidden) will now correctly identify which button is actually visible.
 
 **Files changed:**
+
 - `static/js/main.js` (v237) - Lines 1977-1990 replaced with offsetParent check
 
 ---

@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v241';
+const MAIN_JS_VERSION = 'v242';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -5086,8 +5086,8 @@ async function browseSwitchLibrary() {
 
     const checkResult = await checkResponse.json();
 
-    if (checkResult.exists) {
-      // SCENARIO 1: Existing library - switch immediately
+    if (checkResult.exists && !checkResult.has_media) {
+      // SCENARIO 1: Existing library with no media - switch immediately
       console.log('✅ Found existing library:', selectedPath);
       closeSwitchLibraryOverlay();
       await switchToLibrary(selectedPath, potentialDbPath);

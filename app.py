@@ -3675,25 +3675,24 @@ def check_library():
         db_path = os.path.join(library_path, 'photo_library.db')
         exists = os.path.exists(db_path)
         
-        # If no database, scan for media files
+        # Always scan for media files (needed for terraform decision)
         has_media = False
         media_count = 0
         photo_count = 0
         video_count = 0
         
-        if not exists:
-            print(f"  📊 No database found, scanning for media files...")
-            from library_sync import count_media_files_by_type
-            try:
-                counts = count_media_files_by_type(library_path)
-                photo_count = counts['photo_count']
-                video_count = counts['video_count']
-                media_count = counts['total_count']
-                has_media = media_count > 0
-                print(f"  ✅ Found {photo_count} photo(s) and {video_count} video(s)")
-            except Exception as e:
-                print(f"  ⚠️  Error counting media files: {e}")
-                # Continue with has_media=False if counting fails
+        print(f"  📊 Scanning for media files...")
+        from library_sync import count_media_files_by_type
+        try:
+            counts = count_media_files_by_type(library_path)
+            photo_count = counts['photo_count']
+            video_count = counts['video_count']
+            media_count = counts['total_count']
+            has_media = media_count > 0
+            print(f"  ✅ Found {photo_count} photo(s) and {video_count} video(s)")
+        except Exception as e:
+            print(f"  ⚠️  Error counting media files: {e}")
+            # Continue with has_media=False if counting fails
         
         return jsonify({
             'exists': exists,
