@@ -82,6 +82,13 @@ VIDEO_EXTENSIONS = {
 }
 ALL_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 
+# Subset: Formats that support EXIF writes via exiftool
+# Excludes: RAW formats (read-only), WebP/AVIF/JP2 (ambiguous lossy/lossless)
+# Used by: Date change restore, EXIF metadata operations
+EXIF_WRITABLE_PHOTO_EXTENSIONS = {
+    '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'
+}
+
 # ============================================================================
 # LOGGING CONFIGURATION (Hybrid Approach: print() + persistent logs)
 # ============================================================================
@@ -172,9 +179,9 @@ def extract_exif_date(file_path):
     try:
         # Determine file type
         ext = os.path.splitext(file_path)[1].lower()
-        video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mkv', '.wmv', '.webm', '.flv', '.3gp', '.mpg', '.mpeg', '.vob', '.ts', '.mts'}
+        # v223: Use global constant instead of duplicating extension list
         
-        if ext in video_exts:
+        if ext in VIDEO_EXTENSIONS:
             # Try ffprobe for video metadata
             result = subprocess.run(
                 ['ffprobe', '-v', 'quiet', '-show_entries', 'format_tags=creation_time', 
@@ -612,9 +619,9 @@ class DateEditTransaction:
                     if os.path.exists(file_path):
                         # Determine file type
                         ext = os.path.splitext(file_path)[1].lower()
-                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'}
+                        # v223: Use EXIF-writable subset (no RAW, no ambiguous lossy formats)
                         
-                        if ext in photo_exts:
+                        if ext in EXIF_WRITABLE_PHOTO_EXTENSIONS:
                             write_photo_exif(file_path, old_date)
                         else:
                             write_video_metadata(file_path, old_date)
@@ -672,9 +679,9 @@ class DateEditTransaction:
                     if os.path.exists(file_path):
                         # Determine file type
                         ext = os.path.splitext(file_path)[1].lower()
-                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'}
+                        # v223: Use EXIF-writable subset (no RAW, no ambiguous lossy formats)
                         
-                        if ext in photo_exts:
+                        if ext in EXIF_WRITABLE_PHOTO_EXTENSIONS:
                             write_photo_exif(file_path, old_date)
                         else:
                             write_video_metadata(file_path, old_date)
@@ -1318,9 +1325,8 @@ def cleanup_empty_folders(file_path, library_root):
     Non-media files are deleted along with folders (scorched earth approach).
     Stops at library root or when a folder with media is found.
     """
-    MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
-                  '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
-                  '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+    # v223: Use global constant - was missing .webp/.avif/.jp2/RAW formats (BUG FIX)
+    MEDIA_EXTS = ALL_MEDIA_EXTENSIONS
     
     # Start at parent directory of deleted file
     current_dir = os.path.dirname(file_path)
@@ -2889,8 +2895,9 @@ def scan_index():
         filesystem_paths = set()
         file_count = 0
         
-        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'}
-        video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
+        # v223: Use global constants - was missing .webp/.avif/.jp2/RAW formats (BUG FIX)
+        photo_exts = PHOTO_EXTENSIONS
+        video_exts = VIDEO_EXTENSIONS
         all_exts = photo_exts | video_exts
         
         for root, dirs, filenames in os.walk(LIBRARY_PATH, followlinks=False):
@@ -3525,15 +3532,9 @@ def preview_thumbnail():
         # Determine file type
         ext = os.path.splitext(path)[1].lower()
         
-        # Photo extensions
-        photo_exts = {'.jpg', '.jpeg', '.png', '.heic', '.heif', '.gif', 
-                      '.tiff', '.tif', '.webp', '.avif', '.jp2',
-                      '.raw', '.cr2', '.nef', '.arw', '.dng'}
-        
-        # Video extensions
-        video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mkv', '.wmv', 
-                      '.webm', '.flv', '.3gp', '.mpg', '.mpeg', '.vob', 
-                      '.ts', '.mts'}
+        # v223: Use global constants instead of duplicating extension lists
+        photo_exts = PHOTO_EXTENSIONS
+        video_exts = VIDEO_EXTENSIONS
         
         if ext in photo_exts:
             return generate_photo_preview(path)
@@ -4044,10 +4045,9 @@ def cleanup_empty_folders_recursive(root_path):
     NOTE: This function is deprecated for terraform and kept only for backward compatibility
     with other operations (import, date change, etc.). Use cleanup_terraform_folders() instead.
     """
-    MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
-                  '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
-                  '.avi', '.mpg', '.mpeg', '.3gp', '.mkv',
-                  '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2'}
+    # v223: Use global constant - was missing .webp/.avif/.jp2, some videos (BUG FIX)
+    # Note: Had extra RAW formats (.raf/.orf/.rw2) not in PHOTO_EXTENSIONS, now removed
+    MEDIA_EXTS = ALL_MEDIA_EXTENSIONS
     
     removed_count = 0
     
@@ -4108,10 +4108,9 @@ def cleanup_terraform_source_folders(source_folders, library_path):
     Returns:
         Number of folders deleted
     """
-    MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
-                  '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
-                  '.avi', '.mpg', '.mpeg', '.3gp', '.mkv',
-                  '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2'}
+    # v223: Use global constant - was missing .webp/.avif/.jp2, some videos (BUG FIX)
+    # Note: Had extra RAW formats (.raf/.orf/.rw2) not in PHOTO_EXTENSIONS, now removed
+    MEDIA_EXTS = ALL_MEDIA_EXTENSIONS
     
     removed_count = 0
     

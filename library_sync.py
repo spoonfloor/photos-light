@@ -19,8 +19,9 @@ def count_media_files(library_path):
     Returns:
         int: Number of media files found
     """
+    # v223: Removed .bmp (exiftool cannot write EXIF to BMP)
     photo_exts = {
-        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
         '.webp', '.avif', '.jp2',
         '.raw', '.cr2', '.nef', '.arw', '.dng'
     }
@@ -51,8 +52,9 @@ def count_media_files_by_type(library_path):
     Returns:
         dict: {'photo_count': int, 'video_count': int, 'total_count': int}
     """
+    # v223: Removed .bmp (exiftool cannot write EXIF to BMP)
     photo_exts = {
-        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
         '.webp', '.avif', '.jp2',
         '.raw', '.cr2', '.nef', '.arw', '.dng'
     }
@@ -127,8 +129,9 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     Yields:
         SSE event strings for progress tracking
     """
+    # v223: Removed .bmp (exiftool cannot write EXIF to BMP)
     photo_exts = {
-        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
         '.webp', '.avif', '.jp2',
         '.raw', '.cr2', '.nef', '.arw', '.dng'
     }
