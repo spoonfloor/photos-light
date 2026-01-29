@@ -6,6 +6,38 @@ Issues that have been fixed and verified.
 
 ## Session 14: January 28, 2026
 
+### Import Duplicate Detection + Migration Infrastructure
+
+**Status:** WILL NOT FIX (Deferred Feature)  
+**Date:** January 28, 2026
+
+**Decision:** Marked as "will not fix" - this was deferred feature work, not a bug. Current functionality works as designed.
+
+**What was proposed:**
+
+- Duplicate = Same Hash + Same Date/Time (to the second)
+- Allows "Christmas tree scenario" (same photo at different dates)
+- Required schema change: `UNIQUE(content_hash, date_taken)`
+
+**What was completed:**
+
+- ✅ Schema v2 designed
+- ✅ Import logic updated
+- ✅ Library sync logging added
+- ✅ Documentation created
+- ✅ Reverted to v1 to unblock testing
+
+**Why deferred:**
+
+- Not a bug - current functionality works
+- Not blocking current functionality
+- Migration is complex, needs dedicated time as feature work
+- Other bugs had higher UX impact
+
+**Outcome:** Removed from active bug list. Can be revisited as future feature work if needed.
+
+---
+
 ### Image Rotation - Bake Orientation Metadata into Pixels
 
 **Fixed:** Orientation flags are now baked into pixels during import, date change, and terraform  
@@ -47,16 +79,16 @@ Integrated baking into three workflows:
 
 **Comprehensive Testing:**
 
-| Format | Test Cases | Result |
-|--------|------------|--------|
-| **JPEG** | 16-friendly & non-16-divisible, all orientations (0°, 90°, 180°, 270°) | ✅ PASS |
-| **PNG** | All orientations (0°, 90°, 180°, 270°) | ✅ PASS |
-| **TIFF** | All orientations (0°, 90°, 180°, 270°) | ✅ PASS |
-| **GIF** | Skipped correctly | ✅ PASS |
-| **RAW (DNG)** | Skipped correctly, flag preserved | ✅ PASS |
-| **Video** | Skipped correctly | ✅ PASS |
-| **WebP/AVIF/JP2** | Skipped (cannot detect compression) | ✅ PASS |
-| **HEIC/HEIF** | Skipped (documented) | ✅ PASS |
+| Format            | Test Cases                                                             | Result  |
+| ----------------- | ---------------------------------------------------------------------- | ------- |
+| **JPEG**          | 16-friendly & non-16-divisible, all orientations (0°, 90°, 180°, 270°) | ✅ PASS |
+| **PNG**           | All orientations (0°, 90°, 180°, 270°)                                 | ✅ PASS |
+| **TIFF**          | All orientations (0°, 90°, 180°, 270°)                                 | ✅ PASS |
+| **GIF**           | Skipped correctly                                                      | ✅ PASS |
+| **RAW (DNG)**     | Skipped correctly, flag preserved                                      | ✅ PASS |
+| **Video**         | Skipped correctly                                                      | ✅ PASS |
+| **WebP/AVIF/JP2** | Skipped (cannot detect compression)                                    | ✅ PASS |
+| **HEIC/HEIF**     | Skipped (documented)                                                   | ✅ PASS |
 
 **Quality Verification:**
 

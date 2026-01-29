@@ -2,7 +2,7 @@
 
 Last updated: January 28, 2026
 
-**Status:** 3 remaining bugs + 1 deferred feature
+**Status:** 5 remaining bugs
 
 ---
 
@@ -58,6 +58,30 @@ Last updated: January 28, 2026
 
 ---
 
+### Terraforming - Should Destroy Current Database
+
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 1 hour  
+**Status:** NOT STARTED
+
+**Issue:** Terraforming should destroy current database
+
+- Library conversion (terraforming) creates new organized structure
+- Old database should be removed/replaced
+- Currently may be leaving old database intact
+- Can cause confusion or database conflicts
+
+**Impact:** Leaves stale database files, potential for using wrong database or data inconsistency
+
+**Fix approach:**
+
+- Add database deletion/replacement step to terraforming process
+- Ensure new database is created fresh
+- Verify no remnants of old database remain
+- May need backup/safety checks before deletion
+
+---
+
 ### Performance Optimization - High-Latency Operations
 
 **Priority:** 🟡 MEDIUM  
@@ -86,46 +110,27 @@ Last updated: January 28, 2026
 
 ---
 
-## 🔵 TIER 3: DEFERRED FEATURE WORK (Not Bugs)
+### Primary CTAs - Keyboard Activation (Return Key)
 
-### Import Duplicate Detection + Migration Infrastructure
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 1-2 hours  
+**Status:** NOT STARTED
 
-**Priority:** 🔵 DEFERRED  
-**Estimated effort:** 4-6 hours  
-**Status:** SCHEMA DESIGNED, REVERTED (60% complete)
+**Issue:** All primary (purple) CTAs can be activated by pressing return
 
-**Decision made:**
+- Add keyboard accessibility to all primary action buttons
+- Return/Enter key should trigger primary action in dialogs
+- Improves UX and accessibility
+- Common pattern in modern applications
 
-- Duplicate = Same Hash + Same Date/Time (to the second)
-- Allows "Christmas tree scenario" (same photo at different dates)
-- Requires schema change: `UNIQUE(content_hash, date_taken)`
+**Impact:** Better keyboard navigation and accessibility
 
-**What's done:**
+**Fix approach:**
 
-- ✅ Schema v2 designed
-- ✅ Import logic updated
-- ✅ Library sync logging added
-- ✅ Documentation created
-- ✅ Reverted to v1 to unblock testing
-
-**What's needed:**
-
-- ❌ Migration infrastructure (schema version detection + v1→v2 migration)
-- ❌ Frontend testing with new schema
-- ❌ "Show Duplicates" utility update (keep as informational, move to bottom of menu)
-
-**Defer because:**
-
-- Not a bug - current functionality works
-- Not blocking current functionality
-- Migration is complex, needs dedicated time as feature work
-- Other bugs have higher UX impact
-
-**Sub-issues from original bug bash:**
-
-- Import dupe counts don't reflect reality - Will work with new definition
-- Import count bounces around - Separate issue (see backlog)
-- Duplicates utility shows zero - Will be fixed by schema change
+- Identify all primary (purple) CTA buttons across the app
+- Add Enter key listener to dialogs that triggers primary button
+- Ensure proper focus management
+- Test across all dialog types
 
 ---
 
@@ -135,8 +140,9 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 1. 🔴 **Update Database - Stuck on Removing Untracked Files** (2-3 hrs, CRITICAL - blocks index cleanup)
 2. 🔴 **Date Change to Single Date - Not Working** (2-3 hrs, CRITICAL - core functionality)
-3. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
-4. 🔵 **Import Duplicate Detection** (deferred feature work)
+3. 🔴 **Terraforming - Should Destroy Current Database** (1 hr, CRITICAL - data integrity)
+4. 🟡 **Primary CTAs - Keyboard Activation (Return Key)** (1-2 hrs, accessibility)
+5. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 
 ---
 
@@ -144,13 +150,12 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
 
-**Total remaining:** 3 bugs + 1 deferred feature
+**Total remaining:** 5 bugs
 
-- 🔴 Critical: 2 bugs (Update Database Stuck, Date Change Not Working)
-- 🟡 Polish: 1 bug (Performance Research)
-- 🔵 Deferred: 1 feature (Duplicate Detection + Migration)
+- 🔴 Critical: 3 bugs (Update Database Stuck, Date Change Not Working, Terraforming Database Cleanup)
+- 🟡 Polish: 2 bugs (Primary CTA Keyboard Activation, Performance Research)
 
-**Estimated total effort:** ~4-5 hours for remaining bugs + research (excluding deferred feature and performance optimization implementation)
+**Estimated total effort:** ~7-9 hours for remaining bugs + research (excluding performance optimization implementation)
 
 ---
 

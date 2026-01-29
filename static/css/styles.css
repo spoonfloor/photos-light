@@ -435,7 +435,7 @@ input[type="radio"] {
 
 /* When info panel is open, reduce content height */
 .lightbox-overlay.info-open .lightbox-content {
-  max-height: calc(100vh - 85px);
+  flex: 0 0 calc(100vh - 100px);
 }
 
 .lightbox-content img,

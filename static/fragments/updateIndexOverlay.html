@@ -1,10 +1,14 @@
-<!-- Update Database Overlay -->
+<!-- Clean & Update Library Overlay -->
 <div class="import-overlay" id="updateIndexOverlay">
   <div class="import-card">
     <!-- Header -->
     <div class="import-header">
-      <span class="import-title">Update database</span>
-      <button class="import-close-btn" id="updateIndexCloseBtn" aria-label="Close">
+      <span class="import-title">Clean & update library</span>
+      <button
+        class="import-close-btn"
+        id="updateIndexCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -14,8 +18,8 @@
       <div class="import-status-text" id="updateIndexStatusText">
         Scanning library<span class="import-spinner"></span>
       </div>
-      
-      <div class="import-stats" id="updateIndexStats" style="display: none;">
+
+      <div class="import-stats" id="updateIndexStats" style="display: none">
         <span class="import-stat">
           <span class="import-stat-label">Missing Files:</span>
           <span class="import-stat-value" id="missingFilesCount">0</span>
@@ -36,13 +40,21 @@
     </div>
 
     <!-- Details Section (Phase 4 only) -->
-    <div class="import-details-section" id="updateIndexDetailsSection" style="display: none;">
+    <div
+      class="import-details-section"
+      id="updateIndexDetailsSection"
+      style="display: none"
+    >
       <button class="import-details-toggle" id="updateIndexDetailsToggle">
         <span class="material-symbols-outlined">expand_more</span>
         <span>Show details</span>
       </button>
-      
-      <div class="import-details-list" id="updateIndexDetailsList" style="display: none;">
+
+      <div
+        class="import-details-list"
+        id="updateIndexDetailsList"
+        style="display: none"
+      >
         <!-- Populated dynamically -->
       </div>
     </div>
@@ -52,10 +64,18 @@
       <button class="import-btn import-btn-secondary" id="updateIndexCancelBtn">
         Cancel
       </button>
-      <button class="import-btn import-btn-primary" id="updateIndexProceedBtn" style="display: none;">
+      <button
+        class="import-btn import-btn-primary"
+        id="updateIndexProceedBtn"
+        style="display: none"
+      >
         Continue
       </button>
-      <button class="import-btn import-btn-primary" id="updateIndexDoneBtn" style="display: none;">
+      <button
+        class="import-btn import-btn-primary"
+        id="updateIndexDoneBtn"
+        style="display: none"
+      >
         Done
       </button>
     </div>

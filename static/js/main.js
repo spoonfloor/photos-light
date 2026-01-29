@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v223';
+const MAIN_JS_VERSION = 'v225';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -3439,7 +3439,7 @@ async function loadUtilitiesMenu() {
 
     if (cleanOrganizeBtn) {
       cleanOrganizeBtn.addEventListener('click', () => {
-        console.log('🔧 Update database clicked');
+        console.log('🔧 Clean & update library clicked');
         hideUtilitiesMenu();
         openUpdateIndexOverlay();
       });
@@ -4092,7 +4092,7 @@ async function openUpdateIndexOverlay() {
  * Phase 3: Execute update (after user clicks Continue)
  */
 async function executeUpdateIndex() {
-  console.log('🚀 Executing update database...');
+  console.log('🚀 Executing clean & update library...');
 
   // Phase 3: Execution
   updateUpdateIndexUI('Removing missing files...', false);
@@ -4181,8 +4181,8 @@ async function executeUpdateIndex() {
     await loadAndRenderPhotos(false);
   } catch (error) {
     console.error('❌ Failed to execute update:', error);
-    updateUpdateIndexUI('Failed to update database', false);
-    showToast('Failed to update database', null);
+    updateUpdateIndexUI('Failed to clean & update library', false);
+    showToast('Failed to clean & update library', null);
     showUpdateIndexButtons('cancel');
   }
 }
