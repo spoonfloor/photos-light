@@ -69,6 +69,75 @@ body {
   pointer-events: none;
 }
 
+/* ============================================================================
+   UNIFIED BUTTON SYSTEM
+   ============================================================================
+   
+   Purpose: Replace legacy button systems (.dialog-button, .date-editor-button, 
+            .import-btn) with single unified system
+   
+   Created: January 28, 2026
+   
+   Usage:
+     <button class="btn btn-primary">Continue</button>
+     <button class="btn btn-secondary">Cancel</button>
+   
+   Classes:
+     .btn           - Base button styles (padding, font, border-radius)
+     .btn-primary   - Purple primary action button
+     .btn-secondary - Gray secondary/cancel button
+   
+   Features:
+     ✅ Disabled state support (:disabled selector)
+     ✅ Hover effects
+     ✅ Consistent sizing across all dialogs
+   
+   ============================================================================ */
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+
+/* Primary button - Main action (purple) */
+.btn-primary {
+  background: var(--accent-color);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: var(--accent-color);
+}
+
+/* Secondary button - Cancel/alternative action (gray) */
+.btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-secondary:hover {
+  color: var(--text-primary);
+  background: var(--placeholder-hover);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* --- No Select Utility --- */
 .no-select {
   user-select: none;
@@ -593,34 +662,6 @@ input[type="radio"] {
   padding: 0 24px 24px 24px;
 }
 
-.dialog-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  outline: none;
-}
-
-.dialog-button-secondary {
-  background: transparent;
-  color: var(--text-primary);
-}
-
-.dialog-button-secondary:hover {
-  background: var(--placeholder-hover);
-}
-
-.dialog-button-primary {
-  background: var(--accent-color);
-  color: white;
-}
-
-.dialog-button-primary:hover {
-  background: var(--accent-hover);
-}
-
 /* --- Date Editor --- */
 .date-editor-overlay {
   position: fixed;
@@ -818,34 +859,6 @@ input[type="radio"] {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-}
-
-.date-editor-button {
-  padding: 10px 24px;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  border: none;
-  font-family: inherit;
-}
-
-.date-editor-button-secondary {
-  background: transparent;
-  color: var(--accent-color);
-}
-
-.date-editor-button-secondary:hover {
-  background: rgba(109, 73, 255, 0.1);
-}
-
-.date-editor-button-primary {
-  background: var(--accent-color);
-  color: white;
-}
-
-.date-editor-button-primary:hover {
-  background: var(--accent-hover);
 }
 
 /* --- Toast --- */
@@ -1191,47 +1204,6 @@ input[type="radio"] {
   gap: 12px;
   padding: 16px 20px;
   justify-content: flex-end;
-}
-
-.import-btn {
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  border: none;
-}
-
-.import-btn-primary {
-  background: var(--accent-color);
-  color: white;
-}
-
-.import-btn-primary:hover {
-  background: var(--accent-hover);
-}
-
-.import-btn-primary:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  pointer-events: none;
-  background: var(--accent-color);
-}
-
-.import-btn-secondary {
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.import-btn-secondary:hover {
-  color: var(--text-primary);
-  background: var(--hover-bg);
-}
-
-.import-btn-secondary:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  pointer-events: none;
 }
 
 /* ============================================================================

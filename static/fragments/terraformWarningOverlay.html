@@ -1,45 +1,139 @@
 <!-- Terraform Warning Overlay -->
-<div class="import-overlay" id="terraformWarningOverlay" style="display: none;">
+<div class="import-overlay" id="terraformWarningOverlay" style="display: none">
   <div class="import-card">
     <div class="import-header">
       <span class="import-title">Convert library</span>
-      <button class="import-close-btn" id="terraformWarningCloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="terraformWarningCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
     <div class="import-progress-section">
       <div class="import-status-text">
-        <p style="margin: 0 0 16px 0; font-size: 14px;">
-          This will directly alter <strong id="terraformWarningCount">0</strong> files and remake the folder structure:
+        <p style="margin: 0 0 16px 0; font-size: 14px">
+          This will directly alter
+          <strong id="terraformWarningCount">0</strong>
+          <span id="terraformWarningFileLabel">files</span> and the entire
+          folder structure:
         </p>
         <!-- REORDERED CHECKLIST: 2, 3, 1, 4, 5 -->
-        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; font-size: 13px; line-height: 1.5;">
-          <div style="display: flex; gap: 8px;"><span style="color: #4CAF50;">✓</span><span>Rename to standard format</span></div>
-          <div style="display: flex; gap: 8px;"><span style="color: #4CAF50;">✓</span><span>Organize into YYYY/YYYY-MM-DD folders</span></div>
-          <div style="display: flex; gap: 8px;"><span style="color: #4CAF50;">✓</span><span>Write EXIF metadata to all files</span></div>
-          <div style="display: flex; gap: 8px;"><span style="color: #4CAF50;">✓</span><span>Move duplicates to .trash/</span></div>
-          <div style="display: flex; gap: 8px;"><span style="color: #4CAF50;">✓</span><span>Skip files that fail processing (move to .trash/)</span></div>
+        <div
+          style="
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            line-height: 1.5;
+          "
+        >
+          <div style="display: flex; gap: 8px">
+            <span style="color: #4caf50">✓</span
+            ><span>Rename to standard format</span>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <span style="color: #4caf50">✓</span
+            ><span>Organize into YYYY/YYYY-MM-DD folders</span>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <span style="color: #4caf50">✓</span
+            ><span>Write EXIF metadata to all files</span>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <span style="color: #4caf50">✓</span
+            ><span>Move duplicates to .trash/</span>
+          </div>
+          <div style="display: flex; gap: 8px">
+            <span style="color: #4caf50">✓</span
+            ><span>Skip files that fail processing (move to .trash/)</span>
+          </div>
         </div>
-        <div style="padding: 12px; background: rgba(255, 165, 0, 0.1); border: 1px solid rgba(255, 165, 0, 0.3); border-radius: 6px; margin-bottom: 12px;">
-          <div style="display: flex; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 500; color: #ffa500;">
-            <span class="material-symbols-outlined" style="font-size: 18px;">warning</span>
+        <div
+          style="
+            padding: 12px;
+            background: rgba(255, 165, 0, 0.1);
+            border: 1px solid rgba(255, 165, 0, 0.3);
+            border-radius: 6px;
+            margin-bottom: 12px;
+          "
+        >
+          <div
+            style="
+              display: flex;
+              gap: 8px;
+              margin-bottom: 8px;
+              font-size: 13px;
+              font-weight: 500;
+              color: #ffa500;
+            "
+          >
+            <span class="material-symbols-outlined" style="font-size: 18px"
+              >warning</span
+            >
             <span>WARNING: This modifies files permanently.</span>
           </div>
-          <p style="margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">EXIF changes cannot be undone.</p>
+          <p
+            style="
+              margin: 0;
+              font-size: 13px;
+              color: var(--text-secondary);
+              line-height: 1.5;
+            "
+          >
+            EXIF changes cannot be undone.
+          </p>
         </div>
-        <div style="padding: 12px; background: rgba(255, 107, 107, 0.1); border: 1px solid rgba(255, 107, 107, 0.3); border-radius: 6px; margin-bottom: 16px;">
-          <div style="display: flex; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 500; color: #ff6b6b;">
-            <span class="material-symbols-outlined" style="font-size: 18px;">priority_high</span>
+        <div
+          style="
+            padding: 12px;
+            background: rgba(255, 107, 107, 0.1);
+            border: 1px solid rgba(255, 107, 107, 0.3);
+            border-radius: 6px;
+            margin-bottom: 16px;
+          "
+        >
+          <div
+            style="
+              display: flex;
+              gap: 8px;
+              margin-bottom: 8px;
+              font-size: 13px;
+              font-weight: 500;
+              color: #ff6b6b;
+            "
+          >
+            <span class="material-symbols-outlined" style="font-size: 18px"
+              >priority_high</span
+            >
             <span>CRITICAL: Make a backup before proceeding!</span>
           </div>
-          <p style="margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">Time Machine, copy to external drive, etc.</p>
+          <p
+            style="
+              margin: 0;
+              font-size: 13px;
+              color: var(--text-secondary);
+              line-height: 1.5;
+            "
+          >
+            Time Machine, copy to external drive, etc.
+          </p>
         </div>
-        <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">Estimated time: <strong id="terraformWarningEta">calculating...</strong></p>
+        <p style="margin: 0; font-size: 13px; color: var(--text-secondary)">
+          Estimated time:
+          <strong id="terraformWarningEta">calculating...</strong>
+        </p>
       </div>
     </div>
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="terraformWarningContinueBtn">Yes, continue</button>
-      <button class="import-btn import-btn-primary" id="terraformWarningBackBtn">No, go back</button>
+      <button class="btn btn-secondary" id="terraformWarningContinueBtn">
+        Yes, continue
+      </button>
+      <button class="btn btn-primary" id="terraformWarningBackBtn">
+        No, go back
+      </button>
     </div>
   </div>
 </div>

@@ -1,16 +1,38 @@
 <!-- Terraform Preview Overlay -->
-<div class="import-overlay" id="terraformPreviewOverlay" style="display: none;">
+<div class="import-overlay" id="terraformPreviewOverlay" style="display: none">
   <div class="import-card">
     <div class="import-header">
       <span class="import-title">Convert library</span>
-      <button class="import-close-btn" id="terraformPreviewCloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="terraformPreviewCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
     <div class="import-progress-section">
       <div class="import-status-text">
-        <p style="margin: 0 0 4px 0; font-size: 14px; color: var(--text-secondary);">Found in:</p>
-        <p id="terraformPreviewPath" style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 16px 0;">/path/to/folder/</p>
+        <p
+          style="
+            margin: 0 0 4px 0;
+            font-size: 14px;
+            color: var(--text-secondary);
+          "
+        >
+          Found in:
+        </p>
+        <p
+          id="terraformPreviewPath"
+          style="
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin: 0 0 16px 0;
+          "
+        >
+          /path/to/folder/
+        </p>
       </div>
       <!-- SCOREBOARD FORMAT (no borders) -->
       <div class="import-stats">
@@ -23,13 +45,19 @@
           <span class="import-stat-value" id="terraformPreviewVideos">0</span>
         </span>
       </div>
-      <div class="import-status-text" style="margin-top: 16px;">
-        <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">Is this the correct folder?</p>
+      <div class="import-status-text" style="margin-top: 16px">
+        <p style="margin: 0; font-size: 13px; color: var(--text-secondary)">
+          Is this the correct folder?
+        </p>
       </div>
     </div>
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="terraformPreviewContinueBtn">Yes, continue</button>
-      <button class="import-btn import-btn-primary" id="terraformPreviewBackBtn">No, go back</button>
+      <button class="btn btn-secondary" id="terraformPreviewContinueBtn">
+        Yes, continue
+      </button>
+      <button class="btn btn-primary" id="terraformPreviewBackBtn">
+        No, go back
+      </button>
     </div>
   </div>
 </div>

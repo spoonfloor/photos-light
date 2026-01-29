@@ -14,7 +14,11 @@
     <!-- Header -->
     <div class="import-header">
       <span class="import-title">[Dialog Title]</span>
-      <button class="import-close-btn" id="[OVERLAY_ID]CloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="[OVERLAY_ID]CloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -24,9 +28,9 @@
       <div class="import-status-text" id="[OVERLAY_ID]StatusText">
         [Initial status text]<span class="import-spinner"></span>
       </div>
-      
+
       <!-- Optional: Stats counters -->
-      <div class="import-stats" id="[OVERLAY_ID]Stats" style="display: none;">
+      <div class="import-stats" id="[OVERLAY_ID]Stats" style="display: none">
         <span class="import-stat">
           <span class="import-stat-label">[Stat 1 Label]:</span>
           <span class="import-stat-value" id="[OVERLAY_ID]Stat1">0</span>
@@ -39,23 +43,35 @@
     </div>
 
     <!-- Optional: Details Section -->
-    <div class="import-details-section" id="[OVERLAY_ID]DetailsSection" style="display: none;">
+    <div
+      class="import-details-section"
+      id="[OVERLAY_ID]DetailsSection"
+      style="display: none"
+    >
       <button class="import-details-toggle" id="[OVERLAY_ID]DetailsToggle">
         <span class="material-symbols-outlined">expand_more</span>
         <span>Show details</span>
       </button>
-      
-      <div class="import-details-list" id="[OVERLAY_ID]DetailsList" style="display: none;">
+
+      <div
+        class="import-details-list"
+        id="[OVERLAY_ID]DetailsList"
+        style="display: none"
+      >
         <!-- Populated dynamically -->
       </div>
     </div>
 
     <!-- Action Buttons -->
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="[OVERLAY_ID]CancelBtn">
+      <button class="btn btn-secondary" id="[OVERLAY_ID]CancelBtn">
         Cancel
       </button>
-      <button class="import-btn import-btn-primary" id="[OVERLAY_ID]DoneBtn" style="display: none;">
+      <button
+        class="btn btn-primary"
+        id="[OVERLAY_ID]DoneBtn"
+        style="display: none"
+      >
         Done
       </button>
     </div>

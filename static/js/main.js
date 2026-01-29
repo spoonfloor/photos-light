@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v226';
+const MAIN_JS_VERSION = 'v237';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -651,9 +651,7 @@ function showCriticalError(title, message, buttons) {
   actionsEl.innerHTML = buttons
     .map(
       (btn) => `
-    <button class="dialog-button ${
-      btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'
-    }" 
+    <button class="btn ${btn.primary ? 'btn-primary' : 'btn-secondary'}" 
             data-action="${btn.action}">
       ${btn.text}
     </button>
@@ -928,8 +926,8 @@ function showDialog(title, message, buttons) {
 
     buttons.forEach((btn) => {
       const buttonEl = document.createElement('button');
-      buttonEl.className = `dialog-button ${
-        btn.primary ? 'dialog-button-primary' : 'dialog-button-secondary'
+      buttonEl.className = `btn ${
+        btn.primary ? 'btn-primary' : 'btn-secondary'
       }`;
       buttonEl.textContent = btn.text;
       buttonEl.addEventListener('click', () => {
@@ -1715,7 +1713,7 @@ function showCriticalErrorModal(type, path = '') {
 
     // Add buttons
     const switchBtn = document.createElement('button');
-    switchBtn.className = 'import-btn import-btn-secondary';
+    switchBtn.className = 'btn btn-secondary';
     switchBtn.textContent = 'Open library';
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
@@ -1723,7 +1721,7 @@ function showCriticalErrorModal(type, path = '') {
     };
 
     const rebuildBtn = document.createElement('button');
-    rebuildBtn.className = 'import-btn import-btn-primary';
+    rebuildBtn.className = 'btn btn-primary';
     rebuildBtn.textContent = 'Rebuild database';
     rebuildBtn.onclick = async () => {
       hideCriticalErrorModal();
@@ -1742,7 +1740,7 @@ function showCriticalErrorModal(type, path = '') {
     `;
 
     const switchBtn = document.createElement('button');
-    switchBtn.className = 'import-btn import-btn-secondary';
+    switchBtn.className = 'btn btn-secondary';
     switchBtn.textContent = 'Open library';
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
@@ -1750,7 +1748,7 @@ function showCriticalErrorModal(type, path = '') {
     };
 
     const retryBtn = document.createElement('button');
-    retryBtn.className = 'import-btn import-btn-primary';
+    retryBtn.className = 'btn btn-primary';
     retryBtn.textContent = 'Retry';
     retryBtn.onclick = () => {
       hideCriticalErrorModal();
@@ -1764,7 +1762,7 @@ function showCriticalErrorModal(type, path = '') {
     message.innerHTML = `<p style="margin: 0;">An unexpected error occurred: ${path}</p>`;
 
     const reloadBtn = document.createElement('button');
-    reloadBtn.className = 'import-btn import-btn-primary';
+    reloadBtn.className = 'btn btn-primary';
     reloadBtn.textContent = 'Reload';
     reloadBtn.onclick = () => window.location.reload();
 
@@ -1953,6 +1951,52 @@ function handleLightboxKeyboard(e) {
 
     // Priority 3: Deselect all if on grid
     deselectAllPhotos();
+  } else if (e.key === 'Enter') {
+    // Don't trigger if photo picker is open (it has its own Enter handler)
+    const photoPickerOverlay = document.getElementById('photoPickerOverlay');
+    if (photoPickerOverlay && photoPickerOverlay.style.display !== 'none') {
+      console.log('⏭️ Enter key: Skipping (photo picker is open)');
+      return;
+    }
+
+    // Don't trigger if user is typing in an input field
+    const activeElement = document.activeElement;
+    if (
+      activeElement &&
+      (activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.tagName === 'SELECT')
+    ) {
+      console.log(
+        '⏭️ Enter key: Skipping (user is typing in',
+        activeElement.tagName + ')',
+      );
+      return; // Let the input handle Enter naturally
+    }
+
+    // Find visible primary button (not hidden, not disabled)
+    // Use offsetParent check - returns null if element or any ancestor has display:none
+    const allPrimaryBtns = document.querySelectorAll(
+      '.btn-primary:not(:disabled)',
+    );
+    let primaryBtn = null;
+    for (const btn of allPrimaryBtns) {
+      if (btn.offsetParent !== null) {
+        primaryBtn = btn;
+        break;
+      }
+    }
+
+    if (primaryBtn) {
+      console.log(
+        '✅ Enter key: Found primary button:',
+        primaryBtn.id || primaryBtn.textContent.trim(),
+      );
+      primaryBtn.click();
+      e.preventDefault(); // Prevent any default Enter behavior
+    } else {
+      console.log('⚠️ Enter key: No enabled primary button found');
+    }
   } else if (e.key === 'ArrowLeft' && state.lightboxOpen) {
     navigateLightbox(-1);
   } else if (e.key === 'ArrowRight' && state.lightboxOpen) {
@@ -2554,11 +2598,11 @@ function renderFirstRunEmptyState() {
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
-        <button class="import-btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
+        <button class="btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
           <span>Open library</span>
         </button>
-        <button class="import-btn import-btn-primary" onclick="triggerImportWithLibraryCheck()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+        <button class="btn btn-primary" onclick="triggerImportWithLibraryCheck()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
           <span>Add photos</span>
         </button>
@@ -2580,24 +2624,8 @@ function renderPhotoGrid(photos, append = false) {
 
   if (!photos || photos.length === 0) {
     if (!append) {
-      container.innerHTML = `
-        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
-          <div style="text-align: center;">
-            <div style="font-size: 18px; margin-bottom: 8px;">No photos to display</div>
-            <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
-          </div>
-          <div style="display: flex; gap: 12px;">
-            <button class="import-btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-color); white-space: nowrap;">
-              <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
-              <span>Open library</span>
-            </button>
-            <button class="import-btn import-btn-primary" onclick="triggerImportWithLibraryCheck()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
-              <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
-              <span>Add photos</span>
-            </button>
-          </div>
-        </div>
-      `;
+      // Use the shared empty state function instead of duplicating HTML
+      renderFirstRunEmptyState();
     }
     return;
   }
@@ -6446,11 +6474,11 @@ function showUnifiedErrorDetails() {
     const actions = document.createElement('div');
     actions.className = 'import-rejection-actions';
     actions.innerHTML = `
-      <button class="import-btn import-btn-secondary" id="copyRejectedBtn">
+      <button class="btn btn-secondary" id="copyRejectedBtn">
         <span class="material-symbols-outlined">folder_copy</span>
         Collect rejected files
       </button>
-      <button class="import-btn import-btn-secondary" id="exportRejectionListBtn">
+      <button class="btn btn-secondary" id="exportRejectionListBtn">
         <span class="material-symbols-outlined">description</span>
         Export list
       </button>

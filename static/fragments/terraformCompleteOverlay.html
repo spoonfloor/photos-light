@@ -1,39 +1,59 @@
 <!-- Terraform Complete Overlay -->
-<div class="import-overlay" id="terraformCompleteOverlay" style="display: none;">
+<div class="import-overlay" id="terraformCompleteOverlay" style="display: none">
   <div class="import-card">
     <div class="import-header">
       <span class="import-title">Conversion complete</span>
-      <button class="import-close-btn" id="terraformCompleteCloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="terraformCompleteCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
     <div class="import-progress-section">
       <div class="import-status-text">
-        <p style="margin: 0 0 16px 0; font-size: 14px;">Successfully organized your library.</p>
+        <p style="margin: 0 0 16px 0; font-size: 14px">
+          Successfully organized your library.
+        </p>
       </div>
       <!-- SCOREBOARD FORMAT -->
       <div class="import-stats">
         <span class="import-stat">
           <span class="import-stat-label">Processed:</span>
-          <span class="import-stat-value" id="terraformCompleteProcessed">0</span>
+          <span class="import-stat-value" id="terraformCompleteProcessed"
+            >0</span
+          >
         </span>
         <span class="import-stat">
           <span class="import-stat-label">Duplicates:</span>
-          <span class="import-stat-value" id="terraformCompleteDuplicates">0</span>
+          <span class="import-stat-value" id="terraformCompleteDuplicates"
+            >0</span
+          >
         </span>
         <span class="import-stat">
           <span class="import-stat-label">Errors:</span>
           <span class="import-stat-value" id="terraformCompleteErrors">0</span>
         </span>
       </div>
-      <div class="import-status-text" style="margin-top: 16px;">
-        <p id="terraformCompleteLogPath" style="margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5;">
+      <div class="import-status-text" style="margin-top: 16px">
+        <p
+          id="terraformCompleteLogPath"
+          style="
+            margin: 0;
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+          "
+        >
           A detailed log has been saved to .logs/terraform_DATE_TIME.json
         </p>
       </div>
     </div>
     <div class="import-actions">
-      <button class="import-btn import-btn-primary" id="terraformCompleteDoneBtn">Done</button>
+      <button class="btn btn-primary" id="terraformCompleteDoneBtn">
+        Done
+      </button>
     </div>
   </div>
 </div>

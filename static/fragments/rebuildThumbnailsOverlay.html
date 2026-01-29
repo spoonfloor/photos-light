@@ -4,7 +4,11 @@
     <!-- Header -->
     <div class="import-header">
       <span class="import-title">Rebuild thumbnails</span>
-      <button class="import-close-btn" id="rebuildThumbnailsCloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="rebuildThumbnailsCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -12,20 +16,27 @@
     <!-- Progress Section -->
     <div class="import-progress-section">
       <div class="import-status-text" id="rebuildThumbnailsStatusText">
-        <p>This will clear all cached thumbnails. They will regenerate automatically as you scroll.</p>
+        <p>
+          This will clear all cached thumbnails. They will regenerate
+          automatically as you scroll.
+        </p>
         <p>Ready to delete existing thumbnails?</p>
       </div>
     </div>
 
     <!-- Action Buttons -->
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="rebuildThumbnailsCancelBtn">
+      <button class="btn btn-secondary" id="rebuildThumbnailsCancelBtn">
         Cancel
       </button>
-      <button class="import-btn import-btn-primary" id="rebuildThumbnailsProceedBtn">
+      <button class="btn btn-primary" id="rebuildThumbnailsProceedBtn">
         Delete and rebuild
       </button>
-      <button class="import-btn import-btn-primary" id="rebuildThumbnailsDoneBtn" style="display: none;">
+      <button
+        class="btn btn-primary"
+        id="rebuildThumbnailsDoneBtn"
+        style="display: none"
+      >
         Done
       </button>
     </div>

@@ -5,11 +5,17 @@
     <div class="picker-header">
       <div class="picker-header-top">
         <span class="picker-title" id="photoPickerTitle">Select photos</span>
-        <button class="picker-close-btn" id="photoPickerCloseBtn" aria-label="Close">
+        <button
+          class="picker-close-btn"
+          id="photoPickerCloseBtn"
+          aria-label="Close"
+        >
           <span class="material-symbols-outlined">close</span>
         </button>
       </div>
-      <p class="picker-subtitle" id="photoPickerSubtitle">Choose photos and folders to import</p>
+      <p class="picker-subtitle" id="photoPickerSubtitle">
+        Choose photos and folders to import
+      </p>
     </div>
 
     <!-- Breadcrumb Navigation -->
@@ -25,11 +31,13 @@
 
     <!-- Selection Count -->
     <div class="photo-picker-footer">
-      <span id="photoPickerCount" class="photo-picker-count">No items selected</span>
-      <button 
-        id="photoPickerClearBtn" 
-        class="photo-picker-clear-btn" 
-        style="visibility: hidden;"
+      <span id="photoPickerCount" class="photo-picker-count"
+        >No items selected</span
+      >
+      <button
+        id="photoPickerClearBtn"
+        class="photo-picker-clear-btn"
+        style="visibility: hidden"
         aria-label="Clear selection"
         title="Clear selection"
       >
@@ -39,10 +47,10 @@
 
     <!-- Actions -->
     <div class="picker-actions">
-      <button class="import-btn import-btn-secondary" id="photoPickerCancelBtn">
+      <button class="btn btn-secondary" id="photoPickerCancelBtn">
         Cancel
       </button>
-      <button class="import-btn import-btn-primary" id="photoPickerImportBtn" disabled>
+      <button class="btn btn-primary" id="photoPickerImportBtn" disabled>
         Import
       </button>
     </div>

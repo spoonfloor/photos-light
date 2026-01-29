@@ -4,7 +4,11 @@
     <!-- Header -->
     <div class="import-header">
       <span class="import-title">Rebuild database</span>
-      <button class="import-close-btn" id="rebuildDatabaseCloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="rebuildDatabaseCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -14,8 +18,8 @@
       <div class="import-status-text" id="rebuildDatabaseStatusText">
         Scanning library<span class="import-spinner"></span>
       </div>
-      
-      <div class="import-stats" id="rebuildDatabaseStats" style="display: none;">
+
+      <div class="import-stats" id="rebuildDatabaseStats" style="display: none">
         <span class="import-stat">
           <span class="import-stat-label">Indexed:</span>
           <span class="import-stat-value" id="rebuildIndexedCount">0</span>
@@ -24,26 +28,42 @@
     </div>
 
     <!-- Details Section -->
-    <div class="import-details-section" id="rebuildDatabaseDetailsSection" style="display: none;">
+    <div
+      class="import-details-section"
+      id="rebuildDatabaseDetailsSection"
+      style="display: none"
+    >
       <button class="import-details-toggle" id="rebuildDatabaseDetailsToggle">
         <span class="material-symbols-outlined">expand_more</span>
         <span>Show details</span>
       </button>
-      
-      <div class="import-details-list" id="rebuildDatabaseDetailsList" style="display: none;">
+
+      <div
+        class="import-details-list"
+        id="rebuildDatabaseDetailsList"
+        style="display: none"
+      >
         <!-- Populated dynamically -->
       </div>
     </div>
 
     <!-- Action Buttons -->
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="rebuildDatabaseCancelBtn">
+      <button class="btn btn-secondary" id="rebuildDatabaseCancelBtn">
         Cancel
       </button>
-      <button class="import-btn import-btn-primary" id="rebuildDatabaseProceedBtn" style="display: none;">
+      <button
+        class="btn btn-primary"
+        id="rebuildDatabaseProceedBtn"
+        style="display: none"
+      >
         Continue
       </button>
-      <button class="import-btn import-btn-primary" id="rebuildDatabaseDoneBtn" style="display: none;">
+      <button
+        class="btn btn-primary"
+        id="rebuildDatabaseDoneBtn"
+        style="display: none"
+      >
         Done
       </button>
     </div>

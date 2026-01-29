@@ -4,7 +4,11 @@
     <!-- Header -->
     <div class="import-header">
       <span class="import-title">Create new library?</span>
-      <button class="import-close-btn" id="createLibraryCloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="createLibraryCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -13,16 +17,23 @@
     <div class="import-progress-section">
       <div class="import-status-text" id="createLibraryStatusText">
         <p>This will create a new photo library at:</p>
-        <p id="newLibraryPath" style="font-family: monospace; font-size: 12px; color: var(--text-secondary);"></p>
+        <p
+          id="newLibraryPath"
+          style="
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+          "
+        ></p>
       </div>
     </div>
 
     <!-- Action Buttons -->
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="createLibraryCancelBtn">
+      <button class="btn btn-secondary" id="createLibraryCancelBtn">
         Cancel
       </button>
-      <button class="import-btn import-btn-primary" id="createLibraryConfirmBtn">
+      <button class="btn btn-primary" id="createLibraryConfirmBtn">
         Create & Switch
       </button>
     </div>

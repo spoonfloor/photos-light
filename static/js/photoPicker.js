@@ -77,7 +77,7 @@ const PhotoPicker = (() => {
       selectedPaths.set(folderPath, { type: 'folder' });
       folderStateCache.clear();
       updateSelectionCount();
-      
+
       // Start background counting
       selectFolderRecursiveBackground(folderPath);
     }
@@ -85,16 +85,16 @@ const PhotoPicker = (() => {
 
   async function selectFolderRecursive(folderPath) {
     selectedPaths.set(folderPath, { type: 'folder' });
-    
+
     try {
       const { folders, files } = await listDirectory(folderPath);
-      
+
       // Add all files
       for (const file of files) {
         const filePath = folderPath + '/' + file.name;
         selectedPaths.set(filePath, { type: 'file' });
       }
-      
+
       // Recursively add all subfolders
       for (const folder of folders) {
         const subFolderPath = folderPath + '/' + folder.name;
@@ -112,51 +112,53 @@ const PhotoPicker = (() => {
     let filesDiscoveredSinceUpdate = 0;
     const UPDATE_INTERVAL_MS = 1000;
     const UPDATE_FILE_THRESHOLD = 50;
-    
+
     isCountingInBackground = true;
-    
+
     async function recursiveSelect(path) {
       // Check if counting was aborted
       if (countingAborted) {
         return;
       }
-      
+
       try {
         const { folders, files } = await listDirectory(path);
-        
+
         // Check abort again after async operation
         if (countingAborted) {
           return;
         }
-        
+
         // Add all files
         for (const file of files) {
           if (countingAborted) return; // Check during loop
-          
+
           const filePath = path + '/' + file.name;
           if (!selectedPaths.has(filePath)) {
             selectedPaths.set(filePath, { type: 'file' });
             filesDiscoveredSinceUpdate++;
           }
         }
-        
+
         // Check if we should update UI
         const now = Date.now();
         const timeSinceUpdate = now - lastUpdateTime;
-        
-        if (filesDiscoveredSinceUpdate >= UPDATE_FILE_THRESHOLD || 
-            timeSinceUpdate >= UPDATE_INTERVAL_MS) {
+
+        if (
+          filesDiscoveredSinceUpdate >= UPDATE_FILE_THRESHOLD ||
+          timeSinceUpdate >= UPDATE_INTERVAL_MS
+        ) {
           if (!countingAborted) {
             updateSelectionCount();
             lastUpdateTime = now;
             filesDiscoveredSinceUpdate = 0;
           }
         }
-        
+
         // Recursively process subfolders
         for (const folder of folders) {
           if (countingAborted) return; // Check during loop
-          
+
           const subFolderPath = path + '/' + folder.name;
           if (!selectedPaths.has(subFolderPath)) {
             selectedPaths.set(subFolderPath, { type: 'folder' });
@@ -167,29 +169,29 @@ const PhotoPicker = (() => {
         console.error('Error selecting folder:', error);
       }
     }
-    
+
     await recursiveSelect(folderPath);
-    
+
     // Only finish if not aborted
     if (!countingAborted) {
       const totalTime = Date.now() - startTime;
       isCountingInBackground = false;
-      
+
       // ALWAYS update UI with final count after counting completes
       folderStateCache.clear();
       updateSelectionCount();
-      
+
       console.log(`✅ Folder counting complete in ${totalTime}ms`);
     }
   }
 
   async function unselectFolderRecursive(folderPath) {
     // Remove all paths that start with this folder path
-    const toRemove = Array.from(selectedPaths.keys()).filter(path => 
-      path === folderPath || path.startsWith(folderPath + '/')
+    const toRemove = Array.from(selectedPaths.keys()).filter(
+      (path) => path === folderPath || path.startsWith(folderPath + '/'),
     );
-    
-    toRemove.forEach(path => selectedPaths.delete(path));
+
+    toRemove.forEach((path) => selectedPaths.delete(path));
   }
 
   // Calculate folder checkbox state (checked, unchecked, indeterminate) with caching
@@ -198,14 +200,14 @@ const PhotoPicker = (() => {
     if (folderStateCache.has(folderPath)) {
       return folderStateCache.get(folderPath);
     }
-    
+
     const isChecked = selectedPaths.has(folderPath);
-    
+
     // Check if any descendant is selected
-    const hasSelectedDescendant = Array.from(selectedPaths.keys()).some(path => 
-      path.startsWith(folderPath + '/')
+    const hasSelectedDescendant = Array.from(selectedPaths.keys()).some(
+      (path) => path.startsWith(folderPath + '/'),
     );
-    
+
     let state;
     if (isChecked) {
       state = 'checked';
@@ -214,7 +216,7 @@ const PhotoPicker = (() => {
     } else {
       state = 'unchecked';
     }
-    
+
     // Cache the result
     folderStateCache.set(folderPath, state);
     return state;
@@ -226,47 +228,52 @@ const PhotoPicker = (() => {
 
   function setupThumbnailLazyLoading() {
     const fileList = document.getElementById('photoPickerFileList');
-    const thumbnails = fileList.querySelectorAll('.photo-picker-thumbnail:not([src])');
-    
+    const thumbnails = fileList.querySelectorAll(
+      '.photo-picker-thumbnail:not([src])',
+    );
+
     // Create observer if doesn't exist
     if (!thumbnailObserver) {
-      thumbnailObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            const img = entry.target;
-            loadThumbnail(img);
-            thumbnailObserver.unobserve(img); // Only load once
-          }
-        });
-      }, {
-        root: fileList,
-        rootMargin: '100px', // Load 100px before entering viewport
-        threshold: 0.01
-      });
+      thumbnailObserver = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              const img = entry.target;
+              loadThumbnail(img);
+              thumbnailObserver.unobserve(img); // Only load once
+            }
+          });
+        },
+        {
+          root: fileList,
+          rootMargin: '100px', // Load 100px before entering viewport
+          threshold: 0.01,
+        },
+      );
     }
-    
+
     // Observe all loading thumbnails
-    thumbnails.forEach(img => {
+    thumbnails.forEach((img) => {
       thumbnailObserver.observe(img);
     });
   }
 
   async function loadThumbnail(imgElement) {
     const path = imgElement.dataset.path;
-    
+
     try {
       const response = await fetch('/api/filesystem/preview-thumbnail', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path })
+        body: JSON.stringify({ path }),
       });
-      
+
       if (response.ok) {
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
-        
+
         imgElement.src = url;
-        
+
         // Clean up blob URL after image loads
         imgElement.onload = () => {
           setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -309,7 +316,9 @@ const PhotoPicker = (() => {
     `;
 
     // Find which top-level location we're under
-    const topLevel = topLevelLocations.find((loc) => currentPath.startsWith(loc.path));
+    const topLevel = topLevelLocations.find((loc) =>
+      currentPath.startsWith(loc.path),
+    );
     if (topLevel) {
       html += '<span class="breadcrumb-separator">/</span>';
       html += `<span class="breadcrumb-item" data-path="${topLevel.path}">${topLevel.name}</span>`;
@@ -362,7 +371,7 @@ const PhotoPicker = (() => {
           <span class="photo-picker-name">${loc.name}</span>
           <span class="photo-picker-arrow">→</span>
         </div>
-      `
+      `,
         )
         .join('');
 
@@ -435,13 +444,15 @@ const PhotoPicker = (() => {
           if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
           return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         };
-        
+
         // Format dimensions and metadata
-        const dimensionsText = file.dimensions 
-          ? `${file.dimensions.width}×${file.dimensions.height}` 
+        const dimensionsText = file.dimensions
+          ? `${file.dimensions.width}×${file.dimensions.height}`
           : '';
         const sizeText = formatSize(file.size || 0);
-        const metaText = dimensionsText ? `${dimensionsText} • ${sizeText}` : sizeText;
+        const metaText = dimensionsText
+          ? `${dimensionsText} • ${sizeText}`
+          : sizeText;
 
         html += `
           <div class="photo-picker-item file-item" data-file-path="${filePath}" data-type="file">
@@ -491,7 +502,10 @@ const PhotoPicker = (() => {
         }
 
         // Arrow clicked - navigate
-        if (e.target.classList.contains('photo-picker-arrow') && type === 'folder') {
+        if (
+          e.target.classList.contains('photo-picker-arrow') &&
+          type === 'folder'
+        ) {
           e.stopPropagation();
           navigateTo(path);
           return;
@@ -506,7 +520,7 @@ const PhotoPicker = (() => {
           checkbox.click();
         }
       };
-      
+
       fileList.addEventListener('click', fileListClickHandler);
     } catch (error) {
       fileList.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
@@ -517,20 +531,20 @@ const PhotoPicker = (() => {
     const countEl = document.getElementById('photoPickerCount');
     const importBtn = document.getElementById('photoPickerImportBtn');
     const clearBtn = document.getElementById('photoPickerClearBtn');
-    
+
     const count = selectedPaths.size;
-    
+
     if (count === 0) {
       countEl.textContent = 'No items selected';
       if (importBtn) importBtn.disabled = true;
       if (clearBtn) clearBtn.style.visibility = 'hidden';
       return;
     }
-    
+
     // Count folders vs files using stored type (no regex!)
     let folderCount = 0;
     let fileCount = 0;
-    
+
     selectedPaths.forEach((value) => {
       if (value.type === 'folder') {
         folderCount++;
@@ -538,18 +552,18 @@ const PhotoPicker = (() => {
         fileCount++;
       }
     });
-    
+
     // Build count text - ALWAYS show both folder and file counts
     const folderText = `${folderCount} folder${folderCount !== 1 ? 's' : ''}`;
     const fileText = `${fileCount.toLocaleString()} file${fileCount !== 1 ? 's' : ''}`;
-    
+
     // Show counting state or final count
     if (isCountingInBackground) {
       countEl.textContent = `Counting files... ${folderText}, ${fileCount.toLocaleString()}+ files selected`;
     } else {
       countEl.textContent = `${folderText}, ${fileText} selected`;
     }
-    
+
     if (importBtn) importBtn.disabled = false;
     if (clearBtn) clearBtn.style.visibility = 'visible';
   }
@@ -568,11 +582,11 @@ const PhotoPicker = (() => {
     if (thumbnailObserver) {
       thumbnailObserver.disconnect();
     }
-    
+
     currentPath = path || VIRTUAL_ROOT;
     updateBreadcrumb();
     await updateFileList();
-    
+
     // Observer will be recreated in updateFileList()
   }
 
@@ -581,20 +595,34 @@ const PhotoPicker = (() => {
   // ===========================================================================
 
   async function handleKeyboard(e) {
+    // Enter key - trigger Import button if enabled
+    if (e.key === 'Enter') {
+      const importBtn = document.getElementById('photoPickerImportBtn');
+      if (importBtn && !importBtn.disabled) {
+        console.log('✅ Enter key: Triggering photo picker import');
+        importBtn.click();
+        e.preventDefault();
+        e.stopPropagation(); // Prevent event from bubbling to global handler
+      } else {
+        console.log('⚠️ Enter key: Import button disabled (no files selected)');
+      }
+      return;
+    }
+
     // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
     if (e.metaKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
       e.preventDefault();
       console.log('✅ Desktop shortcut detected!');
-      
+
       // Find user's home directory (contains /Users/ but not Shared)
-      const homeLocation = topLevelLocations.find(loc => 
-        loc.path.includes('/Users/') && !loc.path.includes('Shared')
+      const homeLocation = topLevelLocations.find(
+        (loc) => loc.path.includes('/Users/') && !loc.path.includes('Shared'),
       );
-      
+
       if (homeLocation) {
         const desktopPath = homeLocation.path + '/Desktop';
         console.log('⌨️ Cmd+Shift+D: Navigating to Desktop:', desktopPath);
-        
+
         try {
           // Validate Desktop exists before navigating
           await listDirectory(desktopPath);
@@ -617,28 +645,30 @@ const PhotoPicker = (() => {
   /**
    * Filter selectedPaths to only root-level selections
    * (items explicitly checked by user, not auto-expanded children)
-   * 
+   *
    * Logic: A path is a root selection if NO other selected path is its parent
    */
   function getRootSelections() {
     const allPaths = Array.from(selectedPaths.keys());
     const rootPaths = [];
-    
+
     for (const path of allPaths) {
       // Check if any OTHER path is a parent of this path
-      const hasParentInSelection = allPaths.some(otherPath => {
+      const hasParentInSelection = allPaths.some((otherPath) => {
         if (otherPath === path) return false; // Skip self
         // Check if otherPath is a parent directory of path
         return path.startsWith(otherPath + '/');
       });
-      
+
       // If no parent found in selection, this is a root selection
       if (!hasParentInSelection) {
         rootPaths.push(path);
       }
     }
-    
-    console.log(`📦 Filtered ${allPaths.length} selected paths → ${rootPaths.length} root selections`);
+
+    console.log(
+      `📦 Filtered ${allPaths.length} selected paths → ${rootPaths.length} root selections`,
+    );
     return rootPaths;
   }
 
@@ -660,7 +690,8 @@ const PhotoPicker = (() => {
 
         // Configure picker
         const title = options.title || 'Select photos';
-        const subtitle = options.subtitle || 'Choose photos and folders to import';
+        const subtitle =
+          options.subtitle || 'Choose photos and folders to import';
 
         document.getElementById('photoPickerTitle').textContent = title;
         document.getElementById('photoPickerSubtitle').textContent = subtitle;
@@ -676,7 +707,7 @@ const PhotoPicker = (() => {
 
         // Determine initial path
         let initialPath = VIRTUAL_ROOT;
-        
+
         // If currentPath is set from previous navigation, use it
         if (currentPath !== VIRTUAL_ROOT) {
           initialPath = currentPath;
@@ -697,10 +728,13 @@ const PhotoPicker = (() => {
               // Fall through to Desktop default
             }
           }
-          
+
           // If still at virtual root, use shared utility to get default path
           if (initialPath === VIRTUAL_ROOT) {
-            initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
+            initialPath = await PickerUtils.getDefaultPath(
+              topLevelLocations,
+              listDirectory,
+            );
           }
         }
 
@@ -726,13 +760,13 @@ const PhotoPicker = (() => {
 
         const handleCancel = () => {
           countingAborted = true; // Abort any ongoing counting
-          
+
           // Save current path even on cancel (for next session)
           if (currentPath !== VIRTUAL_ROOT) {
             localStorage.setItem('picker.lastPath', currentPath);
             console.log('💾 Saved path on cancel:', currentPath);
           }
-          
+
           overlay.style.display = 'none';
           if (keyboardHandler) {
             document.removeEventListener('keydown', keyboardHandler);
@@ -744,18 +778,18 @@ const PhotoPicker = (() => {
 
         const handleImport = () => {
           if (selectedPaths.size === 0) return;
-          
+
           // Save current path to localStorage for next session
           localStorage.setItem('picker.lastPath', currentPath);
           console.log('💾 Saved path for next session:', currentPath);
-          
+
           overlay.style.display = 'none';
           if (keyboardHandler) {
             document.removeEventListener('keydown', keyboardHandler);
             keyboardHandler = null;
           }
           resolveCallback = null;
-          
+
           // Return only root selections (folders/files user checked)
           // Backend will scan folders recursively - no need to send expanded children
           const rootSelections = getRootSelections();

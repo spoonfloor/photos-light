@@ -1,10 +1,14 @@
 <!-- Name Library Dialog -->
-<div class="picker-overlay" id="nameLibraryOverlay" style="display: none;">
+<div class="picker-overlay" id="nameLibraryOverlay" style="display: none">
   <div class="import-card">
     <!-- Header -->
     <div class="import-header">
       <span class="import-title">Create new library</span>
-      <button class="import-close-btn" id="nameLibraryCloseBtn" aria-label="Close">
+      <button
+        class="import-close-btn"
+        id="nameLibraryCloseBtn"
+        aria-label="Close"
+      >
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -12,16 +16,16 @@
     <!-- Content -->
     <div class="import-progress-section">
       <div class="import-status-text">
-        <p style="margin: 0; color: var(--text-secondary); font-size: 14px;">
+        <p style="margin: 0; color: var(--text-secondary); font-size: 14px">
           Your new library needs its own folder. Please give it a name.
         </p>
       </div>
-      
+
       <!-- Input Field -->
-      <div style="margin-top: 16px;">
-        <input 
-          type="text" 
-          id="libraryNameInput" 
+      <div style="margin-top: 16px">
+        <input
+          type="text"
+          id="libraryNameInput"
           placeholder="Photo Library"
           value="Photo Library"
           style="
@@ -39,8 +43,8 @@
           autocomplete="off"
           spellcheck="false"
         />
-        <div 
-          id="libraryNameError" 
+        <div
+          id="libraryNameError"
           style="
             margin-top: 8px;
             color: #ff6b6b;
@@ -55,10 +59,10 @@
 
     <!-- Actions -->
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="nameLibraryCancelBtn">
+      <button class="btn btn-secondary" id="nameLibraryCancelBtn">
         Cancel
       </button>
-      <button class="import-btn import-btn-primary" id="nameLibraryConfirmBtn">
+      <button class="btn btn-primary" id="nameLibraryConfirmBtn">
         Continue
       </button>
     </div>

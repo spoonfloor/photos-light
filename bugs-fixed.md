@@ -4,6 +4,115 @@ Issues that have been fixed and verified.
 
 ---
 
+## Session 15: January 28, 2026
+
+### Enter Key - Wrong Button Triggered on Delete Dialog
+
+**Fixed:** Enter key now correctly finds visible primary button, not hidden ones  
+**Version:** v237  
+**Testing completed:** January 28, 2026
+
+**Issue:**
+When Delete confirmation dialog was open and user pressed Enter, it triggered the hidden date editor's Save button instead of the visible Delete button. This caused the "invalid literal for int() with base 10: 'undefined'" error.
+
+**Root cause:**
+The Enter key handler used `document.querySelector('.btn-primary:not([style*="display: none"])')` which only checked if the button element itself had an inline `display: none` style. It didn't check if the button's parent overlay was hidden. Since the date editor overlay (`dateEditorOverlay`) comes before the dialog overlay (`dialogOverlay`) in DOM order, `querySelector` returned the date editor's save button first—even though its parent overlay was hidden with `style="display: none"`.
+
+**The fix:**
+Replaced the CSS selector approach with `offsetParent` check. The `offsetParent` property returns `null` if an element or ANY of its ancestors has `display: none`, making it the standard DOM API for visibility detection.
+
+Changed from:
+```javascript
+const primaryBtn = document.querySelector(
+  '.btn-primary:not([style*="display: none"]):not(:disabled)',
+);
+```
+
+To:
+```javascript
+const allPrimaryBtns = document.querySelectorAll('.btn-primary:not(:disabled)');
+let primaryBtn = null;
+for (const btn of allPrimaryBtns) {
+  if (btn.offsetParent !== null) {
+    primaryBtn = btn;
+    break;
+  }
+}
+```
+
+**Impact:**
+Fixes Enter key behavior across ALL overlays—not just Delete dialog. Any scenario with multiple overlays in DOM (even if hidden) will now correctly identify which button is actually visible.
+
+**Files changed:**
+- `static/js/main.js` (v237) - Lines 1977-1990 replaced with offsetParent check
+
+---
+
+## Session 15: January 28, 2026
+
+### Primary CTAs - Keyboard Activation (Return Key)
+
+**Fixed:** Enter key now activates primary (purple) CTA buttons across all dialogs  
+**Version:** v236  
+**Testing completed:** January 28, 2026
+
+**Issue:**
+Primary action buttons could not be triggered with the Enter/Return key, requiring users to click with mouse. This is a basic accessibility and UX expectation in modern applications.
+
+**Root cause:**
+No keyboard event handlers existed for Enter key on dialogs and overlays. The app only supported mouse clicks for button activation.
+
+**The fix:**
+
+Added Enter key handlers at two levels:
+
+1. **Global handler** (`main.js` - `handleLightboxKeyboard()`):
+   - Finds first visible, enabled `.btn-primary` button
+   - Clicks it when Enter is pressed
+   - Skips if photo picker is open (has its own handler)
+   - Skips if user is typing in text input/textarea/select
+
+2. **PhotoPicker local handler** (`photoPicker.js` - `handleKeyboard()`):
+   - Triggers Import button when Enter pressed
+   - Uses `stopPropagation()` to prevent global handler from also firing
+   - Only activates if Import button is enabled (files selected)
+
+**Additional work:**
+
+Consolidated three redundant button styling systems into unified `.btn`, `.btn-primary`, `.btn-secondary` classes:
+
+- Removed `.dialog-button-primary/secondary`
+- Removed `.date-editor-button-primary/secondary`
+- Removed `.import-btn-primary/secondary`
+- Updated 17 HTML fragments + all dynamic button creation in JS
+- Refactored duplicate empty state HTML
+
+**Files changed:**
+
+- `static/css/styles.css` - Added unified button system
+- `static/js/main.js` - Enter key handler + button consolidation (v236)
+- `static/js/photoPicker.js` - Enter key handler
+- 17 HTML fragments updated
+
+**Testing:**
+
+- ✅ Empty state → Press Enter → Opens photo picker
+- ✅ Photo picker → Select file → Press Enter → Closes picker, starts import
+- ✅ Dialog overlays → Press Enter → Triggers primary button
+- ✅ Text inputs → Press Enter → Does NOT trigger button (preserves text entry)
+- ✅ All dialogs with primary buttons respond to Enter key
+
+**Documentation:**
+
+- `ENTER_KEY_IMPLEMENTATION.md` - Full implementation details
+- `BUTTON_CONSOLIDATION_AUDIT.md` - Analysis of original button systems
+- `UNIFIED_BUTTON_DESIGN.md` - Design spec for new button system
+
+**Known issue:**
+Date change error still exists (separate bug #2) - "invalid literal for int() with base 10: 'undefined'" appears after import. Unrelated to Enter key implementation.
+
+---
+
 ## Session 14: January 28, 2026
 
 ### Lightbox Info Panel - Image Cropping Issue
@@ -17,6 +126,7 @@ When the info panel opened at the bottom of the lightbox, images would be croppe
 
 **Root cause:**
 JavaScript set explicit `height: 100vh` on images for height-constrained photos. When the info panel opened:
+
 1. The container's height was reduced via CSS (`flex: 0 0 calc(100vh - 100px)`)
 2. But the image still had explicit `height: 100vh` from JavaScript
 3. The explicit inline style overrode CSS `max-height: 100%`
@@ -34,11 +144,13 @@ Added CSS rules to override JavaScript-set dimensions when info panel is open:
 ```
 
 This forces images to:
+
 - Respect the reduced container height via `max-height`
 - Let `max-height` control sizing instead of explicit `height`
 - Maintain aspect ratio via existing `object-fit: contain`
 
 **Testing:**
+
 - ✅ Tall photos with info panel open (no longer cropped)
 - ✅ Wide photos with info panel open (still display correctly)
 - ✅ Navigation between photos with info panel open

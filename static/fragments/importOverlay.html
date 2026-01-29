@@ -14,8 +14,8 @@
       <div class="import-status-text" id="importStatusText">
         Preparing import
       </div>
-      
-      <div class="import-stats" id="importStats" style="display: none;">
+
+      <div class="import-stats" id="importStats" style="display: none">
         <span class="import-stat">
           <span class="import-stat-label">Imported:</span>
           <span class="import-stat-value" id="importedCount">0</span>
@@ -32,26 +32,42 @@
     </div>
 
     <!-- Details Section (expandable) -->
-    <div class="import-details-section" id="importDetailsSection" style="display: none;">
+    <div
+      class="import-details-section"
+      id="importDetailsSection"
+      style="display: none"
+    >
       <button class="import-details-toggle" id="importDetailsToggle">
         <span class="material-symbols-outlined">expand_more</span>
         <span>Show details</span>
       </button>
-      
-      <div class="import-details-list" id="importDetailsList" style="display: none;">
+
+      <div
+        class="import-details-list"
+        id="importDetailsList"
+        style="display: none"
+      >
         <!-- Populated dynamically -->
       </div>
     </div>
 
     <!-- Action Buttons -->
     <div class="import-actions">
-      <button class="import-btn import-btn-secondary" id="importCancelBtn" style="display: none;">
+      <button
+        class="btn btn-secondary"
+        id="importCancelBtn"
+        style="display: none"
+      >
         Cancel
       </button>
-      <button class="import-btn import-btn-secondary" id="importUndoBtn" style="display: none;">
+      <button
+        class="btn btn-secondary"
+        id="importUndoBtn"
+        style="display: none"
+      >
         Undo import
       </button>
-      <button class="import-btn import-btn-primary" id="importDoneBtn" style="display: none;">
+      <button class="btn btn-primary" id="importDoneBtn" style="display: none">
         Done
       </button>
     </div>
