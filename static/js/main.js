@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v240';
+const MAIN_JS_VERSION = 'v241';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -3457,7 +3457,7 @@ async function loadUtilitiesMenu() {
 
     if (cleanOrganizeBtn) {
       cleanOrganizeBtn.addEventListener('click', () => {
-        console.log('🔧 Clean & update library clicked');
+        console.log('🔧 Clean library clicked');
         hideUtilitiesMenu();
         openUpdateIndexOverlay();
       });
@@ -3741,7 +3741,7 @@ async function openUpdateIndexOverlay() {
       showUpdateIndexButtons('cancel', 'proceed');
     } else {
       // Phase 2: No changes needed - done immediately
-      updateUpdateIndexUI('Index is up to date. No changes required.', false);
+      updateUpdateIndexUI('Library is up to date. No changes required.', false);
       showUpdateIndexButtons('done');
     }
   } catch (error) {
@@ -3755,7 +3755,7 @@ async function openUpdateIndexOverlay() {
  * Phase 3: Execute update (after user clicks Continue)
  */
 async function executeUpdateIndex() {
-  console.log('🚀 Executing clean & update library...');
+  console.log('🚀 Executing clean library...');
 
   // Phase 3: Execution
   updateUpdateIndexUI('Removing missing files...', false);
@@ -3830,7 +3830,7 @@ async function executeUpdateIndex() {
         if (line.startsWith('event: complete')) {
           // Phase 4: Confirmation (hide stats, show only details)
           console.log('🎯 Complete event received');
-          updateUpdateIndexUI('Index updated', false);
+          updateUpdateIndexUI('Library updated', false);
           hideUpdateIndexStats();
           console.log('🎯 About to render details. State:', updateIndexState);
           renderUpdateIndexDetails();
@@ -3844,8 +3844,8 @@ async function executeUpdateIndex() {
     await loadAndRenderPhotos(false);
   } catch (error) {
     console.error('❌ Failed to execute update:', error);
-    updateUpdateIndexUI('Failed to clean & update library', false);
-    showToast('Failed to clean & update library', null);
+    updateUpdateIndexUI('Failed to clean library', false);
+    showToast('Failed to clean library', null);
     showUpdateIndexButtons('cancel');
   }
 }
