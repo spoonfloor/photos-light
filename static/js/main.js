@@ -1863,13 +1863,50 @@ function wireLightbox() {
 
   const starBtn = document.getElementById('lightboxStarBtn');
   if (starBtn) {
-    starBtn.addEventListener('click', () => {
+    starBtn.addEventListener('click', async () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
+      if (!photoId) return;
+
       const starIcon = starBtn.querySelector('.material-symbols-outlined');
-      const isFilled = starIcon.classList.toggle('filled');
-      console.log(
-        `⭐ LIGHTBOX Star clicked! Photo: ${photoId}, Filled: ${isFilled}`,
-      );
+      const isFilled = starIcon.classList.contains('filled');
+      
+      console.log(`⭐ LIGHTBOX Star clicked! Photo: ${photoId}, Currently: ${isFilled ? 'starred' : 'not starred'}`);
+      
+      try {
+        // Optimistically toggle UI
+        starIcon.classList.toggle('filled');
+        
+        // Call API to toggle favorite
+        const response = await fetch(`/api/photo/${photoId}/favorite`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to toggle favorite: ${response.status}`);
+        }
+        
+        const result = await response.json();
+        console.log(`⭐ Star toggled: Photo ${photoId} now ${result.favorited ? 'starred' : 'not starred'}`);
+        
+        // Update local state to match backend
+        if (state.photos[state.lightboxPhotoIndex]) {
+          state.photos[state.lightboxPhotoIndex].rating = result.rating;
+        }
+        
+        // Ensure UI matches result
+        if (result.favorited) {
+          starIcon.classList.add('filled');
+        } else {
+          starIcon.classList.remove('filled');
+        }
+        
+      } catch (error) {
+        console.error('❌ Error toggling star:', error);
+        // Revert optimistic UI change on error
+        starIcon.classList.toggle('filled');
+        showToast('Failed to update star', null);
+      }
     });
   }
 
@@ -2237,6 +2274,20 @@ async function openLightbox(photoIndex) {
 
   // Prevent body scroll while lightbox is open
   document.body.style.overflow = 'hidden';
+
+  // Update star button state based on photo rating
+  const starBtn = document.getElementById('lightboxStarBtn');
+  if (starBtn) {
+    const starIcon = starBtn.querySelector('.material-symbols-outlined');
+    if (starIcon) {
+      // Photo is starred if rating === 5
+      if (photo.rating === 5) {
+        starIcon.classList.add('filled');
+      } else {
+        starIcon.classList.remove('filled');
+      }
+    }
+  }
 
   // Update info panel with photo details
   const infoDate = document.getElementById('infoDate');

@@ -213,6 +213,35 @@ def write_exif_rating(file_path, rating):
         return False
 
 
+def strip_exif_rating(file_path):
+    """
+    Strip Rating and RatingPercent tags completely from EXIF.
+    
+    Used when un-starring a photo (cleaner than writing 0).
+    Matches Photos.app behavior.
+    
+    Args:
+        file_path: Path to photo file
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        result = subprocess.run([
+            'exiftool',
+            '-overwrite_original',
+            '-Rating=',
+            '-RatingPercent=',
+            file_path
+        ], capture_output=True, text=True, timeout=30)
+        
+        return result.returncode == 0
+    
+    except Exception as e:
+        print(f"❌ Error stripping rating from {file_path}: {e}")
+        return False
+
+
 def extract_metadata_batch(file_paths, include_dimensions=True, include_rating=True):
     """
     Extract EXIF dates, dimensions, and ratings in a single exiftool call.

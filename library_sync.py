@@ -4,6 +4,8 @@ Library Synchronization - Core Operations
 Unified synchronization logic used by both:
 - Update Library Index (incremental maintenance)
 - Rebuild Database (full recovery)
+
+Version: v3 - Simplified (removed operation_state complexity)
 """
 
 import os
@@ -11,7 +13,6 @@ import hashlib
 import json
 from datetime import datetime
 from hash_cache import HashCache
-from operation_state import OperationStateManager, CheckpointHelper, OperationType
 
 
 def count_media_files(library_path):
@@ -119,7 +120,7 @@ def estimate_duration(file_count):
 def synchronize_library_generator(library_path, db_connection, extract_exif_date_func, 
                                    get_image_dimensions_func, mode='incremental'):
     """
-    Core library synchronization with streaming progress and resume capability.
+    Core library synchronization with streaming progress.
     
     Args:
         library_path: Path to photo library folder
@@ -130,6 +131,9 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     
     Yields:
         SSE event strings for progress tracking
+    
+    Note: v3 - Simplified, removed operation_state checkpoint system.
+          Operations are fast enough with hash_cache that restart is acceptable.
     """
     # v223: Removed .bmp (exiftool cannot write EXIF to BMP)
     photo_exts = {
@@ -146,22 +150,9 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     
     cursor = db_connection.cursor()
     
-    # Initialize hash cache
+    # Initialize hash cache (provides 80-90% speedup on repeat operations)
     hash_cache = HashCache(db_connection)
     print(f"📦 Hash cache initialized")
-    
-    # Initialize operation state tracking
-    op_type = OperationType.REBUILD_DATABASE if mode == 'full' else OperationType.UPDATE_INDEX
-    op_manager = OperationStateManager(db_connection)
-    operation_id = op_manager.start_operation(op_type)
-    
-    # Check for resume
-    checkpoint_data = op_manager.get_checkpoint(operation_id)
-    resume_from = checkpoint_data.get('processed_files', 0) if checkpoint_data else 0
-    
-    if resume_from > 0:
-        print(f"🔄 Resuming from file {resume_from}")
-        yield f"event: resume\ndata: {json.dumps({'resumed_from': resume_from})}\n\n"
     
     # Phase 0: Scan filesystem
     print(f"\n🔄 LIBRARY SYNC ({mode} mode): Scanning filesystem...")
@@ -229,22 +220,8 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     if untracked_count > 0:
         print(f"\n📝 Adding {untracked_count} untracked files (with hash caching)...")
         
-        # Setup checkpoint helper (checkpoint every 100 files)
-        checkpoint_helper = CheckpointHelper(op_manager, operation_id, checkpoint_interval=100)
-        
         for idx, mole_path in enumerate(untracked_files_list, 1):
-            # Skip if resuming and already processed
-            if idx <= resume_from:
-                continue
-            
             yield f"event: progress\ndata: {json.dumps({'phase': 'adding_untracked', 'current': idx, 'total': untracked_count})}\n\n"
-            
-            # Checkpoint progress
-            checkpoint_helper.maybe_checkpoint(idx, {
-                'phase': 'adding_untracked',
-                'processed_files': idx,
-                'total_files': untracked_count
-            })
             
             try:
                 full_path = os.path.join(library_path, mole_path)
@@ -289,13 +266,6 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
         # Show cache statistics
         cache_stats = hash_cache.get_stats()
         print(f"  📊 Cache stats: {cache_stats['hit_rate']}% hit rate ({cache_stats['memory_hits']} memory, {cache_stats['db_hits']} DB, {cache_stats['misses']} misses)")
-        
-        # Final checkpoint
-        checkpoint_helper.force_checkpoint({
-            'phase': 'completed',
-            'processed_files': untracked_count,
-            'total_files': untracked_count
-        })
     
     # Phase 3: Remove empty folders (loop until no more found - domino effect)
     print(f"\n🗑️  Removing empty folders...")

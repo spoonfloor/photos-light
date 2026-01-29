@@ -1062,7 +1062,7 @@ def get_photos():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Lightweight query - just id, date, month, file_type, current_path, width, height for grid structure
+        # Lightweight query - just id, date, month, file_type, current_path, width, height, rating for grid structure
         query = f"""
             SELECT 
                 id,
@@ -1070,7 +1070,8 @@ def get_photos():
                 file_type,
                 current_path,
                 width,
-                height
+                height,
+                rating
             FROM photos
             WHERE date_taken IS NOT NULL
             ORDER BY date_taken {order_by}, current_path ASC
@@ -1104,6 +1105,7 @@ def get_photos():
                 'path': row['current_path'],
                 'width': row['width'],
                 'height': row['height'],
+                'rating': row['rating'],  # NULL or 1-5
             })
         
         conn.close()
@@ -4564,21 +4566,21 @@ def terraform_library():
 @handle_db_corruption
 def toggle_favorite(photo_id):
     """
-    Toggle favorite status for a photo (0 ↔ 5 rating).
+    Toggle favorite status for a photo (NULL/5 rating).
     
     POST body (optional):
         {
-            "rating": 5  // Explicit rating (0-5), default toggles 0↔5
+            "rating": 5  // Explicit rating (0-5), default toggles NULL↔5
         }
     
     Returns:
         {
             "photo_id": int,
-            "rating": int,  // New rating (0 or 5)
+            "rating": int or null,  // New rating (NULL or 5)
             "favorited": bool  // true if now favorited
         }
     """
-    from file_operations import extract_exif_rating, write_exif_rating
+    from file_operations import extract_exif_rating, write_exif_rating, strip_exif_rating
     
     try:
         data = request.json or {}
@@ -4601,7 +4603,8 @@ def toggle_favorite(photo_id):
         
         # Get current rating
         current_rating = extract_exif_rating(full_path)
-        if current_rating is None:
+        # Treat None and 0 as equivalent (not starred)
+        if current_rating is None or current_rating == 0:
             current_rating = 0
         
         # Determine new rating
@@ -4614,22 +4617,29 @@ def toggle_favorite(photo_id):
             # Toggle: 0 ↔ 5
             new_rating = 0 if current_rating == 5 else 5
         
-        # Write EXIF rating
-        success = write_exif_rating(full_path, new_rating)
+        # Write or strip EXIF rating
+        if new_rating == 0:
+            # Strip rating tags completely (cleaner than writing 0)
+            success = strip_exif_rating(full_path)
+            db_rating = None  # Store NULL in database
+        else:
+            # Write rating
+            success = write_exif_rating(full_path, new_rating)
+            db_rating = new_rating
         
         if not success:
-            return jsonify({'error': 'Failed to write EXIF rating'}), 500
+            return jsonify({'error': 'Failed to update EXIF rating'}), 500
         
         # Update database
-        cursor.execute("UPDATE photos SET rating = ? WHERE id = ?", (new_rating, photo_id))
+        cursor.execute("UPDATE photos SET rating = ? WHERE id = ?", (db_rating, photo_id))
         conn.commit()
         conn.close()
         
-        print(f"⭐ Photo {photo_id}: rating {current_rating} → {new_rating}")
+        print(f"⭐ Photo {photo_id}: rating {current_rating} → {new_rating if new_rating != 0 else 'NULL'}")
         
         return jsonify({
             'photo_id': photo_id,
-            'rating': new_rating,
+            'rating': db_rating,
             'favorited': new_rating == 5
         })
     
