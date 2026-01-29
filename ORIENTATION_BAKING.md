@@ -16,6 +16,13 @@ The orientation baking feature automatically normalizes photo orientation by rot
 
 ---
 
+## Continuity Notes (Jan 28, 2026)
+
+- `bake_orientation()` now removes **Orientation=1** tags when present (metadata-only change). This fixes files that still carried a "no-op" flag after baking/import/terraform.
+- Implementation: `app.py` → `bake_orientation()` helper `strip_orientation_tag()` (uses `exiftool -Orientation=`) for JPEG/PNG/TIFF paths.
+
+---
+
 ## What Gets Baked
 
 ### ✅ JPEG (Conditional - Only Lossless)
@@ -46,6 +53,13 @@ The orientation baking feature automatically normalizes photo orientation by rot
 ### ❌ HEIC (Skipped)
 
 - Would require lossy re-encode
+- Keeps orientation metadata
+
+### ❌ WebP/AVIF/JP2 (Skipped)
+
+- These formats support both lossy and lossless compression
+- PIL cannot reliably detect which mode a file uses
+- Skipped to avoid potential generational loss from re-encoding
 - Keeps orientation metadata
 
 ### ❌ Video (Skipped)
@@ -135,20 +149,23 @@ EXIF 8: rotate 270
 **JPEG Workflow:**
 
 1. Check EXIF orientation with exiftool
-2. If orientation = 1 or missing → skip
-3. Map orientation to jpegtran transform
-4. Run `jpegtran -perfect -TRANSFORM -copy all`
-5. If fails → skip (would need trim)
-6. If success → remove orientation tag with exiftool
-7. Replace original file
+2. If orientation missing → skip
+3. If orientation = 1 → remove orientation tag only (no pixel changes)
+4. Map orientation to jpegtran transform
+5. Run `jpegtran -perfect -TRANSFORM -copy all`
+6. If fails → skip (would need trim)
+7. If success → remove orientation tag with exiftool
+8. Replace original file
 
 **PNG/TIFF Workflow:**
 
 1. Open with PIL
 2. Check EXIF orientation
-3. Apply `ImageOps.exif_transpose()`
-4. Preserve ICC profile
-5. Save (lossless)
+3. If orientation missing → skip
+4. If orientation = 1 → remove orientation tag only (no pixel changes)
+5. Apply `ImageOps.exif_transpose()` for orientations 2–8
+6. Preserve ICC profile
+7. Save (lossless)
 
 ---
 
@@ -277,6 +294,14 @@ pip install Pillow  # already in requirements.txt
 ---
 
 ## Version History
+
+**v221 (Jan 28, 2026):**
+
+- ✅ Added WebP, AVIF, and JP2 to skip list (cannot detect lossy vs lossless compression)
+
+**v219 (Jan 28, 2026):**
+
+- ✅ Strip Orientation=1 metadata tags when present (no pixel changes)
 
 **v218 (Jan 28, 2026):**
 

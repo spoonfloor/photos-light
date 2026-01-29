@@ -69,8 +69,9 @@ IMPORT_TEMP_DIR = None
 LOG_DIR = None
 
 # Supported media file extensions (wide net for discovery)
+# Note: BMP excluded - exiftool cannot write EXIF to BMP (EXIF write is required)
 PHOTO_EXTENSIONS = {
-    '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif',
+    '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
     '.webp', '.avif', '.jp2',
     '.raw', '.cr2', '.nef', '.arw', '.dng'
 }
@@ -314,7 +315,7 @@ def bake_orientation(file_path):
     Strategy:
     - JPEG: Use jpegtran -perfect (fails if trim required) - keeps orientation metadata if not lossless
     - PNG/TIFF: Use PIL (always lossless)
-    - HEIC/Video: Skip (lossy re-encode required)
+    - HEIC/Video/WebP/AVIF/JP2: Skip (lossy re-encode possible)
     
     Returns:
         (success: bool, message: str, orientation_value: int or None)
@@ -322,9 +323,11 @@ def bake_orientation(file_path):
     _, ext = os.path.splitext(file_path)
     ext_lower = ext.lower()
     
-    # Skip videos and HEIC (lossy re-encode required)
-    if ext_lower in VIDEO_EXTENSIONS or ext_lower in {'.heic', '.heif'}:
-        return (False, "Skipped (video/HEIC - lossy re-encode required)", None)
+    # Skip videos, HEIC, and formats that might be lossy (WebP, AVIF, JP2)
+    # Note: WebP/AVIF/JP2 support both lossy and lossless, but PIL cannot detect which mode
+    # a file uses, so we skip them to avoid potential generational loss from re-encoding
+    if ext_lower in VIDEO_EXTENSIONS or ext_lower in {'.heic', '.heif', '.webp', '.avif', '.jp2'}:
+        return (False, "Skipped (video/HEIC/WebP/AVIF/JP2 - lossy re-encode possible)", None)
     
     try:
         def strip_orientation_tag(target_path):
@@ -609,7 +612,7 @@ class DateEditTransaction:
                     if os.path.exists(file_path):
                         # Determine file type
                         ext = os.path.splitext(file_path)[1].lower()
-                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'}
                         
                         if ext in photo_exts:
                             write_photo_exif(file_path, old_date)
@@ -669,7 +672,7 @@ class DateEditTransaction:
                     if os.path.exists(file_path):
                         # Determine file type
                         ext = os.path.splitext(file_path)[1].lower()
-                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+                        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'}
                         
                         if ext in photo_exts:
                             write_photo_exif(file_path, old_date)
@@ -1316,7 +1319,7 @@ def cleanup_empty_folders(file_path, library_root):
     Stops at library root or when a folder with media is found.
     """
     MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
-                  '.bmp', '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
+                  '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
                   '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
     
     # Start at parent directory of deleted file
@@ -2886,7 +2889,7 @@ def scan_index():
         filesystem_paths = set()
         file_count = 0
         
-        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.bmp', '.tiff', '.tif'}
+        photo_exts = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'}
         video_exts = {'.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg', '.3gp', '.mts', '.mkv'}
         all_exts = photo_exts | video_exts
         
@@ -3524,7 +3527,7 @@ def preview_thumbnail():
         
         # Photo extensions
         photo_exts = {'.jpg', '.jpeg', '.png', '.heic', '.heif', '.gif', 
-                      '.bmp', '.tiff', '.tif', '.webp', '.avif', '.jp2',
+                      '.tiff', '.tif', '.webp', '.avif', '.jp2',
                       '.raw', '.cr2', '.nef', '.arw', '.dng'}
         
         # Video extensions
@@ -4042,7 +4045,7 @@ def cleanup_empty_folders_recursive(root_path):
     with other operations (import, date change, etc.). Use cleanup_terraform_folders() instead.
     """
     MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
-                  '.bmp', '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
+                  '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
                   '.avi', '.mpg', '.mpeg', '.3gp', '.mkv',
                   '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2'}
     
@@ -4106,7 +4109,7 @@ def cleanup_terraform_source_folders(source_folders, library_path):
         Number of folders deleted
     """
     MEDIA_EXTS = {'.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', 
-                  '.bmp', '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
+                  '.tiff', '.tif', '.mov', '.mp4', '.m4v', 
                   '.avi', '.mpg', '.mpeg', '.3gp', '.mkv',
                   '.cr2', '.nef', '.arw', '.dng', '.raf', '.orf', '.rw2'}
     
