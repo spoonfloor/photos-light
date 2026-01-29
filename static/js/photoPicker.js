@@ -15,6 +15,7 @@ const PhotoPicker = (() => {
   let fileListClickHandler = null; // Store reference to event handler for cleanup
   let keyboardHandler = null; // Store keyboard event handler for cleanup
   let thumbnailObserver = null; // IntersectionObserver for lazy loading thumbnails
+  let lastClickedIndex = null; // For shift-select range selection
 
   // ===========================================================================
   // API Calls
@@ -222,6 +223,70 @@ const PhotoPicker = (() => {
     return state;
   }
 
+  // Handle shift-select range selection (always SELECTS items in range)
+  async function handleShiftSelect(currentIndex) {
+    const start = Math.min(lastClickedIndex, currentIndex);
+    const end = Math.max(lastClickedIndex, currentIndex);
+
+    console.log(
+      `🔍 Shift-select: clicking index ${currentIndex}, last was ${lastClickedIndex}`,
+    );
+    console.log(
+      `🔍 Range: ${start} to ${end} (${end - start + 1} items expected)`,
+    );
+
+    // Get all picker items in the DOM
+    const fileList = document.getElementById('photoPickerFileList');
+    const allItems = Array.from(
+      fileList.querySelectorAll('.photo-picker-item[data-index]'),
+    );
+    console.log(`📊 Total items in DOM: ${allItems.length}`);
+
+    // Filter to items within the range
+    const itemsInRange = allItems.filter((item) => {
+      const itemIndex = parseInt(item.dataset.index);
+      return itemIndex >= start && itemIndex <= end;
+    });
+
+    console.log(`📋 Items in range: ${itemsInRange.length}`);
+
+    // Select all items in range (folders and files)
+    for (const item of itemsInRange) {
+      const checkbox = item.querySelector('.photo-picker-checkbox');
+      const path = checkbox?.dataset.path;
+      const type = checkbox?.dataset.type;
+
+      if (!path || !type) continue;
+
+      // Skip if already selected
+      if (selectedPaths.has(path)) continue;
+
+      // Select based on type
+      if (type === 'folder') {
+        // Mark folder as selected and start background counting
+        selectedPaths.set(path, { type: 'folder' });
+        folderStateCache.clear();
+        // Start background counting (non-blocking)
+        selectFolderRecursiveBackground(path);
+      } else {
+        // Select file
+        selectedPaths.set(path, { type: 'file' });
+      }
+    }
+
+    // Update UI
+    folderStateCache.clear();
+    updateSelectionCount();
+    await updateFileList();
+
+    console.log(
+      `📋 Shift-selected ${itemsInRange.length} items (${selectedPaths.size} total selected)`,
+    );
+
+    // Update last clicked index
+    lastClickedIndex = currentIndex;
+  }
+
   // ===========================================================================
   // Thumbnail Lazy Loading
   // ===========================================================================
@@ -405,6 +470,7 @@ const PhotoPicker = (() => {
       }
 
       let html = '';
+      let itemIndex = 0; // Track index for shift-select
 
       // Render folders first
       folders.forEach((folder) => {
@@ -422,12 +488,13 @@ const PhotoPicker = (() => {
         }
 
         html += `
-          <div class="photo-picker-item folder-item" data-folder-path="${folderPath}" data-type="folder">
+          <div class="photo-picker-item folder-item" data-folder-path="${folderPath}" data-type="folder" data-index="${itemIndex}">
             <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${folderPath}" data-type="folder">${iconClass}</span>
             <span class="photo-picker-name">${folder.name}</span>
             <span class="photo-picker-arrow">→</span>
           </div>
         `;
+        itemIndex++;
       });
 
       // Render files
@@ -455,7 +522,7 @@ const PhotoPicker = (() => {
           : sizeText;
 
         html += `
-          <div class="photo-picker-item file-item" data-file-path="${filePath}" data-type="file">
+          <div class="photo-picker-item file-item" data-file-path="${filePath}" data-type="file" data-index="${itemIndex}">
             <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${filePath}" data-type="file">${iconClass}</span>
             <div class="photo-picker-thumbnail-container">
               <img class="photo-picker-thumbnail" data-path="${filePath}" alt="">
@@ -466,6 +533,7 @@ const PhotoPicker = (() => {
             </div>
           </div>
         `;
+        itemIndex++;
       });
 
       fileList.innerHTML = html;
@@ -487,6 +555,21 @@ const PhotoPicker = (() => {
         const arrow = item.querySelector('.photo-picker-arrow');
         const path = checkbox?.dataset.path;
         const type = checkbox?.dataset.type;
+        const index = parseInt(item.dataset.index);
+
+        // SHIFT-SELECT: Select range when shift is held and clicking checkbox or file row
+        if (e.shiftKey && lastClickedIndex !== null) {
+          const shouldTriggerShiftSelect =
+            e.target.classList.contains('photo-picker-checkbox') ||
+            (type === 'file' &&
+              !e.target.classList.contains('photo-picker-arrow'));
+
+          if (shouldTriggerShiftSelect) {
+            e.stopPropagation();
+            await handleShiftSelect(index);
+            return;
+          }
+        }
 
         // Checkbox clicked
         if (e.target.classList.contains('photo-picker-checkbox')) {
@@ -498,6 +581,8 @@ const PhotoPicker = (() => {
             toggleFile(path);
             await updateFileList(); // Re-render to get correct state
           }
+          // Update last clicked index for shift-select
+          lastClickedIndex = index;
           return;
         }
 
@@ -573,6 +658,7 @@ const PhotoPicker = (() => {
     selectedPaths.clear();
     folderStateCache.clear();
     isCountingInBackground = false;
+    lastClickedIndex = null; // Reset shift-select anchor
     updateSelectionCount();
     updateFileList();
   }
@@ -583,9 +669,17 @@ const PhotoPicker = (() => {
       thumbnailObserver.disconnect();
     }
 
+    // Clear selection when navigating (Finder-style behavior)
+    countingAborted = true; // Abort any ongoing counting
+    selectedPaths.clear();
+    folderStateCache.clear();
+    isCountingInBackground = false;
+    lastClickedIndex = null; // Reset shift-select anchor when navigating
+
     currentPath = path || VIRTUAL_ROOT;
     updateBreadcrumb();
     await updateFileList();
+    updateSelectionCount();
 
     // Observer will be recreated in updateFileList()
   }
@@ -704,6 +798,7 @@ const PhotoPicker = (() => {
         folderStateCache = new Map();
         isCountingInBackground = false;
         countingAborted = false; // Reset abort flag for new session
+        lastClickedIndex = null; // Reset shift-select anchor for new session
 
         // Determine initial path
         let initialPath = VIRTUAL_ROOT;

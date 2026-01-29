@@ -1,5 +1,41 @@
 # Bug Fixes Applied - January 29, 2026
 
+## ✅ Picker Shift-Select Support - FIXED (Jan 29, 2026)
+
+### 🔧 Bug: Picker - Add Shift-Select Support
+
+**Problem**: Picker list required clicking each item individually; no shift-click range selection
+
+**Fix Applied**:
+- Implemented shift-select range selection in PhotoPicker
+- Added `lastClickedIndex` state tracking
+- Added `data-index` attributes to all items (folders and files sequentially indexed)
+- Created `handleShiftSelect()` function for range selection
+- Always SELECTS items in range (macOS Finder behavior - Option A)
+- Works seamlessly across folders and files in same range
+- Shift-select anchor resets on navigation (Finder-style)
+- Selection clears when navigating to new folder (Finder-style)
+
+**Implementation Details**:
+- First click stores anchor index
+- Shift-click selects all items between anchor and current click
+- Range selection works forward and backward
+- Folders selected in range trigger background recursive counting
+- Anchor resets on: navigate, clear selection, new picker session
+
+**Files Modified**:
+- `static/js/photoPicker.js` - Added shift-select logic
+- `static/js/main.js` (v258) - Version bump
+
+**Result**:
+- ✅ Shift-click selects range of items
+- ✅ Works with mixed folders and files
+- ✅ Finder-style behavior (selection clears on navigate)
+- ✅ Anchor resets appropriately
+- ✅ Compatible with existing checkbox selection
+
+---
+
 ## ✅ Star & Video Badge Implementation - FIXED (Jan 29, 2026)
 
 ### 🔧 Bug: Grid - Show Star Icon on Thumbnails

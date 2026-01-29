@@ -2,7 +2,7 @@
 
 Last updated: January 29, 2026
 
-**Status:** 6 remaining bugs
+**Status:** 5 remaining bugs
 
 ---
 
@@ -142,32 +142,6 @@ Last updated: January 29, 2026
 
 ---
 
-### Picker - Add Shift-Select Support
-
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 1-2 hours  
-**Status:** NOT STARTED
-
-**Issue:** Allow shift-select in picker list
-
-- Picker list currently requires clicking each item individually
-- No shift-click to select range of items
-- Makes selecting multiple files/folders tedious
-- Standard UX pattern missing
-
-**Impact:** Inefficient multi-selection workflow, especially for large selections
-
-**Fix approach:**
-
-- Implement shift-click range selection in picker
-- Track last clicked item
-- On shift-click, select all items between last click and current click
-- Works in both folder picker and photo picker
-- Ensure compatibility with existing checkbox selection
-- Test edge cases (shift-select in reverse, across different parents, etc.)
-
----
-
 ## Recommended Fix Order
 
 Based on impact, frequency, and effort (quick wins first, then deep work):
@@ -175,9 +149,8 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 1. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access)
 2. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
 3. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
-4. 🟡 **Picker - Add Shift-Select Support** (1-2 hrs, multi-selection efficiency)
-5. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
-6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+4. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
+5. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 
 ---
 
@@ -185,14 +158,14 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Terraforming - Cancel/Go Back Causes Stalled State (CRITICAL - 1-2 hrs)
 
-**Total remaining:** 6 bugs
+**Total remaining:** 5 bugs
 
 - 🔴 Critical: 3 bugs (Terraforming Cancel Stall, Lightbox RAW Format, Lightbox MOV Videos)
-- 🟡 Polish: 3 bugs (Picker Shift-Select, Lightbox Rotation, Performance Research)
+- 🟡 Polish: 2 bugs (Lightbox Rotation, Performance Research)
 
-**Estimated total effort:** ~11-14 hours for remaining bugs + research (excluding performance optimization implementation)
+**Estimated total effort:** ~9-12 hours for remaining bugs + research (excluding performance optimization implementation)
 
-**Recently Fixed:** ✅ Grid Star Icon, ✅ Grid Video Icon (Jan 29, 2026)
+**Recently Fixed:** ✅ Picker Shift-Select, ✅ Grid Star Icon, ✅ Grid Video Icon (Jan 29, 2026)
 
 ---
 
