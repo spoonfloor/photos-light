@@ -4,6 +4,51 @@ Issues that have been fixed and verified.
 
 ---
 
+## Session 16: January 29, 2026
+
+### Show Duplicates Feature - Removed
+
+**Removed:** Show duplicates utility removed from codebase  
+**Version:** v240  
+**Date:** January 29, 2026
+
+**Rationale:**
+The "Show duplicates" feature was removed because duplicates are prevented at all entry points in the application, making this utility redundant.
+
+**Why duplicates can't exist:**
+1. **Import:** Detects duplicate `content_hash` before importing, rejects duplicates
+2. **Date change:** Detects hash collisions after rehashing, moves to `.trash/duplicates/`
+3. **Terraform:** Checks for duplicates 3 times (before orientation baking, after baking, after EXIF write), moves to `.trash/duplicates/`
+4. **Rebuild database:** Uses `INSERT OR IGNORE` to silently skip duplicates
+5. **Update index:** Uses `INSERT OR IGNORE` to silently skip duplicates
+
+**Why removal makes sense:**
+- ✅ **Prevention is better than cleanup** - All operations already prevent duplicates via UNIQUE constraint
+- ✅ **Edge case feature** - Solves a problem that shouldn't exist in normal usage
+- ✅ **Hard to test** - Testing would require manual SQL manipulation to bypass UNIQUE constraint
+- ✅ **Simplifies codebase** - Removes 617 lines of code and one maintenance burden
+- ✅ **No loss of functionality** - Duplicate detection/handling already built into all operations
+
+**Investigation findings:**
+- Feature was fully functional (could scan and remove duplicates)
+- Button renamed "Show duplicates" (v194) to reflect review-first UX
+- Historical docs suggested eventual removal (Phase 4) once prevention was solid
+- Schema v2 (allowing same photo at different dates) was planned but never implemented
+- Current v1 schema uses strict `content_hash UNIQUE` constraint
+
+**Code removed:**
+- Backend: `/api/utilities/duplicates` endpoint (97 lines)
+- Frontend HTML: `duplicatesOverlay.html` fragment (73 lines)
+- Frontend JS: All duplicate functions and state (367 lines)
+- Frontend CSS: All `.duplicate-*` styles (76 lines)
+- Menu button: `removeDuplicatesBtn` from `utilitiesMenu.html` (5 lines)
+
+**Total removal:** 617 lines across 5 files
+
+**Impact:** Cleaner codebase, one less utility for users to wonder about ("why is this always empty?"), and reduced maintenance burden.
+
+---
+
 ## Session 15: January 28, 2026
 
 ### Enter Key - Wrong Button Triggered on Delete Dialog

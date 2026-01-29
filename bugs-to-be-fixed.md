@@ -1,8 +1,8 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: January 28, 2026
+Last updated: January 29, 2026
 
-**Status:** 9 remaining bugs
+**Status:** 8 remaining bugs
 
 ---
 
@@ -136,28 +136,6 @@ Last updated: January 28, 2026
 
 ---
 
-### Duplicates Feature - Why Show-Only?
-
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** Research/documentation  
-**Status:** NOT STARTED
-
-**Issue:** Determine why we no longer offer 'remove duplicates'. Show only
-
-- Feature currently only shows duplicates, doesn't remove them
-- Need to research history and design decision
-- May have been intentional change or incomplete implementation
-- Documentation needed to understand rationale
-
-**Research goals:**
-
-- Check code history for when removal functionality was present
-- Determine if this was an intentional design change or incomplete feature
-- Document reasoning behind current show-only approach
-- Assess if removal functionality should be restored
-
----
-
 ### Lightbox - RAW Format Not Displaying
 
 **Priority:** 🔴 CRITICAL  
@@ -249,8 +227,7 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 5. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
 6. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
 7. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
-8. 🟡 **Duplicates Feature - Why Show-Only?** (research/documentation)
-9. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+8. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 
 ---
 
@@ -258,12 +235,12 @@ Based on impact, frequency, and effort (quick wins first, then deep work):
 
 **Next up:** Update Database - Stuck on Removing Untracked Files (CRITICAL - 2-3 hrs)
 
-**Total remaining:** 9 bugs
+**Total remaining:** 8 bugs
 
 - 🔴 Critical: 6 bugs (Update Database Stuck, Date Change Not Working, Terraforming Database Cleanup, Terraforming Cancel Stall, Lightbox RAW Format, Lightbox MOV Videos)
-- 🟡 Polish: 3 bugs (Lightbox Rotation, Duplicates Research, Performance Research)
+- 🟡 Polish: 2 bugs (Lightbox Rotation, Performance Research)
 
-**Estimated total effort:** ~16-21 hours for remaining bugs + research (excluding performance optimization implementation)
+**Estimated total effort:** ~14-18 hours for remaining bugs + research (excluding performance optimization implementation)
 
 ---
 
