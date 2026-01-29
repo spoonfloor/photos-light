@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v239';
+const MAIN_JS_VERSION = 'v240';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -291,7 +291,6 @@ function enablePhotoRelatedActions() {
   const utilityItems = [
     'cleanOrganizeBtn',
     'rebuildDatabaseBtn',
-    'removeDuplicatesBtn',
     'rebuildThumbnailsBtn',
   ];
 
@@ -3443,7 +3442,6 @@ async function loadUtilitiesMenu() {
 
     // Wire up menu items
     const switchLibraryBtn = document.getElementById('switchLibraryBtn');
-    const removeDuplicatesBtn = document.getElementById('removeDuplicatesBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
     const rebuildThumbnailsBtn = document.getElementById(
       'rebuildThumbnailsBtn',
@@ -3454,14 +3452,6 @@ async function loadUtilitiesMenu() {
         console.log('🔧 Open Library clicked');
         hideUtilitiesMenu();
         browseSwitchLibrary();
-      });
-    }
-
-    if (removeDuplicatesBtn) {
-      removeDuplicatesBtn.addEventListener('click', () => {
-        console.log('🔧 Remove Duplicates clicked');
-        hideUtilitiesMenu();
-        openDuplicatesOverlay();
       });
     }
 
@@ -3597,9 +3587,6 @@ function updateUtilityMenuAvailability() {
   // Rebuild database - requires database
   enableMenuItem('rebuildDatabaseBtn', hasDatabase);
 
-  // Remove duplicates - requires database AND 1+ photos
-  enableMenuItem('removeDuplicatesBtn', hasDatabase && hasPhotos);
-
   // Rebuild thumbnails - requires database AND 1+ photos
   enableMenuItem('rebuildThumbnailsBtn', hasDatabase && hasPhotos);
 }
@@ -3625,358 +3612,6 @@ function enableMenuItem(buttonId, enabled) {
 // =====================
 // DUPLICATES OVERLAY
 // =====================
-
-let duplicatesState = {
-  duplicates: [],
-  selectedForRemoval: new Set(), // photo IDs to remove
-  totalExtraCopies: 0,
-  totalWastedSpace: 0,
-};
-
-/**
- * Load duplicates overlay fragment
- */
-async function loadDuplicatesOverlay() {
-  // Check if already loaded
-  if (document.getElementById('duplicatesOverlay')) {
-    return;
-  }
-
-  try {
-    const response = await fetch('fragments/duplicatesOverlay.html');
-    if (!response.ok) throw new Error('Failed to load duplicates overlay');
-
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-
-    // Wire up buttons
-    const closeBtn = document.getElementById('duplicatesCloseBtn');
-    const cancelBtn = document.getElementById('duplicatesCancelBtn');
-    const removeBtn = document.getElementById('duplicatesRemoveBtn');
-    const doneBtn = document.getElementById('duplicatesDoneBtn');
-    const detailsToggle = document.getElementById('duplicatesDetailsToggle');
-
-    if (closeBtn) closeBtn.addEventListener('click', closeDuplicatesOverlay);
-    if (cancelBtn) cancelBtn.addEventListener('click', closeDuplicatesOverlay);
-    if (removeBtn)
-      removeBtn.addEventListener('click', removeSelectedDuplicates);
-    if (doneBtn) doneBtn.addEventListener('click', closeDuplicatesOverlay);
-
-    if (detailsToggle) {
-      detailsToggle.addEventListener('click', () => {
-        const detailsList = document.getElementById('duplicatesDetailsList');
-        const icon = detailsToggle.querySelector('.material-symbols-outlined');
-
-        if (detailsList.style.display === 'none') {
-          detailsList.style.display = 'block';
-          icon.textContent = 'expand_less';
-          detailsToggle.querySelector('span:last-child').textContent =
-            'Hide details';
-        } else {
-          detailsList.style.display = 'none';
-          icon.textContent = 'expand_more';
-          detailsToggle.querySelector('span:last-child').textContent =
-            'Show details';
-        }
-      });
-    }
-  } catch (error) {
-    console.error('❌ Failed to load duplicates overlay:', error);
-  }
-}
-
-/**
- * Open duplicates overlay and scan for duplicates
- */
-async function openDuplicatesOverlay() {
-  // Check if already open
-  const existingOverlay = document.getElementById('duplicatesOverlay');
-  if (existingOverlay && existingOverlay.style.display === 'flex') {
-    console.log('⚠️ Duplicates overlay already open');
-    return;
-  }
-
-  await loadDuplicatesOverlay();
-
-  const overlay = document.getElementById('duplicatesOverlay');
-  if (!overlay) return;
-
-  // Reset state
-  duplicatesState = {
-    duplicates: [],
-    selectedForRemoval: new Set(),
-    totalExtraCopies: 0,
-    totalWastedSpace: 0,
-  };
-
-  // Reset UI to initial state
-  const statsEl = document.getElementById('duplicatesStats');
-  const detailsSection = document.getElementById('duplicatesDetailsSection');
-  if (statsEl) statsEl.style.display = 'none';
-  if (detailsSection) detailsSection.style.display = 'none';
-
-  // Show overlay
-  overlay.style.display = 'flex';
-
-  // Start scanning
-  updateDuplicatesUI('Scanning for duplicates', true);
-
-  try {
-    const startTime = performance.now();
-    console.log('🔍 Starting duplicate scan...');
-
-    const response = await fetch('/api/utilities/duplicates');
-    if (!response.ok) throw new Error('Failed to fetch duplicates');
-
-    const data = await response.json();
-    const fetchTime = performance.now() - startTime;
-    console.log(`⏱️ Fetch took ${fetchTime.toFixed(0)}ms`);
-
-    duplicatesState.duplicates = data.duplicates;
-    duplicatesState.totalExtraCopies = data.total_extra_copies;
-    duplicatesState.totalWastedSpace = data.total_wasted_space;
-
-    console.log(`📋 Found ${data.total_duplicate_sets} duplicate sets`);
-
-    // Auto-select duplicates for removal (keep oldest)
-    data.duplicates.forEach((dupSet) => {
-      // Sort by ID (oldest first), keep first, mark rest for removal
-      const sortedFiles = dupSet.files.sort((a, b) => a.id - b.id);
-      for (let i = 1; i < sortedFiles.length; i++) {
-        duplicatesState.selectedForRemoval.add(sortedFiles[i].id);
-      }
-    });
-
-    // Update UI
-    if (data.total_duplicate_sets === 0) {
-      updateDuplicatesUI('No duplicates found', false);
-      showDuplicatesComplete();
-    } else {
-      updateDuplicatesUI(
-        `Found ${data.total_duplicate_sets} items with duplicates`,
-        false,
-      );
-      showDuplicatesStats();
-      renderDuplicatesList();
-      showDuplicatesActions();
-    }
-  } catch (error) {
-    console.error('❌ Failed to scan for duplicates:', error);
-    updateDuplicatesUI('Failed to scan for duplicates', false);
-    showToast('Failed to scan for duplicates', null);
-  }
-}
-
-/**
- * Update duplicates UI
- */
-function updateDuplicatesUI(statusText, showSpinner = false) {
-  const statusTextEl = document.getElementById('duplicatesStatusText');
-
-  if (statusTextEl) {
-    if (showSpinner) {
-      statusTextEl.innerHTML = `${statusText}<span class="import-spinner"></span>`;
-    } else {
-      statusTextEl.textContent = statusText;
-    }
-  }
-}
-
-/**
- * Show duplicates statistics
- */
-function showDuplicatesStats() {
-  const statsEl = document.getElementById('duplicatesStats');
-  const setsCountEl = document.getElementById('duplicateSetsCount');
-  const copiesCountEl = document.getElementById('extraCopiesCount');
-
-  if (statsEl) statsEl.style.display = 'flex';
-  if (setsCountEl) setsCountEl.textContent = duplicatesState.duplicates.length;
-  if (copiesCountEl)
-    copiesCountEl.textContent = duplicatesState.totalExtraCopies;
-}
-
-/**
- * Render duplicates list
- */
-function renderDuplicatesList() {
-  const detailsSection = document.getElementById('duplicatesDetailsSection');
-  const detailsList = document.getElementById('duplicatesDetailsList');
-
-  if (!detailsSection || !detailsList) return;
-
-  detailsSection.style.display = 'block';
-
-  let html = '';
-
-  duplicatesState.duplicates.forEach((dupSet, setIndex) => {
-    const sortedFiles = dupSet.files.sort((a, b) => a.id - b.id);
-    const baseFilename = sortedFiles[0].path.split('/').pop();
-    const numDuplicates = dupSet.count - 1; // Total - 1 canonical = duplicates
-
-    html += `
-      <div class="duplicate-set">
-        <div class="duplicate-set-header">
-          <strong>${baseFilename}</strong> (${numDuplicates} duplicate${
-            numDuplicates > 1 ? 's' : ''
-          })
-        </div>
-        <div class="duplicate-files">
-    `;
-
-    sortedFiles.forEach((file, fileIndex) => {
-      const isKeep = fileIndex === 0;
-      const isSelected = duplicatesState.selectedForRemoval.has(file.id);
-      const sizeMB = (file.file_size / (1024 * 1024)).toFixed(2);
-
-      html += `
-        <div class="duplicate-file">
-          <label>
-            <input 
-              type="checkbox" 
-              ${isKeep ? 'disabled' : ''}
-              ${isSelected ? 'checked' : ''}
-              data-photo-id="${file.id}"
-              onchange="toggleDuplicateSelection(${file.id}, this.checked)"
-            />
-            <span class="duplicate-file-path">${file.path}</span>
-            <span class="duplicate-file-size">${sizeMB} MB</span>
-            ${isKeep ? '<span class="duplicate-keep-badge">✓ keep</span>' : ''}
-          </label>
-        </div>
-      `;
-    });
-
-    html += `
-        </div>
-      </div>
-    `;
-  });
-
-  detailsList.innerHTML = html;
-}
-
-/**
- * Toggle duplicate selection
- */
-function toggleDuplicateSelection(photoId, isChecked) {
-  if (isChecked) {
-    duplicatesState.selectedForRemoval.add(photoId);
-  } else {
-    duplicatesState.selectedForRemoval.delete(photoId);
-  }
-
-  // Update button state
-  const removeBtn = document.getElementById('duplicatesRemoveBtn');
-  if (removeBtn) {
-    removeBtn.textContent = `Remove Selected (${duplicatesState.selectedForRemoval.size})`;
-  }
-}
-
-/**
- * Show duplicates actions
- */
-function showDuplicatesActions() {
-  const cancelBtn = document.getElementById('duplicatesCancelBtn');
-  const removeBtn = document.getElementById('duplicatesRemoveBtn');
-
-  if (cancelBtn) cancelBtn.style.display = 'inline-block';
-  if (removeBtn) {
-    removeBtn.style.display = 'inline-block';
-    removeBtn.textContent = `Remove Selected (${duplicatesState.selectedForRemoval.size})`;
-  }
-}
-
-/**
- * Show duplicates complete state
- */
-function showDuplicatesComplete() {
-  const cancelBtn = document.getElementById('duplicatesCancelBtn');
-  const removeBtn = document.getElementById('duplicatesRemoveBtn');
-  const doneBtn = document.getElementById('duplicatesDoneBtn');
-  const statsEl = document.getElementById('duplicatesStats');
-  const detailsSection = document.getElementById('duplicatesDetailsSection');
-
-  // Hide all the details/stats
-  if (statsEl) statsEl.style.display = 'none';
-  if (detailsSection) detailsSection.style.display = 'none';
-
-  // Show only Done button
-  if (cancelBtn) cancelBtn.style.display = 'none';
-  if (removeBtn) removeBtn.style.display = 'none';
-  if (doneBtn) doneBtn.style.display = 'inline-block';
-}
-
-/**
- * Remove selected duplicates
- */
-async function removeSelectedDuplicates() {
-  if (duplicatesState.selectedForRemoval.size === 0) {
-    showToast('No duplicates selected for removal', null);
-    return;
-  }
-
-  const photoIds = Array.from(duplicatesState.selectedForRemoval);
-
-  try {
-    console.log(`🗑️ Removing ${photoIds.length} duplicate photos`);
-
-    // Show removing state with spinner
-    updateDuplicatesUI(
-      `Removing ${photoIds.length} duplicate${photoIds.length > 1 ? 's' : ''}`,
-      true,
-    );
-
-    // Hide action buttons during removal
-    const cancelBtn = document.getElementById('duplicatesCancelBtn');
-    const removeBtn = document.getElementById('duplicatesRemoveBtn');
-    if (cancelBtn) cancelBtn.style.display = 'none';
-    if (removeBtn) removeBtn.style.display = 'none';
-
-    const response = await fetch('/api/photos/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ photo_ids: photoIds }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to remove duplicates: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('✅ Duplicates removed:', result);
-
-    // Show final confirmation state
-    updateDuplicatesUI(
-      `Removed ${result.deleted} duplicate${result.deleted > 1 ? 's' : ''}`,
-      false,
-    );
-    showDuplicatesComplete();
-
-    // Reload grid
-    await loadAndRenderPhotos(false);
-  } catch (error) {
-    console.error('❌ Failed to remove duplicates:', error);
-    updateDuplicatesUI('Failed to remove duplicates', false);
-    showToast('Failed to remove duplicates', null);
-
-    // Show action buttons again on error
-    showDuplicatesActions();
-  }
-}
-
-/**
- * Close duplicates overlay
- */
-function closeDuplicatesOverlay() {
-  const overlay = document.getElementById('duplicatesOverlay');
-  if (overlay) {
-    overlay.style.display = 'none';
-  }
-}
-
-// Make toggleDuplicateSelection available globally for onclick
-window.toggleDuplicateSelection = toggleDuplicateSelection;
 
 // ==========================
 // UPDATE DATABASE OVERLAY
