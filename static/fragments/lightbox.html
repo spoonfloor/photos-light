@@ -1,37 +1,67 @@
 <!-- Lightbox Overlay -->
-<div class="lightbox-overlay" id="lightboxOverlay" style="display: none;">
+<div class="lightbox-overlay" id="lightboxOverlay" style="display: none">
   <!-- Top bar with gradient -->
   <div class="lightbox-top-bar">
-    <button class="lightbox-icon-button" id="lightboxBackBtn" aria-label="Close">
+    <button
+      class="lightbox-icon-button"
+      id="lightboxBackBtn"
+      aria-label="Close"
+    >
       <span class="material-symbols-outlined">arrow_back</span>
     </button>
     <div class="lightbox-spacer"></div>
+    <button
+      class="lightbox-icon-button"
+      id="lightboxRotateBtn"
+      aria-label="Rotate"
+    >
+      <span class="material-symbols-outlined">rotate_left</span>
+    </button>
+    <button
+      class="lightbox-icon-button"
+      id="lightboxEditDateBtn"
+      aria-label="Edit Date"
+    >
+      <span class="material-symbols-outlined">edit_calendar</span>
+    </button>
+    <button class="lightbox-icon-button" id="lightboxStarBtn" aria-label="Star">
+      <span class="material-symbols-outlined">star</span>
+    </button>
     <button class="lightbox-icon-button" id="lightboxInfoBtn" aria-label="Info">
       <span class="material-symbols-outlined">info</span>
     </button>
-    <button class="lightbox-icon-button" id="lightboxEditDateBtn" aria-label="Edit Date">
-      <span class="material-symbols-outlined">edit_calendar</span>
-    </button>
-    <button class="lightbox-icon-button" id="lightboxDeleteBtn" aria-label="Delete">
+    <button
+      class="lightbox-icon-button"
+      id="lightboxDeleteBtn"
+      aria-label="Delete"
+    >
       <span class="material-symbols-outlined">delete</span>
     </button>
   </div>
-  
+
   <!-- Navigation chevrons -->
-  <button class="lightbox-nav-btn lightbox-nav-left" id="lightboxPrevBtn" aria-label="Previous">
+  <button
+    class="lightbox-nav-btn lightbox-nav-left"
+    id="lightboxPrevBtn"
+    aria-label="Previous"
+  >
     <span class="material-symbols-outlined">chevron_left</span>
   </button>
-  <button class="lightbox-nav-btn lightbox-nav-right" id="lightboxNextBtn" aria-label="Next">
+  <button
+    class="lightbox-nav-btn lightbox-nav-right"
+    id="lightboxNextBtn"
+    aria-label="Next"
+  >
     <span class="material-symbols-outlined">chevron_right</span>
   </button>
-  
+
   <!-- Photo content -->
   <div class="lightbox-content" id="lightboxContent">
     <!-- Image or video will be inserted here -->
   </div>
-  
+
   <!-- Info panel at bottom -->
-  <div class="lightbox-info-panel" id="lightboxInfoPanel" style="display: none;">
+  <div class="lightbox-info-panel" id="lightboxInfoPanel" style="display: none">
     <button class="info-close-btn" id="infoCloseBtn" aria-label="Close">
       <span class="material-symbols-outlined">close</span>
     </button>

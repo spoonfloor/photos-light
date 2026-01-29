@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v242';
+const MAIN_JS_VERSION = 'v250';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1850,6 +1850,26 @@ function wireLightbox() {
       infoPanel.style.display = 'none';
       if (overlay) overlay.classList.remove('info-open');
       console.log('❌ Closed info panel via close button');
+    });
+  }
+
+  const rotateBtn = document.getElementById('lightboxRotateBtn');
+  if (rotateBtn) {
+    rotateBtn.addEventListener('click', () => {
+      const photoId = state.photos[state.lightboxPhotoIndex]?.id;
+      console.log(`🔄 LIGHTBOX Rotate clicked! Photo: ${photoId}`);
+    });
+  }
+
+  const starBtn = document.getElementById('lightboxStarBtn');
+  if (starBtn) {
+    starBtn.addEventListener('click', () => {
+      const photoId = state.photos[state.lightboxPhotoIndex]?.id;
+      const starIcon = starBtn.querySelector('.material-symbols-outlined');
+      const isFilled = starIcon.classList.toggle('filled');
+      console.log(
+        `⭐ LIGHTBOX Star clicked! Photo: ${photoId}, Filled: ${isFilled}`,
+      );
     });
   }
 

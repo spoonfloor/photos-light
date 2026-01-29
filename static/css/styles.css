@@ -48,6 +48,11 @@ body {
   background: var(--body-bg);
 }
 
+/* Material Symbols default settings */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 200, 'GRAD' 0, 'opsz' 24;
+}
+
 /* --- Buttons --- */
 .button {
   font-family: inherit;
@@ -496,6 +501,11 @@ input[type="radio"] {
   color: white;
   user-select: none;
   pointer-events: none;
+}
+
+/* Filled star state */
+#lightboxStarBtn .material-symbols-outlined.filled {
+  font-variation-settings: 'FILL' 1, 'wght' 200, 'GRAD' 0, 'opsz' 24;
 }
 
 .lightbox-content {
