@@ -4583,7 +4583,7 @@ def toggle_favorite(photo_id):
     from file_operations import extract_exif_rating, write_exif_rating, strip_exif_rating
     
     try:
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         explicit_rating = data.get('rating')
         
         # Get photo path
@@ -4607,6 +4607,8 @@ def toggle_favorite(photo_id):
         if current_rating is None or current_rating == 0:
             current_rating = 0
         
+        print(f"⭐ Photo {photo_id}: current rating = {current_rating}, toggling...")
+        
         # Determine new rating
         if explicit_rating is not None:
             # Use explicit rating
@@ -4620,14 +4622,19 @@ def toggle_favorite(photo_id):
         # Write or strip EXIF rating
         if new_rating == 0:
             # Strip rating tags completely (cleaner than writing 0)
+            print(f"   → Stripping rating from {os.path.basename(full_path)}")
             success = strip_exif_rating(full_path)
             db_rating = None  # Store NULL in database
         else:
             # Write rating
+            print(f"   → Writing rating {new_rating} to {os.path.basename(full_path)}")
             success = write_exif_rating(full_path, new_rating)
             db_rating = new_rating
         
+        print(f"   → EXIF update success: {success}")
+        
         if not success:
+            error_logger.error(f"Failed to update EXIF rating for photo {photo_id}: {full_path}")
             return jsonify({'error': 'Failed to update EXIF rating'}), 500
         
         # Update database
@@ -4644,7 +4651,9 @@ def toggle_favorite(photo_id):
         })
     
     except Exception as e:
-        error_logger.error(f"Error toggling favorite: {e}")
+        error_logger.error(f"Error toggling favorite for photo {photo_id}: {e}")
+        import traceback
+        error_logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 

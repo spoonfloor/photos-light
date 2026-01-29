@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v254';
+const MAIN_JS_VERSION = 'v256';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1869,38 +1869,62 @@ function wireLightbox() {
 
       const starIcon = starBtn.querySelector('.material-symbols-outlined');
       const isFilled = starIcon.classList.contains('filled');
-      
-      console.log(`⭐ LIGHTBOX Star clicked! Photo: ${photoId}, Currently: ${isFilled ? 'starred' : 'not starred'}`);
-      
+
+      console.log(
+        `⭐ LIGHTBOX Star clicked! Photo: ${photoId}, Currently: ${isFilled ? 'starred' : 'not starred'}`,
+      );
+
       try {
         // Optimistically toggle UI
         starIcon.classList.toggle('filled');
-        
+
         // Call API to toggle favorite
         const response = await fetch(`/api/photo/${photoId}/favorite`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         });
-        
+
         if (!response.ok) {
           throw new Error(`Failed to toggle favorite: ${response.status}`);
         }
-        
+
         const result = await response.json();
-        console.log(`⭐ Star toggled: Photo ${photoId} now ${result.favorited ? 'starred' : 'not starred'}`);
-        
+        console.log(
+          `⭐ Star toggled: Photo ${photoId} now ${result.favorited ? 'starred' : 'not starred'}`,
+        );
+
         // Update local state to match backend
         if (state.photos[state.lightboxPhotoIndex]) {
           state.photos[state.lightboxPhotoIndex].rating = result.rating;
         }
-        
+
+        // Update grid star badge
+        const gridCard = document.querySelector(
+          `.photo-card[data-id="${photoId}"]`,
+        );
+        if (gridCard) {
+          // Remove existing star badge if present
+          const existingBadge = gridCard.querySelector('.star-badge');
+          if (existingBadge) {
+            existingBadge.remove();
+          }
+
+          // Add star badge if favorited
+          if (result.favorited) {
+            const starBadge = document.createElement('div');
+            starBadge.className = 'star-badge';
+            starBadge.innerHTML =
+              '<span class="material-symbols-outlined">star</span>';
+            gridCard.appendChild(starBadge);
+          }
+        }
+
         // Ensure UI matches result
         if (result.favorited) {
           starIcon.classList.add('filled');
         } else {
           starIcon.classList.remove('filled');
         }
-        
       } catch (error) {
         console.error('❌ Error toggling star:', error);
         // Revert optimistic UI change on error
@@ -2736,8 +2760,23 @@ function renderPhotoGrid(photos, append = false) {
         card.className = 'photo-card';
         card.dataset.id = photo.id;
         card.dataset.index = photo.globalIndex;
+
+        // Build star badge HTML if photo is starred
+        const starBadgeHTML =
+          photo.rating === 5
+            ? '<div class="star-badge"><span class="material-symbols-outlined">star</span></div>'
+            : '';
+
+        // Build video badge HTML if photo is a video
+        const videoBadgeHTML =
+          photo.file_type === 'video'
+            ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
+            : '';
+
         card.innerHTML = `
           <img src="/api/photo/${photo.id}/thumbnail" alt="" loading="lazy" class="photo-thumb">
+          ${starBadgeHTML}
+          ${videoBadgeHTML}
         `;
         grid.appendChild(card);
       });
@@ -2757,9 +2796,24 @@ function renderPhotoGrid(photos, append = false) {
           photo.globalIndex !== undefined
             ? photo.globalIndex
             : photosByMonth[month].indexOf(photo);
+
+        // Build star badge HTML if photo is starred
+        const starBadgeHTML =
+          photo.rating === 5
+            ? '<div class="star-badge"><span class="material-symbols-outlined">star</span></div>'
+            : '';
+
+        // Build video badge HTML if photo is a video
+        const videoBadgeHTML =
+          photo.file_type === 'video'
+            ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
+            : '';
+
         html += `
           <div class="photo-card" data-id="${photo.id}" data-index="${globalIndex}">
             <img data-photo-id="${photo.id}" alt="" class="photo-thumb">
+            ${starBadgeHTML}
+            ${videoBadgeHTML}
           </div>
         `;
       });

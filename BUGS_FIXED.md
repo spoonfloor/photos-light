@@ -1,6 +1,62 @@
 # Bug Fixes Applied - January 29, 2026
 
-## ✅ All 4 Critical Bugs Fixed
+## ✅ Star & Video Badge Implementation - FIXED (Jan 29, 2026)
+
+### 🔧 Bug: Grid - Show Star Icon on Thumbnails
+
+**Problem**: No visual indicator for favorited/starred photos in grid view
+
+**Fix Applied**:
+- Added star badge (white filled star, 20px) in top-right corner
+- Shows when `photo.rating === 5`
+- Includes fuzzy shadow: `drop-shadow(0 0 6px rgba(0,0,0,0.45))`
+- Real-time updates when toggling star in lightbox
+- Non-interactive (pointer-events: none)
+
+**Backend**:
+- Created `strip_exif_rating()` function to remove rating tags
+- Updated `/api/photo/<id>/favorite` to strip tags on star OFF (stores NULL)
+- Updated `/api/photos` to return rating field
+- Fixed JSON parsing issue (`request.get_json(silent=True)`)
+
+**Files Modified**:
+- `file_operations.py` - Added strip function
+- `app.py` - Updated favorite API and photos endpoint
+- `static/css/styles.css` - Added star badge styles
+- `static/js/main.js` (v255) - Star badge rendering and real-time updates
+
+**Result**:
+- ✅ Starred photos show white star in top-right corner
+- ✅ Star persists across reloads
+- ✅ Toggle works in lightbox
+- ✅ EXIF rating = 5 for starred, tags stripped for unstarred
+- ✅ Database stores 5 or NULL (never 0)
+
+---
+
+### 🔧 Bug: Grid - Show Video Icon on Thumbnails
+
+**Problem**: No visual indicator to distinguish videos from photos in grid view
+
+**Fix Applied**:
+- Added video badge (white filled `play_circle`, 20px) in bottom-left corner
+- Shows when `photo.file_type === 'video'`
+- Uses same shadow style as star badge
+- Can coexist with star badge on starred videos
+- Non-interactive (pointer-events: none)
+
+**Files Modified**:
+- `static/css/styles.css` - Added video badge styles
+- `static/js/main.js` (v256) - Video badge rendering
+
+**Result**:
+- ✅ Videos show play icon in bottom-left corner
+- ✅ Starred videos show both badges (star top-right, play bottom-left)
+- ✅ No overlap with select circle (top-left)
+
+---
+
+## ✅ All 4 Critical Bugs Fixed (Previous)
 
 ### 🔧 Bug #1: Hash Length Mismatch - FIXED
 
