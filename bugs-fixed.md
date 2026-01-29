@@ -9,7 +9,8 @@ Issues that have been fixed and verified.
 ### Image Rotation - Bake Orientation Metadata into Pixels
 
 **Fixed:** Orientation flags are now baked into pixels during import, date change, and terraform  
-**Version:** v218
+**Version:** v218, v221-v223  
+**Testing completed:** January 28, 2026
 
 **Issues resolved:**
 
@@ -20,6 +21,11 @@ Issues that have been fixed and verified.
 - ✅ PNG/TIFF: Lossless rotation via PIL
 - ✅ Files that can't be baked losslessly keep their orientation flag
 - ✅ Database stores correct post-baking dimensions
+- ✅ ICC color profiles preserved during baking
+- ✅ PNG transparency preserved during baking
+- ✅ WebP/AVIF/JP2 correctly skipped (cannot detect lossy vs lossless)
+- ✅ RAW files correctly skipped (cannot be safely modified)
+- ✅ BMP support removed (exiftool incompatibility)
 
 **Root cause:**
 Files with EXIF orientation flags (e.g., Orientation=6 "Rotate 90 CW") rely on viewer support. Import/date-change operations wrote EXIF metadata which could strip orientation flags, leaving files with unbaked pixels and no flag. This caused incorrect display in rotation-ignorant viewers and dimension mismatches in the database.
@@ -39,13 +45,28 @@ Integrated baking into three workflows:
 - **Date change**: Bakes before EXIF write
 - **Terraform**: Already had baking, added detailed logging
 
-**Testing:**
+**Comprehensive Testing:**
 
-- Test file: 1200×1600 pixels with Orientation=6 flag
-- After terraform: Pixels rotated to 1600×1200, flag removed
-- Displays correctly as landscape in all viewers
+| Format | Test Cases | Result |
+|--------|------------|--------|
+| **JPEG** | 16-friendly & non-16-divisible, all orientations (0°, 90°, 180°, 270°) | ✅ PASS |
+| **PNG** | All orientations (0°, 90°, 180°, 270°) | ✅ PASS |
+| **TIFF** | All orientations (0°, 90°, 180°, 270°) | ✅ PASS |
+| **GIF** | Skipped correctly | ✅ PASS |
+| **RAW (DNG)** | Skipped correctly, flag preserved | ✅ PASS |
+| **Video** | Skipped correctly | ✅ PASS |
+| **WebP/AVIF/JP2** | Skipped (cannot detect compression) | ✅ PASS |
+| **HEIC/HEIF** | Skipped (documented) | ✅ PASS |
 
-**Impact:** Photos now display correctly in all viewers, not just rotation-aware ones. Database stores accurate display dimensions. Orientation is normalized at entry point (import) rather than accumulating technical debt.
+**Quality Verification:**
+
+- ✅ ICC profiles preserved (3144 bytes verified on JPEG, PNG, transparent PNG)
+- ✅ Dimensions swapped correctly for 90° rotations (1200×1600 → 1600×1200)
+- ✅ PNG transparency preserved (RGBA mode intact)
+- ✅ Orientation flags stripped after baking
+- ✅ Files that can't be baked keep their flags unchanged
+
+**Impact:** Photos now display correctly in all viewers, not just rotation-aware ones. Database stores accurate display dimensions. Orientation is normalized at entry point (import) rather than accumulating technical debt. Color profiles and transparency preserved throughout baking process.
 
 ---
 
