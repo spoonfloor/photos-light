@@ -4709,6 +4709,37 @@ def get_favorites():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/library/make-perfect', methods=['POST'])
+def api_make_library_perfect():
+    """
+    Execute Make Library Perfect operation (unified Clean + Rebuild)
+    """
+    try:
+        from make_library_perfect import make_library_perfect
+        
+        # Get current library path
+        library_path = get_library_path()
+        
+        if not library_path or not os.path.exists(library_path):
+            return jsonify({'error': 'No library configured'}), 400
+        
+        print(f"\n{'='*60}")
+        print(f"🔧 MAKE LIBRARY PERFECT: {library_path}")
+        print(f"{'='*60}\n")
+        
+        # Execute the operation
+        result = make_library_perfect(library_path)
+        
+        print(f"\n✅ Make Library Perfect completed successfully")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"\n❌ Make Library Perfect failed: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/photos/bulk-favorite', methods=['POST'])
 @handle_db_corruption
 def bulk_favorite():

@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v258';
+const MAIN_JS_VERSION = 'v263';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -700,6 +700,68 @@ function showCriticalError(title, message, buttons) {
 function hideCriticalError() {
   const overlay = document.getElementById('criticalErrorOverlay');
   if (overlay) overlay.style.display = 'none';
+}
+
+// =====================
+// MAKE LIBRARY PERFECT
+// =====================
+
+/**
+ * Start "Make Library Perfect" operation (unified Clean + Rebuild)
+ * Entry point from utilities menu "Clean library" option
+ */
+async function startMakeLibraryPerfect() {
+  try {
+    console.log('🔧 Starting Make Library Perfect operation...');
+
+    // Show confirmation dialog
+    const confirmed = await showDialog(
+      'Clean library',
+      'This will:\n\n• Index all photos in your library\n• Fix file names and locations\n• Remove rotation flags (lossless)\n• Strip rating=0 tags\n• Move problematic files to trash\n\nThis operation may take several hours for large libraries. The app must remain open until complete.\n\nContinue?',
+      [
+        { text: 'Cancel', value: false, primary: false },
+        { text: 'Start cleaning', value: true, primary: true },
+      ],
+    );
+
+    if (!confirmed) {
+      console.log('❌ User cancelled Make Library Perfect');
+      return;
+    }
+
+    // Show progress toast
+    showToast('Starting library cleanup...', null);
+
+    console.log('📡 Calling /api/library/make-perfect...');
+
+    // Call the backend endpoint
+    const response = await fetch('/api/library/make-perfect', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(
+        errorData.error || `Operation failed: ${response.statusText}`,
+      );
+    }
+
+    const data = await response.json();
+    console.log('✅ Make Library Perfect completed:', data);
+
+    showToast('Library cleanup complete! Reloading photos...', null);
+
+    // Reload photos to show updated library
+    await loadPhotos();
+
+    showToast('✅ Library is now perfectly organized', null);
+  } catch (error) {
+    console.error('❌ Make Library Perfect failed:', error);
+    showToast(`Operation failed: ${error.message}`, 'error');
+  }
 }
 
 // =====================
@@ -2081,6 +2143,13 @@ function handleLightboxKeyboard(e) {
     navigateLightbox(-1);
   } else if (e.key === 'ArrowRight' && state.lightboxOpen) {
     navigateLightbox(1);
+  } else if (
+    state.lightboxOpen &&
+    e.key === 'ArrowUp' &&
+    (e.metaKey || e.ctrlKey)
+  ) {
+    closeLightbox();
+    e.preventDefault();
   }
 }
 
@@ -3584,16 +3653,7 @@ async function loadUtilitiesMenu() {
       cleanOrganizeBtn.addEventListener('click', () => {
         console.log('🔧 Clean library clicked');
         hideUtilitiesMenu();
-        openUpdateIndexOverlay();
-      });
-    }
-
-    const rebuildDatabaseBtn = document.getElementById('rebuildDatabaseBtn');
-    if (rebuildDatabaseBtn) {
-      rebuildDatabaseBtn.addEventListener('click', () => {
-        console.log('🔧 Rebuild database clicked');
-        hideUtilitiesMenu();
-        startRebuildDatabase();
+        startMakeLibraryPerfect();
       });
     }
 
