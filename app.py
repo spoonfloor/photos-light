@@ -5,6 +5,7 @@ Photo Viewer - Flask Server with Database API
 
 from flask import Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
 import sqlite3
+import traceback
 from functools import wraps
 from hash_cache import HashCache
 
@@ -40,6 +41,7 @@ import time
 import hashlib
 import json
 import logging
+import tempfile
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from PIL import Image, ImageOps
@@ -47,6 +49,15 @@ from pillow_heif import register_heif_opener
 from io import BytesIO
 from db_schema import create_database_schema
 from library_sync import synchronize_library_generator, count_media_files, estimate_duration
+from rotation_utils import (
+    JPEG_LOSSY_QUALITY,
+    ROTATION_SUPPORTED_EXTENSIONS,
+    bake_orientation as shared_bake_orientation,
+    can_rotate_losslessly,
+    get_orientation_flag,
+    normalize_rotation_degrees,
+    rotate_file_in_place,
+)
 
 # Register HEIF/HEIC support for PIL
 register_heif_opener()
@@ -324,134 +335,33 @@ def create_db_backup():
         return None
 
 def bake_orientation(file_path):
-    """
-    Bake EXIF/metadata orientation into pixel data (only when truly lossless).
-    
-    Strategy:
-    - JPEG: Use jpegtran -perfect (fails if trim required) - keeps orientation metadata if not lossless
-    - PNG/TIFF: Use PIL (always lossless)
-    - HEIC/Video/WebP/AVIF/JP2: Skip (lossy re-encode possible)
-    
-    Returns:
-        (success: bool, message: str, orientation_value: int or None)
-    """
-    _, ext = os.path.splitext(file_path)
-    ext_lower = ext.lower()
-    
-    # Skip videos, HEIC, and formats that might be lossy (WebP, AVIF, JP2)
-    # Note: WebP/AVIF/JP2 support both lossy and lossless, but PIL cannot detect which mode
-    # a file uses, so we skip them to avoid potential generational loss from re-encoding
-    if ext_lower in VIDEO_EXTENSIONS or ext_lower in {'.heic', '.heif', '.webp', '.avif', '.jp2'}:
-        return (False, "Skipped (video/HEIC/WebP/AVIF/JP2 - lossy re-encode possible)", None)
-    
-    try:
-        def strip_orientation_tag(target_path):
-            """Remove Orientation metadata tag (no pixel change)."""
-            result = subprocess.run(
-                ['exiftool', '-Orientation=', '-overwrite_original', '-P', target_path],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                return (False, f"Failed to remove orientation tag: {result.stderr.strip()}")
-            return (True, "Removed orientation tag")
+    return shared_bake_orientation(file_path)
 
-        # JPEG: Use jpegtran for lossless rotation
-        if ext_lower in {'.jpg', '.jpeg'}:
-            # Check orientation with exiftool
-            result = subprocess.run(
-                ['exiftool', '-Orientation', '-n', '-s3', file_path],
-                capture_output=True, text=True, timeout=5
-            )
-            
-            orientation = result.stdout.strip()
-            
-            if not orientation:
-                return (False, "No rotation needed (orientation missing)", None)
-            if orientation == '1':
-                stripped, message = strip_orientation_tag(file_path)
-                if not stripped:
-                    return (False, message, 1)
-                return (True, "Removed orientation tag (orientation=1)", 1)
-            
-            # Map EXIF orientation to jpegtran transform
-            transform_map = {
-                '2': ['flip', 'horizontal'],
-                '3': ['rotate', '180'],
-                '4': ['flip', 'vertical'],
-                '5': ['transpose'],
-                '6': ['rotate', '90'],
-                '7': ['transverse'],
-                '8': ['rotate', '270'],
-            }
-            
-            transform = transform_map.get(orientation)
-            if not transform:
-                return (False, f"Unknown orientation: {orientation}", int(orientation))
-            
-            # Try jpegtran -perfect (fails if trim would be required)
-            temp_output = file_path + '.baked.jpg'
-            
-            cmd = ['jpegtran', '-perfect'] + [f'-{arg}' if i == 0 else arg for i, arg in enumerate(transform)] + ['-copy', 'all', '-outfile', temp_output, file_path]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            
-            if result.returncode != 0:
-                # Failed - would need trim, so skip
-                if os.path.exists(temp_output):
-                    os.remove(temp_output)
-                return (False, f"Kept orientation {orientation} (trim would be required)", int(orientation))
-            
-            # Success - now remove orientation tag
-            stripped, message = strip_orientation_tag(temp_output)
-            if not stripped:
-                os.remove(temp_output)
-                return (False, message, int(orientation))
-            
-            # Replace original with rotated version
-            os.replace(temp_output, file_path)
-            
-            return (True, f"Baked orientation {orientation}→1 (lossless JPEG)", int(orientation))
-        
-        # PNG/TIFF: Use PIL (lossless)
-        elif ext_lower in {'.png', '.tiff', '.tif'}:
-            with Image.open(file_path) as img:
-                # Check if rotation needed
-                exif = img.getexif()
-                orientation = exif.get(0x0112)
-                
-                if orientation is None:
-                    return (False, "No rotation needed (orientation missing)", None)
-                if orientation == 1:
-                    stripped, message = strip_orientation_tag(file_path)
-                    if not stripped:
-                        return (False, message, 1)
-                    return (True, "Removed orientation tag (orientation=1)", 1)
-                
-                # Apply rotation
-                img_rotated = ImageOps.exif_transpose(img)
-                
-                # Preserve ICC profile
-                icc = img.info.get('icc_profile')
-                
-                # Save (lossless for PNG/TIFF)
-                save_kwargs = {}
-                if icc:
-                    save_kwargs['icc_profile'] = icc
-                
-                img_rotated.save(file_path, **save_kwargs)
-                
-                format_name = "PNG" if ext_lower == '.png' else "TIFF"
-                return (True, f"Baked orientation {orientation}→1 (lossless {format_name})", orientation)
-        
-        else:
-            return (False, f"Unsupported format: {ext_lower}", None)
-            
-    except subprocess.TimeoutExpired:
-        return (False, "Timeout during orientation baking", None)
-    except FileNotFoundError as e:
-        return (False, f"Tool not found: {e}", None)
-    except Exception as e:
-        return (False, f"Error: {e}", None)
+
+def build_canonical_photo_path(date_taken, content_hash, ext):
+    """Build the canonical path used throughout the library."""
+    date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
+    year = date_obj.strftime('%Y')
+    date_folder = date_obj.strftime('%Y-%m-%d')
+    short_hash = content_hash[:8]
+    filename = f"img_{date_obj.strftime('%Y%m%d')}_{short_hash}{ext.lower()}"
+    return os.path.join(year, date_folder, filename), filename
+
+
+def delete_thumbnail_for_hash(content_hash):
+    """Delete a cached thumbnail if it exists."""
+    if not content_hash:
+        return
+
+    thumbnail_path = os.path.join(
+        THUMBNAIL_CACHE_DIR,
+        content_hash[:2],
+        content_hash[2:4],
+        f"{content_hash}.jpg",
+    )
+    if os.path.exists(thumbnail_path):
+        os.remove(thumbnail_path)
+        cleanup_empty_thumbnail_folders(thumbnail_path)
 
 def write_photo_exif(file_path, new_date):
     """Write EXIF date to photo using exiftool"""
@@ -1357,6 +1267,194 @@ def get_photo_file(photo_id):
     except Exception as e:
         print(f"Error serving photo {photo_id}: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/photo/<int:photo_id>/rotate', methods=['POST'])
+@handle_db_corruption
+def rotate_photo(photo_id):
+    """Rotate a still image 90/180/270 degrees counterclockwise."""
+    conn = None
+    temp_path = None
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        degrees_ccw = normalize_rotation_degrees(int(payload.get('degrees_ccw', 90)))
+        commit_lossy = bool(payload.get('commit_lossy', False))
+
+        if degrees_ccw == 0:
+            return jsonify(
+                {
+                    'ok': True,
+                    'committed': False,
+                    'staged': False,
+                    'message': 'No rotation needed',
+                }
+            )
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, current_path, date_taken, file_type, content_hash, original_filename
+            FROM photos
+            WHERE id = ?
+            """,
+            (photo_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({'error': 'Photo not found'}), 404
+
+        if row['file_type'] == 'video':
+            return (
+                jsonify(
+                    {
+                        'error': 'Rotation is not available for videos',
+                        'reason': 'video',
+                    }
+                ),
+                400,
+            )
+
+        full_path = os.path.join(LIBRARY_PATH, row['current_path'])
+        if not os.path.exists(full_path):
+            return jsonify({'error': 'File not found on disk'}), 404
+
+        ext = os.path.splitext(full_path)[1].lower()
+        if ext not in ROTATION_SUPPORTED_EXTENSIONS:
+            return (
+                jsonify(
+                    {
+                        'error': 'Rotation is not available for this file type',
+                        'reason': 'unsupported_format',
+                    }
+                ),
+                400,
+            )
+
+        orientation = get_orientation_flag(full_path)
+        can_commit_losslessly = orientation in (None, 1) and can_rotate_losslessly(
+            full_path,
+            degrees_ccw,
+        )
+
+        if not can_commit_losslessly and not commit_lossy:
+            return jsonify(
+                {
+                    'ok': True,
+                    'committed': False,
+                    'staged': True,
+                    'lossless': False,
+                    'reason': 'lossy_fallback_required',
+                }
+            )
+
+        fd, temp_path = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(full_path))
+        os.close(fd)
+        shutil.copy2(full_path, temp_path)
+
+        rotation_result = rotate_file_in_place(
+            temp_path,
+            degrees_ccw,
+            allow_lossy_fallback=commit_lossy,
+            jpeg_quality=JPEG_LOSSY_QUALITY,
+        )
+        if not rotation_result.success:
+            status_code = 409 if not commit_lossy else 500
+            return jsonify({'error': rotation_result.message}), status_code
+
+        dimensions = get_image_dimensions(temp_path)
+        if not dimensions:
+            return jsonify({'error': 'Could not read rotated image dimensions'}), 500
+        width, height = dimensions
+
+        new_hash = compute_hash(temp_path)
+        cursor.execute(
+            "SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?",
+            (new_hash, photo_id),
+        )
+        duplicate = cursor.fetchone()
+        if duplicate:
+            return (
+                jsonify(
+                    {
+                        'error': 'Rotation would create a duplicate photo',
+                        'reason': 'duplicate_after_rotation',
+                    }
+                ),
+                409,
+            )
+
+        new_rel_path, new_filename = build_canonical_photo_path(
+            row['date_taken'],
+            new_hash,
+            ext,
+        )
+        new_full_path = os.path.join(LIBRARY_PATH, new_rel_path)
+        os.makedirs(os.path.dirname(new_full_path), exist_ok=True)
+
+        if new_full_path != full_path and os.path.exists(new_full_path):
+            return jsonify({'error': 'Canonical destination already exists'}), 409
+
+        old_hash = row['content_hash']
+        old_full_path = full_path
+
+        if new_full_path == old_full_path:
+            os.replace(temp_path, old_full_path)
+        else:
+            os.replace(temp_path, new_full_path)
+            temp_path = None
+            if os.path.exists(old_full_path):
+                os.remove(old_full_path)
+                cleanup_empty_folders(old_full_path, LIBRARY_PATH)
+
+        temp_path = None
+
+        if old_hash != new_hash:
+            delete_thumbnail_for_hash(old_hash)
+
+        cursor.execute(
+            """
+            UPDATE photos
+            SET current_path = ?,
+                original_filename = ?,
+                width = ?,
+                height = ?,
+                content_hash = ?
+            WHERE id = ?
+            """,
+            (new_rel_path, new_filename, width, height, new_hash, photo_id),
+        )
+        conn.commit()
+
+        return jsonify(
+            {
+                'ok': True,
+                'committed': True,
+                'staged': False,
+                'lossless': rotation_result.lossless,
+                'message': rotation_result.message,
+                'photo': {
+                    'id': photo_id,
+                    'path': new_rel_path,
+                    'width': width,
+                    'height': height,
+                    'content_hash': new_hash,
+                },
+            }
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error rotating photo {photo_id}: {e}")
+        if conn:
+            conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+        if conn:
+            conn.close()
 
 def cleanup_empty_folders(file_path, library_root):
     """
@@ -4716,19 +4814,29 @@ def api_make_library_perfect():
     """
     try:
         from make_library_perfect import make_library_perfect
-        
-        # Get current library path
-        library_path = get_library_path()
-        
-        if not library_path or not os.path.exists(library_path):
+
+        if not LIBRARY_PATH:
             return jsonify({'error': 'No library configured'}), 400
+
+        if not os.path.isdir(LIBRARY_PATH):
+            return jsonify({'error': 'Configured library path is missing or invalid'}), 400
+
+        if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+            return jsonify({'error': 'Configured library path is not accessible'}), 503
+
+        if not DB_PATH:
+            return jsonify({'error': 'No database configured'}), 400
+
+        db_dir = os.path.dirname(DB_PATH) or '.'
+        if not os.path.isdir(db_dir):
+            return jsonify({'error': 'Configured database path is invalid'}), 400
         
         print(f"\n{'='*60}")
-        print(f"🔧 MAKE LIBRARY PERFECT: {library_path}")
+        print(f"🔧 MAKE LIBRARY PERFECT: {LIBRARY_PATH}")
         print(f"{'='*60}\n")
         
         # Execute the operation against the configured DB path.
-        result = make_library_perfect(library_path, db_path=DB_PATH)
+        result = make_library_perfect(LIBRARY_PATH, db_path=DB_PATH)
         
         print(f"\n✅ Make Library Perfect completed successfully")
         
@@ -4736,6 +4844,8 @@ def api_make_library_perfect():
         
     except Exception as e:
         print(f"\n❌ Make Library Perfect failed: {str(e)}")
+        error_logger.error(f"Make Library Perfect failed: {e}")
+        error_logger.error(traceback.format_exc())
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 

@@ -526,6 +526,16 @@ input[type="radio"] {
   z-index: 2;
 }
 
+.lightbox-icon-button[aria-disabled='true'] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.lightbox-icon-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .lightbox-icon-button .material-symbols-outlined {
   font-size: 24px;
   color: white;

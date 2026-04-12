@@ -20,7 +20,13 @@ const state = {
   currentOffset: 0, // Current pagination offset
   navigateToMonth: null, // Month to navigate to after closing lightbox (e.g., '2025-12')
   hasDatabase: false, // Track whether database exists and is healthy
+  lightboxPendingRotations: {}, // photoId -> net CCW rotation staged for close
+  lightboxMediaVersions: {}, // photoId -> cache-buster for rewritten media
+  lightboxClosing: false,
+  lightboxRotateInFlight: false,
 };
+
+const ROTATABLE_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff']);
 
 // ============================================================================
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
@@ -742,14 +748,29 @@ async function startMakeLibraryPerfect() {
       },
     });
 
+    const contentType = response.headers.get('content-type') || '';
+    let data;
+
+    if (contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const responseText = await response.text();
+      const isHtmlError = contentType.includes('text/html');
+      data = {
+        error:
+          (isHtmlError
+            ? ''
+            : responseText.replace(/\s+/g, ' ').trim()) ||
+          `Server returned ${response.status} ${response.statusText}`,
+      };
+    }
+
     if (!response.ok) {
-      const errorData = await response.json();
       throw new Error(
-        errorData.error || `Operation failed: ${response.statusText}`,
+        data.error || `Operation failed: ${response.statusText}`,
       );
     }
 
-    const data = await response.json();
     console.log('✅ Make Library Perfect completed:', data);
 
     showToast('Library cleanup complete! Reloading photos...', null);
@@ -1867,6 +1888,186 @@ function loadLightbox() {
     });
 }
 
+function normalizeRotationDegrees(degrees) {
+  const normalized = ((degrees % 360) + 360) % 360;
+  return normalized;
+}
+
+function getPhotoExtension(photo) {
+  const path = photo?.path || '';
+  const match = path.match(/(\.[^.]+)$/);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function getPendingRotation(photoId) {
+  return normalizeRotationDegrees(state.lightboxPendingRotations[photoId] || 0);
+}
+
+function getPhotoFileUrl(photoId) {
+  const version = state.lightboxMediaVersions[photoId];
+  return version
+    ? `/api/photo/${photoId}/file?v=${version}`
+    : `/api/photo/${photoId}/file`;
+}
+
+function getPhotoThumbnailUrl(photoId) {
+  const version = state.lightboxMediaVersions[photoId];
+  return version
+    ? `/api/photo/${photoId}/thumbnail?v=${version}`
+    : `/api/photo/${photoId}/thumbnail`;
+}
+
+function getRotateDisabledReason(photo) {
+  if (!photo) return 'Rotation is not available';
+  if (photo.file_type === 'video') return "Rotation isn't available for videos";
+
+  const ext = getPhotoExtension(photo);
+  if (!ROTATABLE_IMAGE_EXTENSIONS.has(ext)) {
+    return "Rotation isn't available for this file type";
+  }
+
+  return null;
+}
+
+function updateLightboxRotateButtonState(photo = state.photos[state.lightboxPhotoIndex]) {
+  const rotateBtn = document.getElementById('lightboxRotateBtn');
+  if (!rotateBtn) return;
+
+  const reason = getRotateDisabledReason(photo);
+  const isUnavailable = Boolean(reason);
+
+  rotateBtn.setAttribute('aria-disabled', isUnavailable ? 'true' : 'false');
+  rotateBtn.disabled = state.lightboxRotateInFlight || state.lightboxClosing;
+  rotateBtn.title = reason || 'Rotate left';
+}
+
+function refreshGridPhotoThumbnail(photoId) {
+  const thumb = document.querySelector(`.photo-thumb[data-photo-id="${photoId}"]`);
+  if (!thumb) return;
+
+  if (thumb.getAttribute('src')) {
+    thumb.src = getPhotoThumbnailUrl(photoId);
+  }
+}
+
+function applyCommittedPhotoUpdate(updatedPhoto) {
+  const photoIndex = state.photos.findIndex((photo) => photo.id === updatedPhoto.id);
+  if (photoIndex === -1) return;
+
+  state.photos[photoIndex] = {
+    ...state.photos[photoIndex],
+    path: updatedPhoto.path,
+    width: updatedPhoto.width,
+    height: updatedPhoto.height,
+  };
+
+  state.lightboxMediaVersions[updatedPhoto.id] = Date.now();
+  delete state.lightboxPendingRotations[updatedPhoto.id];
+  refreshGridPhotoThumbnail(updatedPhoto.id);
+}
+
+function rerenderCurrentLightbox() {
+  if (!state.lightboxOpen || state.lightboxPhotoIndex === null) return;
+  openLightbox(state.lightboxPhotoIndex);
+}
+
+function stagePhotoRotation(photoId, deltaDegrees) {
+  const current = getPendingRotation(photoId);
+  const next = normalizeRotationDegrees(current + deltaDegrees);
+
+  if (next === 0) {
+    delete state.lightboxPendingRotations[photoId];
+  } else {
+    state.lightboxPendingRotations[photoId] = next;
+  }
+
+  rerenderCurrentLightbox();
+}
+
+async function commitPendingLightboxRotations() {
+  const pendingEntries = Object.entries(state.lightboxPendingRotations).filter(
+    ([, degrees]) => normalizeRotationDegrees(degrees) !== 0,
+  );
+
+  for (const [photoId, degrees] of pendingEntries) {
+    try {
+      const response = await fetch(`/api/photo/${photoId}/rotate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          degrees_ccw: degrees,
+          commit_lossy: true,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.ok || !result.committed) {
+        throw new Error(result.error || 'Failed to save rotation');
+      }
+
+      applyCommittedPhotoUpdate(result.photo);
+    } catch (error) {
+      console.error('❌ Error saving staged rotation:', error);
+      showToast('Failed to save rotation', null);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function handleLightboxRotate() {
+  const photo = state.photos[state.lightboxPhotoIndex];
+  const rotateBtn = document.getElementById('lightboxRotateBtn');
+  if (!photo || !rotateBtn) return;
+  if (rotateBtn.getAttribute('aria-disabled') === 'true') return;
+  if (state.lightboxRotateInFlight || state.lightboxClosing) return;
+
+  const existingPending = getPendingRotation(photo.id);
+  if (existingPending !== 0) {
+    stagePhotoRotation(photo.id, 90);
+    return;
+  }
+
+  state.lightboxRotateInFlight = true;
+  updateLightboxRotateButtonState(photo);
+
+  try {
+    const response = await fetch(`/api/photo/${photo.id}/rotate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        degrees_ccw: 90,
+        commit_lossy: false,
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to rotate photo');
+    }
+
+    if (result.staged) {
+      stagePhotoRotation(photo.id, 90);
+      return;
+    }
+
+    if (result.committed && result.photo) {
+      applyCommittedPhotoUpdate(result.photo);
+      rerenderCurrentLightbox();
+      return;
+    }
+
+    throw new Error('Unexpected rotate response');
+  } catch (error) {
+    console.error('❌ Error rotating photo:', error);
+    showToast('Failed to rotate photo', null);
+  } finally {
+    state.lightboxRotateInFlight = false;
+    updateLightboxRotateButtonState();
+  }
+}
+
 /**
  * Wire up lightbox controls
  */
@@ -1922,10 +2123,7 @@ function wireLightbox() {
 
   const rotateBtn = document.getElementById('lightboxRotateBtn');
   if (rotateBtn) {
-    rotateBtn.addEventListener('click', () => {
-      const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      console.log(`🔄 LIGHTBOX Rotate clicked! Photo: ${photoId}`);
-    });
+    rotateBtn.addEventListener('click', handleLightboxRotate);
   }
 
   const starBtn = document.getElementById('lightboxStarBtn');
@@ -2161,8 +2359,15 @@ function handleLightboxKeyboard(e) {
 /**
  * Helper function to calculate dimensions based on photo AR vs viewport AR
  */
-function calculateMediaDimensions(photo) {
-  if (!photo.width || !photo.height) {
+function calculateMediaDimensions(photo, rotationDegrees = 0) {
+  let width = photo.width;
+  let height = photo.height;
+
+  if (normalizeRotationDegrees(rotationDegrees) % 180 !== 0 && width && height) {
+    [width, height] = [height, width];
+  }
+
+  if (!width || !height) {
     return {
       width: '100vw',
       height: '75vw',
@@ -2170,11 +2375,11 @@ function calculateMediaDimensions(photo) {
     };
   }
 
-  const photoAR = photo.width / photo.height;
+  const photoAR = width / height;
   const viewportAR = window.innerWidth / window.innerHeight;
 
   console.log(
-    `📐 Photo ${photo.id}: ${photo.width}x${photo.height} (AR ${photoAR.toFixed(3)}) | Viewport AR: ${viewportAR.toFixed(3)}`,
+    `📐 Photo ${photo.id}: ${width}x${height} (AR ${photoAR.toFixed(3)}) | Viewport AR: ${viewportAR.toFixed(3)}`,
   );
 
   if (photoAR > viewportAR) {
@@ -2219,8 +2424,9 @@ function createPlaceholder(photo, dims, isDebug = false) {
 /**
  * Helper function to load media into lightbox content
  */
-function loadMediaIntoContent(content, photo, isVideo) {
-  const dims = calculateMediaDimensions(photo);
+function loadMediaIntoContent(content, photo, isVideo, options = {}) {
+  const rotationDegrees = normalizeRotationDegrees(options.rotationDegrees || 0);
+  const dims = calculateMediaDimensions(photo, rotationDegrees);
 
   if (isVideo) {
     // For video, show placeholder and load
@@ -2251,7 +2457,7 @@ function loadMediaIntoContent(content, photo, isVideo) {
   } else {
     // For images, preload in memory first
     const img = new Image();
-    img.src = `/api/photo/${photo.id}/file`;
+    img.src = getPhotoFileUrl(photo.id);
 
     // Check if already cached
     if (img.complete && img.naturalWidth > 0) {
@@ -2264,6 +2470,10 @@ function loadMediaIntoContent(content, photo, isVideo) {
       if (dims.maxHeight) img.style.maxHeight = dims.maxHeight;
 
       img.style.objectFit = 'contain';
+      if (rotationDegrees) {
+        img.style.transform = `rotate(${rotationDegrees}deg)`;
+        img.style.transformOrigin = 'center center';
+      }
       const filename =
         photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
       img.alt = filename;
@@ -2290,6 +2500,10 @@ function loadMediaIntoContent(content, photo, isVideo) {
         if (dims.maxHeight) img.style.maxHeight = dims.maxHeight;
 
         img.style.objectFit = 'contain';
+        if (rotationDegrees) {
+          img.style.transform = `rotate(${rotationDegrees}deg)`;
+          img.style.transformOrigin = 'center center';
+        }
         const filename =
           photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
         img.alt = filename;
@@ -2353,19 +2567,24 @@ async function openLightbox(photoIndex) {
   const isVideo =
     photo.file_type === 'video' ||
     (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
+  const previewRotation = getPendingRotation(photo.id);
 
   // DEBUG MODE: Show pink overlay to verify sizing
   if (DEBUG_CLICK_TO_LOAD) {
     // Load media normally (with preload logic)
-    loadMediaIntoContent(content, photo, isVideo);
+    loadMediaIntoContent(content, photo, isVideo, {
+      rotationDegrees: previewRotation,
+    });
 
     // Add pink debug overlay on top
-    const dims = calculateMediaDimensions(photo);
+    const dims = calculateMediaDimensions(photo, previewRotation);
     const debugOverlay = createPlaceholder(photo, dims, true);
     content.appendChild(debugOverlay);
   } else {
     // PRODUCTION MODE: Auto-load media immediately
-    loadMediaIntoContent(content, photo, isVideo);
+    loadMediaIntoContent(content, photo, isVideo, {
+      rotationDegrees: previewRotation,
+    });
   }
 
   overlay.style.display = 'flex';
@@ -2388,6 +2607,8 @@ async function openLightbox(photoIndex) {
   }
 
   // Update info panel with photo details
+  updateLightboxRotateButtonState(photo);
+
   const infoDate = document.getElementById('infoDate');
   const infoFilename = document.getElementById('infoFilename');
 
@@ -2484,14 +2705,14 @@ function preloadAdjacentImages(currentIndex) {
   if (prevIndex >= 0 && prevIndex < state.photos.length) {
     const prevPhoto = state.photos[prevIndex];
     const prevImg = new Image();
-    prevImg.src = `/api/photo/${prevPhoto.id}/file`;
+    prevImg.src = getPhotoFileUrl(prevPhoto.id);
   }
 
   // Preload next image
   if (nextIndex >= 0 && nextIndex < state.photos.length) {
     const nextPhoto = state.photos[nextIndex];
     const nextImg = new Image();
-    nextImg.src = `/api/photo/${nextPhoto.id}/file`;
+    nextImg.src = getPhotoFileUrl(nextPhoto.id);
   }
 }
 
@@ -2506,9 +2727,20 @@ function updateLightboxDimensions(placeholder, aspectRatio) {
 /**
  * Close lightbox
  */
-function closeLightbox() {
+async function closeLightbox() {
   const overlay = document.getElementById('lightboxOverlay');
   if (!overlay) return;
+  if (state.lightboxClosing) return;
+
+  state.lightboxClosing = true;
+  updateLightboxRotateButtonState();
+
+  const saved = await commitPendingLightboxRotations();
+  if (!saved) {
+    state.lightboxClosing = false;
+    updateLightboxRotateButtonState();
+    return;
+  }
 
   // Stop any playing videos
   const video = overlay.querySelector('video');
@@ -2564,6 +2796,7 @@ function closeLightbox() {
     }, 100);
   }
 
+  state.lightboxClosing = false;
   console.log('✖️ Closed lightbox');
 }
 
@@ -2708,7 +2941,7 @@ function setupThumbnailLazyLoading() {
 
           if (photoId && !img.src) {
             // Load thumbnail
-            img.src = `/api/photo/${photoId}/thumbnail`;
+            img.src = getPhotoThumbnailUrl(photoId);
             img.classList.add('loading');
 
             img.onload = () => {
@@ -2848,7 +3081,7 @@ function renderPhotoGrid(photos, append = false) {
             : '';
 
         card.innerHTML = `
-          <img src="/api/photo/${photo.id}/thumbnail" alt="" loading="lazy" class="photo-thumb">
+          <img src="${getPhotoThumbnailUrl(photo.id)}" alt="" loading="lazy" class="photo-thumb" data-photo-id="${photo.id}">
           ${starBadgeHTML}
           ${videoBadgeHTML}
         `;

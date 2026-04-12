@@ -15,17 +15,21 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import tempfile
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from PIL import Image, ImageOps
+from PIL import Image
 
 from db_schema import create_database_schema
 from file_operations import extract_exif_date, extract_exif_rating, strip_exif_rating
 from hash_cache import HashCache
+from rotation_utils import (
+    bake_orientation as shared_bake_orientation,
+    can_bake_losslessly as shared_can_bake_losslessly,
+    get_orientation_flag as shared_get_orientation_flag,
+)
 
 
 PHOTO_EXTENSIONS = {
@@ -188,140 +192,15 @@ def get_orientation_flag(file_path: str) -> Optional[int]:
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in PHOTO_EXTENSIONS:
         return None
-
-    try:
-        result = subprocess.run(
-            ["exiftool", "-Orientation", "-n", "-s3", file_path],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return None
-        value = result.stdout.strip()
-        return int(value) if value else None
-    except (ValueError, OSError, subprocess.TimeoutExpired):
-        return None
+    return shared_get_orientation_flag(file_path)
 
 
 def can_bake_losslessly(file_path: str) -> bool:
-    ext = os.path.splitext(file_path)[1].lower()
-    orientation = get_orientation_flag(file_path)
-    if orientation in (None, 1):
-        return False
-
-    if ext in {".png", ".tiff", ".tif"}:
-        return True
-    if ext not in {".jpg", ".jpeg"}:
-        return False
-
-    tmp = None
-    try:
-        fd, tmp = tempfile.mkstemp(suffix=".jpg")
-        os.close(fd)
-        transform_map = {
-            2: ["flip", "horizontal"],
-            3: ["rotate", "180"],
-            4: ["flip", "vertical"],
-            5: ["transpose"],
-            6: ["rotate", "90"],
-            7: ["transverse"],
-            8: ["rotate", "270"],
-        }
-        transform = transform_map.get(orientation)
-        if not transform:
-            return False
-        cmd = ["jpegtran", "-perfect"]
-        cmd.extend(f"-{part}" if index == 0 else part for index, part in enumerate(transform))
-        cmd.extend(["-copy", "all", "-outfile", tmp, file_path])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    finally:
-        if tmp and os.path.exists(tmp):
-            os.remove(tmp)
+    return shared_can_bake_losslessly(file_path)
 
 
 def bake_orientation(file_path: str) -> Tuple[bool, str, Optional[int]]:
-    """
-    Bake orientation only when the operation is lossless.
-
-    Returns:
-        (success, message, orientation_value)
-    """
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext in VIDEO_EXTENSIONS or ext in {".heic", ".heif", ".webp", ".avif", ".jp2"}:
-        return False, "Skipped lossy-risk format", None
-
-    def strip_orientation_tag(target_path: str) -> Tuple[bool, str]:
-        result = subprocess.run(
-            ["exiftool", "-Orientation=", "-overwrite_original", "-P", target_path],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return False, result.stderr.strip() or "Failed to remove orientation tag"
-        return True, "Removed orientation tag"
-
-    try:
-        orientation = get_orientation_flag(file_path)
-        if orientation is None:
-            return False, "No orientation metadata", None
-        if orientation == 1:
-            success, message = strip_orientation_tag(file_path)
-            return success, message, 1
-
-        if ext in {".jpg", ".jpeg"}:
-            transform_map = {
-                2: ["flip", "horizontal"],
-                3: ["rotate", "180"],
-                4: ["flip", "vertical"],
-                5: ["transpose"],
-                6: ["rotate", "90"],
-                7: ["transverse"],
-                8: ["rotate", "270"],
-            }
-            transform = transform_map.get(orientation)
-            if not transform:
-                return False, f"Unknown orientation {orientation}", orientation
-
-            temp_output = file_path + ".baked.jpg"
-            cmd = ["jpegtran", "-perfect"]
-            cmd.extend(f"-{part}" if index == 0 else part for index, part in enumerate(transform))
-            cmd.extend(["-copy", "all", "-outfile", temp_output, file_path])
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode != 0:
-                if os.path.exists(temp_output):
-                    os.remove(temp_output)
-                return False, "Kept orientation (lossless bake not possible)", orientation
-
-            success, message = strip_orientation_tag(temp_output)
-            if not success:
-                os.remove(temp_output)
-                return False, message, orientation
-
-            os.replace(temp_output, file_path)
-            return True, f"Baked orientation {orientation}", orientation
-
-        if ext in {".png", ".tiff", ".tif"}:
-            with Image.open(file_path) as image:
-                rotated = ImageOps.exif_transpose(image)
-                icc_profile = image.info.get("icc_profile")
-                save_kwargs: Dict[str, Any] = {}
-                if icc_profile:
-                    save_kwargs["icc_profile"] = icc_profile
-                rotated.save(file_path, **save_kwargs)
-            return True, f"Baked orientation {orientation}", orientation
-
-        return False, f"Unsupported rotation format {ext}", orientation
-    except subprocess.TimeoutExpired:
-        return False, "Orientation bake timeout", None
-    except FileNotFoundError as exc:
-        return False, f"Required tool missing: {exc}", None
-    except Exception as exc:  # pragma: no cover - defensive
-        return False, f"Orientation bake error: {exc}", None
+    return shared_bake_orientation(file_path)
 
 
 def verify_media_file(file_path: str) -> Tuple[bool, str]:
