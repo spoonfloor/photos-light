@@ -4712,7 +4712,7 @@ def get_favorites():
 @app.route('/api/library/make-perfect', methods=['POST'])
 def api_make_library_perfect():
     """
-    Execute Make Library Perfect operation (unified Clean + Rebuild)
+    Execute Clean library operation.
     """
     try:
         from make_library_perfect import make_library_perfect
@@ -4727,8 +4727,8 @@ def api_make_library_perfect():
         print(f"🔧 MAKE LIBRARY PERFECT: {library_path}")
         print(f"{'='*60}\n")
         
-        # Execute the operation
-        result = make_library_perfect(library_path)
+        # Execute the operation against the configured DB path.
+        result = make_library_perfect(library_path, db_path=DB_PATH)
         
         print(f"\n✅ Make Library Perfect completed successfully")
         

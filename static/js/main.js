@@ -717,7 +717,7 @@ async function startMakeLibraryPerfect() {
     // Show confirmation dialog
     const confirmed = await showDialog(
       'Clean library',
-      'This will:\n\n• Index all photos in your library\n• Fix file names and locations\n• Remove rotation flags (lossless)\n• Strip rating=0 tags\n• Move problematic files to trash\n\nThis operation may take several hours for large libraries. The app must remain open until complete.\n\nContinue?',
+      'This will:\n\n• Fix misnamed and misfiled media\n• Move duplicates, corrupted files, and non-library files to .trash\n• Add missing media to the database and remove ghost DB entries\n• Bake still-image rotation when it is lossless\n• Strip EXIF rating flags when rating = 0\n• Remove empty and non-canonical folders outside infrastructure\n\nItems already inside .trash are allowed and do not count against cleanliness.\n\nThis operation may take several hours for large libraries. The app must remain open until complete.\n\nContinue?',
       [
         { text: 'Cancel', value: false, primary: false },
         { text: 'Start cleaning', value: true, primary: true },
@@ -929,7 +929,7 @@ async function executeRebuildDatabase() {
 /**
  * Show confirmation dialog (old callback-based version)
  */
-function showDialogOld(title, message, onConfirm) {
+function showDialogOld(title, message, onConfirm, confirmLabel = 'Delete') {
   console.log('📋 showDialogOld called', { title, hasCallback: !!onConfirm });
 
   const overlay = document.getElementById('dialogOverlay');
@@ -951,6 +951,11 @@ function showDialogOld(title, message, onConfirm) {
     const cancelBtn = document.getElementById('dialogCancelBtn');
     if (confirmBtn) confirmBtn.addEventListener('click', handleDialogConfirm);
     if (cancelBtn) cancelBtn.addEventListener('click', hideDialog);
+  }
+
+  const confirmBtn = document.getElementById('dialogConfirmBtn');
+  if (confirmBtn) {
+    confirmBtn.textContent = confirmLabel;
   }
 
   titleEl.textContent = title;
@@ -3628,7 +3633,7 @@ async function loadUtilitiesMenu() {
   if (utilitiesMenuLoaded) return;
 
   try {
-    const response = await fetch('fragments/utilitiesMenu.html?v=2');
+    const response = await fetch('fragments/utilitiesMenu.html?v=3');
     if (!response.ok) throw new Error('Failed to load utilities menu');
 
     const html = await response.text();
@@ -3640,6 +3645,7 @@ async function loadUtilitiesMenu() {
     const rebuildThumbnailsBtn = document.getElementById(
       'rebuildThumbnailsBtn',
     );
+    const closeLibraryBtn = document.getElementById('closeLibraryBtn');
 
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
@@ -3662,6 +3668,20 @@ async function loadUtilitiesMenu() {
         console.log('🔧 Rebuild Thumbnails clicked');
         hideUtilitiesMenu();
         rebuildThumbnails();
+      });
+    }
+
+    if (closeLibraryBtn) {
+      closeLibraryBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        showDialogOld(
+          'Close library',
+          'Return to the welcome screen? Your library folder and files are not deleted.',
+          () => {
+            resetLibraryConfig();
+          },
+          'Close',
+        );
       });
     }
 
@@ -3751,6 +3771,7 @@ function hideUtilitiesMenu() {
  * - Rebuild database: requires database
  * - Remove duplicates: requires database AND 1+ photos
  * - Rebuild thumbnails: requires database AND 1+ photos
+ * - Close library: requires database
  */
 function updateUtilityMenuAvailability() {
   const hasDatabase = state.hasDatabase;
@@ -3765,6 +3786,8 @@ function updateUtilityMenuAvailability() {
 
   // Switch library - ALWAYS available (never disabled)
   enableMenuItem('switchLibraryBtn', true);
+
+  enableMenuItem('closeLibraryBtn', hasDatabase);
 
   // Update database - requires database (doesn't need photos)
   enableMenuItem('cleanOrganizeBtn', hasDatabase);
