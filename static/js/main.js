@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v276';
+const MAIN_JS_VERSION = 'v277';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -22,6 +22,7 @@ const state = {
   hasDatabase: false, // Track whether database exists and is healthy
   lightboxRotationSessions: {}, // photoId -> optimistic rotation session state
   lightboxMediaVersions: {}, // photoId -> cache-buster for rewritten media
+  lightboxReloadToken: 0,
   lightboxClosing: false,
 };
 
@@ -2074,6 +2075,7 @@ function reloadOpenLightboxMedia(photoId) {
   const isVideo =
     photo.file_type === 'video' ||
     (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
+  const reloadToken = ++state.lightboxReloadToken;
 
   if (!isVideo) {
     const existingFrame = content.querySelector('.lightbox-media-frame');
@@ -2083,16 +2085,37 @@ function reloadOpenLightboxMedia(photoId) {
       const nextImg = new Image();
       nextImg.src = getPhotoFileUrl(photoId);
       nextImg.onload = () => {
+        if (
+          reloadToken !== state.lightboxReloadToken ||
+          !state.lightboxOpen ||
+          state.lightboxPhotoIndex === null
+        ) {
+          return;
+        }
+
+        const currentPhoto = state.photos[state.lightboxPhotoIndex];
+        if (!currentPhoto || currentPhoto.id !== photoId) {
+          return;
+        }
+
+        const currentFrame = content.querySelector('.lightbox-media-frame');
+        const currentImg = currentFrame?.querySelector('img.lightbox-media-element');
+        if (!currentFrame || !currentImg) {
+          return;
+        }
+
         nextImg.className = 'lightbox-media-element';
         nextImg.alt =
-          photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
+          currentPhoto.path?.split('/').pop() ||
+          currentPhoto.filename ||
+          `Photo ${currentPhoto.id}`;
         applyLightboxMediaStyles(
-          existingFrame,
+          currentFrame,
           nextImg,
-          photo,
+          currentPhoto,
           getLightboxPreviewRotation(photoId),
         );
-        existingFrame.replaceChild(nextImg, existingImg);
+        currentFrame.replaceChild(nextImg, currentImg);
         console.log('[rotate] lightbox image swapped', {
           photoId,
           src: nextImg.getAttribute('src'),
@@ -2106,6 +2129,10 @@ function reloadOpenLightboxMedia(photoId) {
       };
       return;
     }
+  }
+
+  if (reloadToken !== state.lightboxReloadToken) {
+    return;
   }
 
   content.innerHTML = '';

@@ -78,6 +78,7 @@ VIDEO_EXTENSIONS = {
 SUPPORTED_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
 INFRASTRUCTURE_DIRS = set(ROOT_INFRASTRUCTURE_DIRS)
 ALLOWED_ROOT_DIRS = INFRASTRUCTURE_DIRS
+IGNORED_LIBRARY_FILES = {".DS_Store"}
 PIL_VERIFY_EXTENSIONS = {
     ".jpg",
     ".jpeg",
@@ -169,6 +170,8 @@ def path_parts(rel_path: str) -> List[str]:
 
 
 def root_entry_allowed(name: str, is_dir: bool) -> bool:
+    if name in IGNORED_LIBRARY_FILES:
+        return True
     if is_dir:
         return name in ALLOWED_ROOT_DIRS or is_year_folder_name(name)
     return False
@@ -508,6 +511,8 @@ class LibraryCleaner:
         for root, _, files in self.active_walk():
             rel_root = os.path.relpath(root, self.library_path)
             for filename in files:
+                if filename in IGNORED_LIBRARY_FILES:
+                    continue
                 full_path = os.path.join(root, filename)
                 record = self.normalize_media_file(full_path)
                 if record is not None:
@@ -635,6 +640,8 @@ class LibraryCleaner:
             issues.append(format_issue("invalid_library_db", os.path.relpath(canonical_path, self.library_path)))
 
         for item in os.listdir(metadata_dir):
+            if item in IGNORED_LIBRARY_FILES:
+                continue
             item_path = os.path.join(metadata_dir, item)
             rel_path = os.path.relpath(item_path, self.library_path)
             if os.path.isdir(item_path):
@@ -651,6 +658,8 @@ class LibraryCleaner:
         active_hashes: Dict[str, str] = {}
 
         for item in os.listdir(self.library_path):
+            if item in IGNORED_LIBRARY_FILES:
+                continue
             full_path = os.path.join(self.library_path, item)
             if not root_entry_allowed(item, os.path.isdir(full_path)):
                 issue_kind = "noncanonical_root_folder" if os.path.isdir(full_path) else "noncanonical_root_file"
@@ -684,6 +693,8 @@ class LibraryCleaner:
                     issues.append(format_issue("noncanonical_folder", dir_rel))
 
             for filename in files:
+                if filename in IGNORED_LIBRARY_FILES:
+                    continue
                 full_path = os.path.join(root, filename)
                 rel_path = os.path.relpath(full_path, self.library_path)
 

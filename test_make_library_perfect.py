@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 
 from library_layout import canonical_db_path, detect_existing_db_path, is_library_metadata_file
 from make_library_perfect import (
+    IGNORED_LIBRARY_FILES,
     canonical_relative_path,
     in_infrastructure,
     is_day_folder_name,
@@ -41,6 +42,8 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
         self.assertTrue(root_entry_allowed(".library", True))
         self.assertTrue(root_entry_allowed(".trash", True))
         self.assertTrue(root_entry_allowed("2026", True))
+        self.assertIn(".DS_Store", IGNORED_LIBRARY_FILES)
+        self.assertTrue(root_entry_allowed(".DS_Store", False))
         self.assertFalse(root_entry_allowed("photo_library.db", False))
         self.assertFalse(root_entry_allowed("notes.txt", False))
         self.assertFalse(root_entry_allowed(".hidden", True))
