@@ -16,15 +16,15 @@ const PickerUtils = (() => {
     for (const loc of topLevelLocations) {
       if (loc.path.includes('/Users/') && !loc.path.includes('Shared')) {
         const desktopPath = loc.path + '/Desktop';
-        console.log(`🔍 Trying Desktop path: ${desktopPath}`);
+        
         try {
           await listDirectory(desktopPath);
-          console.log('✅ Starting at Desktop:', desktopPath);
+          
           return desktopPath;
         } catch (error) {
           // Desktop doesn't exist or not accessible, try home folder as fallback
-          console.log(`⚠️ Desktop check failed: ${error.message}`);
-          console.log(`📁 Falling back to home folder: ${loc.path}`);
+          
+          
           return loc.path;
         }
       }
@@ -34,7 +34,7 @@ const PickerUtils = (() => {
     if (topLevelLocations.length > 0) {
       const firstLocation = topLevelLocations.find(loc => !loc.path.includes('Shared'));
       if (firstLocation) {
-        console.log(`📁 Using first location: ${firstLocation.path}`);
+        
         return firstLocation.path;
       }
     }

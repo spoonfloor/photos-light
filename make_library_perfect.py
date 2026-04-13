@@ -30,6 +30,15 @@ from rotation_utils import (
     can_bake_losslessly as shared_can_bake_losslessly,
     get_orientation_flag as shared_get_orientation_flag,
 )
+from library_layout import (
+    LIBRARY_METADATA_DIR,
+    ROOT_INFRASTRUCTURE_DIRS,
+    canonical_db_path,
+    db_is_valid,
+    db_sidecar_paths,
+    is_library_metadata_file,
+    resolve_db_path,
+)
 
 
 PHOTO_EXTENSIONS = {
@@ -67,9 +76,8 @@ VIDEO_EXTENSIONS = {
     ".avi",
 }
 SUPPORTED_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
-INFRASTRUCTURE_DIRS = {".db_backups", ".logs", ".thumbnails", ".trash"}
+INFRASTRUCTURE_DIRS = set(ROOT_INFRASTRUCTURE_DIRS)
 ALLOWED_ROOT_DIRS = INFRASTRUCTURE_DIRS
-DB_FILENAME = "photo_library.db"
 PIL_VERIFY_EXTENSIONS = {
     ".jpg",
     ".jpeg",
@@ -160,14 +168,10 @@ def path_parts(rel_path: str) -> List[str]:
     return rel_path.split(os.sep)
 
 
-def root_entry_allowed(name: str, is_dir: bool, db_filename: str) -> bool:
+def root_entry_allowed(name: str, is_dir: bool) -> bool:
     if is_dir:
         return name in ALLOWED_ROOT_DIRS or is_year_folder_name(name)
-    return name == db_filename
-
-
-def is_db_artifact(filename: str, db_filename: str) -> bool:
-    return filename in {f"{db_filename}-wal", f"{db_filename}-shm"}
+    return False
 
 
 def in_infrastructure(rel_path: str) -> bool:
@@ -276,7 +280,7 @@ def format_issue(kind: str, path: str, detail: str = "") -> Dict[str, str]:
 class LibraryCleaner:
     def __init__(self, library_path: str, db_path: Optional[str] = None):
         self.library_path = os.path.abspath(library_path)
-        self.db_path = db_path or os.path.join(self.library_path, DB_FILENAME)
+        self.db_path = resolve_db_path(self.library_path, db_path)
         self.db_conn: Optional[sqlite3.Connection] = None
         self.hash_cache: Optional[HashCache] = None
         self.manifest = None
@@ -343,8 +347,10 @@ class LibraryCleaner:
                 self.db_conn.close()
 
     def setup(self) -> None:
-        for folder in [".db_backups", ".logs", ".thumbnails", ".trash"]:
+        for folder in [LIBRARY_METADATA_DIR, ".db_backups", ".logs", ".thumbnails", ".trash"]:
             os.makedirs(os.path.join(self.library_path, folder), exist_ok=True)
+
+        self.migrate_db_to_canonical_location()
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if os.path.exists(self.db_path):
@@ -370,6 +376,41 @@ class LibraryCleaner:
         create_database_schema(self.db_conn.cursor())
         self.db_conn.commit()
         self.hash_cache = HashCache(self.db_conn)
+
+    def migrate_db_to_canonical_location(self) -> None:
+        target_db_path = canonical_db_path(self.library_path)
+        if os.path.abspath(self.db_path) == os.path.abspath(target_db_path):
+            self.db_path = target_db_path
+            return
+
+        if not os.path.exists(self.db_path):
+            self.db_path = target_db_path
+            return
+
+        os.makedirs(os.path.dirname(target_db_path), exist_ok=True)
+        if os.path.exists(target_db_path):
+            raise CleanLibraryError(
+                f"Refusing to migrate legacy database because canonical path already exists: {target_db_path}"
+            )
+
+        shutil.move(self.db_path, target_db_path)
+        for source_sidecar in db_sidecar_paths(self.db_path):
+            if not os.path.exists(source_sidecar):
+                continue
+            sidecar_name = os.path.basename(source_sidecar)
+            target_sidecar = os.path.join(os.path.dirname(target_db_path), sidecar_name)
+            if os.path.exists(target_sidecar):
+                raise CleanLibraryError(
+                    f"Refusing to overwrite canonical DB sidecar during migration: {target_sidecar}"
+                )
+            shutil.move(source_sidecar, target_sidecar)
+
+        self.log(
+            "db_migrated_to_hidden_folder",
+            source=os.path.relpath(self.db_path, self.library_path),
+            destination=os.path.relpath(target_db_path, self.library_path),
+        )
+        self.db_path = target_db_path
 
     def active_walk(self) -> Iterable[Tuple[str, List[str], List[str]]]:
         for root, dirs, files in os.walk(self.library_path, topdown=True):
@@ -468,10 +509,6 @@ class LibraryCleaner:
             rel_root = os.path.relpath(root, self.library_path)
             for filename in files:
                 full_path = os.path.join(root, filename)
-                if rel_root == "." and filename == os.path.basename(self.db_path):
-                    continue
-                if rel_root == "." and is_db_artifact(filename, os.path.basename(self.db_path)):
-                    continue
                 record = self.normalize_media_file(full_path)
                 if record is not None:
                     records.append(record)
@@ -580,19 +617,33 @@ class LibraryCleaner:
             )
 
         self.db_conn.commit()
-        self.cleanup_db_artifacts()
         self.stats["db_rows_rebuilt"] = len(records)
         self.log("photos_table_rebuilt", row_count=len(records))
 
-    def cleanup_db_artifacts(self) -> None:
-        for suffix in ("-wal", "-shm"):
-            artifact = f"{self.db_path}{suffix}"
-            if os.path.exists(artifact):
-                try:
-                    os.remove(artifact)
-                    self.log("db_artifact_removed", path=os.path.basename(artifact))
-                except OSError:
-                    self.log("db_artifact_kept", path=os.path.basename(artifact))
+    def audit_library_metadata_dir(self) -> List[Dict[str, str]]:
+        issues: List[Dict[str, str]] = []
+        metadata_dir = os.path.join(self.library_path, LIBRARY_METADATA_DIR)
+
+        if not os.path.isdir(metadata_dir):
+            issues.append(format_issue("missing_library_metadata_dir", LIBRARY_METADATA_DIR))
+            return issues
+
+        canonical_path = canonical_db_path(self.library_path)
+        if not os.path.exists(canonical_path):
+            issues.append(format_issue("missing_library_db", os.path.relpath(canonical_path, self.library_path)))
+        elif not db_is_valid(canonical_path):
+            issues.append(format_issue("invalid_library_db", os.path.relpath(canonical_path, self.library_path)))
+
+        for item in os.listdir(metadata_dir):
+            item_path = os.path.join(metadata_dir, item)
+            rel_path = os.path.relpath(item_path, self.library_path)
+            if os.path.isdir(item_path):
+                issues.append(format_issue("unexpected_library_metadata_dir", rel_path))
+                continue
+            if not is_library_metadata_file(item):
+                issues.append(format_issue("unexpected_library_metadata_file", rel_path))
+
+        return issues
 
     def final_audit(self) -> List[Dict[str, str]]:
         issues: List[Dict[str, str]] = []
@@ -601,12 +652,11 @@ class LibraryCleaner:
 
         for item in os.listdir(self.library_path):
             full_path = os.path.join(self.library_path, item)
-            if is_db_artifact(item, os.path.basename(self.db_path)):
-                issues.append(format_issue("db_artifact_present", item))
-                continue
-            if not root_entry_allowed(item, os.path.isdir(full_path), os.path.basename(self.db_path)):
+            if not root_entry_allowed(item, os.path.isdir(full_path)):
                 issue_kind = "noncanonical_root_folder" if os.path.isdir(full_path) else "noncanonical_root_file"
                 issues.append(format_issue(issue_kind, item))
+
+        issues.extend(self.audit_library_metadata_dir())
 
         for root, dirs, files in self.active_walk():
             rel_root = os.path.relpath(root, self.library_path)
@@ -636,11 +686,6 @@ class LibraryCleaner:
             for filename in files:
                 full_path = os.path.join(root, filename)
                 rel_path = os.path.relpath(full_path, self.library_path)
-
-                if rel_root == "." and filename == os.path.basename(self.db_path):
-                    continue
-                if rel_root == "." and is_db_artifact(filename, os.path.basename(self.db_path)):
-                    continue
 
                 ext = os.path.splitext(filename)[1].lower()
                 if ext not in SUPPORTED_MEDIA_EXTENSIONS:

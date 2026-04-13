@@ -50,6 +50,14 @@ from pillow_heif import register_heif_opener
 from io import BytesIO
 from db_schema import create_database_schema
 from library_sync import synchronize_library_generator, count_media_files, estimate_duration
+from library_layout import (
+    LIBRARY_METADATA_DIR,
+    ROOT_INFRASTRUCTURE_DIRS,
+    canonical_db_path,
+    detect_existing_db_path,
+    library_has_db,
+    resolve_db_path,
+)
 from rotation_utils import (
     JPEG_LOSSY_QUALITY,
     ROTATION_SUPPORTED_EXTENSIONS,
@@ -3646,22 +3654,21 @@ def validate_library_path():
         if not os.path.isdir(path):
             return jsonify({'status': 'invalid', 'error': 'Path is not a directory'}), 400
         
-        # Check if path has a database
-        potential_db_path = os.path.join(path, 'photo_library.db')
+        existing_db_path = detect_existing_db_path(path)
         
-        if os.path.exists(potential_db_path):
+        if existing_db_path:
             # Valid existing library
             return jsonify({
                 'status': 'exists',
                 'library_path': path,
-                'db_path': potential_db_path
+                'db_path': existing_db_path
             })
         else:
             # New library needs initialization
             return jsonify({
                 'status': 'needs_init',
                 'library_path': path,
-                'db_path': potential_db_path
+                'db_path': canonical_db_path(path)
             })
             
     except Exception as e:
@@ -3697,9 +3704,16 @@ def list_directory():
         # Filter and categorize items
         folders = []
         files = []
-        has_db = False
+        has_db = library_has_db(path)
         
         for item in items:
+            if item == LIBRARY_METADATA_DIR:
+                continue
+
+            if item == 'photo_library.db':
+                has_db = True
+                continue
+
             # Skip hidden files/folders (starting with .)
             if item.startswith('.'):
                 continue
@@ -3708,11 +3722,6 @@ def list_directory():
             item_lower = item.lower()
             backup_patterns = ['backup', 'backups', 'archive', 'archives', 'time machine', 'time_machine']
             if any(pattern in item_lower for pattern in backup_patterns):
-                continue
-
-            # Check if this is the database file
-            if item == 'photo_library.db':
-                has_db = True
                 continue
 
             item_path = os.path.join(path, item)
@@ -3983,22 +3992,21 @@ def browse_library():
         if not selected_path:
             return jsonify({'status': 'cancelled'})
         
-        # Check if path has a database
-        potential_db_path = os.path.join(selected_path, 'photo_library.db')
+        existing_db_path = detect_existing_db_path(selected_path)
         
-        if os.path.exists(potential_db_path):
+        if existing_db_path:
             # Valid existing library
             return jsonify({
                 'status': 'exists',
                 'library_path': selected_path,
-                'db_path': potential_db_path
+                'db_path': existing_db_path
             })
         else:
             # New library needs initialization
             return jsonify({
                 'status': 'needs_init',
                 'library_path': selected_path,
-                'db_path': potential_db_path
+                'db_path': canonical_db_path(selected_path)
             })
             
     except subprocess.TimeoutExpired:
@@ -4027,9 +4035,8 @@ def check_library():
                 'db_path': None
             })
         
-        # Check if database exists
-        db_path = os.path.join(library_path, 'photo_library.db')
-        exists = os.path.exists(db_path)
+        db_path = detect_existing_db_path(library_path)
+        exists = db_path is not None
         
         # Always scan for media files (needed for terraform decision)
         has_media = False
@@ -4057,7 +4064,7 @@ def check_library():
             'photo_count': photo_count,
             'video_count': video_count,
             'library_path': library_path,
-            'db_path': db_path
+            'db_path': db_path or canonical_db_path(library_path)
         })
         
     except Exception as e:
@@ -4071,10 +4078,10 @@ def create_library():
     try:
         data = request.json
         library_path = data.get('library_path')
-        db_path = data.get('db_path')
-        
-        if not library_path or not db_path:
-            return jsonify({'error': 'Missing library_path or db_path'}), 400
+        if not library_path:
+            return jsonify({'error': 'Missing library_path'}), 400
+
+        db_path = canonical_db_path(library_path)
         
         print(f"\n📦 Creating new library at: {library_path}")
         
@@ -4088,6 +4095,7 @@ def create_library():
         print(f"  ✅ Created: {library_path}")
         
         # Create subdirectories
+        os.makedirs(os.path.join(library_path, LIBRARY_METADATA_DIR), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.thumbnails'), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.trash'), exist_ok=True)
         os.makedirs(os.path.join(library_path, '.db_backups'), exist_ok=True)
@@ -4125,8 +4133,10 @@ def switch_library():
         library_path = data.get('library_path')
         db_path = data.get('db_path')
         
-        if not library_path or not db_path:
-            return jsonify({'error': 'Missing library_path or db_path'}), 400
+        if not library_path:
+            return jsonify({'error': 'Missing library_path'}), 400
+
+        db_path = resolve_db_path(library_path, db_path)
         
         print(f"\n🔄 Switching to library: {library_path}")
         
@@ -4228,7 +4238,7 @@ def cleanup_terraform_folders(library_path):
         return 0
     
     # Whitelist: allowed folder names at root level
-    INFRASTRUCTURE_FOLDERS = {'.thumbnails', '.logs', '.trash', '.db_backups'}
+    INFRASTRUCTURE_FOLDERS = set(ROOT_INFRASTRUCTURE_DIRS)
     
     for item in root_items:
         item_path = os.path.join(library_path, item)
@@ -4474,12 +4484,13 @@ def terraform_library():
             print("✅ Pre-flight checks passed\n")
             
             # Create hidden directories
+            library_meta_dir = os.path.join(library_path, LIBRARY_METADATA_DIR)
             trash_dir = os.path.join(library_path, '.trash')
             thumbnails_dir = os.path.join(library_path, '.thumbnails')
             db_backups_dir = os.path.join(library_path, '.db_backups')
             logs_dir = os.path.join(library_path, '.logs')
             
-            for directory in [trash_dir, thumbnails_dir, db_backups_dir, logs_dir]:
+            for directory in [library_meta_dir, trash_dir, thumbnails_dir, db_backups_dir, logs_dir]:
                 os.makedirs(directory, exist_ok=True)
             
             # Create manifest log
@@ -4558,7 +4569,7 @@ def terraform_library():
             yield f"event: start\ndata: {json.dumps({'total': total_files})}\n\n"
             
             # Create database
-            db_path = os.path.join(library_path, 'photo_library.db')
+            db_path = canonical_db_path(library_path)
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row  # Return rows as dictionaries
             cursor = conn.cursor()
@@ -4853,7 +4864,7 @@ def terraform_library():
             print(f"   Log: {os.path.relpath(log_path, library_path)}")
             print(f"{'='*60}\n")
             
-            yield f"event: complete\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'log_path': os.path.relpath(log_path, library_path)})}\n\n"
+            yield f"event: complete\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'log_path': os.path.relpath(log_path, library_path), 'db_path': db_path})}\n\n"
             
         except Exception as e:
             error_logger.error(f"Terraform failed: {e}")

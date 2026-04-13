@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v269';
+const MAIN_JS_VERSION = 'v276';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -126,13 +126,13 @@ function wireAppBar() {
 
   if (menuBtn) {
     menuBtn.addEventListener('click', () => {
-      console.log('🍔 Menu clicked');
+      
     });
   }
 
   if (utilitiesBtn) {
     utilitiesBtn.addEventListener('click', (e) => {
-      console.log('🔧 Utilities button clicked');
+      
       e.stopPropagation();
       toggleUtilitiesMenu();
     });
@@ -142,7 +142,7 @@ function wireAppBar() {
 
   if (addPhotoBtn) {
     addPhotoBtn.addEventListener('click', () => {
-      console.log('📸 Add photo clicked');
+      
       triggerImport();
     });
   }
@@ -150,7 +150,7 @@ function wireAppBar() {
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
       const count = state.selectedPhotos.size;
-      console.log(`🗑️ APP BAR Delete clicked! Selected: ${count}`);
+      
 
       if (count === 0) return;
 
@@ -168,7 +168,7 @@ function wireAppBar() {
   if (editDateBtn) {
     editDateBtn.addEventListener('click', () => {
       const count = state.selectedPhotos.size;
-      console.log('📅 APP BAR Edit Date clicked! Selected:', count);
+      
       if (count === 0) return;
 
       const selectedIds = Array.from(state.selectedPhotos);
@@ -199,11 +199,11 @@ function wireAppBar() {
       if (state.currentSortOrder === 'newest') {
         sortIcon.textContent = 'hourglass_arrow_down';
         sortToggleBtn.title = 'Newest first';
-        console.log('🔽 Sorting: Newest first');
+        
       } else {
         sortIcon.textContent = 'hourglass_arrow_up';
         sortToggleBtn.title = 'Oldest first';
-        console.log('🔼 Sorting: Oldest first');
+        
       }
 
       // Reload photos with new sort
@@ -275,7 +275,7 @@ async function populateDatePicker() {
       }
     }
 
-    console.log(`📅 Loaded ${data.years.length} years`);
+    
   } catch (error) {
     console.warn('⚠️  Date picker disabled:', error.message);
   }
@@ -329,7 +329,7 @@ function wireDatePicker() {
     const year = yearPicker.value;
     const targetMonth = `${year}-${month}`;
 
-    console.log(`📅 Jumping to: ${targetMonth}`);
+    
 
     // Check if month section already exists in DOM
     const monthSection = document.getElementById(`month-${targetMonth}`);
@@ -342,7 +342,7 @@ function wireDatePicker() {
       window.scrollTo({ top: targetY, behavior: 'smooth' });
     } else {
       // Not rendered - need to find nearest valid month
-      console.log(`🔍 Finding nearest month to ${targetMonth}...`);
+      
 
       try {
         const nearestResponse = await fetch(
@@ -351,12 +351,12 @@ function wireDatePicker() {
         const nearestData = await nearestResponse.json();
 
         if (!nearestData.nearest_month) {
-          console.log('❌ No photos found in database');
+          
           return;
         }
 
         const actualMonth = nearestData.nearest_month;
-        console.log(`📍 Nearest month with photos: ${actualMonth}`);
+        
 
         // Check if that section exists
         const actualSection = document.getElementById(`month-${actualMonth}`);
@@ -366,9 +366,7 @@ function wireDatePicker() {
           const targetY = actualSection.offsetTop - appBarHeight - 20; // 20px padding
           window.scrollTo({ top: targetY, behavior: 'smooth' });
         } else {
-          console.log(
-            `⚠️ Month ${actualMonth} not in DOM yet - may not have photos`,
-          );
+          
         }
       } catch (error) {
         console.error('❌ Error finding nearest month:', error);
@@ -456,7 +454,7 @@ function deselectAllPhotos() {
   });
   updateDeleteButtonVisibility();
   updateMonthCircleStates(); // Update month circles
-  console.log(`❌ Deselected all (${selectedCards.length} photos)`);
+  
 }
 
 /**
@@ -508,10 +506,10 @@ let originalDialogButtonsHTML = null;
  * Handle dialog confirm click (single persistent listener)
  */
 function handleDialogConfirm() {
-  console.log('✅ Dialog confirm clicked');
+  
   hideDialog();
   if (currentDialogCallback) {
-    console.log('🔥 Executing callback');
+    
     currentDialogCallback();
     currentDialogCallback = null;
   } else {
@@ -569,7 +567,7 @@ function loadCriticalErrorModal() {
     })
     .then((html) => {
       mount.innerHTML = html;
-      console.log('✅ Critical error modal loaded');
+      
     })
     .catch((err) => {
       console.error('❌ Critical error modal load failed:', err);
@@ -613,7 +611,7 @@ function loadRebuildDatabaseOverlay() {
           loadAndRenderPhotos(); // Reload photos after rebuild
         });
 
-      console.log('✅ Rebuild database overlay loaded');
+      
     })
     .catch((err) => {
       console.error('❌ Rebuild database overlay load failed:', err);
@@ -717,7 +715,7 @@ function hideCriticalError() {
  */
 async function startMakeLibraryPerfect() {
   try {
-    console.log('🔧 Starting Make Library Perfect operation...');
+    
 
     // Show confirmation dialog
     const confirmed = await showDialog(
@@ -730,14 +728,14 @@ async function startMakeLibraryPerfect() {
     );
 
     if (!confirmed) {
-      console.log('❌ User cancelled Make Library Perfect');
+      
       return;
     }
 
     // Show progress toast
     showToast('Starting library cleanup...', null);
 
-    console.log('📡 Calling /api/library/make-perfect...');
+    
 
     // Call the backend endpoint
     const response = await fetch('/api/library/make-perfect', {
@@ -770,7 +768,7 @@ async function startMakeLibraryPerfect() {
       );
     }
 
-    console.log('✅ Make Library Perfect completed:', data);
+    
 
     showToast('Library cleanup complete! Reloading photos...', null);
 
@@ -799,7 +797,7 @@ async function startRebuildDatabase() {
     }
 
     // Pre-scan: count files and get estimate
-    console.log('🔍 Pre-scanning library for rebuild...');
+    
 
     const overlay = document.getElementById('rebuildDatabaseOverlay');
     const statusText = document.getElementById('rebuildDatabaseStatusText');
@@ -821,7 +819,7 @@ async function startRebuildDatabase() {
     }
 
     const data = await response.json();
-    console.log('📊 Scan results:', data);
+    
 
     // Show warning if large library
     if (data.requires_warning) {
@@ -859,12 +857,12 @@ async function startRebuildDatabase() {
  * Execute rebuild database (after user confirms)
  */
 async function executeRebuildDatabase() {
-  console.log('🚀 Executing database rebuild...');
+  
 
   // Close lightbox if open (user should see grid during rebuild)
   const lightbox = document.getElementById('lightboxOverlay');
   if (lightbox && lightbox.style.display !== 'none') {
-    console.log('🔄 Closing lightbox to show grid');
+    
     closeLightbox();
   }
 
@@ -891,7 +889,7 @@ async function executeRebuildDatabase() {
 
     eventSource.addEventListener('progress', (e) => {
       const data = JSON.parse(e.data);
-      console.log('📊 Progress:', data);
+      
 
       if (data.phase === 'adding_untracked') {
         indexedCount.textContent = data.current.toLocaleString();
@@ -904,7 +902,7 @@ async function executeRebuildDatabase() {
 
     eventSource.addEventListener('complete', (e) => {
       const data = JSON.parse(e.data);
-      console.log('✅ Rebuild complete:', data);
+      
 
       // Update title and status (State 4)
       title.textContent = 'Database rebuilt';
@@ -915,7 +913,7 @@ async function executeRebuildDatabase() {
       eventSource.close();
 
       // Check library health and reload photos
-      console.log('🔄 Refreshing library status after rebuild...');
+      
       checkLibraryHealthAndInit().catch((err) => {
         console.error('❌ Failed to reload after rebuild:', err);
       });
@@ -950,7 +948,7 @@ async function executeRebuildDatabase() {
  * Show confirmation dialog (old callback-based version)
  */
 function showDialogOld(title, message, onConfirm, confirmLabel = 'Delete') {
-  console.log('📋 showDialogOld called', { title, hasCallback: !!onConfirm });
+  
 
   const overlay = document.getElementById('dialogOverlay');
   const titleEl = document.getElementById('dialogTitle');
@@ -983,7 +981,7 @@ function showDialogOld(title, message, onConfirm, confirmLabel = 'Delete') {
 
   // Store the callback for the handler to use
   currentDialogCallback = onConfirm;
-  console.log('✅ Dialog callback stored, showing overlay');
+  
 
   overlay.style.display = 'flex';
 }
@@ -1317,10 +1315,7 @@ function openDateEditor(photoIdOrIds) {
   // Show overlay
   overlay.style.display = 'flex';
 
-  console.log(
-    '📅 Opened date editor for:',
-    isBulk ? `${photoIds.length} photos` : `photo ${firstPhotoId}`,
-  );
+  
 }
 
 /**
@@ -1334,7 +1329,7 @@ function closeDateEditor() {
   state.dateEditorOpen = false;
 
   overlay.style.display = 'none';
-  console.log('✖️ Closed date editor');
+  
 }
 
 /**
@@ -1369,7 +1364,7 @@ function loadDateChangeProgressOverlay() {
           loadAndRenderPhotos(false);
         });
 
-      console.log('✅ Date change progress overlay loaded');
+      
     })
     .catch((err) => {
       console.error('❌ Date change progress overlay load failed:', err);
@@ -1416,7 +1411,7 @@ function showDateChangeProgressOverlay(photoCount) {
   if (doneBtn) doneBtn.style.display = 'none';
 
   overlay.style.display = 'flex';
-  console.log('📊 Date change progress overlay shown');
+  
 }
 
 /**
@@ -1426,7 +1421,7 @@ function hideDateChangeProgressOverlay() {
   const overlay = document.getElementById('dateChangeProgressOverlay');
   if (overlay) {
     overlay.style.display = 'none';
-    console.log('✖️ Date change progress overlay hidden');
+    
   }
 }
 
@@ -1464,7 +1459,7 @@ function showDateChangeComplete(count) {
     doneBtn.style.display = 'block';
   }
 
-  console.log(`✅ Date change complete: ${count} photo(s)`);
+  
 }
 
 /**
@@ -1526,7 +1521,7 @@ async function saveDateEdit() {
   // Format as EXIF format (YYYY:MM:DD HH:MM:SS)
   const newDate = `${year}:${month}:${day} ${hour24}:${minute}:00`;
 
-  console.log('💾 Saving date edit:', { photoIds, isBulk, newDate });
+  
 
   // Capture original dates BEFORE edit for undo
   const originalDates = photoIds.map((id) => {
@@ -1580,13 +1575,13 @@ async function saveDateEdit() {
 
       eventSource.addEventListener('progress', (e) => {
         const data = JSON.parse(e.data);
-        console.log('📊 Progress:', data);
+        
         updateDateChangeProgress(data.current, data.total);
       });
 
       eventSource.addEventListener('complete', (e) => {
         const data = JSON.parse(e.data);
-        console.log('✅ Bulk date update complete:', data);
+        
 
         eventSource.close();
 
@@ -1632,13 +1627,13 @@ async function saveDateEdit() {
 
       eventSource.addEventListener('progress', (e) => {
         const data = JSON.parse(e.data);
-        console.log('📊 Progress:', data);
+        
         updateDateChangeProgress(data.current || 0, data.total || 1);
       });
 
       eventSource.addEventListener('complete', (e) => {
         const data = JSON.parse(e.data);
-        console.log('✅ Date update complete:', data);
+        
 
         eventSource.close();
 
@@ -1710,7 +1705,7 @@ function showToast(message, onUndo, duration) {
   }
 
   // Log actual duration being used
-  console.log(`🍞 Toast: "${message}" (${duration}ms, undo: ${!!onUndo})`);
+  
 
   // Show/hide undo button based on whether undo callback exists
   const newUndoBtn = undoBtn.cloneNode(true);
@@ -1769,7 +1764,7 @@ async function loadCriticalErrorModal() {
         `Failed to load critical error modal (${response.status})`,
       );
     mount.insertAdjacentHTML('beforeend', await response.text());
-    console.log('✅ Critical error modal loaded');
+    
   } catch (error) {
     console.error('❌ Critical Error Modal load failed:', error);
   }
@@ -2000,7 +1995,10 @@ function applyLightboxMediaStyles(frameEl, mediaEl, photo, rotationDegrees) {
   }
 
   if (normalized) {
-    mediaEl.style.transform = `translate(-50%, -50%) rotate(${normalized}deg)`;
+    // Rotation state is tracked as counterclockwise degrees, but CSS positive
+    // angles render clockwise on screen. Negate here so optimistic preview
+    // matches the committed file rotation.
+    mediaEl.style.transform = `translate(-50%, -50%) rotate(${-normalized}deg)`;
   } else {
     mediaEl.style.transform = 'translate(-50%, -50%)';
   }
@@ -2013,14 +2011,7 @@ function applyLightboxMediaStyles(frameEl, mediaEl, photo, rotationDegrees) {
     const pos = frameEl.style.position;
     const parentClass = frameEl.parentElement?.className || '(no parent)';
     const mediaClass = mediaEl.className || mediaEl.tagName;
-    console.log(
-      `[layout] photo=${photo.id}` +
-      ` | photoDims=${photo.width}x${photo.height}` +
-      ` | preview=${normalized}° display=${displayRotation}° persisted=${persistedRotation}° stillNeeded=${stillNeeded}°` +
-      ` | frame assigned=${frameDims.width}×${frameDims.height} rendered=${fw}×${fh}px pos=${pos}` +
-      ` | media class=${mediaClass} assigned=${mediaEl.style.width}×${mediaEl.style.height} rendered=${mw}×${mh}px` +
-      ` | parent="${parentClass}"`
-    );
+    
   });
 }
 
@@ -2053,6 +2044,75 @@ function getPhotoThumbnailUrl(photoId) {
   return version
     ? `/api/photo/${photoId}/thumbnail?v=${version}`
     : `/api/photo/${photoId}/thumbnail`;
+}
+
+function getCurrentLightboxImageDebugInfo() {
+  const liveImg = document.querySelector('#lightboxContent img.lightbox-media-element');
+  if (!liveImg) {
+    return null;
+  }
+
+  return {
+    src: liveImg.getAttribute('src'),
+    currentSrc: liveImg.currentSrc,
+    naturalWidth: liveImg.naturalWidth,
+    naturalHeight: liveImg.naturalHeight,
+    renderedWidth: liveImg.offsetWidth,
+    renderedHeight: liveImg.offsetHeight,
+  };
+}
+
+function reloadOpenLightboxMedia(photoId) {
+  if (!state.lightboxOpen || state.lightboxPhotoIndex === null) return;
+
+  const photo = state.photos[state.lightboxPhotoIndex];
+  if (!photo || photo.id !== photoId) return;
+
+  const content = document.getElementById('lightboxContent');
+  if (!content) return;
+
+  const isVideo =
+    photo.file_type === 'video' ||
+    (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
+
+  if (!isVideo) {
+    const existingFrame = content.querySelector('.lightbox-media-frame');
+    const existingImg = content.querySelector('img.lightbox-media-element');
+
+    if (existingFrame && existingImg) {
+      const nextImg = new Image();
+      nextImg.src = getPhotoFileUrl(photoId);
+      nextImg.onload = () => {
+        nextImg.className = 'lightbox-media-element';
+        nextImg.alt =
+          photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
+        applyLightboxMediaStyles(
+          existingFrame,
+          nextImg,
+          photo,
+          getLightboxPreviewRotation(photoId),
+        );
+        existingFrame.replaceChild(nextImg, existingImg);
+        console.log('[rotate] lightbox image swapped', {
+          photoId,
+          src: nextImg.getAttribute('src'),
+          currentSrc: nextImg.currentSrc,
+          naturalWidth: nextImg.naturalWidth,
+          naturalHeight: nextImg.naturalHeight,
+        });
+      };
+      nextImg.onerror = () => {
+        console.error(`❌ Reloaded image ${photoId} failed to load`);
+      };
+      return;
+    }
+  }
+
+  content.innerHTML = '';
+  content.style.backgroundColor = 'transparent';
+  loadMediaIntoContent(content, photo, isVideo, {
+    rotationDegrees: getLightboxPreviewRotation(photoId),
+  });
 }
 
 function getRotateDisabledReason(photo) {
@@ -2106,6 +2166,13 @@ function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
   };
 
   state.lightboxMediaVersions[updatedPhoto.id] = Date.now();
+  console.log('[rotate] committed photo update', {
+    photoId: updatedPhoto.id,
+    width: updatedPhoto.width,
+    height: updatedPhoto.height,
+    fileUrl: getPhotoFileUrl(updatedPhoto.id),
+    liveLightboxImage: getCurrentLightboxImageDebugInfo(),
+  });
 
   if (options.deferThumbnailRefresh) {
     scheduleGridPhotoThumbnailRefresh(updatedPhoto.id);
@@ -2162,9 +2229,14 @@ async function processImmediateRotationSession(photoId) {
       session.persistedRotation + requestDegrees,
     );
     session.requestInFlight = false;
-    console.log(
-      `✅ Rotate photo ${photoId}: ${result.lossless ? 'lossless' : 'lossy'} in ${rotateElapsedMs.toFixed(1)} ms`,
-    );
+    reloadOpenLightboxMedia(photoId);
+    console.log('[rotate] immediate rotate committed', {
+      photoId,
+      requestDegrees,
+      rotateElapsedMs: Number(rotateElapsedMs.toFixed(1)),
+      stillNeeded: getRotationStillNeeded(photoId),
+      liveLightboxImage: getCurrentLightboxImageDebugInfo(),
+    });
 
     if (getRotationStillNeeded(photoId) !== 0) {
       processImmediateRotationSession(photoId);
@@ -2192,9 +2264,7 @@ async function commitPendingLightboxRotations() {
     return true;
   }
 
-  console.log(
-    `💾 Saving ${pendingEntries.length} staged rotation(s) on lightbox close`,
-  );
+  
 
   for (const [photoIdString, session] of pendingEntries) {
     const photoId = Number(photoIdString);
@@ -2220,9 +2290,7 @@ async function commitPendingLightboxRotations() {
       });
       delete state.lightboxRotationSessions[photoId];
       const saveElapsedMs = performance.now() - saveStartedAt;
-      console.log(
-        `✅ Rotate photo ${photoId}: staged save ${result.lossless ? 'lossless' : 'lossy'} in ${saveElapsedMs.toFixed(1)} ms`,
-      );
+      
     } catch (error) {
       session.displayRotation = session.persistedRotation;
       session.mode = null;
@@ -2246,9 +2314,7 @@ async function handleLightboxRotate() {
 
   const session = getLightboxRotationSession(photo.id, true);
   session.displayRotation = normalizeRotationDegrees(session.displayRotation + 90);
-  console.log(
-    `🔄 Lightbox rotate: photo ${photo.id} | display=${session.displayRotation}° persisted=${session.persistedRotation}° stillNeeded=${getRotationStillNeeded(photo.id)}°`,
-  );
+  
   applyCurrentLightboxPreviewRotation();
 
   if (session.mode === 'staged') {
@@ -2291,11 +2357,11 @@ function wireLightbox() {
       if (isVisible) {
         infoPanel.style.display = 'none';
         if (overlay) overlay.classList.remove('info-open');
-        console.log('❌ Closed info panel');
+        
       } else {
         infoPanel.style.display = 'block';
         if (overlay) overlay.classList.add('info-open');
-        console.log('📋 Opened info panel');
+        
       }
     });
   }
@@ -2307,7 +2373,7 @@ function wireLightbox() {
       const overlay = document.getElementById('lightboxOverlay');
       infoPanel.style.display = 'none';
       if (overlay) overlay.classList.remove('info-open');
-      console.log('❌ Closed info panel via close button');
+      
     });
   }
 
@@ -2325,9 +2391,7 @@ function wireLightbox() {
       const starIcon = starBtn.querySelector('.material-symbols-outlined');
       const isFilled = starIcon.classList.contains('filled');
 
-      console.log(
-        `⭐ LIGHTBOX Star clicked! Photo: ${photoId}, Currently: ${isFilled ? 'starred' : 'not starred'}`,
-      );
+      
 
       try {
         // Optimistically toggle UI
@@ -2344,9 +2408,7 @@ function wireLightbox() {
         }
 
         const result = await response.json();
-        console.log(
-          `⭐ Star toggled: Photo ${photoId} now ${result.favorited ? 'starred' : 'not starred'}`,
-        );
+        
 
         // Update local state to match backend
         if (state.photos[state.lightboxPhotoIndex]) {
@@ -2393,7 +2455,7 @@ function wireLightbox() {
   if (editDateBtn) {
     editDateBtn.addEventListener('click', () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      console.log(`📅 LIGHTBOX Edit Date clicked! Photo: ${photoId}`);
+      
       openDateEditor(photoId);
     });
   }
@@ -2401,7 +2463,7 @@ function wireLightbox() {
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      console.log(`🗑️ LIGHTBOX Delete clicked! Photo: ${photoId}`);
+      
 
       if (!photoId) return;
 
@@ -2490,7 +2552,7 @@ function handleLightboxKeyboard(e) {
     // Don't trigger if photo picker is open (it has its own Enter handler)
     const photoPickerOverlay = document.getElementById('photoPickerOverlay');
     if (photoPickerOverlay && photoPickerOverlay.style.display !== 'none') {
-      console.log('⏭️ Enter key: Skipping (photo picker is open)');
+      
       return;
     }
 
@@ -2502,10 +2564,7 @@ function handleLightboxKeyboard(e) {
         activeElement.tagName === 'TEXTAREA' ||
         activeElement.tagName === 'SELECT')
     ) {
-      console.log(
-        '⏭️ Enter key: Skipping (user is typing in',
-        activeElement.tagName + ')',
-      );
+      
       return; // Let the input handle Enter naturally
     }
 
@@ -2523,20 +2582,24 @@ function handleLightboxKeyboard(e) {
     }
 
     if (primaryBtn) {
-      console.log(
-        '✅ Enter key: Found primary button:',
-        primaryBtn.id || primaryBtn.textContent.trim(),
-      );
+      
       primaryBtn.click();
       e.preventDefault(); // Prevent any default Enter behavior
     } else {
-      console.log('⚠️ Enter key: No enabled primary button found');
+      
     }
   } else if (e.key === 'ArrowLeft' && state.lightboxOpen) {
     navigateLightbox(-1);
   } else if (e.key === 'ArrowRight' && state.lightboxOpen) {
     navigateLightbox(1);
-  } else if (e.key === 'r' && state.lightboxOpen) {
+  } else if (
+    e.key === 'r' &&
+    state.lightboxOpen &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    !e.shiftKey
+  ) {
     const photo = state.photos[state.lightboxPhotoIndex];
     if (!getRotateDisabledReason(photo)) {
       handleLightboxRotate();
@@ -2692,6 +2755,13 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
         img.alt = filename;
 
         frame.appendChild(img);
+        console.log('[rotate] lightbox image loaded', {
+          photoId: photo.id,
+          src: img.getAttribute('src'),
+          currentSrc: img.currentSrc,
+          naturalWidth: img.naturalWidth,
+          naturalHeight: img.naturalHeight,
+        });
       };
 
       img.onerror = async () => {
@@ -2700,17 +2770,15 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
         // Check if failure was due to database corruption
         try {
           const response = await fetch(`/api/photo/${photo.id}/file`);
-          console.log(
-            `🔍 Corruption check - Status: ${response.status}, OK: ${response.ok}`,
-          );
+          
 
           if (!response.ok) {
             const contentType = response.headers.get('content-type');
-            console.log(`🔍 Content-Type: ${contentType}`);
+            
 
             if (contentType && contentType.includes('application/json')) {
               const data = await response.json();
-              console.log(`🔍 Response data:`, data);
+              
 
               if (checkForDatabaseCorruption(data)) {
                 return; // Corruption dialog shown, stop here
@@ -2818,7 +2886,7 @@ async function openLightbox(photoIndex) {
     infoDate.onclick = (e) => {
       e.preventDefault();
       const month = photo.month; // YYYY-MM format
-      console.log('📅 Jumping to month:', month);
+      
 
       // Set flag to navigate to month instead of photo
       state.navigateToMonth = month;
@@ -2841,7 +2909,7 @@ async function openLightbox(photoIndex) {
       const filename = photo.path
         ? photo.path.split('/').pop()
         : photo.filename || photo.id;
-      console.log('🔍 Attempting to reveal in Finder:', filename);
+      
       try {
         const response = await fetch(`/api/photo/${photo.id}/reveal`, {
           method: 'POST',
@@ -2851,7 +2919,7 @@ async function openLightbox(photoIndex) {
           const error = await response.json();
           console.error('❌ Failed to reveal in Finder:', error);
         } else {
-          console.log('✅ Revealed in Finder:', filename);
+          
         }
       } catch (error) {
         console.error('❌ Error revealing in Finder:', error);
@@ -2916,13 +2984,13 @@ async function closeLightbox() {
 
   state.lightboxClosing = true;
   updateLightboxRotateButtonState();
-  console.log('🚪 Lightbox close requested');
+  
 
   const saved = await commitPendingLightboxRotations();
   if (!saved) {
     state.lightboxClosing = false;
     updateLightboxRotateButtonState();
-    console.log('❌ Lightbox close aborted because staged rotation save failed');
+    
     return;
   }
 
@@ -2964,16 +3032,12 @@ async function closeLightbox() {
     // Scroll to month header after lightbox closes
     setTimeout(() => {
       const monthSection = document.getElementById(`month-${month}`);
-      console.log(
-        '🔍 Looking for month section:',
-        `month-${month}`,
-        monthSection,
-      );
+      
       if (monthSection) {
         const monthHeader = monthSection.querySelector('.month-header');
         const target = monthHeader || monthSection;
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        console.log('✅ Scrolled to month:', month);
+        
       } else {
         console.warn('⚠️ Month section not found:', month);
       }
@@ -2981,7 +3045,7 @@ async function closeLightbox() {
   }
 
   state.lightboxClosing = false;
-  console.log('✖️ Closed lightbox');
+  
 }
 
 /**
@@ -3021,7 +3085,7 @@ function navigateLightbox(direction) {
 
   // Bounds check
   if (newIndex < 0 || newIndex >= state.photos.length) {
-    console.log('📍 Reached end of photos');
+    
     return;
   }
 
@@ -3060,7 +3124,7 @@ async function loadAndRenderPhotos(append = false) {
 
   state.loading = true;
 
-  console.log('📡 Loading ALL photos metadata...');
+  
 
   try {
     // Fetch ALL photos (no limit) - just id, date, month, file_type
@@ -3075,7 +3139,7 @@ async function loadAndRenderPhotos(append = false) {
 
     state.photos = data.photos;
     state.hasDatabase = true; // Database exists if we successfully loaded photos
-    console.log(`✅ Loaded ${state.photos.length.toLocaleString()} photos`);
+    
 
     // Reset shift-select anchor when reloading (indices may have changed)
     if (!append) {
@@ -3160,9 +3224,7 @@ function setupThumbnailLazyLoading() {
   const thumbnails = document.querySelectorAll('.photo-thumb:not([src])');
   thumbnails.forEach((thumb) => thumbnailObserver.observe(thumb));
 
-  console.log(
-    `👁️ Observing ${thumbnails.length.toLocaleString()} thumbnails for lazy loading`,
-  );
+  
 }
 
 // =====================
@@ -3395,24 +3457,18 @@ function togglePhotoSelection(card, e) {
     const start = Math.min(state.lastClickedIndex, index);
     const end = Math.max(state.lastClickedIndex, index);
 
-    console.log(
-      `🔍 Shift-select: clicking index ${index}, last was ${state.lastClickedIndex}`,
-    );
-    console.log(
-      `🔍 Range: ${start} to ${end} (${end - start + 1} photos expected)`,
-    );
+    
+    
 
     // Get all photo cards in the DOM
     const allCards = Array.from(document.querySelectorAll('.photo-card'));
-    console.log(`📊 Total cards in DOM: ${allCards.length}`);
+    
 
     // Debug: show sample of indices
     const sampleIndices = allCards
       .slice(0, 10)
       .map((c) => parseInt(c.dataset.index));
-    console.log(
-      `📊 Sample indices (first 10 cards): ${sampleIndices.join(', ')}`,
-    );
+    
 
     // Filter to cards within the range
     const cardsInRange = allCards.filter((c) => {
@@ -3420,7 +3476,7 @@ function togglePhotoSelection(card, e) {
       return cardIndex >= start && cardIndex <= end;
     });
 
-    console.log(`📋 Cards in range: ${cardsInRange.length}`);
+    
 
     // Debug: if we found fewer than expected, show what's missing
     if (cardsInRange.length < end - start + 1) {
@@ -3444,24 +3500,18 @@ function togglePhotoSelection(card, e) {
     });
 
     updateDeleteButtonVisibility();
-    console.log(
-      `📷 Shift-selected ${cardsInRange.length} photos (${state.selectedPhotos.size} total selected)`,
-    );
+    
   }
   // NORMAL CLICK: Toggle single
   else {
     if (card.classList.contains('selected')) {
       card.classList.remove('selected');
       state.selectedPhotos.delete(id);
-      console.log(
-        `📷 Deselected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`,
-      );
+      
     } else {
       card.classList.add('selected');
       state.selectedPhotos.add(id);
-      console.log(
-        `📷 Selected photo ${id} at index ${index} (${state.selectedPhotos.size} selected)`,
-      );
+      
     }
 
     // Update last clicked index for next shift-select
@@ -3500,7 +3550,7 @@ function wireMonthSelectors() {
         const start = Math.min(state.lastClickedIndex, lastPhotoIndex);
         const end = Math.max(state.lastClickedIndex, lastPhotoIndex);
 
-        console.log(`🔍 Month shift-select: range ${start} to ${end}`);
+        
 
         // Get all photo cards and select those in range
         const allCards = Array.from(document.querySelectorAll('.photo-card'));
@@ -3515,9 +3565,7 @@ function wireMonthSelectors() {
           state.selectedPhotos.add(cardId);
         });
 
-        console.log(
-          `📷 Selected ${cardsInRange.length} photos via month shift-select`,
-        );
+        
 
         // Update anchor to this month's last photo
         state.lastClickedIndex = lastPhotoIndex;
@@ -3556,7 +3604,7 @@ function toggleMonthSelection(month) {
       const id = parseInt(card.dataset.id);
       state.selectedPhotos.delete(id);
     });
-    console.log(`📅 Deselected ${photoIds.length} photos from ${month}`);
+    
   } else {
     // Select all photos in this month
     photoCards.forEach((card) => {
@@ -3564,7 +3612,7 @@ function toggleMonthSelection(month) {
       const id = parseInt(card.dataset.id);
       state.selectedPhotos.add(id);
     });
-    console.log(`📅 Selected ${photoIds.length} photos from ${month}`);
+    
   }
 
   updateDeleteButtonVisibility();
@@ -3621,8 +3669,8 @@ async function deletePhotos(photoIds) {
     }
 
     const result = await response.json();
-    console.log(`🗑️ Delete response:`, result);
-    console.log(`🗑️ Deleted ${result.deleted} photos from backend`);
+    
+    
 
     // Clear selection and shift-select anchor
     state.selectedPhotos.clear();
@@ -3655,7 +3703,7 @@ async function deletePhotos(photoIds) {
  */
 async function undoDateEdit(originalDates) {
   try {
-    console.log('↩️ Undoing date edit for', originalDates.length, 'photos');
+    
 
     // Restore each photo to its original date
     const promises = originalDates.map(({ id, originalDate }) =>
@@ -3672,7 +3720,7 @@ async function undoDateEdit(originalDates) {
     const allSucceeded = responses.every((r) => r.ok);
 
     if (allSucceeded) {
-      console.log('✅ Date edit undone successfully');
+      
 
       // Reload grid to reflect restored dates
       await loadAndRenderPhotos(false);
@@ -3703,7 +3751,7 @@ async function undoDelete(photoIds) {
     }
 
     const result = await response.json();
-    console.log(`↩️ Restored ${result.restored} photos from trash`);
+    
 
     // Reload grid to show restored photos
     await loadAndRenderPhotos(false);
@@ -3834,7 +3882,7 @@ async function loadImportOverlay() {
     const html = await response.text();
     mount.insertAdjacentHTML('beforeend', html);
     wireImportOverlay();
-    console.log('✅ Import overlay loaded');
+    
   } catch (error) {
     console.error('❌ Import overlay load failed:', error);
   }
@@ -3988,7 +4036,7 @@ function scrollToImportedPhoto(photoIds) {
       `[data-photo-id="${firstVisibleId}"]`,
     );
     if (element) {
-      console.log(`📍 Scrolling to imported photo ID ${firstVisibleId}`);
+      
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
       // Optional: briefly highlight the photo
@@ -4039,7 +4087,7 @@ async function showImportComplete() {
       const dateStr = firstImported.date.replace(/:/g, '-');
       const monthStr = dateStr.substring(0, 7); // YYYY-MM
 
-      console.log(`📍 Scrolling to imported photo month: ${monthStr}`);
+      
 
       // Wait for grid to render, then scroll to the month section
       setTimeout(() => {
@@ -4151,9 +4199,7 @@ async function undoImport() {
   }
 
   try {
-    console.log(
-      `⏪ Undoing import of ${importState.importedPhotoIds.length} photos`,
-    );
+    
 
     // Delete all imported photos
     const response = await fetch('/api/photos/delete', {
@@ -4167,7 +4213,7 @@ async function undoImport() {
     }
 
     const result = await response.json();
-    console.log('✅ Undo complete:', result);
+    
 
     showToast(`Undid import of ${result.deleted} photos`, null);
     closeImportOverlay();
@@ -4209,7 +4255,7 @@ async function loadUtilitiesMenu() {
 
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
-        console.log('🔧 Open Library clicked');
+        
         hideUtilitiesMenu();
         browseSwitchLibrary();
       });
@@ -4217,7 +4263,7 @@ async function loadUtilitiesMenu() {
 
     if (cleanOrganizeBtn) {
       cleanOrganizeBtn.addEventListener('click', () => {
-        console.log('🔧 Clean library clicked');
+        
         hideUtilitiesMenu();
         openUpdateIndexOverlay();
       });
@@ -4225,7 +4271,7 @@ async function loadUtilitiesMenu() {
 
     if (rebuildThumbnailsBtn) {
       rebuildThumbnailsBtn.addEventListener('click', () => {
-        console.log('🔧 Rebuild Thumbnails clicked');
+        
         hideUtilitiesMenu();
         rebuildThumbnails();
       });
@@ -4272,7 +4318,7 @@ async function toggleUtilitiesMenu() {
   const menu = document.getElementById('utilitiesMenu');
   const utilitiesBtn = document.getElementById('utilitiesBtn');
 
-  console.log('🔧 Toggle menu - menu:', menu, 'button:', utilitiesBtn);
+  
 
   if (!menu || !utilitiesBtn) {
     console.warn('⚠️ Menu or button not found');
@@ -4281,7 +4327,7 @@ async function toggleUtilitiesMenu() {
 
   const isVisible = menu.style.display === 'block';
 
-  console.log('🔧 Menu visible?', isVisible);
+  
 
   if (isVisible) {
     hideUtilitiesMenu();
@@ -4291,24 +4337,14 @@ async function toggleUtilitiesMenu() {
 
     // Position menu below the button
     const btnRect = utilitiesBtn.getBoundingClientRect();
-    console.log('🔧 Button rect:', btnRect);
-    console.log(
-      '🔧 Setting menu position - top:',
-      btnRect.bottom + 8,
-      'right:',
-      window.innerWidth - btnRect.right,
-    );
+    
+    
 
     menu.style.top = `${btnRect.bottom + 8}px`;
     menu.style.right = `${window.innerWidth - btnRect.right}px`;
     menu.style.display = 'block';
 
-    console.log(
-      '🔧 Menu style after:',
-      menu.style.top,
-      menu.style.right,
-      menu.style.display,
-    );
+    
   }
 }
 
@@ -4337,12 +4373,7 @@ function updateUtilityMenuAvailability() {
   const hasDatabase = state.hasDatabase;
   const hasPhotos = state.photos && state.photos.length > 0;
 
-  console.log(
-    '🔧 Updating menu availability - DB:',
-    hasDatabase,
-    'Photos:',
-    hasPhotos ? state.photos.length : 0,
-  );
+  
 
   // Switch library - ALWAYS available (never disabled)
   enableMenuItem('switchLibraryBtn', true);
@@ -4451,7 +4482,7 @@ async function openUpdateIndexOverlay() {
   // Check if already open
   const existingOverlay = document.getElementById('updateIndexOverlay');
   if (existingOverlay && existingOverlay.style.display === 'flex') {
-    console.log('⚠️ Update database overlay already open');
+    
     return;
   }
 
@@ -4493,7 +4524,7 @@ async function openUpdateIndexOverlay() {
     updateIndexState.nameUpdates = data.name_updates;
     updateIndexState.emptyFolders = data.empty_folders;
 
-    console.log('📋 Scan results:', data);
+    
 
     // Check if any changes are needed
     const hasChanges =
@@ -4523,7 +4554,7 @@ async function openUpdateIndexOverlay() {
  * Phase 3: Execute update (after user clicks Continue)
  */
 async function executeUpdateIndex() {
-  console.log('🚀 Executing clean library...');
+  
 
   // Phase 3: Execution
   updateUpdateIndexUI('Removing missing files...', false);
@@ -4547,7 +4578,7 @@ async function executeUpdateIndex() {
       const { done, value } = await reader.read();
 
       if (done) {
-        console.log('📡 SSE stream ended');
+        
         break;
       }
 
@@ -4583,8 +4614,8 @@ async function executeUpdateIndex() {
             updateIndexState.emptyFolders = data.stats.empty_folders;
             updateIndexState.details = data.details;
 
-            console.log('✅ Update complete:', data.stats);
-            console.log('📋 Details:', data.details);
+            
+            
           }
 
           if (data.error) {
@@ -4597,12 +4628,12 @@ async function executeUpdateIndex() {
       for (const line of lines) {
         if (line.startsWith('event: complete')) {
           // Phase 4: Confirmation (hide stats, show only details)
-          console.log('🎯 Complete event received');
+          
           updateUpdateIndexUI('Library updated', false);
           hideUpdateIndexStats();
-          console.log('🎯 About to render details. State:', updateIndexState);
+          
           renderUpdateIndexDetails();
-          console.log('🎯 After render details');
+          
           showUpdateIndexButtons('done');
         }
       }
@@ -4692,8 +4723,8 @@ function showUpdateIndexButtons(...buttons) {
  * Render details (Phase 4 only)
  */
 function renderUpdateIndexDetails() {
-  console.log('📋 renderUpdateIndexDetails called');
-  console.log('📋 updateIndexState.details:', updateIndexState.details);
+  
+  
 
   if (!updateIndexState.details) {
     console.warn('⚠️ No details in state!');
@@ -4703,8 +4734,8 @@ function renderUpdateIndexDetails() {
   const detailsSection = document.getElementById('updateIndexDetailsSection');
   const detailsList = document.getElementById('updateIndexDetailsList');
 
-  console.log('📋 detailsSection:', detailsSection);
-  console.log('📋 detailsList:', detailsList);
+  
+  
 
   if (!detailsSection || !detailsList) {
     console.warn('⚠️ Details elements not found in DOM!');
@@ -4846,7 +4877,7 @@ async function loadRebuildThumbnailsOverlay() {
         });
       });
 
-    console.log('✅ Rebuild thumbnails overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load rebuild thumbnails overlay:', error);
   }
@@ -4882,7 +4913,7 @@ async function openRebuildThumbnailsOverlay() {
       throw new Error(result.error || 'Failed to check thumbnails');
     }
 
-    console.log('✅ Thumbnail check result:', result);
+    
 
     // If no thumbnails exist, show info message with Done button only
     if (result.thumbnail_count === 0) {
@@ -4907,7 +4938,7 @@ async function openRebuildThumbnailsOverlay() {
     doneBtn.style.display = 'block';
   }
 
-  console.log('🔧 Rebuild thumbnails overlay opened');
+  
 }
 
 /**
@@ -4930,7 +4961,7 @@ async function executeRebuildThumbnails() {
   const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
 
   try {
-    console.log('🔧 Starting thumbnail rebuild...');
+    
 
     // Immediately show Phase 2 (spinner)
     statusText.innerHTML =
@@ -4950,11 +4981,11 @@ async function executeRebuildThumbnails() {
       throw new Error(result.error || 'Failed to rebuild thumbnails');
     }
 
-    console.log('✅ Thumbnails cleared:', result);
+    
 
     // Visual confirmation: Clear all thumbnail images
     if (result.cleared_count > 0) {
-      console.log('🎨 Clearing visible thumbnails for visual confirmation...');
+      
 
       // Clear the grid to show user that purge happened
       const container = document.getElementById('photoContainer');
@@ -4966,7 +4997,7 @@ async function executeRebuildThumbnails() {
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       // Reload grid with fresh thumbnails
-      console.log('🔄 Reloading grid with fresh thumbnails...');
+      
       await loadAndRenderPhotos(false);
     }
 
@@ -5024,7 +5055,7 @@ async function loadRebuildDatabaseOverlay() {
       .getElementById('rebuildDatabaseDoneBtn')
       .addEventListener('click', hideRebuildDatabaseOverlay);
 
-    console.log('✅ Rebuild database overlay loaded');
+    
   } catch (error) {
     console.error('❌ Rebuild Database Overlay load failed:', error);
   }
@@ -5057,7 +5088,7 @@ async function loadSwitchLibraryOverlay() {
       .getElementById('switchLibraryResetBtn')
       ?.addEventListener('click', resetLibraryConfig);
 
-    console.log('✅ Switch library overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load switch library overlay:', error);
   }
@@ -5074,7 +5105,7 @@ async function loadCreateLibraryOverlay() {
 
     // Event listeners wired up when showing overlay
 
-    console.log('✅ Create library overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load create library overlay:', error);
   }
@@ -5088,7 +5119,7 @@ async function loadNameLibraryOverlay() {
     const response = await fetch('/fragments/nameLibraryOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    console.log('✅ Name library overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load name library overlay:', error);
   }
@@ -5293,7 +5324,7 @@ async function openSwitchLibraryOverlay() {
   }
 
   document.getElementById('switchLibraryOverlay').style.display = 'block';
-  console.log('📚 Switch library overlay opened');
+  
 }
 
 /**
@@ -5318,7 +5349,7 @@ async function loadTerraformChoiceOverlay() {
     const response = await fetch('/fragments/terraformChoiceOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    console.log('✅ Terraform choice overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load terraform choice overlay:', error);
   }
@@ -5382,7 +5413,7 @@ async function loadTerraformPreviewOverlay() {
     const response = await fetch('/fragments/terraformPreviewOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    console.log('✅ Terraform preview overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load terraform preview overlay:', error);
   }
@@ -5444,7 +5475,7 @@ async function loadTerraformWarningOverlay() {
     const response = await fetch('/fragments/terraformWarningOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    console.log('✅ Terraform warning overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load terraform warning overlay:', error);
   }
@@ -5505,7 +5536,7 @@ async function loadTerraformProgressOverlay() {
     const response = await fetch('/fragments/terraformProgressOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    console.log('✅ Terraform progress overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load terraform progress overlay:', error);
   }
@@ -5519,7 +5550,7 @@ async function loadTerraformCompleteOverlay() {
     const response = await fetch('/fragments/terraformCompleteOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    console.log('✅ Terraform complete overlay loaded');
+    
   } catch (error) {
     console.error('❌ Failed to load terraform complete overlay:', error);
   }
@@ -5598,7 +5629,7 @@ async function executeTerraformFlow(options = {}) {
     }
 
     // Step 1: Preview
-    console.log('📊 Showing preview...');
+    
     const continuePreview = await showTerraformPreviewDialog({
       path,
       photo_count: finalPhotoCount,
@@ -5606,12 +5637,12 @@ async function executeTerraformFlow(options = {}) {
     });
 
     if (!continuePreview) {
-      console.log('User cancelled at preview');
+      
       return false;
     }
 
     // Step 2: Warning
-    console.log('⚠️  Showing warning...');
+    
 
     // Estimate time: ~2 seconds per file
     const estimated_seconds = Math.ceil(media_count * 2);
@@ -5627,12 +5658,12 @@ async function executeTerraformFlow(options = {}) {
     });
 
     if (!continueWarning) {
-      console.log('User cancelled at warning');
+      
       return false;
     }
 
     // Step 3: Execute terraform
-    console.log('🔄 Starting terraform...');
+    
 
     // Load progress overlay
     let progressOverlay = document.getElementById('terraformProgressOverlay');
@@ -5658,6 +5689,7 @@ async function executeTerraformFlow(options = {}) {
     let duplicates = 0;
     let errors = 0;
     let log_path = '';
+    let dbPath = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -5697,6 +5729,9 @@ async function executeTerraformFlow(options = {}) {
           if (data.log_path) {
             log_path = data.log_path;
           }
+          if (data.db_path) {
+            dbPath = data.db_path;
+          }
 
           // Update status (static - shows total)
           if (data.total) {
@@ -5711,7 +5746,7 @@ async function executeTerraformFlow(options = {}) {
     progressOverlay.style.display = 'none';
 
     // Step 4: Show completion
-    console.log('✅ Terraform complete');
+    
     await showTerraformCompleteDialog({
       processed,
       duplicates,
@@ -5720,7 +5755,6 @@ async function executeTerraformFlow(options = {}) {
     });
 
     // Step 5: Switch to this library
-    const dbPath = path + '/photo_library.db';
     await switchToLibrary(path, dbPath);
 
     return true;
@@ -5743,7 +5777,7 @@ async function executeTerraformFlow(options = {}) {
  * Clears grid and disables interactive buttons
  */
 function showLibraryTransitionState() {
-  console.log('🔄 Entering library transition state...');
+  
 
   // Clear photo container
   const container = document.getElementById('photoContainer');
@@ -5815,13 +5849,13 @@ function enableAppBarButtons() {
 /**
  * Browse for library (uses custom folder picker)
  * Handles 3 scenarios:
- * 1. Folder has DB → open it
+ * 1. Folder has DB → open it (imports do not matter)
  * 2. Folder has no DB, no media → create blank library
  * 3. Folder has no DB, has media → show terraform choice dialog
  */
 async function browseSwitchLibrary() {
   try {
-    console.log('🔍 Opening custom folder picker...');
+    
 
     // Hide Switch Library overlay before showing FolderPicker
     closeSwitchLibraryOverlay();
@@ -5833,17 +5867,14 @@ async function browseSwitchLibrary() {
     });
 
     if (!selectedPath) {
-      console.log('User cancelled folder selection');
+      
       return false;
     }
 
-    console.log('📂 Selected path:', selectedPath);
+    
 
     // Enter transition state immediately (clears grid, disables buttons)
     showLibraryTransitionState();
-
-    // Check if path has a database and/or media
-    const potentialDbPath = selectedPath + '/photo_library.db';
 
     // Try to check if library exists via backend
     const checkResponse = await fetch('/api/library/check', {
@@ -5854,14 +5885,13 @@ async function browseSwitchLibrary() {
 
     const checkResult = await checkResponse.json();
 
-    if (checkResult.exists && !checkResult.has_media) {
-      // SCENARIO 1: Existing library with no media - switch immediately
-      console.log('✅ Found existing library:', selectedPath);
+    if (checkResult.exists) {
+      // SCENARIO 1: Valid library on disk — open it (media scan is for terraform only)
       closeSwitchLibraryOverlay();
-      await switchToLibrary(selectedPath, potentialDbPath);
+      await switchToLibrary(selectedPath, checkResult.db_path);
     } else if (!checkResult.has_media) {
       // SCENARIO 2: No DB, no media - create blank library here
-      console.log('📦 Empty folder - creating blank library...');
+      
 
       // Get library name
       const libraryName = await showNameLibraryDialog({
@@ -5870,20 +5900,16 @@ async function browseSwitchLibrary() {
       });
 
       if (!libraryName) {
-        console.log('User cancelled library naming');
+        
         return false;
       }
 
       // Create library in subfolder
       const libraryPath = selectedPath + '/' + libraryName;
-      const dbPath = libraryPath + '/photo_library.db';
-
-      console.log('📚 Creating library:', libraryPath);
-
       const createResponse = await fetch('/api/library/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ library_path: libraryPath, db_path: dbPath }),
+        body: JSON.stringify({ library_path: libraryPath }),
       });
 
       const createResult = await createResponse.json();
@@ -5892,15 +5918,13 @@ async function browseSwitchLibrary() {
         throw new Error(createResult.error || 'Failed to create library');
       }
 
-      console.log('✅ Library created');
+      
 
       // Switch to new library
-      await switchToLibrary(libraryPath, dbPath);
+      await switchToLibrary(libraryPath, createResult.db_path);
     } else {
       // SCENARIO 3: No DB, has media - show terraform choice dialog
-      console.log(
-        `📸 Found ${checkResult.media_count} media file(s) - showing terraform choice...`,
-      );
+      
 
       // Show choice dialog
       const choice = await showTerraformChoiceDialog({
@@ -5910,7 +5934,7 @@ async function browseSwitchLibrary() {
 
       if (choice === 'blank') {
         // User chose to create blank library
-        console.log('User chose: Create new library folder');
+        
 
         // Get library name
         const libraryName = await showNameLibraryDialog({
@@ -5919,20 +5943,16 @@ async function browseSwitchLibrary() {
         });
 
         if (!libraryName) {
-          console.log('User cancelled library naming');
+          
           return false;
         }
 
         // Create library in subfolder
         const libraryPath = selectedPath + '/' + libraryName;
-        const dbPath = libraryPath + '/photo_library.db';
-
-        console.log('📚 Creating library:', libraryPath);
-
         const createResponse = await fetch('/api/library/create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ library_path: libraryPath, db_path: dbPath }),
+          body: JSON.stringify({ library_path: libraryPath }),
         });
 
         const createResult = await createResponse.json();
@@ -5941,13 +5961,13 @@ async function browseSwitchLibrary() {
           throw new Error(createResult.error || 'Failed to create library');
         }
 
-        console.log('✅ Library created');
+        
 
         // Switch to new library
-        await switchToLibrary(libraryPath, dbPath);
+        await switchToLibrary(libraryPath, createResult.db_path);
       } else if (choice === 'terraform') {
         // User chose to terraform
-        console.log('User chose: Convert this library');
+        
 
         // Execute full terraform flow
         const success = await executeTerraformFlow({
@@ -5958,12 +5978,12 @@ async function browseSwitchLibrary() {
         });
 
         if (!success) {
-          console.log('Terraform flow failed or was cancelled');
+          
           return false;
         }
       } else {
         // User cancelled
-        console.log('User cancelled choice dialog');
+        
         return false;
       }
     }
@@ -5984,7 +6004,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
     // Loop to allow user to go back and change location
     while (true) {
       // Step 1: Choose parent location using custom folder picker
-      console.log('🔍 Opening custom folder picker for parent location...');
+      
 
       const parentPath = await FolderPicker.show({
         title: 'Library location',
@@ -5992,43 +6012,36 @@ async function createNewLibraryWithName(dialogOptions = {}) {
       });
 
       if (!parentPath) {
-        console.log('User cancelled folder selection');
+        
         return false;
       }
 
-      console.log('📂 Parent location:', parentPath);
+      
 
       // Step 2: Get library name from user (with validation against parent path)
-      console.log('📝 Asking for library name...');
+      
       const libraryName = await showNameLibraryDialog({
         ...dialogOptions,
         parentPath: parentPath,
       });
 
       if (!libraryName) {
-        console.log(
-          'User cancelled library naming - going back to folder picker',
-        );
+        
         // null means cancelled - loop back to folder picker
         continue;
       }
 
-      console.log('📚 Library name:', libraryName);
+      
 
       // Step 3: Combine parent path with library name
       const cleanParentPath = parentPath.replace(/\/+$/, ''); // Remove trailing slashes
       const fullLibraryPath = `${cleanParentPath}/${libraryName}`;
-      const dbPath = `${fullLibraryPath}/photo_library.db`;
-
-      console.log('📦 Creating library at:', fullLibraryPath);
-
       // Step 4: Create library
       const createResponse = await fetch('/api/library/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           library_path: fullLibraryPath,
-          db_path: dbPath,
         }),
       });
 
@@ -6038,7 +6051,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
         throw new Error(createResult.error || 'Failed to create library');
       }
 
-      console.log('✅ Library created');
+      
 
       // Step 5: Switch to new library
       const switchResponse = await fetch('/api/library/switch', {
@@ -6046,7 +6059,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           library_path: fullLibraryPath,
-          db_path: dbPath,
+          db_path: createResult.db_path,
         }),
       });
 
@@ -6056,7 +6069,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
         throw new Error(switchResult.error || 'Failed to switch library');
       }
 
-      console.log('✅ Switched to:', switchResult.library_path);
+      
 
       // Step 6: Refresh photos (library is now empty)
       await loadAndRenderPhotos();
@@ -6077,7 +6090,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
  * Reset library configuration to first-run state (debug)
  */
 async function resetLibraryConfig() {
-  console.log('🔄 Resetting library configuration to create new library...');
+  
 
   try {
     const response = await fetch('/api/library/reset', {
@@ -6087,7 +6100,7 @@ async function resetLibraryConfig() {
     const data = await response.json();
 
     if (data.status === 'success') {
-      console.log('✅ Configuration reset - reloading to first-run state...');
+      
       window.location.reload();
     } else {
       throw new Error(data.error || 'Reset failed');
@@ -6132,7 +6145,7 @@ async function showCreateLibraryConfirmation(libraryPath, dbPath) {
   });
 
   overlay.style.display = 'block';
-  console.log('📦 Create library confirmation shown');
+  
 }
 
 /**
@@ -6140,7 +6153,7 @@ async function showCreateLibraryConfirmation(libraryPath, dbPath) {
  */
 async function createAndSwitchLibrary(libraryPath, dbPath) {
   try {
-    console.log('📦 Creating new library:', libraryPath);
+    
 
     // Show loading
     const confirmBtn = document.getElementById('createLibraryConfirmBtn');
@@ -6160,13 +6173,13 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
       throw new Error(createResult.error || 'Failed to create library');
     }
 
-    console.log('✅ Library created');
+    
 
     // Close create overlay
     document.getElementById('createLibraryOverlay').style.display = 'none';
 
     // Switch to new library
-    await switchToLibrary(libraryPath, dbPath);
+    await switchToLibrary(libraryPath, createResult.db_path);
   } catch (error) {
     console.error('❌ Failed to create library:', error);
     showToast(`Error: ${error.message}`, 'error');
@@ -6183,7 +6196,7 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
  */
 async function switchToLibrary(libraryPath, dbPath) {
   try {
-    console.log('🔄 Switching to library:', libraryPath);
+    
 
     const response = await fetch('/api/library/switch', {
       method: 'POST',
@@ -6197,7 +6210,7 @@ async function switchToLibrary(libraryPath, dbPath) {
       throw new Error(result.error || 'Failed to switch library');
     }
 
-    console.log('✅ Switched to:', result.library_path);
+    
 
     // Get folder name for toast message
     const folderName =
@@ -6234,7 +6247,7 @@ async function triggerImportWithLibraryCheck() {
 
     if (status.status === 'not_configured') {
       // No library - prompt to create one first
-      console.log('📦 No library configured - starting library creation flow');
+      
 
       // Create new library with naming (custom copy for Add photos flow)
       const created = await createNewLibraryWithName({
@@ -6245,7 +6258,7 @@ async function triggerImportWithLibraryCheck() {
 
       // If user cancelled at any point, show empty state
       if (!created) {
-        console.log('User cancelled library creation');
+        
         renderFirstRunEmptyState();
         return;
       }
@@ -6268,7 +6281,7 @@ async function triggerImportWithLibraryCheck() {
  */
 async function triggerImport() {
   try {
-    console.log('📸 Opening photo picker...');
+    
 
     const selectedPaths = await PhotoPicker.show({
       title: 'Select photos',
@@ -6276,11 +6289,11 @@ async function triggerImport() {
     });
 
     if (!selectedPaths || selectedPaths.length === 0) {
-      console.log('User cancelled or no files selected');
+      
       return;
     }
 
-    console.log(`✅ Selected ${selectedPaths.length} item(s)`);
+    
 
     // Scan paths to expand folders into file list (without confirmation dialog)
     await scanAndImport(selectedPaths);
@@ -6295,7 +6308,7 @@ async function triggerImport() {
  */
 async function importFiles() {
   try {
-    console.log('📸 Opening file picker...');
+    
 
     // Blur browser window to ensure focus shifts to native file picker
     window.blur();
@@ -6312,7 +6325,7 @@ async function importFiles() {
     if (!response.ok) {
       const error = await response.json();
       if (error.status === 'cancelled') {
-        console.log('User cancelled file selection');
+        
         return;
       }
       throw new Error(error.error || 'Failed to select files');
@@ -6322,11 +6335,11 @@ async function importFiles() {
     const paths = result.paths || [];
 
     if (paths.length === 0) {
-      console.log('No files selected');
+      
       return;
     }
 
-    console.log(`✅ Selected ${paths.length} file(s)`);
+    
     await scanAndConfirmImport(paths);
   } catch (error) {
     console.error('❌ Failed to import files:', error);
@@ -6339,7 +6352,7 @@ async function importFiles() {
  */
 async function importFolders() {
   try {
-    console.log('📁 Opening folder picker...');
+    
 
     // Blur browser window to ensure focus shifts to native folder picker
     window.blur();
@@ -6356,7 +6369,7 @@ async function importFolders() {
     if (!response.ok) {
       const error = await response.json();
       if (error.status === 'cancelled') {
-        console.log('User cancelled folder selection');
+        
         return;
       }
       throw new Error(error.error || 'Failed to select folder');
@@ -6366,11 +6379,11 @@ async function importFolders() {
     const paths = result.paths || [];
 
     if (paths.length === 0) {
-      console.log('No folders selected');
+      
       return;
     }
 
-    console.log(`✅ Selected ${paths.length} folder(s)`);
+    
     await scanAndConfirmImport(paths);
   } catch (error) {
     console.error('❌ Failed to import folders:', error);
@@ -6447,7 +6460,7 @@ async function scanAndConfirmImport(paths) {
     ]);
 
     if (!confirmed) {
-      console.log('User cancelled import');
+      
       return;
     }
 
@@ -6464,7 +6477,7 @@ async function scanAndConfirmImport(paths) {
  */
 async function startImportFromPaths(filePaths) {
   try {
-    console.log(`📥 Starting import of ${filePaths.length} files...`);
+    
 
     if (importState.isImporting) {
       console.warn('⚠️ Import already in progress');
@@ -6532,7 +6545,7 @@ async function startImportFromPaths(filePaths) {
     }
   } catch (error) {
     if (error.name === 'AbortError') {
-      console.log('🛑 Import cancelled by user');
+      
       return;
     }
 
@@ -6548,7 +6561,7 @@ async function startImportFromPaths(filePaths) {
  * Handle import SSE events
  */
 function handleImportEvent(event, data) {
-  console.log(`Import event: ${event}`, data);
+  
 
   const statusText = document.getElementById('importStatusText');
   const stats = document.getElementById('importStats');
@@ -6696,7 +6709,7 @@ function handleImportEvent(event, data) {
     // Reload photos if any were imported
     const importedPhotos = importState.importedCount;
     if (importedPhotos > 0) {
-      console.log(`🔄 Reloading ${importedPhotos} newly imported photos...`);
+      
       loadAndRenderPhotos();
     }
   }
@@ -6721,32 +6734,32 @@ async function checkLibraryHealthAndInit() {
     const response = await fetch('/api/library/status');
     const status = await response.json();
 
-    console.log('📊 Library status:', status.status);
+    
 
     switch (status.status) {
       case 'not_configured':
         // First-time setup - show empty state
-        console.log('⚠️ No library configured');
+        
         state.hasDatabase = false;
         renderFirstRunEmptyState();
         return;
 
       case 'library_missing':
       case 'library_inaccessible':
-        console.log('⚠️ Library not accessible:', status.library_path);
+        
         state.hasDatabase = false;
         showCriticalErrorModal('library_not_found', status.library_path);
         return;
 
       case 'db_missing':
       case 'db_inaccessible':
-        console.log('⚠️ Database not accessible:', status.db_path);
+        
         state.hasDatabase = false;
         showCriticalErrorModal('db_missing', status.db_path);
         return;
 
       case 'healthy':
-        console.log('✅ Library is healthy');
+        
         state.hasDatabase = true;
         // Load photos (date picker will be populated automatically)
         await loadAndRenderPhotos();
@@ -6960,7 +6973,7 @@ async function copyRejectedFiles() {
     }
 
     if (!destFolder) {
-      console.log('User cancelled folder selection');
+      
       return;
     }
 

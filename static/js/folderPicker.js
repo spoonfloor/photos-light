@@ -222,7 +222,7 @@ const FolderPicker = (() => {
             // Same action as clicking "Choose" button
             if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
               localStorage.setItem('picker.lastPath', currentPath);
-              console.log('💾 Saved path for next session:', currentPath);
+              
               
               const overlay = document.getElementById('folderPickerOverlay');
               if (overlay) {
@@ -280,10 +280,10 @@ const FolderPicker = (() => {
     // Toggle behavior - clicking same folder deselects it
     if (selectedPath === path) {
       selectedPath = currentPath; // Revert to current location
-      console.log('📂 Folder deselected, reverting to current path:', currentPath);
+      
     } else {
       selectedPath = path; // Select (radio button - clears others)
-      console.log('📂 Folder selected:', path);
+      
     }
     
     // Re-render folder list to update checkbox states
@@ -308,7 +308,7 @@ const FolderPicker = (() => {
     // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
     if (e.metaKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
       e.preventDefault();
-      console.log('✅ Desktop shortcut detected!');
+      
       
       // Find user's home directory (contains /Users/ but not Shared)
       const homeLocation = topLevelLocations.find(loc => 
@@ -317,7 +317,7 @@ const FolderPicker = (() => {
       
       if (homeLocation) {
         const desktopPath = homeLocation.path + '/Desktop';
-        console.log('⌨️ Cmd+Shift+D: Navigating to Desktop:', desktopPath);
+        
         
         try {
           // Validate Desktop exists before navigating
@@ -366,20 +366,20 @@ const FolderPicker = (() => {
         // If no initial path provided and currentPath is set from previous session, use it
         if (!options.initialPath && currentPath !== VIRTUAL_ROOT) {
           initialPath = currentPath;
-          console.log('📍 Resuming at previous location:', initialPath);
+          
         }
         // Otherwise try to use last saved path from localStorage
         else if (initialPath === VIRTUAL_ROOT) {
           const savedPath = localStorage.getItem('picker.lastPath');
           if (savedPath) {
-            console.log(`🔍 Trying saved path: ${savedPath}`);
+            
             try {
               // Validate saved path exists and is accessible
               await listDirectory(savedPath);
               initialPath = savedPath;
-              console.log('✅ Using saved path:', savedPath);
+              
             } catch (error) {
-              console.log(`⚠️ Saved path not accessible: ${error.message}`);
+              
               // Fall through to Desktop default
             }
           }
@@ -430,7 +430,7 @@ const FolderPicker = (() => {
           
           // Save selected path to localStorage for next session
           localStorage.setItem('picker.lastPath', selectedPath);
-          console.log('💾 Saved path for next session:', selectedPath);
+          
           
           overlay.style.display = 'none';
           if (keyboardHandler) {

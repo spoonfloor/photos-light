@@ -1,6 +1,9 @@
+import os
 import unittest
 from datetime import datetime
+from tempfile import TemporaryDirectory
 
+from library_layout import canonical_db_path, detect_existing_db_path, is_library_metadata_file
 from make_library_perfect import (
     canonical_relative_path,
     in_infrastructure,
@@ -35,16 +38,33 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
         self.assertFalse(is_day_folder_name("2026", "misc"))
 
     def test_root_entry_allowlist(self):
-        self.assertTrue(root_entry_allowed("photo_library.db", False, "photo_library.db"))
-        self.assertTrue(root_entry_allowed(".trash", True, "photo_library.db"))
-        self.assertTrue(root_entry_allowed("2026", True, "photo_library.db"))
-        self.assertFalse(root_entry_allowed("notes.txt", False, "photo_library.db"))
-        self.assertFalse(root_entry_allowed(".hidden", True, "photo_library.db"))
+        self.assertTrue(root_entry_allowed(".library", True))
+        self.assertTrue(root_entry_allowed(".trash", True))
+        self.assertTrue(root_entry_allowed("2026", True))
+        self.assertFalse(root_entry_allowed("photo_library.db", False))
+        self.assertFalse(root_entry_allowed("notes.txt", False))
+        self.assertFalse(root_entry_allowed(".hidden", True))
 
     def test_infrastructure_detection(self):
         self.assertTrue(in_infrastructure(".trash/duplicates/file.jpg"))
         self.assertTrue(in_infrastructure(".logs/run.jsonl"))
+        self.assertTrue(in_infrastructure(".library/photo_library.db"))
         self.assertFalse(in_infrastructure("2026/2026-04-12/img_20260412_abc1234.jpg"))
+
+    def test_library_metadata_detection_prefers_hidden_db(self):
+        with TemporaryDirectory() as tmpdir:
+            hidden_db = canonical_db_path(tmpdir)
+            os.makedirs(os.path.dirname(hidden_db), exist_ok=True)
+            with open(hidden_db, "w", encoding="utf-8"):
+                pass
+
+            self.assertEqual(detect_existing_db_path(tmpdir), hidden_db)
+
+    def test_library_metadata_allowlist(self):
+        self.assertTrue(is_library_metadata_file("photo_library.db"))
+        self.assertTrue(is_library_metadata_file("photo_library.db-wal"))
+        self.assertTrue(is_library_metadata_file("photo_library.db-shm"))
+        self.assertFalse(is_library_metadata_file("notes.txt"))
 
 
 if __name__ == "__main__":

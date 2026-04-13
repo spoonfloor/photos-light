@@ -182,7 +182,7 @@ const PhotoPicker = (() => {
       folderStateCache.clear();
       updateSelectionCount();
 
-      console.log(`✅ Folder counting complete in ${totalTime}ms`);
+      
     }
   }
 
@@ -228,19 +228,15 @@ const PhotoPicker = (() => {
     const start = Math.min(lastClickedIndex, currentIndex);
     const end = Math.max(lastClickedIndex, currentIndex);
 
-    console.log(
-      `🔍 Shift-select: clicking index ${currentIndex}, last was ${lastClickedIndex}`,
-    );
-    console.log(
-      `🔍 Range: ${start} to ${end} (${end - start + 1} items expected)`,
-    );
+    
+    
 
     // Get all picker items in the DOM
     const fileList = document.getElementById('photoPickerFileList');
     const allItems = Array.from(
       fileList.querySelectorAll('.photo-picker-item[data-index]'),
     );
-    console.log(`📊 Total items in DOM: ${allItems.length}`);
+    
 
     // Filter to items within the range
     const itemsInRange = allItems.filter((item) => {
@@ -248,7 +244,7 @@ const PhotoPicker = (() => {
       return itemIndex >= start && itemIndex <= end;
     });
 
-    console.log(`📋 Items in range: ${itemsInRange.length}`);
+    
 
     // Select all items in range (folders and files)
     for (const item of itemsInRange) {
@@ -279,9 +275,7 @@ const PhotoPicker = (() => {
     updateSelectionCount();
     await updateFileList();
 
-    console.log(
-      `📋 Shift-selected ${itemsInRange.length} items (${selectedPaths.size} total selected)`,
-    );
+    
 
     // Update last clicked index
     lastClickedIndex = currentIndex;
@@ -693,12 +687,12 @@ const PhotoPicker = (() => {
     if (e.key === 'Enter') {
       const importBtn = document.getElementById('photoPickerImportBtn');
       if (importBtn && !importBtn.disabled) {
-        console.log('✅ Enter key: Triggering photo picker import');
+        
         importBtn.click();
         e.preventDefault();
         e.stopPropagation(); // Prevent event from bubbling to global handler
       } else {
-        console.log('⚠️ Enter key: Import button disabled (no files selected)');
+        
       }
       return;
     }
@@ -706,7 +700,7 @@ const PhotoPicker = (() => {
     // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
     if (e.metaKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
       e.preventDefault();
-      console.log('✅ Desktop shortcut detected!');
+      
 
       // Find user's home directory (contains /Users/ but not Shared)
       const homeLocation = topLevelLocations.find(
@@ -715,7 +709,7 @@ const PhotoPicker = (() => {
 
       if (homeLocation) {
         const desktopPath = homeLocation.path + '/Desktop';
-        console.log('⌨️ Cmd+Shift+D: Navigating to Desktop:', desktopPath);
+        
 
         try {
           // Validate Desktop exists before navigating
@@ -760,9 +754,7 @@ const PhotoPicker = (() => {
       }
     }
 
-    console.log(
-      `📦 Filtered ${allPaths.length} selected paths → ${rootPaths.length} root selections`,
-    );
+    
     return rootPaths;
   }
 
@@ -806,20 +798,20 @@ const PhotoPicker = (() => {
         // If currentPath is set from previous navigation, use it
         if (currentPath !== VIRTUAL_ROOT) {
           initialPath = currentPath;
-          console.log('📍 Resuming at previous location:', initialPath);
+          
         }
         // Otherwise try to use last saved path from localStorage
         else {
           const savedPath = localStorage.getItem('picker.lastPath');
           if (savedPath) {
-            console.log(`🔍 Trying saved path: ${savedPath}`);
+            
             try {
               // Validate saved path exists and is accessible
               await listDirectory(savedPath);
               initialPath = savedPath;
-              console.log('✅ Using saved path:', savedPath);
+              
             } catch (error) {
-              console.log(`⚠️ Saved path not accessible: ${error.message}`);
+              
               // Fall through to Desktop default
             }
           }
@@ -859,7 +851,7 @@ const PhotoPicker = (() => {
           // Save current path even on cancel (for next session)
           if (currentPath !== VIRTUAL_ROOT) {
             localStorage.setItem('picker.lastPath', currentPath);
-            console.log('💾 Saved path on cancel:', currentPath);
+            
           }
 
           overlay.style.display = 'none';
@@ -876,7 +868,7 @@ const PhotoPicker = (() => {
 
           // Save current path to localStorage for next session
           localStorage.setItem('picker.lastPath', currentPath);
-          console.log('💾 Saved path for next session:', currentPath);
+          
 
           overlay.style.display = 'none';
           if (keyboardHandler) {
@@ -888,7 +880,7 @@ const PhotoPicker = (() => {
           // Return only root selections (folders/files user checked)
           // Backend will scan folders recursively - no need to send expanded children
           const rootSelections = getRootSelections();
-          console.log('📤 Sending root selections to backend:', rootSelections);
+          
           resolve(rootSelections);
         };
 
