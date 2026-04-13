@@ -101,22 +101,36 @@ def _can_run_jpegtran_transform_losslessly(file_path: str, transform: List[str])
 def can_rotate_losslessly(file_path: str, degrees_ccw: int) -> bool:
     ext = os.path.splitext(file_path)[1].lower()
     normalized = normalize_rotation_degrees(degrees_ccw)
+    print(
+        f"🔍 Rotation helper: checking lossless rotation for {os.path.basename(file_path)} "
+        f"({ext}, {normalized}° CCW)"
+    )
     if normalized == 0:
+        print("   ↪ No-op rotation; treated as lossless")
         return True
     if ext in PIL_LOSSLESS_ROTATION_EXTENSIONS:
+        print("   ✅ PIL-backed format rotates losslessly")
         return True
     if ext not in JPEG_EXTENSIONS:
+        print("   ❌ Unsupported for lossless manual rotation")
         return False
 
     orientation = get_orientation_flag(file_path)
     if orientation not in (None, 1):
+        print(f"   ⚠️ Existing orientation metadata={orientation}; not safe for immediate lossless rotate")
         return False
 
     transform = jpegtran_transform_for_degrees(normalized)
     if transform is None:
+        print("   ❌ No jpegtran transform available")
         return False
 
-    return _can_run_jpegtran_transform_losslessly(file_path, transform)
+    is_lossless = _can_run_jpegtran_transform_losslessly(file_path, transform)
+    if is_lossless:
+        print("   ✅ jpegtran -perfect can rotate this JPEG losslessly")
+    else:
+        print("   ⚠️ jpegtran -perfect rejected this JPEG; lossy fallback required")
+    return is_lossless
 
 
 def _rotate_jpeg_losslessly(file_path: str, degrees_ccw: int) -> RotationResult:
@@ -128,18 +142,25 @@ def _rotate_jpeg_losslessly(file_path: str, degrees_ccw: int) -> RotationResult:
 
     temp_output = f"{file_path}.rotated.jpg"
     try:
+        print(
+            f"🛠️ Rotation helper: applying immediate lossless JPEG rotation "
+            f"({degrees_ccw}° CCW) to {os.path.basename(file_path)}"
+        )
         result = _run_jpegtran_transform(file_path, transform, temp_output)
         if result.returncode != 0:
             if os.path.exists(temp_output):
                 os.remove(temp_output)
+            print("   ❌ jpegtran failed during committed rotate")
             return RotationResult(False, False, "Lossless JPEG rotation not possible")
 
         stripped, message = strip_orientation_tag(temp_output)
         if not stripped:
             os.remove(temp_output)
+            print(f"   ❌ Failed to strip orientation tag after jpegtran rotate: {message}")
             return RotationResult(False, False, message)
 
         os.replace(temp_output, file_path)
+        print("   ✅ Lossless JPEG rotation committed")
         return RotationResult(True, True, "Rotated JPEG losslessly")
     finally:
         if os.path.exists(temp_output):
@@ -169,6 +190,10 @@ def _rotate_with_pillow(
     os.close(fd)
 
     try:
+        print(
+            f"🛠️ Rotation helper: using Pillow for {os.path.basename(file_path)} "
+            f"({degrees_ccw}° CCW, {'lossy JPEG @'+str(jpeg_quality) if save_as_jpeg else 'lossless PIL save'})"
+        )
         with Image.open(file_path) as image:
             normalized = ImageOps.exif_transpose(image)
             rotated = normalized.rotate(degrees_ccw, expand=True)
@@ -200,9 +225,15 @@ def _rotate_with_pillow(
 
         stripped, message = strip_orientation_tag(temp_output)
         if not stripped:
+            print(f"   ❌ Failed to strip orientation tag after Pillow rotate: {message}")
             return RotationResult(False, False, message)
 
         os.replace(temp_output, file_path)
+        print(
+            "   ✅ Pillow rotation committed"
+            if not save_as_jpeg
+            else f"   ✅ Pillow JPEG fallback committed at quality={jpeg_quality}"
+        )
         return RotationResult(
             True,
             not save_as_jpeg,
@@ -222,7 +253,12 @@ def rotate_file_in_place(
 ) -> RotationResult:
     ext = os.path.splitext(file_path)[1].lower()
     normalized = normalize_rotation_degrees(degrees_ccw)
+    print(
+        f"🔄 Rotation helper: rotate_file_in_place {os.path.basename(file_path)} "
+        f"({ext}, {normalized}° CCW, allow_lossy_fallback={allow_lossy_fallback})"
+    )
     if normalized == 0:
+        print("   ↪ No-op rotation; skipping write")
         return RotationResult(True, True, "No rotation needed")
 
     if ext in PIL_LOSSLESS_ROTATION_EXTENSIONS:
@@ -234,14 +270,17 @@ def rotate_file_in_place(
         )
 
     if ext not in JPEG_EXTENSIONS:
+        print(f"   ❌ Unsupported manual rotation format: {ext}")
         return RotationResult(False, False, f"Unsupported rotation format {ext}")
 
     if can_rotate_losslessly(file_path, normalized):
         return _rotate_jpeg_losslessly(file_path, normalized)
 
     if not allow_lossy_fallback:
+        print("   📝 Lossy fallback needed, but caller requested staging instead of commit")
         return RotationResult(False, False, "Lossless JPEG rotation not possible")
 
+    print(f"   💾 Falling back to high-quality JPEG re-save at quality={jpeg_quality}")
     return _rotate_with_pillow(
         file_path,
         normalized,

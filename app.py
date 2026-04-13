@@ -42,6 +42,7 @@ import hashlib
 import json
 import logging
 import tempfile
+import threading
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from PIL import Image, ImageOps
@@ -79,6 +80,8 @@ TRASH_DIR = None
 DB_BACKUP_DIR = None
 IMPORT_TEMP_DIR = None
 LOG_DIR = None
+ROTATION_RECONCILE_VERSIONS = {}
+ROTATION_RECONCILE_VERSIONS_LOCK = threading.Lock()
 
 # Supported media file extensions (wide net for discovery)
 # Note: BMP excluded - exiftool cannot write EXIF to BMP (EXIF write is required)
@@ -362,6 +365,134 @@ def delete_thumbnail_for_hash(content_hash):
     if os.path.exists(thumbnail_path):
         os.remove(thumbnail_path)
         cleanup_empty_thumbnail_folders(thumbnail_path)
+
+
+def estimate_rotated_dimensions(width, height, degrees_ccw):
+    """Estimate rotated dimensions from existing DB metadata."""
+    if width is None or height is None:
+        return width, height
+    if normalize_rotation_degrees(degrees_ccw) % 180 != 0:
+        return height, width
+    return width, height
+
+
+def next_rotation_reconcile_version(photo_id):
+    """Return the next background reconcile generation for a photo."""
+    with ROTATION_RECONCILE_VERSIONS_LOCK:
+        version = ROTATION_RECONCILE_VERSIONS.get(photo_id, 0) + 1
+        ROTATION_RECONCILE_VERSIONS[photo_id] = version
+        return version
+
+
+def get_rotation_reconcile_version(photo_id):
+    with ROTATION_RECONCILE_VERSIONS_LOCK:
+        return ROTATION_RECONCILE_VERSIONS.get(photo_id, 0)
+
+
+def reconcile_rotated_photo_background(photo_id, reconcile_version, old_hash):
+    """Catch the DB and thumbnail cache up after an already-committed rotate."""
+    conn = None
+    started_at = time.perf_counter()
+    try:
+        print(
+            f"🧵 Background reconcile start: photo={photo_id} "
+            f"version={reconcile_version} old_hash={old_hash}"
+        )
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT current_path, content_hash FROM photos WHERE id = ?",
+            (photo_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            print("   ⚠️ Background reconcile skipped: photo row no longer exists")
+            return
+
+        full_path = os.path.join(LIBRARY_PATH, row['current_path'])
+        if not os.path.exists(full_path):
+            print("   ⚠️ Background reconcile skipped: file missing on disk")
+            return
+
+        width, height = get_image_dimensions(full_path) or (None, None)
+        new_hash = compute_hash(full_path)
+        print(
+            f"   🔍 Background reconcile computed width={width} height={height} "
+            f"new_hash={new_hash}"
+        )
+
+        if get_rotation_reconcile_version(photo_id) != reconcile_version:
+            print("   ↪ Background reconcile is stale; newer rotate already requested")
+            return
+
+        duplicate = None
+        if new_hash != old_hash:
+            cursor.execute(
+                "SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?",
+                (new_hash, photo_id),
+            )
+            duplicate = cursor.fetchone()
+
+        if old_hash != new_hash:
+            delete_thumbnail_for_hash(old_hash)
+            print(f"   🖼️ Background reconcile invalidated thumbnail for old hash {old_hash}")
+
+        if duplicate:
+            print(
+                f"   ⚠️ Background reconcile found duplicate photo {duplicate['id']} "
+                f"({duplicate['current_path']}); keeping existing DB hash for now"
+            )
+            cursor.execute(
+                """
+                UPDATE photos
+                SET width = ?, height = ?
+                WHERE id = ?
+                """,
+                (width, height, photo_id),
+            )
+        else:
+            cursor.execute(
+                """
+                UPDATE photos
+                SET width = ?, height = ?, content_hash = ?
+                WHERE id = ?
+                """,
+                (width, height, new_hash, photo_id),
+            )
+            print(
+                f"   ✅ Background reconcile updated DB: "
+                f"hash {row['content_hash']} → {new_hash}"
+            )
+
+        conn.commit()
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        print(
+            f"   ✅ Background reconcile complete: photo={photo_id} "
+            f"({elapsed_ms:.1f} ms)"
+        )
+    except Exception as e:
+        print(f"❌ Background reconcile failed for photo {photo_id}: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
+
+def schedule_rotation_reconcile(photo_id, old_hash):
+    """Kick off async post-rotate bookkeeping without blocking the UI."""
+    reconcile_version = next_rotation_reconcile_version(photo_id)
+    print(
+        f"🧵 Scheduling background reconcile: photo={photo_id} "
+        f"version={reconcile_version}"
+    )
+    thread = threading.Thread(
+        target=reconcile_rotated_photo_background,
+        args=(photo_id, reconcile_version, old_hash),
+        daemon=True,
+    )
+    thread.start()
 
 def write_photo_exif(file_path, new_date):
     """Write EXIF date to photo using exiftool"""
@@ -1275,13 +1406,19 @@ def rotate_photo(photo_id):
     """Rotate a still image 90/180/270 degrees counterclockwise."""
     conn = None
     temp_path = None
+    request_started_at = time.perf_counter()
 
     try:
         payload = request.get_json(silent=True) or {}
         degrees_ccw = normalize_rotation_degrees(int(payload.get('degrees_ccw', 90)))
         commit_lossy = bool(payload.get('commit_lossy', False))
+        print(
+            f"🔄 Rotate request: photo={photo_id} degrees={degrees_ccw}° CCW "
+            f"commit_lossy={commit_lossy}"
+        )
 
         if degrees_ccw == 0:
+            print("   ↪ No-op rotate request; skipping")
             return jsonify(
                 {
                     'ok': True,
@@ -1295,7 +1432,7 @@ def rotate_photo(photo_id):
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, current_path, date_taken, file_type, content_hash, original_filename
+            SELECT id, current_path, date_taken, file_type, content_hash, original_filename, width, height
             FROM photos
             WHERE id = ?
             """,
@@ -1306,6 +1443,7 @@ def rotate_photo(photo_id):
             return jsonify({'error': 'Photo not found'}), 404
 
         if row['file_type'] == 'video':
+            print("   ❌ Rotation rejected: file is a video")
             return (
                 jsonify(
                     {
@@ -1322,6 +1460,7 @@ def rotate_photo(photo_id):
 
         ext = os.path.splitext(full_path)[1].lower()
         if ext not in ROTATION_SUPPORTED_EXTENSIONS:
+            print(f"   ❌ Rotation rejected: unsupported format {ext}")
             return (
                 jsonify(
                     {
@@ -1333,12 +1472,35 @@ def rotate_photo(photo_id):
             )
 
         orientation = get_orientation_flag(full_path)
-        can_commit_losslessly = orientation in (None, 1) and can_rotate_losslessly(
-            full_path,
-            degrees_ccw,
+        print(
+            f"   📷 Source: path={row['current_path']} ext={ext} "
+            f"hash={row['content_hash']} orientation={orientation}"
         )
+        if not commit_lossy:
+            lossless_check_started_at = time.perf_counter()
+            can_commit_losslessly = orientation in (None, 1) and can_rotate_losslessly(
+                full_path,
+                degrees_ccw,
+            )
+            lossless_check_elapsed_ms = (
+                time.perf_counter() - lossless_check_started_at
+            ) * 1000
+            print(
+                "   ✅ Immediate save path: lossless commit"
+                if can_commit_losslessly
+                else "   📝 Immediate save path unavailable: staging until lightbox close"
+            )
+            print(
+                f"   ⏱️ Lossless eligibility check: {lossless_check_elapsed_ms:.1f} ms"
+            )
+        else:
+            can_commit_losslessly = False
+            print("   💾 Close-lightbox save: skipping staging check and committing now")
 
         if not can_commit_losslessly and not commit_lossy:
+            request_elapsed_ms = (time.perf_counter() - request_started_at) * 1000
+            print("   📝 Returning staged response to frontend (lossy fallback deferred)")
+            print(f"   ⏱️ Rotate request handled in {request_elapsed_ms:.1f} ms")
             return jsonify(
                 {
                     'ok': True,
@@ -1349,83 +1511,43 @@ def rotate_photo(photo_id):
                 }
             )
 
-        fd, temp_path = tempfile.mkstemp(suffix=ext, dir=os.path.dirname(full_path))
-        os.close(fd)
-        shutil.copy2(full_path, temp_path)
-
+        rotate_started_at = time.perf_counter()
         rotation_result = rotate_file_in_place(
-            temp_path,
+            full_path,
             degrees_ccw,
             allow_lossy_fallback=commit_lossy,
             jpeg_quality=JPEG_LOSSY_QUALITY,
         )
+        rotate_elapsed_ms = (time.perf_counter() - rotate_started_at) * 1000
         if not rotation_result.success:
             status_code = 409 if not commit_lossy else 500
+            print(f"   ❌ Rotation failed during commit: {rotation_result.message}")
+            print(f"   ⏱️ Rotate attempt failed after {rotate_elapsed_ms:.1f} ms")
             return jsonify({'error': rotation_result.message}), status_code
-
-        dimensions = get_image_dimensions(temp_path)
-        if not dimensions:
-            return jsonify({'error': 'Could not read rotated image dimensions'}), 500
-        width, height = dimensions
-
-        new_hash = compute_hash(temp_path)
-        cursor.execute(
-            "SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?",
-            (new_hash, photo_id),
+        print(
+            f"   💾 Rotation committed via "
+            f"{'lossless' if rotation_result.lossless else f'lossy JPEG @ {JPEG_LOSSY_QUALITY}'} path"
         )
-        duplicate = cursor.fetchone()
-        if duplicate:
-            return (
-                jsonify(
-                    {
-                        'error': 'Rotation would create a duplicate photo',
-                        'reason': 'duplicate_after_rotation',
-                    }
-                ),
-                409,
-            )
+        print(f"   ⏱️ File rotation took {rotate_elapsed_ms:.1f} ms")
 
-        new_rel_path, new_filename = build_canonical_photo_path(
-            row['date_taken'],
-            new_hash,
-            ext,
+        estimated_width, estimated_height = estimate_rotated_dimensions(
+            row['width'],
+            row['height'],
+            degrees_ccw,
         )
-        new_full_path = os.path.join(LIBRARY_PATH, new_rel_path)
-        os.makedirs(os.path.dirname(new_full_path), exist_ok=True)
-
-        if new_full_path != full_path and os.path.exists(new_full_path):
-            return jsonify({'error': 'Canonical destination already exists'}), 409
+        print(f"   📏 Estimated dimensions for UI: {estimated_width}x{estimated_height}")
 
         old_hash = row['content_hash']
-        old_full_path = full_path
-
-        if new_full_path == old_full_path:
-            os.replace(temp_path, old_full_path)
-        else:
-            os.replace(temp_path, new_full_path)
-            temp_path = None
-            if os.path.exists(old_full_path):
-                os.remove(old_full_path)
-                cleanup_empty_folders(old_full_path, LIBRARY_PATH)
-
-        temp_path = None
-
-        if old_hash != new_hash:
-            delete_thumbnail_for_hash(old_hash)
-
-        cursor.execute(
-            """
-            UPDATE photos
-            SET current_path = ?,
-                original_filename = ?,
-                width = ?,
-                height = ?,
-                content_hash = ?
-            WHERE id = ?
-            """,
-            (new_rel_path, new_filename, width, height, new_hash, photo_id),
+        schedule_rotation_reconcile(photo_id, old_hash)
+        conn.close()
+        conn = None
+        request_elapsed_ms = (time.perf_counter() - request_started_at) * 1000
+        print(
+            f"   ✅ Rotate complete: photo={photo_id} "
+            f"{'immediate lossless save' if rotation_result.lossless else 'saved on leave-lightbox via lossy fallback'}; "
+            f"hash/thumb reconcile deferred"
         )
-        conn.commit()
+        print(f"   ⏱️ Rotate request returned in {request_elapsed_ms:.1f} ms")
 
         return jsonify(
             {
@@ -1433,17 +1555,19 @@ def rotate_photo(photo_id):
                 'committed': True,
                 'staged': False,
                 'lossless': rotation_result.lossless,
+                'reconcile_pending': True,
                 'message': rotation_result.message,
                 'photo': {
                     'id': photo_id,
-                    'path': new_rel_path,
-                    'width': width,
-                    'height': height,
-                    'content_hash': new_hash,
+                    'path': row['current_path'],
+                    'width': estimated_width,
+                    'height': estimated_height,
+                    'content_hash': old_hash,
                 },
             }
         )
     except ValueError as e:
+        print(f"❌ Rotate request rejected: {e}")
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         print(f"Error rotating photo {photo_id}: {e}")
@@ -2509,12 +2633,28 @@ def import_from_paths():
     Import photos from file paths (SSE streaming version with fixes)
     """
     def generate():
+        conn = None
+        client_disconnected = False
+
+        def emit_event(event_name, payload):
+            nonlocal client_disconnected
+
+            if client_disconnected:
+                return False
+
+            try:
+                yield f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+                return True
+            except (BrokenPipeError, ConnectionError, GeneratorExit):
+                client_disconnected = True
+                return False
+
         try:
             data = request.json
             file_paths = data.get('paths', [])
             
             if not file_paths:
-                yield f"event: error\ndata: {json.dumps({'error': 'No paths provided'})}\n\n"
+                yield from emit_event('error', {'error': 'No paths provided'})
                 return
             
             total_files = len(file_paths)
@@ -2524,7 +2664,8 @@ def import_from_paths():
             print(f"DB_PATH: {DB_PATH}")
             print(f"{'='*60}\n")
             
-            yield f"event: start\ndata: {json.dumps({'total': total_files})}\n\n"
+            if not (yield from emit_event('start', {'total': total_files})):
+                return
             
             # Track results
             imported_count = 0
@@ -2538,11 +2679,22 @@ def import_from_paths():
             hash_cache = HashCache(conn)
             
             for file_index, source_path in enumerate(file_paths, 1):
+                if client_disconnected:
+                    print(f"🛑 Import stream closed after {imported_count} imported file(s)")
+                    break
+
                 try:
                     if not os.path.exists(source_path):
                         print(f"{file_index}. ❌ File not found: {source_path}")
                         error_count += 1
-                        yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        if not (yield from emit_event('progress', {
+                            'imported': imported_count,
+                            'duplicates': duplicate_count,
+                            'errors': error_count,
+                            'current': file_index,
+                            'total': total_files
+                        })):
+                            break
                         continue
                     
                     filename = os.path.basename(source_path)
@@ -2558,7 +2710,14 @@ def import_from_paths():
                     if content_hash is None:
                         print(f"   ❌ Failed to hash file")
                         error_count += 1
-                        yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        if not (yield from emit_event('progress', {
+                            'imported': imported_count,
+                            'duplicates': duplicate_count,
+                            'errors': error_count,
+                            'current': file_index,
+                            'total': total_files
+                        })):
+                            break
                         continue
                     
                     # Check for duplicates
@@ -2568,7 +2727,14 @@ def import_from_paths():
                     if existing:
                         print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
                         duplicate_count += 1
-                        yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                        if not (yield from emit_event('progress', {
+                            'imported': imported_count,
+                            'duplicates': duplicate_count,
+                            'errors': error_count,
+                            'current': file_index,
+                            'total': total_files
+                        })):
+                            break
                         continue
                     
                     # Determine date_taken
@@ -2742,7 +2908,14 @@ def import_from_paths():
                             error_count += 1
                         
                         # Yield rejection event (special type of error with extra metadata)
-                        yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(exif_error)})}\n\n"
+                        if not (yield from emit_event('rejected', {
+                            'file': filename,
+                            'source_path': source_path,
+                            'reason': user_message,
+                            'category': category,
+                            'technical_error': str(exif_error)
+                        })):
+                            break
                         
                         # Continue to next file (don't increment imported_count)
                         continue
@@ -2750,7 +2923,15 @@ def import_from_paths():
                     # SUCCESS - file imported with EXIF
                     imported_count += 1
                     
-                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files, 'photo_id': photo_id})}\n\n"
+                    if not (yield from emit_event('progress', {
+                        'imported': imported_count,
+                        'duplicates': duplicate_count,
+                        'errors': error_count,
+                        'current': file_index,
+                        'total': total_files,
+                        'photo_id': photo_id
+                    })):
+                        break
                     
                 except Exception as e:
                     error_msg = str(e)
@@ -2758,9 +2939,23 @@ def import_from_paths():
                     import traceback
                     traceback.print_exc()
                     error_count += 1
-                    yield f"event: progress\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files, 'error': error_msg, 'error_file': filename})}\n\n"
-            
-            conn.close()
+                    if not (yield from emit_event('progress', {
+                        'imported': imported_count,
+                        'duplicates': duplicate_count,
+                        'errors': error_count,
+                        'current': file_index,
+                        'total': total_files,
+                        'error': error_msg,
+                        'error_file': filename
+                    })):
+                        break
+
+            if client_disconnected:
+                print(f"\n🛑 IMPORT STOPPED BY CLIENT")
+                print(f"  Imported: {imported_count}")
+                print(f"  Duplicates: {duplicate_count}")
+                print(f"  Errors: {error_count}\n")
+                return
             
             print(f"\n{'='*60}")
             print(f"IMPORT COMPLETE:")
@@ -2769,13 +2964,25 @@ def import_from_paths():
             print(f"  Errors: {error_count}")
             print(f"{'='*60}\n")
             
-            yield f"event: complete\ndata: {json.dumps({'imported': imported_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
+            yield from emit_event('complete', {
+                'imported': imported_count,
+                'duplicates': duplicate_count,
+                'errors': error_count
+            })
             
+        except GeneratorExit:
+            print("🛑 Import stream disconnected")
         except Exception as e:
+            if client_disconnected:
+                return
+
             print(f"❌ Import error: {e}")
             import traceback
             traceback.print_exc()
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+            yield from emit_event('error', {'error': str(e)})
+        finally:
+            if conn is not None:
+                conn.close()
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
