@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v277';
+const MAIN_JS_VERSION = 'v281';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -22,6 +22,7 @@ const state = {
   hasDatabase: false, // Track whether database exists and is healthy
   lightboxRotationSessions: {}, // photoId -> optimistic rotation session state
   lightboxMediaVersions: {}, // photoId -> cache-buster for rewritten media
+  lightboxVisualState: null, // currently mounted lightbox bitmap state
   lightboxReloadToken: 0,
   lightboxClosing: false,
 };
@@ -78,7 +79,7 @@ function loadAppBar() {
   const mount = document.getElementById('appBarMount');
 
   // Check session cache first (with version check)
-  const APP_BAR_VERSION = '48'; // Increment this when appBar changes
+  const APP_BAR_VERSION = '49'; // Increment this when appBar changes
   try {
     const cachedVersion = sessionStorage.getItem('photoViewer_appBarVersion');
     const cached = sessionStorage.getItem('photoViewer_appBarShell');
@@ -1921,11 +1922,62 @@ function cleanupLightboxRotationSession(photoId) {
   }
 }
 
+function getLightboxVisualState(photoId) {
+  const visualState = state.lightboxVisualState;
+  if (!visualState || visualState.photoId !== photoId) {
+    return null;
+  }
+  return visualState;
+}
+
+function clearLightboxVisualState() {
+  state.lightboxVisualState = null;
+}
+
+function setLightboxVisualState(photoId, mediaEl, persistedRotation = null) {
+  const width = mediaEl?.naturalWidth || mediaEl?.videoWidth || 0;
+  const height = mediaEl?.naturalHeight || mediaEl?.videoHeight || 0;
+  const session = getLightboxRotationSession(photoId);
+
+  state.lightboxVisualState = {
+    photoId,
+    width,
+    height,
+    persistedRotation: normalizeRotationDegrees(
+      persistedRotation ?? session?.persistedRotation ?? 0,
+    ),
+  };
+}
+
+function getLightboxVisualDimensions(photo) {
+  const visualState = getLightboxVisualState(photo.id);
+  if (visualState?.width && visualState?.height) {
+    return {
+      width: visualState.width,
+      height: visualState.height,
+    };
+  }
+
+  return {
+    width: photo.width,
+    height: photo.height,
+  };
+}
+
 function getLightboxPreviewRotation(photoId) {
   const session = getLightboxRotationSession(photoId);
-  // Preview rotation should be relative to the photo as it currently exists on disk,
-  // not the total historical rotation accumulated in this session.
-  return session ? getRotationStillNeeded(photoId) : 0;
+  if (!session) return 0;
+
+  const visualState = getLightboxVisualState(photoId);
+  if (!visualState) {
+    return getRotationStillNeeded(photoId);
+  }
+
+  // Preview rotation must be relative to the bitmap currently mounted in the
+  // lightbox, not whichever intermediate file state has already committed.
+  return normalizeRotationDegrees(
+    session.displayRotation - visualState.persistedRotation,
+  );
 }
 
 function rebaseLightboxRotationSessionForReload(photoId) {
@@ -2063,6 +2115,10 @@ function getCurrentLightboxImageDebugInfo() {
   };
 }
 
+function invalidatePendingLightboxReloads() {
+  state.lightboxReloadToken += 1;
+}
+
 function reloadOpenLightboxMedia(photoId) {
   if (!state.lightboxOpen || state.lightboxPhotoIndex === null) return;
 
@@ -2104,6 +2160,11 @@ function reloadOpenLightboxMedia(photoId) {
           return;
         }
 
+        setLightboxVisualState(
+          photoId,
+          nextImg,
+          getLightboxRotationSession(photoId)?.persistedRotation ?? 0,
+        );
         nextImg.className = 'lightbox-media-element';
         nextImg.alt =
           currentPhoto.path?.split('/').pop() ||
@@ -2256,16 +2317,19 @@ async function processImmediateRotationSession(photoId) {
       session.persistedRotation + requestDegrees,
     );
     session.requestInFlight = false;
-    reloadOpenLightboxMedia(photoId);
+    const stillNeededAfterCommit = getRotationStillNeeded(photoId);
+    if (stillNeededAfterCommit === 0) {
+      reloadOpenLightboxMedia(photoId);
+    }
     console.log('[rotate] immediate rotate committed', {
       photoId,
       requestDegrees,
       rotateElapsedMs: Number(rotateElapsedMs.toFixed(1)),
-      stillNeeded: getRotationStillNeeded(photoId),
+      stillNeeded: stillNeededAfterCommit,
       liveLightboxImage: getCurrentLightboxImageDebugInfo(),
     });
 
-    if (getRotationStillNeeded(photoId) !== 0) {
+    if (stillNeededAfterCommit !== 0) {
       processImmediateRotationSession(photoId);
     } else {
       cleanupLightboxRotationSession(photoId);
@@ -2341,7 +2405,7 @@ async function handleLightboxRotate() {
 
   const session = getLightboxRotationSession(photo.id, true);
   session.displayRotation = normalizeRotationDegrees(session.displayRotation + 90);
-  
+  invalidatePendingLightboxReloads();
   applyCurrentLightboxPreviewRotation();
 
   if (session.mode === 'staged') {
@@ -2654,10 +2718,11 @@ function handleLightboxKeyboard(e) {
 function calculateMediaDimensions(photo, rotationDegrees = 0) {
   const normalized = normalizeRotationDegrees(rotationDegrees);
   const isTransposed = normalized === 90 || normalized === 270;
+  const baseDimensions = getLightboxVisualDimensions(photo);
 
   // Displayed dimensions after rotation
-  const displayW = isTransposed ? photo.height : photo.width;
-  const displayH = isTransposed ? photo.width : photo.height;
+  const displayW = isTransposed ? baseDimensions.height : baseDimensions.width;
+  const displayH = isTransposed ? baseDimensions.width : baseDimensions.height;
 
   if (!displayW || !displayH) {
     return {
@@ -2730,6 +2795,7 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
       if (placeholder.parentNode) {
         placeholder.parentNode.removeChild(placeholder);
       }
+      setLightboxVisualState(photo.id, video, 0);
       video.style.backgroundColor = 'transparent';
     });
 
@@ -2742,6 +2808,7 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
     // Check if already cached
     if (img.complete && img.naturalWidth > 0) {
       const frame = createLightboxMediaFrame();
+      setLightboxVisualState(photo.id, img);
       img.className = 'lightbox-media-element';
       applyLightboxMediaStyles(
         frame,
@@ -2770,6 +2837,7 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
         }
 
         // Add loaded image
+        setLightboxVisualState(photo.id, img);
         img.className = 'lightbox-media-element';
         applyLightboxMediaStyles(
           frame,
@@ -2832,6 +2900,8 @@ async function openLightbox(photoIndex) {
 
   if (!overlay || !content) return;
 
+  invalidatePendingLightboxReloads();
+  clearLightboxVisualState();
   state.lightboxOpen = true;
   state.lightboxPhotoIndex = photoIndex;
 
@@ -3038,6 +3108,8 @@ async function closeLightbox() {
   }
 
   // Grid is already positioned (from openLightbox), just close
+  invalidatePendingLightboxReloads();
+  clearLightboxVisualState();
   state.lightboxOpen = false;
   state.lightboxPhotoIndex = null;
   overlay.style.display = 'none';

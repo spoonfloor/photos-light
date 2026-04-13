@@ -16,6 +16,24 @@ const FolderPicker = (() => {
   let keyboardHandler = null; // Store keyboard event handler for cleanup
   let folderListClickHandler = null; // Store reference to event handler for cleanup
 
+  async function readErrorMessage(response, fallbackMessage) {
+    try {
+      const error = await response.json();
+      return error.error || fallbackMessage;
+    } catch (_) {
+      return fallbackMessage;
+    }
+  }
+
+  function buildHttpError(response, message) {
+    const error = new Error(message);
+    error.status = response.status;
+    if (response.status === 404) {
+      error.code = 'filesystem_api_unavailable';
+    }
+    return error;
+  }
+
   // ===========================================================================
   // API Calls
   // ===========================================================================
@@ -23,7 +41,8 @@ const FolderPicker = (() => {
   async function getLocations() {
     const response = await fetch('/api/filesystem/get-locations');
     if (!response.ok) {
-      throw new Error('Failed to get locations');
+      const message = await readErrorMessage(response, 'Failed to get locations');
+      throw buildHttpError(response, message);
     }
     const data = await response.json();
     return data.locations;
@@ -37,8 +56,8 @@ const FolderPicker = (() => {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to list directory');
+      const message = await readErrorMessage(response, 'Failed to list directory');
+      throw buildHttpError(response, message);
     }
 
     const data = await response.json();
@@ -46,6 +65,32 @@ const FolderPicker = (() => {
       folders: data.folders,
       has_db: data.has_db || false
     };
+  }
+
+  async function showNativeFolderPicker(options = {}) {
+    const prompt = (options.title || 'Select folder').replace(/"/g, '\\"');
+    const script = `POSIX path of (choose folder with prompt "${prompt}")`;
+
+    const response = await fetch('/api/library/browse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to open folder picker');
+    }
+
+    if (data.status === 'cancelled') {
+      return null;
+    }
+
+    return data.library_path || null;
+  }
+
+  function isFilesystemApiUnavailable(error) {
+    return error?.code === 'filesystem_api_unavailable' || error?.status === 404;
   }
 
   // ===========================================================================
@@ -449,6 +494,17 @@ const FolderPicker = (() => {
         chooseBtn.onclick = handleChoose;
       } catch (error) {
         console.error('Failed to show folder picker:', error);
+        if (isFilesystemApiUnavailable(error)) {
+          try {
+            const nativePath = await showNativeFolderPicker(options);
+            resolve(nativePath);
+            return;
+          } catch (nativeError) {
+            console.error('Native folder picker fallback failed:', nativeError);
+            reject(nativeError);
+            return;
+          }
+        }
         reject(error);
       }
     });

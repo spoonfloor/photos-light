@@ -5,7 +5,9 @@ from tempfile import TemporaryDirectory
 
 from library_layout import canonical_db_path, detect_existing_db_path, is_library_metadata_file
 from make_library_perfect import (
+    DBNormalizationEngine,
     IGNORED_LIBRARY_FILES,
+    LibraryCleaner,
     canonical_relative_path,
     in_infrastructure,
     is_day_folder_name,
@@ -68,6 +70,9 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
         self.assertTrue(is_library_metadata_file("photo_library.db-wal"))
         self.assertTrue(is_library_metadata_file("photo_library.db-shm"))
         self.assertFalse(is_library_metadata_file("notes.txt"))
+
+    def test_db_normalization_engine_alias_exists(self):
+        self.assertTrue(issubclass(DBNormalizationEngine, LibraryCleaner))
 
 
 if __name__ == "__main__":

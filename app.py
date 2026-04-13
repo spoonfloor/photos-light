@@ -5028,10 +5028,10 @@ def get_favorites():
 @app.route('/api/library/make-perfect', methods=['POST'])
 def api_make_library_perfect():
     """
-    Execute Clean library operation.
+    Execute Clean library operation via the DB normalization engine.
     """
     try:
-        from make_library_perfect import make_library_perfect
+        from make_library_perfect import run_db_normalization_engine
 
         if not LIBRARY_PATH:
             return jsonify({'error': 'No library configured'}), 400
@@ -5054,7 +5054,7 @@ def api_make_library_perfect():
         print(f"{'='*60}\n")
         
         # Execute the operation against the configured DB path.
-        result = make_library_perfect(LIBRARY_PATH, db_path=DB_PATH)
+        result = run_db_normalization_engine(LIBRARY_PATH, db_path=DB_PATH)
         
         print(f"\n✅ Make Library Perfect completed successfully")
         

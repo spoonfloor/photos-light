@@ -781,6 +781,15 @@ class LibraryCleaner:
         return issues
 
 
+class DBNormalizationEngine(LibraryCleaner):
+    """Authoritative DB normalization engine for library cleanup and repair."""
+
+
+def run_db_normalization_engine(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    engine = DBNormalizationEngine(library_path, db_path=db_path)
+    return engine.run()
+
+
 def make_library_perfect(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:
-    cleaner = LibraryCleaner(library_path, db_path=db_path)
-    return cleaner.run()
+    """Backward-compatible wrapper for the DB normalization engine."""
+    return run_db_normalization_engine(library_path, db_path=db_path)
