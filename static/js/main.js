@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v281';
+const MAIN_JS_VERSION = 'v299';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -11,6 +11,7 @@ const state = {
   selectedPhotos: new Set(),
   photos: [],
   loading: false,
+  libraryTransitionActive: false,
   lastClickedIndex: null, // For shift-select
   lightboxOpen: false,
   lightboxPhotoIndex: null, // Index of currently viewed photo in lightbox
@@ -298,7 +299,6 @@ function enablePhotoRelatedActions() {
   const utilityItems = [
     'cleanOrganizeBtn',
     'rebuildDatabaseBtn',
-    'rebuildThumbnailsBtn',
   ];
 
   utilityItems.forEach((id) => {
@@ -1813,6 +1813,29 @@ function showCriticalErrorModal(type, path = '') {
 
     actions.appendChild(switchBtn);
     actions.appendChild(rebuildBtn);
+  } else if (type === 'db_needs_migration') {
+    title.textContent = 'Database needs migration';
+
+    message.innerHTML = `<p style="margin: 0 0 12px 0;">Your library database needs an update before it can be opened safely.</p><p style="margin: 0;">${path}</p>`;
+
+    const switchBtn = document.createElement('button');
+    switchBtn.className = 'btn btn-secondary';
+    switchBtn.textContent = 'Open library';
+    switchBtn.onclick = async () => {
+      hideCriticalErrorModal();
+      await browseSwitchLibrary();
+    };
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.className = 'btn btn-primary';
+    reloadBtn.textContent = 'Reload';
+    reloadBtn.onclick = () => {
+      hideCriticalErrorModal();
+      window.location.reload();
+    };
+
+    actions.appendChild(switchBtn);
+    actions.appendChild(reloadBtn);
   } else if (type === 'library_not_found') {
     title.textContent = 'Library folder not found';
 
@@ -2269,6 +2292,15 @@ function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
   }
 }
 
+async function handleDuplicateRemovedRotation(photoId, message) {
+  delete state.lightboxRotationSessions[photoId];
+  if (state.lightboxOpen && state.photos[state.lightboxPhotoIndex]?.id === photoId) {
+    await closeLightbox();
+  }
+  await loadAndRenderPhotos();
+  showToast(message || 'Photo became a duplicate and was moved to trash');
+}
+
 async function processImmediateRotationSession(photoId) {
   const session = getLightboxRotationSession(photoId);
   if (!session || session.mode === 'staged' || session.requestInFlight) return;
@@ -2298,6 +2330,12 @@ async function processImmediateRotationSession(photoId) {
 
     if (!response.ok) {
       throw new Error(result.error || 'Failed to rotate photo');
+    }
+
+    if (result.duplicate_removed) {
+      session.requestInFlight = false;
+      await handleDuplicateRemovedRotation(photoId, result.message);
+      return;
     }
 
     if (result.staged) {
@@ -2374,6 +2412,11 @@ async function commitPendingLightboxRotations() {
       const result = await response.json();
       if (!response.ok || !result.ok || !result.committed) {
         throw new Error(result.error || 'Failed to save rotation');
+      }
+
+      if (result.duplicate_removed) {
+        await handleDuplicateRemovedRotation(photoId, result.message);
+        continue;
       }
 
       applyCommittedPhotoUpdate(result.photo, {
@@ -2500,10 +2543,24 @@ function wireLightbox() {
 
         const result = await response.json();
         
+        if (result.duplicate_removed) {
+          if (state.lightboxOpen && state.photos[state.lightboxPhotoIndex]?.id === photoId) {
+            await closeLightbox();
+          }
+          await loadAndRenderPhotos();
+          showToast(
+            result.message || 'Photo became a duplicate and was moved to trash',
+            null,
+          );
+          return;
+        }
 
         // Update local state to match backend
         if (state.photos[state.lightboxPhotoIndex]) {
           state.photos[state.lightboxPhotoIndex].rating = result.rating;
+        }
+        if (result.photo) {
+          applyCommittedPhotoUpdate(result.photo);
         }
 
         // Update grid star badge
@@ -3218,10 +3275,11 @@ async function fetchPhotos(offset = 0, limit = 100) {
 /**
  * Load ALL photos metadata at once (lightweight)
  */
-async function loadAndRenderPhotos(append = false) {
+async function loadAndRenderPhotos(append = false, options = {}) {
   if (state.loading) return;
 
   state.loading = true;
+  const { throwOnError = false } = options;
 
   
 
@@ -3230,9 +3288,15 @@ async function loadAndRenderPhotos(append = false) {
     const response = await fetch(`/api/photos?sort=${state.currentSortOrder}`);
     const data = await response.json();
 
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load photos');
+    }
+
     // Check for database corruption
     if (checkForDatabaseCorruption(data)) {
-      state.loading = false;
+      if (throwOnError) {
+        throw new Error(data.error || data.message || 'Database appears corrupted');
+      }
       return;
     }
 
@@ -3262,6 +3326,9 @@ async function loadAndRenderPhotos(append = false) {
   } catch (error) {
     console.error('❌ Error loading photos:', error);
     state.hasDatabase = false; // Mark database as unavailable on error
+    if (throwOnError) {
+      throw error;
+    }
   } finally {
     state.loading = false;
   }
@@ -4338,7 +4405,7 @@ async function loadUtilitiesMenu() {
   if (utilitiesMenuLoaded) return;
 
   try {
-    const response = await fetch('fragments/utilitiesMenu.html?v=3');
+    const response = await fetch('fragments/utilitiesMenu.html?v=4');
     if (!response.ok) throw new Error('Failed to load utilities menu');
 
     const html = await response.text();
@@ -4347,9 +4414,6 @@ async function loadUtilitiesMenu() {
     // Wire up menu items
     const switchLibraryBtn = document.getElementById('switchLibraryBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
-    const rebuildThumbnailsBtn = document.getElementById(
-      'rebuildThumbnailsBtn',
-    );
     const closeLibraryBtn = document.getElementById('closeLibraryBtn');
 
     if (switchLibraryBtn) {
@@ -4368,25 +4432,10 @@ async function loadUtilitiesMenu() {
       });
     }
 
-    if (rebuildThumbnailsBtn) {
-      rebuildThumbnailsBtn.addEventListener('click', () => {
-        
-        hideUtilitiesMenu();
-        rebuildThumbnails();
-      });
-    }
-
     if (closeLibraryBtn) {
       closeLibraryBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
-        showDialogOld(
-          'Close library',
-          'Return to the welcome screen? Your library folder and files are not deleted.',
-          () => {
-            resetLibraryConfig();
-          },
-          'Close',
-        );
+        void resetLibraryConfig();
       });
     }
 
@@ -4436,11 +4485,15 @@ async function toggleUtilitiesMenu() {
 
     // Position menu below the button
     const btnRect = utilitiesBtn.getBoundingClientRect();
-    
-    
+    const insetEnd = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue(
+        '--utilities-menu-viewport-inset-end',
+      ),
+    );
+    const insetExtra = Number.isFinite(insetEnd) ? insetEnd : 0;
 
     menu.style.top = `${btnRect.bottom + 8}px`;
-    menu.style.right = `${window.innerWidth - btnRect.right}px`;
+    menu.style.right = `${window.innerWidth - btnRect.right + insetExtra}px`;
     menu.style.display = 'block';
 
     
@@ -4465,7 +4518,6 @@ function hideUtilitiesMenu() {
  * - Update database: requires database (doesn't need photos)
  * - Rebuild database: requires database
  * - Remove duplicates: requires database AND 1+ photos
- * - Rebuild thumbnails: requires database AND 1+ photos
  * - Close library: requires database
  */
 function updateUtilityMenuAvailability() {
@@ -4484,9 +4536,6 @@ function updateUtilityMenuAvailability() {
 
   // Rebuild database - requires database
   enableMenuItem('rebuildDatabaseBtn', hasDatabase);
-
-  // Rebuild thumbnails - requires database AND 1+ photos
-  enableMenuItem('rebuildThumbnailsBtn', hasDatabase && hasPhotos);
 }
 
 /**
@@ -4929,7 +4978,12 @@ function closeUpdateIndexOverlay() {
 // =====================
 
 /**
- * Rebuild thumbnails - 3-phase overlay pattern
+ * Rebuild thumbnails — 3-phase overlay pattern.
+ *
+ * UI entry (More menu) removed Apr 2026: thumbnail cache issues are rare; deleting
+ * the library `.thumbnails` folder manually is equivalent. Kept so POST
+ * `/api/utilities/rebuild-thumbnails` and this flow remain available if we
+ * re-expose or call from devtools / a future setting.
  */
 async function rebuildThumbnails() {
   // Load overlay if not already loaded
@@ -5226,7 +5280,7 @@ async function loadNameLibraryOverlay() {
 
 /**
  * Show name library dialog and return user's chosen name
- * @returns {Promise<string|null>} Library name or null if cancelled
+ * @returns {Promise<string|null|{ action: 'cancel'|'back' }>} Name, null if cancelled (non-wizard), or wizard actions
  */
 async function showNameLibraryDialog(options = {}) {
   return new Promise(async (resolve) => {
@@ -5242,6 +5296,25 @@ async function showNameLibraryDialog(options = {}) {
     const cancelBtn = document.getElementById('nameLibraryCancelBtn');
     const confirmBtn = document.getElementById('nameLibraryConfirmBtn');
     const closeBtn = document.getElementById('nameLibraryCloseBtn');
+    const goBackBtn = document.getElementById('nameLibraryGoBackBtn');
+
+    const wizardActions = !!options.wizardActions;
+    const showGoBack = wizardActions && !!options.showGoBack;
+    let listenersDetached = false;
+    let isSubmitting = false;
+
+    function setActionButtonsDisabled(disabled) {
+      cancelBtn.disabled = disabled;
+      confirmBtn.disabled = disabled;
+      closeBtn.disabled = disabled;
+      if (goBackBtn) {
+        goBackBtn.disabled = disabled;
+      }
+    }
+
+    if (goBackBtn) {
+      goBackBtn.style.display = showGoBack ? '' : 'none';
+    }
 
     // Update dialog title and subtitle if provided
     const titleEl = overlay.querySelector('.import-title');
@@ -5261,7 +5334,11 @@ async function showNameLibraryDialog(options = {}) {
     }
 
     // Reset state
-    input.value = 'Photo Library';
+    const defaultName =
+      options.initialLibraryName != null && options.initialLibraryName !== ''
+        ? options.initialLibraryName
+        : 'Photo Library';
+    input.value = defaultName;
     errorDiv.style.visibility = 'hidden';
     errorDiv.textContent = '';
 
@@ -5269,6 +5346,9 @@ async function showNameLibraryDialog(options = {}) {
     setTimeout(() => {
       input.focus();
       input.select();
+      if (options.parentPath) {
+        validateName(input.value);
+      }
     }, 100);
 
     // Sanitize folder name
@@ -5328,34 +5408,79 @@ async function showNameLibraryDialog(options = {}) {
       return sanitized;
     }
 
-    // Clean up listeners
-    function cleanup() {
-      overlay.style.display = 'none';
-      // Remove event listeners by cloning (prevents duplicates)
+    // Remove listeners (clone nodes). Optionally hide — wizard handoff keeps overlay
+    // visible until the next step paints so the empty state never flashes through.
+    function detachListeners() {
+      if (listenersDetached) {
+        return;
+      }
+      if (
+        !cancelBtn?.parentNode ||
+        !confirmBtn?.parentNode ||
+        !closeBtn?.parentNode ||
+        !input?.parentNode
+      ) {
+        listenersDetached = true;
+        return;
+      }
+
       const newCancelBtn = cancelBtn.cloneNode(true);
       const newConfirmBtn = confirmBtn.cloneNode(true);
       const newCloseBtn = closeBtn.cloneNode(true);
       const newInput = input.cloneNode(true);
+      const newGoBackBtn = goBackBtn ? goBackBtn.cloneNode(true) : null;
 
       cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
       confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
       closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
       input.parentNode.replaceChild(newInput, input);
+      if (goBackBtn && newGoBackBtn && goBackBtn.parentNode) {
+        goBackBtn.parentNode.replaceChild(newGoBackBtn, goBackBtn);
+      }
+      listenersDetached = true;
+    }
+
+    function cleanup() {
+      overlay.style.display = 'none';
+      detachListeners();
     }
 
     // Handle cancel
     const handleCancel = () => {
       cleanup();
-      resolve(null);
+      if (wizardActions) {
+        resolve({ action: 'cancel' });
+      } else {
+        resolve(null);
+      }
+    };
+
+    const handleGoBack = () => {
+      cleanup();
+      resolve({ action: 'back' });
     };
 
     // Handle confirm
     const handleConfirm = async () => {
+      if (isSubmitting) {
+        return;
+      }
+
+      isSubmitting = true;
+      setActionButtonsDisabled(true);
       const validated = await validateName(input.value);
       if (validated) {
-        cleanup();
+        if (wizardActions) {
+          detachListeners();
+        } else {
+          cleanup();
+        }
         resolve(validated);
+        return;
       }
+
+      isSubmitting = false;
+      setActionButtonsDisabled(false);
     };
 
     // Handle Enter key
@@ -5388,6 +5513,9 @@ async function showNameLibraryDialog(options = {}) {
     cancelBtn.addEventListener('click', handleCancel);
     closeBtn.addEventListener('click', handleCancel);
     confirmBtn.addEventListener('click', handleConfirm);
+    if (goBackBtn && showGoBack) {
+      goBackBtn.addEventListener('click', handleGoBack);
+    }
     input.addEventListener('keydown', handleKeyPress);
     input.addEventListener('input', handleInput);
 
@@ -5407,19 +5535,10 @@ async function openSwitchLibraryOverlay() {
   }
 
   // Get current library path
-  try {
-    const response = await fetch('/api/library/current');
-    const data = await response.json();
-    const pathElement = document.getElementById('currentLibraryPath');
-    if (pathElement) {
-      pathElement.textContent = data.library_path;
-    }
-  } catch (error) {
-    console.error('Failed to get current library:', error);
-    const pathElement = document.getElementById('currentLibraryPath');
-    if (pathElement) {
-      pathElement.textContent = '(unable to load)';
-    }
+  const currentLibrary = await fetchCurrentLibraryInfo();
+  const pathElement = document.getElementById('currentLibraryPath');
+  if (pathElement) {
+    pathElement.textContent = currentLibrary?.library_path || '(unable to load)';
   }
 
   document.getElementById('switchLibraryOverlay').style.display = 'block';
@@ -5433,6 +5552,19 @@ function closeSwitchLibraryOverlay() {
   const overlay = document.getElementById('switchLibraryOverlay');
   if (overlay) {
     overlay.style.display = 'none';
+  }
+}
+
+async function fetchCurrentLibraryInfo() {
+  try {
+    const response = await fetch('/api/library/current');
+    if (!response.ok) {
+      throw new Error(`Failed to load current library (${response.status})`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.warn('⚠️ Failed to get current library:', error);
+    return null;
   }
 }
 
@@ -5854,12 +5986,10 @@ async function executeTerraformFlow(options = {}) {
     });
 
     // Step 5: Switch to this library
-    await switchToLibrary(path, dbPath);
-
-    return true;
+    return await switchToLibrary(path, dbPath);
   } catch (error) {
     console.error('❌ Terraform failed:', error);
-    showToast(`Terraform failed: ${error.message}`, 'error');
+    showToast(`Terraform failed: ${error.message}`);
 
     // Hide progress overlay if showing
     const progressOverlay = document.getElementById('terraformProgressOverlay');
@@ -5871,61 +6001,107 @@ async function executeTerraformFlow(options = {}) {
   }
 }
 
-/**
- * Show transition state while switching/creating library
- * Clears grid and disables interactive buttons
- */
-function showLibraryTransitionState() {
-  
-
-  // Clear photo container
-  const container = document.getElementById('photoContainer');
-  if (container) {
-    container.innerHTML = `
-      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-secondary);">
-        <div style="font-size: 14px;">Loading library...</div>
-      </div>
-    `;
+async function loadLibraryTransitionOverlay() {
+  if (document.getElementById('libraryTransitionOverlay')) {
+    return;
   }
 
-  // Disable app bar interactive buttons
-  const interactiveButtons = [
-    'addPhotoBtn',
-    'sortToggleBtn',
-    'deleteBtn',
-    'editDateBtn',
-    'deselectAllBtn',
-  ];
-
-  interactiveButtons.forEach((id) => {
-    const btn = document.getElementById(id);
-    if (btn) {
-      btn.style.opacity = '0.3';
-      btn.style.pointerEvents = 'none';
+  try {
+    const response = await fetch('/fragments/libraryTransitionOverlay.html');
+    if (!response.ok) {
+      throw new Error(
+        `Failed to load library transition overlay (${response.status})`,
+      );
     }
-  });
-
-  // Disable date picker
-  const monthPicker = document.getElementById('monthPicker');
-  const yearPicker = document.getElementById('yearPicker');
-  if (monthPicker) {
-    monthPicker.disabled = true;
-    monthPicker.style.opacity = '0.3';
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (error) {
+    console.error('❌ Failed to load library transition overlay:', error);
   }
-  if (yearPicker) {
-    yearPicker.disabled = true;
-    yearPicker.style.opacity = '0.3';
+}
+
+async function showLibraryTransitionOverlay(options = {}) {
+  let overlay = document.getElementById('libraryTransitionOverlay');
+  if (!overlay) {
+    await loadLibraryTransitionOverlay();
+    overlay = document.getElementById('libraryTransitionOverlay');
   }
 
-  // Disable utility menu items (except utilities button itself stays enabled)
-  updateUtilityMenuAvailability(); // This will disable based on state
+  if (!overlay) {
+    return;
+  }
+
+  const titleEl = document.getElementById('libraryTransitionTitle');
+  const statusEl = document.getElementById('libraryTransitionStatusLabel');
+
+  if (titleEl) {
+    titleEl.textContent = options.title || 'Opening library';
+  }
+  if (statusEl) {
+    statusEl.textContent =
+      options.message || 'Loading photos and preparing your library.';
+  }
+
+  overlay.style.display = 'flex';
+  state.libraryTransitionActive = true;
+}
+
+function hideLibraryTransitionOverlay() {
+  const overlay = document.getElementById('libraryTransitionOverlay');
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+  state.libraryTransitionActive = false;
+}
+
+async function restorePreviousLibraryAfterFailedSwitch(previousLibrary) {
+  if (!previousLibrary?.library_path) {
+    return false;
+  }
+
+  try {
+    const response = await fetch('/api/library/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        library_path: previousLibrary.library_path,
+        db_path: previousLibrary.db_path,
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to restore previous library');
+    }
+
+    await loadAndRenderPhotos(false, { throwOnError: true });
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to restore previous library:', error);
+    return false;
+  }
+}
+
+function renderSafeLibraryFallback() {
+  state.photos = [];
+  state.hasDatabase = false;
+  state.selectedPhotos.clear();
+  state.lastClickedIndex = null;
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
+  }
+  renderFirstRunEmptyState();
+  enableAppBarButtons();
 }
 
 /**
- * Re-enable app bar buttons after library transition completes
- * Called by loadAndRenderPhotos() after successful library load
+ * Sync app bar interactivity after library load state changes
  */
 function enableAppBarButtons() {
+  const hasPhotos = state.photos && state.photos.length > 0;
+  const canUseDatePicker = state.hasDatabase && hasPhotos;
+
   // Re-enable add photo button (always available)
   const addPhotoBtn = document.getElementById('addPhotoBtn');
   if (addPhotoBtn) {
@@ -5933,16 +6109,27 @@ function enableAppBarButtons() {
     addPhotoBtn.style.pointerEvents = 'auto';
   }
 
-  // Re-enable sort button (enabled when photos exist, managed by enablePhotoRelatedActions)
+  // Sort button follows whether the current library has photos.
   const sortToggleBtn = document.getElementById('sortToggleBtn');
-  if (sortToggleBtn && state.photos && state.photos.length > 0) {
-    sortToggleBtn.style.opacity = '1';
-    sortToggleBtn.style.pointerEvents = 'auto';
+  if (sortToggleBtn) {
+    sortToggleBtn.style.opacity = hasPhotos ? '1' : '0.3';
+    sortToggleBtn.style.pointerEvents = hasPhotos ? 'auto' : 'none';
   }
 
-  // Delete, edit date, deselect buttons are managed by selection state (updateButtonVisibility)
-  // Date pickers are re-enabled when populateDatePicker() runs
-  // Utility menu items are re-enabled by updateUtilityMenuAvailability()
+  updateDeleteButtonVisibility();
+
+  const monthPicker = document.getElementById('monthPicker');
+  const yearPicker = document.getElementById('yearPicker');
+  if (monthPicker) {
+    monthPicker.disabled = !canUseDatePicker;
+    monthPicker.style.opacity = canUseDatePicker ? '1' : '0.3';
+  }
+  if (yearPicker) {
+    yearPicker.disabled = !canUseDatePicker;
+    yearPicker.style.opacity = canUseDatePicker ? '1' : '0.3';
+  }
+
+  updateUtilityMenuAvailability();
 }
 
 /**
@@ -5960,6 +6147,7 @@ async function browseSwitchLibrary() {
     closeSwitchLibraryOverlay();
 
     const selectedPath = await FolderPicker.show({
+      intent: FolderPicker.INTENT.OPEN_EXISTING_LIBRARY,
       title: 'Open library',
       subtitle:
         'Select an existing library folder (or choose where to create one).',
@@ -5971,9 +6159,6 @@ async function browseSwitchLibrary() {
     }
 
     
-
-    // Enter transition state immediately (clears grid, disables buttons)
-    showLibraryTransitionState();
 
     // Try to check if library exists via backend
     const checkResponse = await fetch('/api/library/check', {
@@ -5987,7 +6172,10 @@ async function browseSwitchLibrary() {
     if (checkResult.exists) {
       // SCENARIO 1: Valid library on disk — open it (media scan is for terraform only)
       closeSwitchLibraryOverlay();
-      await switchToLibrary(selectedPath, checkResult.db_path);
+      const switched = await switchToLibrary(selectedPath, checkResult.db_path);
+      if (!switched) {
+        return false;
+      }
     } else if (!checkResult.has_media) {
       // SCENARIO 2: No DB, no media - create blank library here
       
@@ -6020,7 +6208,10 @@ async function browseSwitchLibrary() {
       
 
       // Switch to new library
-      await switchToLibrary(libraryPath, createResult.db_path);
+      const switched = await switchToLibrary(libraryPath, createResult.db_path);
+      if (!switched) {
+        return false;
+      }
     } else {
       // SCENARIO 3: No DB, has media - show terraform choice dialog
       
@@ -6063,7 +6254,10 @@ async function browseSwitchLibrary() {
         
 
         // Switch to new library
-        await switchToLibrary(libraryPath, createResult.db_path);
+        const switched = await switchToLibrary(libraryPath, createResult.db_path);
+        if (!switched) {
+          return false;
+        }
       } else if (choice === 'terraform') {
         // User chose to terraform
         
@@ -6090,97 +6284,157 @@ async function browseSwitchLibrary() {
     return true;
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
-    showToast(`Error: ${error.message}`, 'error');
+    showToast(`Error: ${error.message}`);
     return false;
   }
 }
 
 /**
- * Create new library with name prompt (first-run flow)
+ * True if a folder with the same sanitized name already exists under parentPath.
+ */
+async function libraryFolderNameExistsAtParent(parentPath, rawName) {
+  const sanitizeFolderName = (name) =>
+    name
+      .replace(/[\/\\:*?"<>|]/g, '')
+      .replace(/^\.+/, '')
+      .trim();
+  const sanitized = sanitizeFolderName(rawName);
+  if (!sanitized) return false;
+  try {
+    const response = await fetch('/api/filesystem/list-directory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: parentPath }),
+    });
+    if (!response.ok) return false;
+    const data = await response.json();
+    const existingFolders = data.folders.map((f) =>
+      typeof f === 'string' ? f : f.name,
+    );
+    return existingFolders.includes(sanitized);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Create new library with name prompt (first-run flow): naming → location → create → import
  */
 async function createNewLibraryWithName(dialogOptions = {}) {
   try {
-    // Loop to allow user to go back and change location
+    let phase = 'name';
+    let libraryName = null;
+    let duplicateParentPath = null;
+
     while (true) {
-      // Step 1: Choose parent location using custom folder picker
-      
+      if (phase === 'name') {
+        const nameResult = await showNameLibraryDialog({
+          ...dialogOptions,
+          wizardActions: true,
+          showGoBack: duplicateParentPath !== null,
+          parentPath: duplicateParentPath,
+          initialLibraryName: libraryName,
+        });
 
-      const parentPath = await FolderPicker.show({
-        title: 'Library location',
-        subtitle: "Choose where you'd like to create your new library",
-      });
+        if (
+          nameResult &&
+          typeof nameResult === 'object' &&
+          nameResult.action === 'cancel'
+        ) {
+          return false;
+        }
+        if (
+          nameResult &&
+          typeof nameResult === 'object' &&
+          nameResult.action === 'back'
+        ) {
+          duplicateParentPath = null;
+          phase = 'folder';
+          continue;
+        }
 
-      if (!parentPath) {
-        
-        return false;
-      }
-
-      
-
-      // Step 2: Get library name from user (with validation against parent path)
-      
-      const libraryName = await showNameLibraryDialog({
-        ...dialogOptions,
-        parentPath: parentPath,
-      });
-
-      if (!libraryName) {
-        
-        // null means cancelled - loop back to folder picker
+        libraryName = nameResult;
+        duplicateParentPath = null;
+        phase = 'folder';
         continue;
       }
 
-      
+      if (phase === 'folder') {
+        const folderResult = await FolderPicker.show({
+          intent: FolderPicker.INTENT.CHOOSE_LIBRARY_LOCATION,
+          title: 'Library location',
+          subtitle: "Choose where you'd like to create your new library",
+          wizardActions: true,
+          showGoBack: true,
+          keepVisibleOnChoose: true,
+        });
 
-      // Step 3: Combine parent path with library name
-      const cleanParentPath = parentPath.replace(/\/+$/, ''); // Remove trailing slashes
-      const fullLibraryPath = `${cleanParentPath}/${libraryName}`;
-      // Step 4: Create library
-      const createResponse = await fetch('/api/library/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          library_path: fullLibraryPath,
-        }),
-      });
+        if (
+          folderResult &&
+          typeof folderResult === 'object' &&
+          folderResult.action === 'cancel'
+        ) {
+          return false;
+        }
+        if (
+          folderResult &&
+          typeof folderResult === 'object' &&
+          folderResult.action === 'back'
+        ) {
+          phase = 'name';
+          continue;
+        }
 
-      const createResult = await createResponse.json();
+        const parentPath = folderResult;
+        const taken = await libraryFolderNameExistsAtParent(
+          parentPath,
+          libraryName,
+        );
+        if (taken) {
+          FolderPicker.hide();
+          duplicateParentPath = parentPath;
+          phase = 'name';
+          continue;
+        }
 
-      if (!createResponse.ok) {
-        throw new Error(createResult.error || 'Failed to create library');
+        const cleanParentPath = parentPath.replace(/\/+$/, '');
+        const fullLibraryPath = `${cleanParentPath}/${libraryName}`;
+
+        const createResponse = await fetch('/api/library/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            library_path: fullLibraryPath,
+          }),
+        });
+
+        const createResult = await createResponse.json();
+
+        if (!createResponse.ok) {
+          throw new Error(createResult.error || 'Failed to create library');
+        }
+
+        const switched = await switchToLibrary(
+          fullLibraryPath,
+          createResult.db_path,
+          { skipTransitionOverlay: true },
+        );
+        if (!switched) {
+          FolderPicker.hide();
+          return false;
+        }
+
+        await triggerImport({
+          onPickerVisible: () => FolderPicker.hide(),
+        });
+
+        return true;
       }
-
-      
-
-      // Step 5: Switch to new library
-      const switchResponse = await fetch('/api/library/switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          library_path: fullLibraryPath,
-          db_path: createResult.db_path,
-        }),
-      });
-
-      const switchResult = await switchResponse.json();
-
-      if (!switchResponse.ok) {
-        throw new Error(switchResult.error || 'Failed to switch library');
-      }
-
-      
-
-      // Step 6: Refresh photos (library is now empty)
-      await loadAndRenderPhotos();
-
-      // Step 7: Immediately show import dialog
-      await triggerImport();
-
-      return true;
     }
   } catch (error) {
+    FolderPicker.hide();
     console.error('❌ Failed to create library:', error);
-    showToast(`Error: ${error.message}`, 'error');
+    showToast(`Error: ${error.message}`);
     return false;
   }
 }
@@ -6278,10 +6532,14 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
     document.getElementById('createLibraryOverlay').style.display = 'none';
 
     // Switch to new library
-    await switchToLibrary(libraryPath, createResult.db_path);
+    const switched = await switchToLibrary(libraryPath, createResult.db_path);
+    if (!switched) {
+      confirmBtn.textContent = 'Create & Switch';
+      confirmBtn.disabled = false;
+    }
   } catch (error) {
     console.error('❌ Failed to create library:', error);
-    showToast(`Error: ${error.message}`, 'error');
+    showToast(`Error: ${error.message}`);
 
     // Reset button
     const confirmBtn = document.getElementById('createLibraryConfirmBtn');
@@ -6293,9 +6551,21 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
 /**
  * Switch to a different library
  */
-async function switchToLibrary(libraryPath, dbPath) {
+async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
+  const deferTransitionHide = !!switchOptions.deferTransitionHide;
+  const skipTransitionOverlay = !!switchOptions.skipTransitionOverlay;
+  const previousLibrary = await fetchCurrentLibraryInfo();
+  const folderName = libraryPath.split('/').filter(Boolean).pop() || 'library';
+  let switchedLibrary = false;
+  let success = false;
+
   try {
-    
+    if (!skipTransitionOverlay && !state.libraryTransitionActive) {
+      await showLibraryTransitionOverlay({
+        title: 'Opening library',
+        message: 'Loading photos and preparing your library.',
+      });
+    }
 
     const response = await fetch('/api/library/switch', {
       method: 'POST',
@@ -6308,13 +6578,7 @@ async function switchToLibrary(libraryPath, dbPath) {
     if (!response.ok) {
       throw new Error(result.error || 'Failed to switch library');
     }
-
-    
-
-    // Get folder name for toast message
-    const folderName =
-      libraryPath.split('/').filter(Boolean).pop() || 'library';
-    showToast(`Opened ${folderName}`);
+    switchedLibrary = true;
 
     // Close overlays
     closeSwitchLibraryOverlay();
@@ -6322,12 +6586,42 @@ async function switchToLibrary(libraryPath, dbPath) {
     if (createOverlay) createOverlay.style.display = 'none';
 
     // Reload photos from new library
-    setTimeout(async () => {
-      await loadAndRenderPhotos();
-    }, 500);
+    await loadAndRenderPhotos(false, { throwOnError: true });
+    if (!deferTransitionHide && !skipTransitionOverlay) {
+      showToast(`Opened ${folderName}`);
+    }
+    success = true;
+    return true;
   } catch (error) {
     console.error('❌ Failed to switch library:', error);
-    showToast(`Error: ${error.message}`, 'error');
+    let restoredPreviousLibrary = false;
+    const shouldAttemptRestore =
+      switchedLibrary && previousLibrary?.library_path !== libraryPath;
+
+    if (shouldAttemptRestore) {
+      if (!skipTransitionOverlay) {
+        await showLibraryTransitionOverlay({
+          title: 'Restoring previous library',
+          message: 'Returning to your previous library after the switch failed.',
+        });
+      }
+      restoredPreviousLibrary =
+        await restorePreviousLibraryAfterFailedSwitch(previousLibrary);
+    }
+
+    if (switchedLibrary && !restoredPreviousLibrary && shouldAttemptRestore) {
+      renderSafeLibraryFallback();
+    }
+
+    const errorMessage = restoredPreviousLibrary
+      ? `Couldn't open ${folderName}. Restored your previous library.`
+      : `Error: ${error.message}`;
+    showToast(errorMessage);
+    return false;
+  } finally {
+    if (!skipTransitionOverlay && (!deferTransitionHide || !success)) {
+      hideLibraryTransitionOverlay();
+    }
   }
 }
 
@@ -6350,9 +6644,9 @@ async function triggerImportWithLibraryCheck() {
 
       // Create new library with naming (custom copy for Add photos flow)
       const created = await createNewLibraryWithName({
-        title: 'Add photos',
+        title: 'Add to new library',
         subtitle:
-          'Adding photos will create a new library. Please give your library folder a name.',
+          'To add photos, first create a new library. Give your library a name to continue.',
       });
 
       // If user cancelled at any point, show empty state
@@ -6377,26 +6671,56 @@ async function triggerImportWithLibraryCheck() {
 
 /**
  * Trigger import via disambiguation dialog
+ * @param {object} [options]
+ * @param {boolean} [options.deferTransitionHandoff] If true, keep the library transition
+ *   overlay up until the photo picker is fully painted and ready to take over.
+ * @param {Function} [options.onPickerVisible] Optional callback fired exactly once
+ *   when the photo picker is ready to take over, or immediately if setup fails first.
  */
-async function triggerImport() {
+async function triggerImport(options = {}) {
+  const deferHandoff = !!options.deferTransitionHandoff;
+  let didRunPickerVisibleCallback = false;
+
+  function runPickerVisibleCallback() {
+    if (didRunPickerVisibleCallback) {
+      return;
+    }
+    didRunPickerVisibleCallback = true;
+    if (typeof options.onPickerVisible === 'function') {
+      options.onPickerVisible();
+    }
+  }
+
   try {
-    
+    if (deferHandoff && state.libraryTransitionActive) {
+      await showLibraryTransitionOverlay({
+        title: 'Select photos',
+        message: 'Choose photos and folders to import.',
+      });
+    }
 
     const selectedPaths = await PhotoPicker.show({
       title: 'Select photos',
       subtitle: 'Choose photos and folders to import',
+      onOverlayReady: () => {
+        if (deferHandoff) {
+          hideLibraryTransitionOverlay();
+        }
+        runPickerVisibleCallback();
+      },
     });
 
     if (!selectedPaths || selectedPaths.length === 0) {
-      
       return;
     }
-
-    
 
     // Scan paths to expand folders into file list (without confirmation dialog)
     await scanAndImport(selectedPaths);
   } catch (error) {
+    if (deferHandoff) {
+      hideLibraryTransitionOverlay();
+    }
+    runPickerVisibleCallback();
     console.error('❌ Failed to trigger import:', error);
     showToast(`Error: ${error.message}`, 'error');
   }
@@ -6851,10 +7175,17 @@ async function checkLibraryHealthAndInit() {
         return;
 
       case 'db_missing':
+      case 'db_corrupted':
       case 'db_inaccessible':
         
         state.hasDatabase = false;
-        showCriticalErrorModal('db_missing', status.db_path);
+        showCriticalErrorModal(status.status, status.db_path);
+        return;
+
+      case 'needs_migration':
+        
+        state.hasDatabase = false;
+        showCriticalErrorModal('db_needs_migration', status.message);
         return;
 
       case 'healthy':
@@ -7062,6 +7393,7 @@ async function copyRejectedFiles() {
 
     // Show folder picker
     const destFolder = await FolderPicker.show({
+      intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
       title: 'Copy rejected files',
       subtitle: 'Choose destination folder for rejected files',
     });

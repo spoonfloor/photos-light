@@ -11,7 +11,8 @@ const PhotoPicker = (() => {
   let topLevelLocations = [];
   let resolveCallback = null;
   let isCountingInBackground = false;
-  let countingAborted = false; // Flag to abort ongoing counting operations
+  let countGeneration = 0; // Invalidates stale background counting jobs
+  let activeCountingJobs = 0; // Tracks live counting jobs for the current generation
   let fileListClickHandler = null; // Store reference to event handler for cleanup
   let keyboardHandler = null; // Store keyboard event handler for cleanup
   let thumbnailObserver = null; // IntersectionObserver for lazy loading thumbnails
@@ -106,33 +107,47 @@ const PhotoPicker = (() => {
     }
   }
 
+  function invalidateBackgroundCounting() {
+    countGeneration++;
+    activeCountingJobs = 0;
+    isCountingInBackground = false;
+  }
+
+  function isCountGenerationActive(generation) {
+    return generation === countGeneration;
+  }
+
+  function isCountJobActive(generation, rootFolderPath) {
+    return isCountGenerationActive(generation) && selectedPaths.has(rootFolderPath);
+  }
+
   // Background recursive selection with progress updates
   async function selectFolderRecursiveBackground(folderPath) {
-    const startTime = Date.now();
-    let lastUpdateTime = startTime;
+    let lastUpdateTime = Date.now();
     let filesDiscoveredSinceUpdate = 0;
     const UPDATE_INTERVAL_MS = 1000;
     const UPDATE_FILE_THRESHOLD = 50;
+    const generation = countGeneration;
 
+    activeCountingJobs++;
     isCountingInBackground = true;
+    updateSelectionCount();
 
     async function recursiveSelect(path) {
-      // Check if counting was aborted
-      if (countingAborted) {
+      if (!isCountJobActive(generation, folderPath)) {
         return;
       }
 
       try {
         const { folders, files } = await listDirectory(path);
 
-        // Check abort again after async operation
-        if (countingAborted) {
+        if (!isCountJobActive(generation, folderPath)) {
           return;
         }
 
         // Add all files
         for (const file of files) {
-          if (countingAborted) return; // Check during loop
+          if (!isCountJobActive(generation, folderPath)) return;
 
           const filePath = path + '/' + file.name;
           if (!selectedPaths.has(filePath)) {
@@ -149,7 +164,7 @@ const PhotoPicker = (() => {
           filesDiscoveredSinceUpdate >= UPDATE_FILE_THRESHOLD ||
           timeSinceUpdate >= UPDATE_INTERVAL_MS
         ) {
-          if (!countingAborted) {
+          if (isCountJobActive(generation, folderPath)) {
             updateSelectionCount();
             lastUpdateTime = now;
             filesDiscoveredSinceUpdate = 0;
@@ -158,7 +173,7 @@ const PhotoPicker = (() => {
 
         // Recursively process subfolders
         for (const folder of folders) {
-          if (countingAborted) return; // Check during loop
+          if (!isCountJobActive(generation, folderPath)) return;
 
           const subFolderPath = path + '/' + folder.name;
           if (!selectedPaths.has(subFolderPath)) {
@@ -171,18 +186,19 @@ const PhotoPicker = (() => {
       }
     }
 
-    await recursiveSelect(folderPath);
+    try {
+      await recursiveSelect(folderPath);
+    } finally {
+      if (!isCountGenerationActive(generation)) {
+        return;
+      }
 
-    // Only finish if not aborted
-    if (!countingAborted) {
-      const totalTime = Date.now() - startTime;
-      isCountingInBackground = false;
+      activeCountingJobs = Math.max(0, activeCountingJobs - 1);
+      isCountingInBackground = activeCountingJobs > 0;
 
       // ALWAYS update UI with final count after counting completes
       folderStateCache.clear();
       updateSelectionCount();
-
-      
     }
   }
 
@@ -648,10 +664,9 @@ const PhotoPicker = (() => {
   }
 
   function clearSelection() {
-    countingAborted = true; // Abort any ongoing counting
+    invalidateBackgroundCounting();
     selectedPaths.clear();
     folderStateCache.clear();
-    isCountingInBackground = false;
     lastClickedIndex = null; // Reset shift-select anchor
     updateSelectionCount();
     updateFileList();
@@ -664,10 +679,9 @@ const PhotoPicker = (() => {
     }
 
     // Clear selection when navigating (Finder-style behavior)
-    countingAborted = true; // Abort any ongoing counting
+    invalidateBackgroundCounting();
     selectedPaths.clear();
     folderStateCache.clear();
-    isCountingInBackground = false;
     lastClickedIndex = null; // Reset shift-select anchor when navigating
 
     currentPath = path || VIRTUAL_ROOT;
@@ -765,6 +779,9 @@ const PhotoPicker = (() => {
   async function show(options = {}) {
     return new Promise(async (resolve, reject) => {
       try {
+        const onOverlayReady =
+          options.onOverlayReady || options.beforePickerVisible;
+
         // Load fragment if not already in DOM
         let overlay = document.getElementById('photoPickerOverlay');
         if (!overlay) {
@@ -788,8 +805,7 @@ const PhotoPicker = (() => {
         // Reset selection state (but preserve currentPath if navigating within same session)
         selectedPaths = new Map();
         folderStateCache = new Map();
-        isCountingInBackground = false;
-        countingAborted = false; // Reset abort flag for new session
+        invalidateBackgroundCounting();
         lastClickedIndex = null; // Reset shift-select anchor for new session
 
         // Determine initial path
@@ -832,8 +848,17 @@ const PhotoPicker = (() => {
         await updateFileList();
         updateSelectionCount();
 
-        // Show overlay
+        // Hide name-library step if it is still visible from the wizard handoff.
+        const nameLibraryOverlay = document.getElementById('nameLibraryOverlay');
+        if (nameLibraryOverlay) {
+          nameLibraryOverlay.style.display = 'none';
+        }
+
+        // Make the picker visible before removing the previous blocking overlay.
         overlay.style.display = 'flex';
+        if (typeof onOverlayReady === 'function') {
+          onOverlayReady();
+        }
 
         // Set up keyboard shortcuts
         keyboardHandler = (e) => handleKeyboard(e);
@@ -846,7 +871,7 @@ const PhotoPicker = (() => {
         const clearBtn = document.getElementById('photoPickerClearBtn');
 
         const handleCancel = () => {
-          countingAborted = true; // Abort any ongoing counting
+          invalidateBackgroundCounting();
 
           // Save current path even on cancel (for next session)
           if (currentPath !== VIRTUAL_ROOT) {
@@ -880,7 +905,8 @@ const PhotoPicker = (() => {
           // Return only root selections (folders/files user checked)
           // Backend will scan folders recursively - no need to send expanded children
           const rootSelections = getRootSelections();
-          
+          invalidateBackgroundCounting();
+
           resolve(rootSelections);
         };
 

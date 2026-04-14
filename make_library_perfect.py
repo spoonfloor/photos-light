@@ -30,9 +30,19 @@ from rotation_utils import (
     can_bake_losslessly as shared_can_bake_losslessly,
     get_orientation_flag as shared_get_orientation_flag,
 )
+from library_cleanliness import (
+    IGNORED_LIBRARY_FILES,
+    INFRASTRUCTURE_DIRS,
+    canonical_relative_path,
+    in_infrastructure,
+    is_day_folder_name,
+    is_year_folder_name,
+    parse_metadata_datetime,
+    path_parts,
+    root_entry_allowed,
+)
 from library_layout import (
     LIBRARY_METADATA_DIR,
-    ROOT_INFRASTRUCTURE_DIRS,
     canonical_db_path,
     db_is_valid,
     db_sidecar_paths,
@@ -76,9 +86,6 @@ VIDEO_EXTENSIONS = {
     ".avi",
 }
 SUPPORTED_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
-INFRASTRUCTURE_DIRS = set(ROOT_INFRASTRUCTURE_DIRS)
-ALLOWED_ROOT_DIRS = INFRASTRUCTURE_DIRS
-IGNORED_LIBRARY_FILES = {".DS_Store"}
 PIL_VERIFY_EXTENSIONS = {
     ".jpg",
     ".jpeg",
@@ -112,74 +119,9 @@ class MediaRecord:
 class CleanLibraryError(RuntimeError):
     """Operation failed and the library may still be dirty."""
 
-
-def parse_metadata_datetime(value: Optional[str], fallback_timestamp: float) -> Tuple[str, datetime]:
-    """Normalize metadata dates to the app's canonical DB format."""
-    if value:
-        candidate = value.strip()
-        for fmt in (
-            "%Y:%m:%d %H:%M:%S",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y:%m:%d %H:%M:%S%z",
-            "%Y-%m-%dT%H:%M:%S",
-        ):
-            try:
-                parsed = datetime.strptime(candidate, fmt)
-                normalized = parsed.strftime("%Y:%m:%d %H:%M:%S")
-                return normalized, datetime.strptime(normalized, "%Y:%m:%d %H:%M:%S")
-            except ValueError:
-                continue
-
-    parsed = datetime.fromtimestamp(fallback_timestamp)
-    normalized = parsed.strftime("%Y:%m:%d %H:%M:%S")
-    return normalized, parsed
-
-
 def get_birth_time(stat_result: os.stat_result) -> float:
     """Use birthtime when available, otherwise fall back to mtime."""
     return float(getattr(stat_result, "st_birthtime", stat_result.st_mtime))
-
-
-def is_year_folder_name(name: str) -> bool:
-    return len(name) == 4 and name.isdigit()
-
-
-def is_day_folder_name(year: str, name: str) -> bool:
-    if len(name) != 10 or name[:4] != year:
-        return False
-    if name[4] != "-" or name[7] != "-":
-        return False
-    try:
-        datetime.strptime(name, "%Y-%m-%d")
-        return True
-    except ValueError:
-        return False
-
-
-def canonical_relative_path(date_obj: datetime, content_hash: str, ext: str) -> str:
-    year = date_obj.strftime("%Y")
-    day = date_obj.strftime("%Y-%m-%d")
-    filename = f"img_{date_obj.strftime('%Y%m%d')}_{content_hash}{ext.lower()}"
-    return os.path.join(year, day, filename)
-
-
-def path_parts(rel_path: str) -> List[str]:
-    if rel_path in ("", "."):
-        return []
-    return rel_path.split(os.sep)
-
-
-def root_entry_allowed(name: str, is_dir: bool) -> bool:
-    if name in IGNORED_LIBRARY_FILES:
-        return True
-    if is_dir:
-        return name in ALLOWED_ROOT_DIRS or is_year_folder_name(name)
-    return False
-
-
-def in_infrastructure(rel_path: str) -> bool:
-    parts = path_parts(rel_path)
-    return bool(parts) and parts[0] in INFRASTRUCTURE_DIRS
 
 
 def exiftool_json(file_path: str, args: List[str]) -> Dict[str, Any]:

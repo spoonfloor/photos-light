@@ -3020,6 +3020,9 @@ def rebuild_thumbnails():
     """
     Rebuild thumbnails: Delete all cached thumbnails.
     They will regenerate automatically via lazy loading as users scroll.
+
+    No in-app menu item as of Apr 2026 (same as removing `.thumbnails/` by hand);
+    endpoint kept for support and possible future UI.
     """
     try:
         import shutil
@@ -3327,7 +3330,7 @@ def list_directory():
         
         # Validate path exists and is accessible
         if not os.path.exists(path):
-            return jsonify({'error': 'Path does not exist'}), 404
+            return jsonify({'error': 'Path does not exist', 'code': 'path_not_found'}), 400
         
         if not os.path.isdir(path):
             return jsonify({'error': 'Path is not a directory'}), 400

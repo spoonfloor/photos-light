@@ -21,6 +21,9 @@
   /* --- Layout --- */
   --app-bar-height: 64px;
   --page-top-gap: 48px;
+  /* Utilities (⋮) dropdown knobs */
+  --utilities-menu-padding-inline-end: 24px; /* inner: label → panel right */
+  --utilities-menu-viewport-inset-end: 0px; /* outer: + nudges whole panel left (away from viewport right) */
   --app-bar-title-size: 20px;
   --app-bar-gap: 4px;
 
@@ -1294,11 +1297,17 @@ input[type="radio"] {
 
 .utilities-menu {
   position: fixed;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  /* With only `right` set in JS, width:auto stretches from the viewport left edge
+     to `right`, causing huge dead space; max-content sizes to the menu labels. */
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
   background: #2a2a2a;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  min-width: 200px;
-  padding: 8px 0;
+  padding: 12px 0 8px;
   z-index: var(--z-dropdown);
 }
 
@@ -1306,8 +1315,9 @@ input[type="radio"] {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 16px;
-  width: 100%;
+  padding: 10px var(--utilities-menu-padding-inline-end) 10px 16px;
+  box-sizing: border-box;
+  min-width: 0;
   background: none;
   border: none;
   color: var(--text-primary);

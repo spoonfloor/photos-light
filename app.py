@@ -42,13 +42,14 @@ import hashlib
 import json
 import logging
 import tempfile
-import threading
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 from io import BytesIO
+from db_health import DBStatus, check_database_health
 from db_schema import create_database_schema
+from library_cleanliness import build_canonical_photo_path, parse_metadata_datetime
 from library_sync import synchronize_library_generator, count_media_files, estimate_duration
 from library_layout import (
     LIBRARY_METADATA_DIR,
@@ -56,8 +57,10 @@ from library_layout import (
     canonical_db_path,
     detect_existing_db_path,
     library_has_db,
+    library_has_openable_db,
     resolve_db_path,
 )
+from media_finalization import finalize_mutated_media
 from rotation_utils import (
     JPEG_LOSSY_QUALITY,
     ROTATION_SUPPORTED_EXTENSIONS,
@@ -88,9 +91,6 @@ TRASH_DIR = None
 DB_BACKUP_DIR = None
 IMPORT_TEMP_DIR = None
 LOG_DIR = None
-ROTATION_RECONCILE_VERSIONS = {}
-ROTATION_RECONCILE_VERSIONS_LOCK = threading.Lock()
-
 # Supported media file extensions (wide net for discovery)
 # Note: BMP excluded - exiftool cannot write EXIF to BMP (EXIF write is required)
 PHOTO_EXTENSIONS = {
@@ -185,6 +185,15 @@ def compute_hash(file_path):
         for byte_block in iter(lambda: f.read(1048576), b""):  # 1MB chunks for network efficiency
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()[:7]  # First 7 chars
+
+
+def compute_full_hash(file_path):
+    """Compute the full SHA-256 hash of a file."""
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(1048576), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
 def save_and_hash(file_storage, dest_path):
     """
@@ -349,16 +358,6 @@ def bake_orientation(file_path):
     return shared_bake_orientation(file_path)
 
 
-def build_canonical_photo_path(date_taken, content_hash, ext):
-    """Build the canonical path used throughout the library."""
-    date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
-    year = date_obj.strftime('%Y')
-    date_folder = date_obj.strftime('%Y-%m-%d')
-    short_hash = content_hash[:8]
-    filename = f"img_{date_obj.strftime('%Y%m%d')}_{short_hash}{ext.lower()}"
-    return os.path.join(year, date_folder, filename), filename
-
-
 def delete_thumbnail_for_hash(content_hash):
     """Delete a cached thumbnail if it exists."""
     if not content_hash:
@@ -373,134 +372,6 @@ def delete_thumbnail_for_hash(content_hash):
     if os.path.exists(thumbnail_path):
         os.remove(thumbnail_path)
         cleanup_empty_thumbnail_folders(thumbnail_path)
-
-
-def estimate_rotated_dimensions(width, height, degrees_ccw):
-    """Estimate rotated dimensions from existing DB metadata."""
-    if width is None or height is None:
-        return width, height
-    if normalize_rotation_degrees(degrees_ccw) % 180 != 0:
-        return height, width
-    return width, height
-
-
-def next_rotation_reconcile_version(photo_id):
-    """Return the next background reconcile generation for a photo."""
-    with ROTATION_RECONCILE_VERSIONS_LOCK:
-        version = ROTATION_RECONCILE_VERSIONS.get(photo_id, 0) + 1
-        ROTATION_RECONCILE_VERSIONS[photo_id] = version
-        return version
-
-
-def get_rotation_reconcile_version(photo_id):
-    with ROTATION_RECONCILE_VERSIONS_LOCK:
-        return ROTATION_RECONCILE_VERSIONS.get(photo_id, 0)
-
-
-def reconcile_rotated_photo_background(photo_id, reconcile_version, old_hash):
-    """Catch the DB and thumbnail cache up after an already-committed rotate."""
-    conn = None
-    started_at = time.perf_counter()
-    try:
-        print(
-            f"🧵 Background reconcile start: photo={photo_id} "
-            f"version={reconcile_version} old_hash={old_hash}"
-        )
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT current_path, content_hash FROM photos WHERE id = ?",
-            (photo_id,),
-        )
-        row = cursor.fetchone()
-        if not row:
-            print("   ⚠️ Background reconcile skipped: photo row no longer exists")
-            return
-
-        full_path = os.path.join(LIBRARY_PATH, row['current_path'])
-        if not os.path.exists(full_path):
-            print("   ⚠️ Background reconcile skipped: file missing on disk")
-            return
-
-        width, height = get_image_dimensions(full_path) or (None, None)
-        new_hash = compute_hash(full_path)
-        print(
-            f"   🔍 Background reconcile computed width={width} height={height} "
-            f"new_hash={new_hash}"
-        )
-
-        if get_rotation_reconcile_version(photo_id) != reconcile_version:
-            print("   ↪ Background reconcile is stale; newer rotate already requested")
-            return
-
-        duplicate = None
-        if new_hash != old_hash:
-            cursor.execute(
-                "SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?",
-                (new_hash, photo_id),
-            )
-            duplicate = cursor.fetchone()
-
-        if old_hash != new_hash:
-            delete_thumbnail_for_hash(old_hash)
-            print(f"   🖼️ Background reconcile invalidated thumbnail for old hash {old_hash}")
-
-        if duplicate:
-            print(
-                f"   ⚠️ Background reconcile found duplicate photo {duplicate['id']} "
-                f"({duplicate['current_path']}); keeping existing DB hash for now"
-            )
-            cursor.execute(
-                """
-                UPDATE photos
-                SET width = ?, height = ?
-                WHERE id = ?
-                """,
-                (width, height, photo_id),
-            )
-        else:
-            cursor.execute(
-                """
-                UPDATE photos
-                SET width = ?, height = ?, content_hash = ?
-                WHERE id = ?
-                """,
-                (width, height, new_hash, photo_id),
-            )
-            print(
-                f"   ✅ Background reconcile updated DB: "
-                f"hash {row['content_hash']} → {new_hash}"
-            )
-
-        conn.commit()
-        elapsed_ms = (time.perf_counter() - started_at) * 1000
-        print(
-            f"   ✅ Background reconcile complete: photo={photo_id} "
-            f"({elapsed_ms:.1f} ms)"
-        )
-    except Exception as e:
-        print(f"❌ Background reconcile failed for photo {photo_id}: {e}")
-        if conn:
-            conn.rollback()
-    finally:
-        if conn:
-            conn.close()
-
-
-def schedule_rotation_reconcile(photo_id, old_hash):
-    """Kick off async post-rotate bookkeeping without blocking the UI."""
-    reconcile_version = next_rotation_reconcile_version(photo_id)
-    print(
-        f"🧵 Scheduling background reconcile: photo={photo_id} "
-        f"version={reconcile_version}"
-    )
-    thread = threading.Thread(
-        target=reconcile_rotated_photo_background,
-        args=(photo_id, reconcile_version, old_hash),
-        daemon=True,
-    )
-    thread.start()
 
 def write_photo_exif(file_path, new_date):
     """Write EXIF date to photo using exiftool"""
@@ -608,28 +479,6 @@ def parse_filename(filename):
     
     return prefix, date_str, hash_part, ext
 
-def generate_new_filename(old_filename, new_date):
-    """Generate new filename with new date but same hash"""
-    prefix, _, hash_part, ext = parse_filename(old_filename)
-    if not prefix or not hash_part:
-        # Can't parse - generate new canonical name with date and first 8 chars of filename
-        new_date_str = new_date.split()[0].replace(':', '')
-        basename = os.path.splitext(old_filename)[0][:8]
-        ext = os.path.splitext(old_filename)[1]
-        return f"img_{new_date_str}_{basename}{ext}"
-    
-    # Extract date: "2025:12:25 14:30:00" -> "20251225"
-    new_date_str = new_date.split()[0].replace(':', '')
-    return f"{prefix}_{new_date_str}_{hash_part}{ext}"
-
-def get_date_folder(date_str):
-    """Get folder path from date: YYYY/YYYY-MM-DD"""
-    parts = date_str.split()[0].split(':')
-    year = parts[0]
-    month = parts[1]
-    day = parts[2]
-    return os.path.join(year, f"{year}-{month}-{day}")
-
 class DateEditTransaction:
     """Track all operations for rollback"""
     def __init__(self):
@@ -690,90 +539,47 @@ class DateEditTransaction:
         
         print(f"✅ Rollback complete")
 
-class DateEditTransaction:
-    """Track all operations for rollback"""
-    def __init__(self):
-        self.operations = []
-        self.failed_files = []
-    
-    def log_exif_write(self, file_path, old_date):
-        self.operations.append(('exif', {
-            'file': file_path,
-            'old_date': old_date
-        }))
-    
-    def log_move(self, old_path, new_path):
-        self.operations.append(('move', {
-            'from': old_path,
-            'to': new_path
-        }))
-    
-    def log_failure(self, filename, error):
-        self.failed_files.append({
-            'filename': filename,
-            'error': str(error)
-        })
-    
-    def rollback(self, library_path):
-        """Undo all operations in reverse order"""
-        print(f"\n🔄 Rolling back {len(self.operations)} operations...")
-        
-        for action, details in reversed(self.operations):
-            try:
-                if action == 'move':
-                    old_full = os.path.join(library_path, details['from'])
-                    new_full = os.path.join(library_path, details['to'])
-                    
-                    if os.path.exists(new_full):
-                        os.makedirs(os.path.dirname(old_full), exist_ok=True)
-                        shutil.move(new_full, old_full)
-                        print(f"  ↩️  Moved back: {details['to']} -> {details['from']}")
-                
-                elif action == 'exif':
-                    file_path = details['file']
-                    old_date = details['old_date']
-                    
-                    if os.path.exists(file_path):
-                        # Determine file type
-                        ext = os.path.splitext(file_path)[1].lower()
-                        # v223: Use EXIF-writable subset (no RAW, no ambiguous lossy formats)
-                        
-                        if ext in EXIF_WRITABLE_PHOTO_EXTENSIONS:
-                            write_photo_exif(file_path, old_date)
-                        else:
-                            write_video_metadata(file_path, old_date)
-                        
-                        print(f"  ↩️  Restored EXIF: {os.path.basename(file_path)}")
-            
-            except Exception as e:
-                print(f"  ⚠️  Rollback error (continuing): {e}")
-        
-        print(f"✅ Rollback complete")
+def cleanup_empty_date_folders(old_full_path):
+    """Remove empty date/year folders left behind after a successful move."""
+    try:
+        old_dir = os.path.dirname(old_full_path)
+        if os.path.isdir(old_dir) and not os.listdir(old_dir):
+            os.rmdir(old_dir)
+            year_dir = os.path.dirname(old_dir)
+            if os.path.isdir(year_dir) and not os.listdir(year_dir):
+                os.rmdir(year_dir)
+    except Exception as e:
+        # Folder cleanup is best-effort and should not fail the edit.
+        print(f"  ⚠️  Couldn't clean up empty folders: {e}")
 
 def update_photo_date_with_files(photo_id, new_date, conn):
     """
     Update single photo date with full file operations
-    Returns: (success, error_message, transaction)
+    Returns: (success, result, transaction)
     """
     cursor = conn.cursor()
     transaction = DateEditTransaction()
     
     try:
         # Get photo info
-        cursor.execute("SELECT current_path, date_taken, file_type FROM photos WHERE id = ?", (photo_id,))
+        cursor.execute(
+            "SELECT current_path, date_taken, file_type, content_hash FROM photos WHERE id = ?",
+            (photo_id,),
+        )
         row = cursor.fetchone()
         if not row:
-            return False, "Photo not found", transaction
+            return False, {'status': 'error', 'error': 'Photo not found'}, transaction
         
         old_rel_path = row['current_path']
         old_filename = os.path.basename(old_rel_path)
         old_date = row['date_taken']
         file_type = row['file_type']
+        old_hash = row['content_hash']
         
         old_full_path = os.path.join(LIBRARY_PATH, old_rel_path)
         
         if not os.path.exists(old_full_path):
-            return False, "File not found on disk", transaction
+            return False, {'status': 'error', 'error': 'File not found on disk'}, transaction
         
         # Phase 0: Bake orientation (before EXIF write to preserve it)
         try:
@@ -793,8 +599,10 @@ def update_photo_date_with_files(photo_id, new_date, conn):
             print(f"  ⚠️  Orientation baking failed: {bake_error}")
             # Continue anyway - not critical for date change operation
         
-        # Phase 1: Write EXIF
-        exif_write_succeeded = False
+        # Phase 1: Write EXIF (best effort; shared finalization will reconcile the
+        # actual bytes/path state afterward so date-edit doesn't maintain a second
+        # post-mutation cleanliness implementation.)
+        exif_write_error = None
         try:
             if file_type in ('photo', 'image'):  # Handle both for backward compatibility
                 write_photo_exif(old_full_path, new_date)
@@ -804,151 +612,71 @@ def update_photo_date_with_files(photo_id, new_date, conn):
                 raise Exception(f"Unknown file type: {file_type}")
             
             transaction.log_exif_write(old_full_path, old_date)
-            exif_write_succeeded = True
             
         except Exception as e:
             print(f"  ❌ EXIF write failed: {e}")
-            exif_write_succeeded = False
-            # Continue to check if file was actually modified
-        
-        # Phase 1.5: Rehash file (only if EXIF write succeeded or file might have changed)
-        # Use hash cache to detect if file actually changed
+            exif_write_error = str(e)
+
+        # Phase 2: Reconcile hash/path/thumbnail/DB through the shared finalizer.
         try:
-            if exif_write_succeeded:
-                # Initialize hash cache
-                hash_cache = HashCache(conn)
-                
-                # Get new hash (cache will detect if file unchanged despite EXIF write attempt)
-                new_hash, cache_hit = hash_cache.get_hash(old_full_path)
-                
-                if cache_hit:
-                    # File unchanged - EXIF write had no effect (possibly already had this date)
-                    print(f"  ℹ️  File unchanged (cache hit) - skipping hash update")
-                    new_hash = None  # Signal to skip hash-related operations
-                else:
-                    print(f"  📝 Hash computed after EXIF write: {new_hash[:8]}")
-                
-                # Get old hash from database
-                cursor.execute("SELECT content_hash FROM photos WHERE id = ?", (photo_id,))
-                row = cursor.fetchone()
-                old_hash = row['content_hash'] if row else None
-                
-                if new_hash and new_hash != old_hash:
-                    print(f"  📝 Hash changed: {old_hash[:8] if old_hash else 'N/A'} → {new_hash[:8]}")
-                    
-                    # Check if new hash already exists (collision detection)
-                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?", 
-                                   (new_hash, photo_id))
-                    existing = cursor.fetchone()
-                    
-                    if existing:
-                        # Hash collision - this photo is now a duplicate
-                        print(f"  ⚠️  Duplicate detected after rehash (existing ID: {existing['id']})")
-                        
-                        # Move to trash
-                        dup_dir = os.path.join(TRASH_DIR, 'duplicates')
-                        os.makedirs(dup_dir, exist_ok=True)
-                        dup_filename = os.path.basename(old_full_path)
-                        dup_path = os.path.join(dup_dir, dup_filename)
-                        
-                        # Handle filename collision in trash
-                        counter = 1
-                        while os.path.exists(dup_path):
-                            base, ext = os.path.splitext(dup_filename)
-                            dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
-                            counter += 1
-                        
-                        shutil.move(old_full_path, dup_path)
-                        print(f"  🗑️  Moved to trash: {os.path.basename(dup_path)}")
-                        
-                        # Delete old thumbnail if exists
-                        if old_hash:
-                            old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
-                            if os.path.exists(old_thumb_path):
-                                os.remove(old_thumb_path)
-                                cleanup_empty_thumbnail_folders(old_thumb_path)
-                                print(f"  🗑️  Deleted old thumbnail")
-                        
-                        # Delete from database
-                        cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
-                        
-                        # Return special status for duplicate (success, but marked as duplicate)
-                        return True, "DUPLICATE", transaction
-                    
-                    # No collision - safe to update hash
-                    # Delete old thumbnail if hash changed (keep DB squeaky clean)
-                    if old_hash:
-                        old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, old_hash[:2], old_hash[2:4], f"{old_hash}.jpg")
-                        if os.path.exists(old_thumb_path):
-                            os.remove(old_thumb_path)
-                            cleanup_empty_thumbnail_folders(old_thumb_path)
-                            print(f"  🗑️  Deleted old thumbnail")
-                    
-                    # Update database with new hash
-                    cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
-                    transaction.log_hash_update(photo_id, old_hash, new_hash)
-                
-                elif new_hash is None:
-                    # File unchanged - no hash update needed
-                    pass
-                else:
-                    # Hash unchanged - EXIF write had no effect
-                    print(f"  ℹ️  Hash unchanged - file already had this metadata")
-            
-            else:
-                # EXIF write failed - file is unchanged, skip rehashing entirely
-                print(f"  ⚠️  Skipping rehash - EXIF write failed, file unchanged")
-                new_hash = None
-                
-        except Exception as e:
-            transaction.log_failure(old_filename, e)
-            raise
-        
-        # Phase 2: Rename and move file
-        try:
-            new_filename = generate_new_filename(old_filename, new_date)
-            new_folder = get_date_folder(new_date)
-            new_rel_path = os.path.join(new_folder, new_filename)
-            new_full_path = os.path.join(LIBRARY_PATH, new_rel_path)
-            
-            # Create destination folder
-            os.makedirs(os.path.dirname(new_full_path), exist_ok=True)
-            
-            # Move file
-            shutil.move(old_full_path, new_full_path)
-            transaction.log_move(old_rel_path, new_rel_path)
-            
-            # Clean up empty old folders
-            try:
-                old_dir = os.path.dirname(old_full_path)
-                # Remove date folder if empty
-                if os.path.isdir(old_dir) and not os.listdir(old_dir):
-                    os.rmdir(old_dir)
-                    # Remove year folder if empty
-                    year_dir = os.path.dirname(old_dir)
-                    if os.path.isdir(year_dir) and not os.listdir(year_dir):
-                        os.rmdir(year_dir)
-            except Exception as e:
-                # Don't fail the whole operation if cleanup fails
-                print(f"  ⚠️  Couldn't clean up empty folders: {e}")
-            
-            # Update database
-            cursor.execute("""
-                UPDATE photos 
-                SET current_path = ?, 
-                    original_filename = ?,
-                    date_taken = ?
+            finalize_result = finalize_mutated_media(
+                conn=conn,
+                photo_id=photo_id,
+                library_path=LIBRARY_PATH,
+                current_rel_path=old_rel_path,
+                date_taken=new_date,
+                old_hash=old_hash,
+                build_canonical_path=build_canonical_photo_path,
+                compute_hash=compute_full_hash,
+                get_dimensions=get_image_dimensions,
+                delete_thumbnail_for_hash=delete_thumbnail_for_hash,
+                duplicate_policy='trash',
+                duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
+            )
+
+            if exif_write_error:
+                print(
+                    "  ⚠️  EXIF write failed; reconciled canonical path/DB using the "
+                    f"current on-disk bytes: {exif_write_error}"
+                )
+
+            if finalize_result.status == 'duplicate_removed':
+                return True, {
+                    'status': 'duplicate_removed',
+                    'duplicate_photo_id': (
+                        finalize_result.duplicate.photo_id if finalize_result.duplicate else None
+                    ),
+                    'duplicate_path': (
+                        finalize_result.duplicate.current_path if finalize_result.duplicate else None
+                    ),
+                    'duplicate_destination': finalize_result.duplicate_destination,
+                }, transaction
+
+            if finalize_result.current_path and finalize_result.current_path != old_rel_path:
+                transaction.log_move(old_rel_path, finalize_result.current_path)
+                cleanup_empty_date_folders(old_full_path)
+
+            cursor.execute(
+                """
+                UPDATE photos
+                SET date_taken = ?, original_filename = ?
                 WHERE id = ?
-            """, (new_rel_path, new_filename, new_date, photo_id))
-            
+                """,
+                (new_date, os.path.basename(finalize_result.current_path), photo_id),
+            )
+
         except Exception as e:
             transaction.log_failure(old_filename, e)
             raise
         
-        return True, None, transaction
+        return True, {
+            'status': 'updated',
+            'current_path': finalize_result.current_path,
+            'content_hash': finalize_result.content_hash,
+        }, transaction
         
     except Exception as e:
-        return False, str(e), transaction
+        return False, {'status': 'error', 'error': str(e)}, transaction
 
 def generate_thumbnail_for_file(file_path, content_hash, file_type):
     """Generate thumbnail for a file using hash-based sharding"""
@@ -1537,23 +1265,45 @@ def rotate_photo(photo_id):
             f"{'lossless' if rotation_result.lossless else f'lossy JPEG @ {JPEG_LOSSY_QUALITY}'} path"
         )
         print(f"   ⏱️ File rotation took {rotate_elapsed_ms:.1f} ms")
-
-        estimated_width, estimated_height = estimate_rotated_dimensions(
-            row['width'],
-            row['height'],
-            degrees_ccw,
-        )
-        print(f"   📏 Estimated dimensions for UI: {estimated_width}x{estimated_height}")
-
         old_hash = row['content_hash']
-        schedule_rotation_reconcile(photo_id, old_hash)
+        finalize_result = finalize_mutated_media(
+            conn=conn,
+            photo_id=photo_id,
+            library_path=LIBRARY_PATH,
+            current_rel_path=row['current_path'],
+            date_taken=row['date_taken'],
+            old_hash=old_hash,
+            build_canonical_path=build_canonical_photo_path,
+            compute_hash=compute_full_hash,
+            get_dimensions=get_image_dimensions,
+            delete_thumbnail_for_hash=delete_thumbnail_for_hash,
+            duplicate_policy='trash',
+            duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
+        )
+        conn.commit()
         conn.close()
         conn = None
         request_elapsed_ms = (time.perf_counter() - request_started_at) * 1000
+        if finalize_result.status == 'duplicate_removed':
+            print(
+                f"   ✅ Rotate finalized as duplicate: photo={photo_id} "
+                f"matched photo={finalize_result.duplicate.photo_id if finalize_result.duplicate else 'unknown'}"
+            )
+            print(f"   ⏱️ Rotate request returned in {request_elapsed_ms:.1f} ms")
+            return jsonify(
+                {
+                    'ok': True,
+                    'committed': True,
+                    'staged': False,
+                    'duplicate_removed': True,
+                    'message': 'Photo became a duplicate after rotation and was moved to trash',
+                }
+            )
+
         print(
             f"   ✅ Rotate complete: photo={photo_id} "
             f"{'immediate lossless save' if rotation_result.lossless else 'saved on leave-lightbox via lossy fallback'}; "
-            f"hash/thumb reconcile deferred"
+            f"final hash/path committed"
         )
         print(f"   ⏱️ Rotate request returned in {request_elapsed_ms:.1f} ms")
 
@@ -1563,14 +1313,14 @@ def rotate_photo(photo_id):
                 'committed': True,
                 'staged': False,
                 'lossless': rotation_result.lossless,
-                'reconcile_pending': True,
+                'reconcile_pending': False,
                 'message': rotation_result.message,
                 'photo': {
                     'id': photo_id,
-                    'path': row['current_path'],
-                    'width': estimated_width,
-                    'height': estimated_height,
-                    'content_hash': old_hash,
+                    'path': finalize_result.current_path,
+                    'width': finalize_result.width,
+                    'height': finalize_result.height,
+                    'content_hash': finalize_result.content_hash,
                 },
             }
         )
@@ -1876,13 +1626,27 @@ def update_photo_date():
         
         # Update with full file operations
         conn = get_db_connection()
-        success, error, transaction = update_photo_date_with_files(photo_id, new_date, conn)
+        success, result, transaction = update_photo_date_with_files(photo_id, new_date, conn)
         
         if success:
             conn.commit()
             conn.close()
             print(f"✅ Updated photo {photo_id} with file operations")
-            return jsonify({'status': 'success', 'new_date': new_date})
+            if result['status'] == 'duplicate_removed':
+                return jsonify({
+                    'status': 'success',
+                    'new_date': new_date,
+                    'duplicate_removed': True,
+                    'message': 'Photo became a duplicate after updating date and was moved to trash'
+                })
+            return jsonify({
+                'status': 'success',
+                'new_date': new_date,
+                'photo': {
+                    'path': result['current_path'],
+                    'content_hash': result['content_hash'],
+                },
+            })
         else:
             # Rollback transaction
             transaction.rollback(LIBRARY_PATH)
@@ -1891,7 +1655,7 @@ def update_photo_date():
             
             return jsonify({
                 'status': 'error',
-                'error': error,
+                'error': result['error'],
                 'failed_files': transaction.failed_files
             }), 500
             
@@ -1986,20 +1750,24 @@ def bulk_update_photo_dates():
         # Now process all photos with file operations
         master_transaction = DateEditTransaction()
         success_count = 0
+        duplicate_count = 0
         
         for photo_id, target_date in photo_date_map.items():
-            success, error, transaction = update_photo_date_with_files(photo_id, target_date, conn)
+            success, result, transaction = update_photo_date_with_files(photo_id, target_date, conn)
             
             if success:
-                success_count += 1
-                # Merge this transaction into master
-                master_transaction.operations.extend(transaction.operations)
+                if result['status'] == 'duplicate_removed':
+                    duplicate_count += 1
+                else:
+                    success_count += 1
+                    # Merge this transaction into master
+                    master_transaction.operations.extend(transaction.operations)
             else:
                 # Log failure
                 cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
                 row = cursor.fetchone()
                 filename = os.path.basename(row['current_path']) if row else f"photo_{photo_id}"
-                master_transaction.log_failure(filename, error)
+                master_transaction.log_failure(filename, result['error'])
         
         # Check results
         if master_transaction.failed_files:
@@ -2020,10 +1788,14 @@ def bulk_update_photo_dates():
             # All succeeded - commit
             conn.commit()
             conn.close()
-            print(f"✅ Updated {success_count} photos with file operations")
+            if duplicate_count > 0:
+                print(f"✅ Updated {success_count} photos, {duplicate_count} duplicates moved to trash")
+            else:
+                print(f"✅ Updated {success_count} photos with file operations")
             return jsonify({
                 'status': 'success',
-                'updated_count': success_count
+                'updated_count': success_count,
+                'duplicate_count': duplicate_count,
             })
             
     except Exception as e:
@@ -2054,7 +1826,7 @@ def update_photo_date_execute():
             
             # Update with full file operations
             conn = get_db_connection()
-            success, error, transaction = update_photo_date_with_files(photo_id, new_date, conn)
+            success, result, transaction = update_photo_date_with_files(photo_id, new_date, conn)
             
             if success:
                 conn.commit()
@@ -2062,14 +1834,17 @@ def update_photo_date_execute():
                 print(f"✅ Updated photo {photo_id} with file operations")
                 
                 # Send completion
-                yield f"event: complete\ndata: {json.dumps({'updated_count': 1, 'photo_id': photo_id})}\n\n"
+                if result['status'] == 'duplicate_removed':
+                    yield f"event: complete\ndata: {json.dumps({'updated_count': 0, 'duplicate_count': 1, 'photo_id': photo_id, 'duplicate_removed': True})}\n\n"
+                else:
+                    yield f"event: complete\ndata: {json.dumps({'updated_count': 1, 'duplicate_count': 0, 'photo_id': photo_id})}\n\n"
             else:
                 # Rollback transaction
                 transaction.rollback(LIBRARY_PATH)
                 conn.rollback()
                 conn.close()
                 
-                yield f"event: error\ndata: {json.dumps({'error': error, 'failed_files': transaction.failed_files})}\n\n"
+                yield f"event: error\ndata: {json.dumps({'error': result['error'], 'failed_files': transaction.failed_files})}\n\n"
                 
         except Exception as e:
             error_logger.error(f"Error updating photo date: {e}")
@@ -2183,10 +1958,10 @@ def bulk_update_photo_dates_execute():
                 # Send progress update
                 yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'photo_id': photo_id})}\n\n"
                 
-                success, error, transaction = update_photo_date_with_files(photo_id, target_date, conn)
+                success, result, transaction = update_photo_date_with_files(photo_id, target_date, conn)
                 
                 if success:
-                    if error == "DUPLICATE":
+                    if result['status'] == 'duplicate_removed':
                         # Photo became a duplicate during date change
                         duplicate_count += 1
                         print(f"  ⏭️  Photo {photo_id} is now a duplicate (moved to trash)")
@@ -2200,7 +1975,7 @@ def bulk_update_photo_dates_execute():
                     cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
                     row = cursor.fetchone()
                     filename = os.path.basename(row['current_path']) if row else f"photo_{photo_id}"
-                    master_transaction.log_failure(filename, error)
+                    master_transaction.log_failure(filename, result['error'])
             
             # Check results
             if master_transaction.failed_files:
@@ -2731,6 +2506,12 @@ def import_from_paths():
                     # Check for duplicates
                     cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
                     existing = cursor.fetchone()
+                    print(
+                        f"   🔎 Import preflight: source={source_path} "
+                        f"initial_hash={content_hash} "
+                        f"existing_match={existing['id'] if existing else None} "
+                        f"existing_path={existing['current_path'] if existing else None}"
+                    )
                     
                     if existing:
                         print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
@@ -2746,34 +2527,29 @@ def import_from_paths():
                         continue
                     
                     # Determine date_taken
-                    date_taken = extract_exif_date(source_path)
-                    if not date_taken:
-                        date_taken = datetime.fromtimestamp(os.path.getmtime(source_path)).strftime('%Y:%m:%d %H:%M:%S')
+                    date_taken, _ = parse_metadata_datetime(
+                        extract_exif_date(source_path),
+                        os.path.getmtime(source_path),
+                    )
                     print(f"   Date: {date_taken}")
                     
                     # Build target path
-                    date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
-                    year = date_obj.strftime('%Y')
-                    date_folder = date_obj.strftime('%Y-%m-%d')
-                    target_dir = os.path.join(LIBRARY_PATH, year, date_folder)
-                    os.makedirs(target_dir, exist_ok=True)
-                    
-                    # Generate canonical filename
                     _, ext = os.path.splitext(filename)
-                    short_hash = content_hash[:8]
-                    base_name = f"img_{date_obj.strftime('%Y%m%d')}_{short_hash}"
-                    canonical_name = base_name + ext.lower()
-                    target_path = os.path.join(target_dir, canonical_name)
+                    relative_path, canonical_name = build_canonical_photo_path(date_taken, content_hash, ext)
+                    target_path = os.path.join(LIBRARY_PATH, relative_path)
+                    target_dir = os.path.dirname(target_path)
+                    os.makedirs(target_dir, exist_ok=True)
+                    base_name, _ = os.path.splitext(canonical_name)
                     
                     # Handle naming collisions
                     counter = 1
                     while os.path.exists(target_path):
                         canonical_name = f"{base_name}_{counter}{ext.lower()}"
+                        relative_path = os.path.join(os.path.dirname(relative_path), canonical_name)
                         target_path = os.path.join(target_dir, canonical_name)
                         counter += 1
                     
                     # Insert into DB FIRST (atomic) - dimensions will be updated after baking
-                    relative_path = os.path.relpath(target_path, LIBRARY_PATH)
                     file_size = os.path.getsize(source_path)
                     file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
                     
@@ -2823,11 +2599,7 @@ def import_from_paths():
                     width = dimensions[0] if dimensions else None
                     height = dimensions[1] if dimensions else None
                     print(f"   📏 Final dimensions for DB: {width}×{height}")
-                    
-                    # Update DB with dimensions
-                    cursor.execute("UPDATE photos SET width = ?, height = ? WHERE id = ?", (width, height, photo_id))
-                    conn.commit()
-                    
+
                     # Write EXIF metadata to file
                     try:
                         print(f"   🔧 Writing EXIF metadata...")
@@ -2838,29 +2610,47 @@ def import_from_paths():
                         else:
                             raise Exception(f"Unknown file type: {file_type}")
                         print(f"   ✅ EXIF written and verified")
-                        
-                        # Rehash file after EXIF write (content changed)
-                        print(f"   🔄 Rehashing file after EXIF write...")
-                        sha256 = hashlib.sha256()
-                        with open(target_path, 'rb') as f:
-                            while chunk := f.read(1024 * 1024):
-                                sha256.update(chunk)
-                        new_hash = sha256.hexdigest()
-                        
-                        if new_hash != content_hash:
-                            print(f"   📝 Hash changed: {content_hash[:8]} → {new_hash[:8]}")
-                            
-                            # Delete old thumbnail if hash changed (keep DB squeaky clean)
-                            old_thumb_path = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4], f"{content_hash}.jpg")
-                            if os.path.exists(old_thumb_path):
-                                os.remove(old_thumb_path)
-                                cleanup_empty_thumbnail_folders(old_thumb_path)
-                                print(f"   🗑️  Deleted old thumbnail")
-                            
-                            # Update database with new hash
-                            cursor.execute("UPDATE photos SET content_hash = ? WHERE id = ?", (new_hash, photo_id))
-                            conn.commit()
-                            # Note: Thumbnail will be regenerated on-demand with new hash
+                        finalize_result = finalize_mutated_media(
+                            conn=conn,
+                            photo_id=photo_id,
+                            library_path=LIBRARY_PATH,
+                            current_rel_path=relative_path,
+                            date_taken=date_taken,
+                            old_hash=content_hash,
+                            build_canonical_path=build_canonical_photo_path,
+                            compute_hash=compute_full_hash,
+                            get_dimensions=get_image_dimensions,
+                            delete_thumbnail_for_hash=delete_thumbnail_for_hash,
+                            duplicate_policy='delete',
+                        )
+                        print(
+                            f"   🔎 Import finalize: photo_id={photo_id} "
+                            f"status={finalize_result.status} "
+                            f"final_hash={finalize_result.content_hash} "
+                            f"final_path={finalize_result.current_path} "
+                            f"matched_id={finalize_result.duplicate.photo_id if finalize_result.duplicate else None} "
+                            f"matched_path={finalize_result.duplicate.current_path if finalize_result.duplicate else None}"
+                        )
+                        conn.commit()
+                        if finalize_result.status == 'duplicate_removed':
+                            print("   ⏭️  Duplicate detected after metadata write; removed imported copy")
+                            duplicate_count += 1
+                            if not (yield from emit_event('progress', {
+                                'imported': imported_count,
+                                'duplicates': duplicate_count,
+                                'errors': error_count,
+                                'current': file_index,
+                                'total': total_files
+                            })):
+                                break
+                            continue
+
+                        target_path = finalize_result.full_path
+                        relative_path = finalize_result.current_path
+                        print(
+                            f"   ✅ Finalized import path/hash: "
+                            f"{finalize_result.current_path} ({finalize_result.content_hash[:8]})"
+                        )
                         
                     except Exception as exif_error:
                         # EXIF write failed - rollback this file
@@ -3384,6 +3174,9 @@ def rebuild_thumbnails():
     """
     Rebuild thumbnails: Delete all cached thumbnails.
     They will regenerate automatically via lazy loading as users scroll.
+
+    No in-app menu item as of Apr 2026 (same as removing `.thumbnails/` by hand);
+    endpoint kept for support and possible future UI.
     """
     try:
         import shutil
@@ -3496,6 +3289,67 @@ def update_app_paths(library_path, db_path):
             print(f"   This may indicate the library is not accessible.")
 
 
+def build_library_status_payload(library_path, db_path, report):
+    """Translate the shared DB health report into library-status API payloads."""
+    if report.status == DBStatus.HEALTHY:
+        return {
+            'status': 'healthy',
+            'message': 'Library is ready.',
+            'library_path': library_path,
+            'db_path': db_path,
+            'valid': True,
+        }
+
+    if report.status == DBStatus.MISSING:
+        return {
+            'status': 'db_missing',
+            'message': report.get_user_message(),
+            'library_path': library_path,
+            'db_path': db_path,
+            'valid': False,
+        }
+
+    if report.status == DBStatus.CORRUPTED:
+        return {
+            'status': 'db_corrupted',
+            'message': report.get_user_message(),
+            'library_path': library_path,
+            'db_path': db_path,
+            'valid': False,
+            'error': report.error_message,
+        }
+
+    if report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
+        return {
+            'status': 'needs_migration',
+            'message': report.get_user_message(),
+            'library_path': library_path,
+            'db_path': db_path,
+            'valid': False,
+            'missing_columns': report.missing_columns,
+            'extra_columns': report.extra_columns,
+            'can_continue': report.can_use_anyway,
+        }
+
+    if report.status == DBStatus.EXTRA_COLUMNS:
+        return {
+            'status': 'healthy',
+            'message': report.get_user_message(),
+            'library_path': library_path,
+            'db_path': db_path,
+            'valid': True,
+            'extra_columns': report.extra_columns,
+        }
+
+    return {
+        'status': 'db_missing',
+        'message': report.get_user_message(),
+        'library_path': library_path,
+        'db_path': db_path,
+        'valid': False,
+    }
+
+
 @app.route('/api/library/current', methods=['GET'])
 def get_current_library():
     """Get current library path"""
@@ -3522,7 +3376,6 @@ def library_status():
                 'valid': False
             })
         
-        # Validate config has required keys
         library_path = config.get('library_path')
         db_path = config.get('db_path')
         
@@ -3547,20 +3400,7 @@ def library_status():
                 'valid': False
             })
         
-        try:
-            db_exists = os.path.exists(db_path)
-        except (OSError, PermissionError) as e:
-            return jsonify({
-                'status': 'db_inaccessible',
-                'message': f'Cannot check database access: {str(e)}',
-                'library_path': library_path,
-                'db_path': db_path,
-                'valid': False
-            })
-        
-        # Determine status - treat missing library/db as not_configured (first run)
-        if not library_exists or not db_exists:
-            # Library or database is gone - treat as first run
+        if not library_exists:
             delete_config()  # Clean up stale config
             return jsonify({
                 'status': 'not_configured',
@@ -3570,39 +3410,30 @@ def library_status():
                 'valid': False
             })
         
-        # Database file exists - verify it's actually usable
         try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            # Check if the photos table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='photos'")
-            if not cursor.fetchone():
-                conn.close()
-                return jsonify({
-                    'status': 'db_missing',
-                    'message': 'Database file exists but is not initialized.',
-                    'library_path': library_path,
-                    'db_path': db_path,
-                    'valid': False
-                })
-            conn.close()
-        except sqlite3.DatabaseError:
+            resolved_db_path = resolve_db_path(library_path, db_path)
+        except (OSError, PermissionError) as e:
             return jsonify({
-                'status': 'db_missing',
-                'message': 'Database file is corrupted or invalid.',
+                'status': 'db_inaccessible',
+                'message': f'Cannot check database access: {str(e)}',
                 'library_path': library_path,
                 'db_path': db_path,
                 'valid': False
             })
-        
-        # All checks passed
-        return jsonify({
-            'status': 'healthy',
-            'message': 'Library is ready.',
-            'library_path': library_path,
-            'db_path': db_path,
-            'valid': True
-        })
+
+        report = check_database_health(resolved_db_path)
+        payload = build_library_status_payload(library_path, resolved_db_path, report)
+        if payload['status'] == 'db_missing':
+            delete_config()
+            return jsonify({
+                'status': 'not_configured',
+                'message': 'Library not found. Please select or create a library.',
+                'library_path': None,
+                'db_path': None,
+                'valid': False
+            })
+
+        return jsonify(payload)
         
     except Exception as e:
         return jsonify({
@@ -3675,6 +3506,34 @@ def validate_library_path():
         error_logger.error(f"Library path validation failed: {e}")
         return jsonify({'status': 'invalid', 'error': str(e)}), 500
 
+
+@app.route('/api/library/probe', methods=['POST'])
+def probe_library_path():
+    """Return a lightweight good-faith estimate of whether a library can open."""
+    try:
+        data = request.json
+        library_path = data.get('library_path', '').strip()
+
+        if not library_path:
+            return jsonify({'error': 'Missing library_path'}), 400
+
+        if not os.path.exists(library_path):
+            return jsonify({'error': 'Path does not exist', 'code': 'path_not_found'}), 400
+
+        if not os.path.isdir(library_path):
+            return jsonify({'error': 'Path is not a directory'}), 400
+
+        db_path = detect_existing_db_path(library_path)
+        return jsonify({
+            'library_path': library_path,
+            'has_db': db_path is not None,
+            'has_openable_db': library_has_openable_db(library_path),
+            'db_path': db_path,
+        })
+    except Exception as e:
+        error_logger.error(f"Library path probe failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # ============================================================================
 # FILESYSTEM API - Custom Folder Picker Backend
 # ============================================================================
@@ -3688,9 +3547,10 @@ def list_directory():
         path = data.get('path', '/')
         include_files = data.get('include_files', False)  # New parameter for photo picker
         
-        # Validate path exists and is accessible
+        # Validate path exists and is accessible (400 — not 404 — so clients
+        # don't confuse missing paths with "API route not registered".)
         if not os.path.exists(path):
-            return jsonify({'error': 'Path does not exist'}), 404
+            return jsonify({'error': 'Path does not exist', 'code': 'path_not_found'}), 400
         
         if not os.path.isdir(path):
             return jsonify({'error': 'Path is not a directory'}), 400
@@ -3705,6 +3565,7 @@ def list_directory():
         folders = []
         files = []
         has_db = library_has_db(path)
+        has_openable_db = library_has_openable_db(path)
         
         for item in items:
             if item == LIBRARY_METADATA_DIR:
@@ -3759,7 +3620,8 @@ def list_directory():
         
         response = {
             'current_path': path,
-            'has_db': has_db
+            'has_db': has_db,
+            'has_openable_db': has_openable_db,
         }
         
         # Return format depends on mode
@@ -4902,10 +4764,13 @@ def toggle_favorite(photo_id):
         data = request.get_json(silent=True) or {}
         explicit_rating = data.get('rating')
         
-        # Get photo path
+        # Get photo path and current cleanliness state
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
+        cursor.execute(
+            "SELECT current_path, content_hash, date_taken FROM photos WHERE id = ?",
+            (photo_id,),
+        )
         row = cursor.fetchone()
         
         if not row:
@@ -4952,8 +4817,45 @@ def toggle_favorite(photo_id):
         if not success:
             error_logger.error(f"Failed to update EXIF rating for photo {photo_id}: {full_path}")
             return jsonify({'error': 'Failed to update EXIF rating'}), 500
-        
-        # Update database
+
+        finalize_result = finalize_mutated_media(
+            conn=conn,
+            photo_id=photo_id,
+            library_path=LIBRARY_PATH,
+            current_rel_path=rel_path,
+            date_taken=row['date_taken'],
+            old_hash=row['content_hash'],
+            build_canonical_path=build_canonical_photo_path,
+            compute_hash=compute_full_hash,
+            get_dimensions=get_image_dimensions,
+            delete_thumbnail_for_hash=delete_thumbnail_for_hash,
+            duplicate_policy='trash',
+            duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
+        )
+        print(
+            f"   🔎 Favorite finalize: photo_id={photo_id} "
+            f"old_hash={row['content_hash']} "
+            f"final_status={finalize_result.status} "
+            f"final_hash={finalize_result.content_hash} "
+            f"final_path={finalize_result.current_path} "
+            f"matched_id={finalize_result.duplicate.photo_id if finalize_result.duplicate else None} "
+            f"matched_path={finalize_result.duplicate.current_path if finalize_result.duplicate else None}"
+        )
+
+        if finalize_result.status == 'duplicate_removed':
+            conn.commit()
+            conn.close()
+            print(
+                f"⭐ Photo {photo_id}: favorite update made file a duplicate of "
+                f"{finalize_result.duplicate.photo_id if finalize_result.duplicate else 'unknown'}"
+            )
+            return jsonify({
+                'photo_id': photo_id,
+                'duplicate_removed': True,
+                'message': 'Photo became a duplicate after updating favorite and was moved to trash'
+            })
+
+        # Update database rating after final hash/path reconciliation.
         cursor.execute("UPDATE photos SET rating = ? WHERE id = ?", (db_rating, photo_id))
         conn.commit()
         conn.close()
@@ -4963,7 +4865,14 @@ def toggle_favorite(photo_id):
         return jsonify({
             'photo_id': photo_id,
             'rating': db_rating,
-            'favorited': new_rating == 5
+            'favorited': new_rating == 5,
+            'photo': {
+                'id': photo_id,
+                'path': finalize_result.current_path,
+                'content_hash': finalize_result.content_hash,
+                'width': finalize_result.width,
+                'height': finalize_result.height,
+            }
         })
     
     except Exception as e:
@@ -5189,4 +5098,6 @@ if __name__ == '__main__':
     
     print(f"🌐 Open: http://localhost:5001\n")
     
-    app.run(debug=True, port=5001, host='0.0.0.0')
+    # Run a single backend process to avoid transient route drift from the
+    # Werkzeug debug reloader serving newer frontend files against stale routes.
+    app.run(debug=True, use_reloader=False, port=5001, host='0.0.0.0')

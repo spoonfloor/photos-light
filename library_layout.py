@@ -82,3 +82,11 @@ def library_has_db(library_path: str) -> bool:
 def db_is_valid(db_path: str) -> bool:
     report = check_database_health(db_path)
     return report.status not in {DBStatus.MISSING, DBStatus.CORRUPTED}
+
+
+def library_has_openable_db(library_path: str) -> bool:
+    db_path = detect_existing_db_path(library_path)
+    if not db_path:
+        return False
+
+    return db_is_valid(db_path)

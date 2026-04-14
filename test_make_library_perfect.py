@@ -4,16 +4,19 @@ from datetime import datetime
 from tempfile import TemporaryDirectory
 
 from library_layout import canonical_db_path, detect_existing_db_path, is_library_metadata_file
-from make_library_perfect import (
-    DBNormalizationEngine,
+from library_cleanliness import (
     IGNORED_LIBRARY_FILES,
-    LibraryCleaner,
+    build_canonical_photo_path,
     canonical_relative_path,
     in_infrastructure,
     is_day_folder_name,
     is_year_folder_name,
     parse_metadata_datetime,
     root_entry_allowed,
+)
+from make_library_perfect import (
+    DBNormalizationEngine,
+    LibraryCleaner,
 )
 
 
@@ -30,8 +33,21 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
         self.assertEqual(parsed, expected)
 
     def test_canonical_relative_path_uses_expected_layout(self):
-        rel_path = canonical_relative_path(datetime(2026, 4, 12, 9, 30, 15), "abc1234", ".JPG")
-        self.assertEqual(rel_path, "2026/2026-04-12/img_20260412_abc1234.jpg")
+        rel_path = canonical_relative_path(
+            datetime(2026, 4, 12, 9, 30, 15),
+            "abc1234def567890fedcba0987654321abc1234def567890fedcba0987654321",
+            ".JPG",
+        )
+        self.assertEqual(rel_path, "2026/2026-04-12/img_20260412_abc1234d.jpg")
+
+    def test_build_canonical_photo_path_uses_same_shared_rule(self):
+        rel_path, filename = build_canonical_photo_path(
+            "2026:04:12 09:30:15",
+            "abc1234def567890fedcba0987654321abc1234def567890fedcba0987654321",
+            ".JPG",
+        )
+        self.assertEqual(rel_path, "2026/2026-04-12/img_20260412_abc1234d.jpg")
+        self.assertEqual(filename, "img_20260412_abc1234d.jpg")
 
     def test_year_and_day_folder_validation(self):
         self.assertTrue(is_year_folder_name("2026"))

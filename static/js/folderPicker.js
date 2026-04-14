@@ -6,15 +6,25 @@
 const FolderPicker = (() => {
   // State
   const VIRTUAL_ROOT = '__LOCATIONS__';
+  const PICKER_INTENT = {
+    OPEN_EXISTING_LIBRARY: 'open_existing_library',
+    CHOOSE_LIBRARY_LOCATION: 'choose_library_location',
+    GENERIC_FOLDER_SELECTION: 'generic_folder_selection',
+  };
   let currentPath = VIRTUAL_ROOT;
   let selectedPath = VIRTUAL_ROOT; // Explicitly selected folder (via checkbox)
   let currentHasDb = false; // Track if current selected folder has database
+  let currentHasOpenableDb = false; // Track if current folder's DB looks openable
+  let selectedHasOpenableDb = false; // Track if the resolved picker action should read as "Open"
+  let pickerIntent = PICKER_INTENT.GENERIC_FOLDER_SELECTION;
   let topLevelLocations = [];
   let resolveCallback = null; // Store resolve callback for database click handler
   let onSelectCallback = null;
   let onCancelCallback = null;
   let keyboardHandler = null; // Store keyboard event handler for cleanup
   let folderListClickHandler = null; // Store reference to event handler for cleanup
+  let folderListRequestId = 0;
+  let selectionProbeRequestId = 0;
 
   async function readErrorMessage(response, fallbackMessage) {
     try {
@@ -22,6 +32,15 @@ const FolderPicker = (() => {
       return error.error || fallbackMessage;
     } catch (_) {
       return fallbackMessage;
+    }
+  }
+
+  async function readErrorPayload(response, fallbackMessage) {
+    try {
+      const body = await response.json();
+      return { message: body.error || fallbackMessage, code: body.code };
+    } catch (_) {
+      return { message: fallbackMessage, code: undefined };
     }
   }
 
@@ -56,18 +75,47 @@ const FolderPicker = (() => {
     });
 
     if (!response.ok) {
-      const message = await readErrorMessage(response, 'Failed to list directory');
-      throw buildHttpError(response, message);
+      const { message, code } = await readErrorPayload(response, 'Failed to list directory');
+      const err = buildHttpError(response, message);
+      if (code) err.code = code;
+      throw err;
     }
 
     const data = await response.json();
     return {
       folders: data.folders,
-      has_db: data.has_db || false
+      has_db: data.has_db || false,
+      has_openable_db: data.has_openable_db || false,
+    };
+  }
+
+  async function probeLibraryPath(path) {
+    const response = await fetch('/api/library/probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: path }),
+    });
+
+    if (!response.ok) {
+      const { message, code } = await readErrorPayload(response, 'Failed to inspect library path');
+      const err = buildHttpError(response, message);
+      if (code) err.code = code;
+      throw err;
+    }
+
+    const data = await response.json();
+    return {
+      has_db: data.has_db || false,
+      has_openable_db: data.has_openable_db || false,
     };
   }
 
   async function showNativeFolderPicker(options = {}) {
+    const nameLibraryOverlay = document.getElementById('nameLibraryOverlay');
+    if (nameLibraryOverlay) {
+      nameLibraryOverlay.style.display = 'none';
+    }
+
     const prompt = (options.title || 'Select folder').replace(/"/g, '\\"');
     const script = `POSIX path of (choose folder with prompt "${prompt}")`;
 
@@ -90,7 +138,20 @@ const FolderPicker = (() => {
   }
 
   function isFilesystemApiUnavailable(error) {
+    if (error?.code === 'path_not_found') return false;
     return error?.code === 'filesystem_api_unavailable' || error?.status === 404;
+  }
+
+  function shouldUseOpenLibraryCta() {
+    return pickerIntent === PICKER_INTENT.OPEN_EXISTING_LIBRARY;
+  }
+
+  function getPrimaryActionLabel() {
+    if (!shouldUseOpenLibraryCta()) {
+      return 'Continue';
+    }
+
+    return selectedHasOpenableDb ? 'Open' : 'Continue';
   }
 
   // ===========================================================================
@@ -163,10 +224,14 @@ const FolderPicker = (() => {
 
   async function updateFolderList() {
     const folderList = document.getElementById('folderPickerFolderList');
+    const requestId = ++folderListRequestId;
+    const pathForRequest = currentPath;
 
     // At virtual root, show curated top-level locations
     if (currentPath === VIRTUAL_ROOT) {
       currentHasDb = false;
+      currentHasOpenableDb = false;
+      selectedHasOpenableDb = false;
       updateButtonText();
       
       folderList.innerHTML = topLevelLocations
@@ -200,8 +265,17 @@ const FolderPicker = (() => {
     // Regular filesystem navigation
     try {
       const result = await listDirectory(currentPath);
+      if (requestId !== folderListRequestId || pathForRequest !== currentPath) {
+        return;
+      }
       const folders = result.folders;
       currentHasDb = result.has_db;
+      currentHasOpenableDb = result.has_openable_db;
+      if (shouldUseOpenLibraryCta() && selectedPath === currentPath) {
+        selectedHasOpenableDb = currentHasOpenableDb;
+      } else if (!shouldUseOpenLibraryCta()) {
+        selectedHasOpenableDb = false;
+      }
       
       // Update button based on database presence
       updateButtonText();
@@ -297,8 +371,17 @@ const FolderPicker = (() => {
 
       folderList.addEventListener('click', folderListClickHandler);
     } catch (error) {
+      if (requestId !== folderListRequestId || pathForRequest !== currentPath) {
+        return;
+      }
       folderList.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
       currentHasDb = false;
+      currentHasOpenableDb = false;
+      if (shouldUseOpenLibraryCta() && selectedPath === currentPath) {
+        selectedHasOpenableDb = false;
+      } else if (!shouldUseOpenLibraryCta()) {
+        selectedHasOpenableDb = false;
+      }
       updateButtonText();
     }
   }
@@ -316,12 +399,52 @@ const FolderPicker = (() => {
   function updateButtonText() {
     const chooseBtn = document.getElementById('folderPickerChooseBtn');
     if (chooseBtn) {
-      // Button text is always "Continue" - context-agnostic
-      chooseBtn.textContent = 'Continue';
+      chooseBtn.textContent = getPrimaryActionLabel();
     }
   }
 
-  function selectFolder(path) {
+  async function syncSelectedPathProbe() {
+    const requestId = ++selectionProbeRequestId;
+
+    if (!shouldUseOpenLibraryCta()) {
+      selectedHasOpenableDb = false;
+      updateButtonText();
+      return;
+    }
+
+    if (selectedPath === VIRTUAL_ROOT) {
+      selectedHasOpenableDb = false;
+      updateButtonText();
+      return;
+    }
+
+    if (selectedPath === currentPath) {
+      selectedHasOpenableDb = currentHasOpenableDb;
+      updateButtonText();
+      return;
+    }
+
+    // While probing an explicitly selected sibling folder, fall back to the safe CTA.
+    selectedHasOpenableDb = false;
+    updateButtonText();
+
+    try {
+      const result = await probeLibraryPath(selectedPath);
+      if (requestId !== selectionProbeRequestId) {
+        return;
+      }
+      selectedHasOpenableDb = result.has_openable_db;
+      updateButtonText();
+    } catch (_) {
+      if (requestId !== selectionProbeRequestId) {
+        return;
+      }
+      selectedHasOpenableDb = false;
+      updateButtonText();
+    }
+  }
+
+  async function selectFolder(path) {
     // Toggle behavior - clicking same folder deselects it
     if (selectedPath === path) {
       selectedPath = currentPath; // Revert to current location
@@ -332,7 +455,8 @@ const FolderPicker = (() => {
     }
     
     // Re-render folder list to update checkbox states
-    updateFolderList();
+    await updateFolderList();
+    await syncSelectedPathProbe();
     updateSelectedPath();
   }
 
@@ -342,6 +466,7 @@ const FolderPicker = (() => {
     selectedPath = currentPath;
     updateBreadcrumb();
     await updateFolderList(); // This now updates currentHasDb and button text
+    await syncSelectedPathProbe();
     updateSelectedPath();
   }
 
@@ -385,7 +510,10 @@ const FolderPicker = (() => {
 
   async function show(options = {}) {
     return new Promise(async (resolve, reject) => {
+      let wizardActions = false;
       try {
+        wizardActions = !!options.wizardActions;
+        pickerIntent = options.intent || PICKER_INTENT.GENERIC_FOLDER_SELECTION;
         // Load fragment if not already in DOM
         let overlay = document.getElementById('folderPickerOverlay');
         if (!overlay) {
@@ -401,6 +529,12 @@ const FolderPicker = (() => {
 
         document.getElementById('folderPickerTitle').textContent = title;
         document.getElementById('folderPickerSubtitle').textContent = subtitle;
+
+        const showGoBack = wizardActions && !!options.showGoBack;
+        const goBackBtn = document.getElementById('folderPickerGoBackBtn');
+        if (goBackBtn) {
+          goBackBtn.style.display = showGoBack ? '' : 'none';
+        }
 
         // Load locations
         topLevelLocations = await getLocations();
@@ -439,18 +573,24 @@ const FolderPicker = (() => {
         currentPath = initialPath;
         selectedPath = initialPath;
         currentHasDb = false;
+        currentHasOpenableDb = false;
+        selectedHasOpenableDb = false;
 
         // Initialize UI
         updateBreadcrumb();
         await updateFolderList();
+        await syncSelectedPathProbe();
         updateSelectedPath();
+
+        // Hide name-library step if still visible (wizard kept it until this paints).
+        const nameLibraryOverlay = document.getElementById('nameLibraryOverlay');
+        if (nameLibraryOverlay) {
+          nameLibraryOverlay.style.display = 'none';
+        }
 
         // Show overlay
         overlay.style.display = 'flex';
-
-        // Set up keyboard shortcuts
-        keyboardHandler = (e) => handleKeyboard(e);
-        document.addEventListener('keydown', keyboardHandler);
+        overlay.style.pointerEvents = '';
 
         // Wire up buttons
         const closeBtn = document.getElementById('folderPickerCloseBtn');
@@ -464,25 +604,44 @@ const FolderPicker = (() => {
             keyboardHandler = null;
           }
           resolveCallback = null;
-          resolve(null);
+          resolve(wizardActions ? { action: 'cancel' } : null);
         };
 
-        const handleChoose = () => {
-          if (selectedPath === VIRTUAL_ROOT) {
-            // No path selected
-            return;
-          }
-          
-          // Save selected path to localStorage for next session
-          localStorage.setItem('picker.lastPath', selectedPath);
-          
-          
+        const handleGoBack = () => {
           overlay.style.display = 'none';
           if (keyboardHandler) {
             document.removeEventListener('keydown', keyboardHandler);
             keyboardHandler = null;
           }
           resolveCallback = null;
+          resolve({ action: 'back' });
+        };
+
+        const handleChoose = async () => {
+          if (selectedPath === VIRTUAL_ROOT) {
+            // No path selected
+            return;
+          }
+
+          // Save selected path to localStorage for next session
+          localStorage.setItem('picker.lastPath', selectedPath);
+
+          if (typeof options.beforeResolveChoose === 'function') {
+            await options.beforeResolveChoose();
+          }
+
+          if (keyboardHandler) {
+            document.removeEventListener('keydown', keyboardHandler);
+            keyboardHandler = null;
+          }
+          resolveCallback = null;
+          if (options.keepVisibleOnChoose) {
+            overlay.style.pointerEvents = 'none';
+            resolve(selectedPath);
+            return;
+          }
+
+          overlay.style.display = 'none';
           resolve(selectedPath);
         };
 
@@ -492,12 +651,39 @@ const FolderPicker = (() => {
         closeBtn.onclick = handleCancel;
         cancelBtn.onclick = handleCancel;
         chooseBtn.onclick = handleChoose;
+        if (goBackBtn) {
+          goBackBtn.onclick = showGoBack ? handleGoBack : null;
+        }
+
+        keyboardHandler = (e) => {
+          void handleKeyboard(e);
+          const isEnter = e.key === 'Enter' || e.key === 'NumpadEnter';
+          if (!isEnter) return;
+          const t = e.target;
+          const actionBtn =
+            t && typeof t.closest === 'function' ? t.closest('button') : null;
+          if (
+            actionBtn === chooseBtn ||
+            actionBtn === cancelBtn ||
+            actionBtn === closeBtn ||
+            (showGoBack && goBackBtn && actionBtn === goBackBtn)
+          ) {
+            return;
+          }
+          e.preventDefault();
+          void handleChoose();
+        };
+        document.addEventListener('keydown', keyboardHandler);
       } catch (error) {
         console.error('Failed to show folder picker:', error);
         if (isFilesystemApiUnavailable(error)) {
           try {
             const nativePath = await showNativeFolderPicker(options);
-            resolve(nativePath);
+            if (wizardActions) {
+              resolve(nativePath ? nativePath : { action: 'cancel' });
+            } else {
+              resolve(nativePath);
+            }
             return;
           } catch (nativeError) {
             console.error('Native folder picker fallback failed:', nativeError);
@@ -514,6 +700,7 @@ const FolderPicker = (() => {
     const overlay = document.getElementById('folderPickerOverlay');
     if (overlay) {
       overlay.style.display = 'none';
+      overlay.style.pointerEvents = '';
     }
     // Clean up keyboard listener
     if (keyboardHandler) {
@@ -523,6 +710,7 @@ const FolderPicker = (() => {
   }
 
   return {
+    INTENT: PICKER_INTENT,
     show,
     hide,
   };
