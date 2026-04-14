@@ -9,10 +9,12 @@ Version: v3 - Simplified (removed operation_state complexity)
 """
 
 import os
-import hashlib
 import json
-from datetime import datetime
 from hash_cache import HashCache
+from library_cleanliness import (
+    is_supported_media_extension,
+    media_kind_for_extension,
+)
 
 
 def count_media_files(library_path):
@@ -22,19 +24,6 @@ def count_media_files(library_path):
     Returns:
         int: Number of media files found
     """
-    # v223: Removed .bmp (exiftool cannot write EXIF to BMP)
-    photo_exts = {
-        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
-        '.webp', '.avif', '.jp2',
-        '.raw', '.cr2', '.nef', '.arw', '.dng'
-    }
-    video_exts = {
-        '.mov', '.mp4', '.m4v', '.mkv',
-        '.wmv', '.webm', '.flv', '.3gp',
-        '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
-    }
-    all_exts = photo_exts | video_exts
-    
     count = 0
     for root, dirs, filenames in os.walk(library_path, followlinks=False):
         dirs[:] = [d for d in dirs if not d.startswith('.')]
@@ -42,7 +31,7 @@ def count_media_files(library_path):
             if filename.startswith('.'):
                 continue
             ext = os.path.splitext(filename)[1].lower()
-            if ext in all_exts:
+            if is_supported_media_extension(ext):
                 count += 1
     
     return count
@@ -55,18 +44,6 @@ def count_media_files_by_type(library_path):
     Returns:
         dict: {'photo_count': int, 'video_count': int, 'total_count': int}
     """
-    # v223: Removed .bmp (exiftool cannot write EXIF to BMP)
-    photo_exts = {
-        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
-        '.webp', '.avif', '.jp2',
-        '.raw', '.cr2', '.nef', '.arw', '.dng'
-    }
-    video_exts = {
-        '.mov', '.mp4', '.m4v', '.mkv',
-        '.wmv', '.webm', '.flv', '.3gp',
-        '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
-    }
-    
     photo_count = 0
     video_count = 0
     
@@ -76,9 +53,10 @@ def count_media_files_by_type(library_path):
             if filename.startswith('.'):
                 continue
             ext = os.path.splitext(filename)[1].lower()
-            if ext in photo_exts:
+            media_kind = media_kind_for_extension(ext)
+            if media_kind == 'photo':
                 photo_count += 1
-            elif ext in video_exts:
+            elif media_kind == 'video':
                 video_count += 1
     
     return {
@@ -135,19 +113,6 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     Note: v3 - Simplified, removed operation_state checkpoint system.
           Operations are fast enough with hash_cache that restart is acceptable.
     """
-    # v223: Removed .bmp (exiftool cannot write EXIF to BMP)
-    photo_exts = {
-        '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
-        '.webp', '.avif', '.jp2',
-        '.raw', '.cr2', '.nef', '.arw', '.dng'
-    }
-    video_exts = {
-        '.mov', '.mp4', '.m4v', '.mkv',
-        '.wmv', '.webm', '.flv', '.3gp',
-        '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
-    }
-    all_exts = photo_exts | video_exts
-    
     cursor = db_connection.cursor()
     
     # Initialize hash cache (provides 80-90% speedup on repeat operations)
@@ -164,7 +129,7 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
             if filename.startswith('.'):
                 continue
             ext = os.path.splitext(filename)[1].lower()
-            if ext not in all_exts:
+            if not is_supported_media_extension(ext):
                 continue
             full_path = os.path.join(root, filename)
             try:
@@ -227,7 +192,9 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
                 full_path = os.path.join(library_path, mole_path)
                 filename = os.path.basename(mole_path)
                 ext = os.path.splitext(filename)[1].lower()
-                file_type = 'photo' if ext in photo_exts else 'video'
+                file_type = media_kind_for_extension(ext)
+                if file_type is None:
+                    continue
                 file_size = os.path.getsize(full_path)
                 
                 # Compute hash with caching

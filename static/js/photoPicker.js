@@ -17,6 +17,7 @@ const PhotoPicker = (() => {
   let keyboardHandler = null; // Store keyboard event handler for cleanup
   let thumbnailObserver = null; // IntersectionObserver for lazy loading thumbnails
   let lastClickedIndex = null; // For shift-select range selection
+  let activeItemKey = null; // Keyboard-highlighted row in the visible list
 
   // ===========================================================================
   // API Calls
@@ -433,6 +434,84 @@ const PhotoPicker = (() => {
     });
   }
 
+  function getPhotoItemKey(type, path) {
+    return `${type}:${path}`;
+  }
+
+  function getPhotoPickerRows() {
+    const fileList = document.getElementById('photoPickerFileList');
+    return PickerUtils.getNavigableRows(
+      fileList,
+      '.photo-picker-item[data-item-key]',
+    );
+  }
+
+  function syncActiveListItem(options = {}) {
+    const rows = getPhotoPickerRows();
+    let activeRow = null;
+
+    rows.forEach((row) => {
+      const isActive = row.dataset.itemKey === activeItemKey;
+      row.classList.toggle('picker-keyboard-active', isActive);
+      row.setAttribute('aria-selected', isActive ? 'true' : 'false');
+
+      if (isActive) {
+        activeRow = row;
+      }
+    });
+
+    if (!activeRow) {
+      activeItemKey = null;
+      return;
+    }
+
+    if (options.scroll) {
+      PickerUtils.scrollRowIntoView(activeRow);
+    }
+  }
+
+  function setActiveItemKey(itemKey, options = {}) {
+    activeItemKey = itemKey;
+    syncActiveListItem(options);
+    updateSelectionCount();
+  }
+
+  function getActiveItemLabel() {
+    if (!activeItemKey) {
+      return null;
+    }
+
+    const activeRow = getPhotoPickerRows().find(
+      (row) => row.dataset.itemKey === activeItemKey,
+    );
+    if (!activeRow) {
+      activeItemKey = null;
+      return null;
+    }
+
+    const name = activeRow.querySelector('.photo-picker-name')?.textContent?.trim();
+    return name || activeRow.dataset.itemPath || null;
+  }
+
+  function moveActiveItem(direction) {
+    const rows = getPhotoPickerRows();
+    const currentIndex = rows.findIndex(
+      (row) => row.dataset.itemKey === activeItemKey,
+    );
+    const nextIndex = PickerUtils.getNextFocusIndex(
+      currentIndex,
+      direction,
+      rows.length,
+    );
+
+    if (nextIndex === null) {
+      return false;
+    }
+
+    setActiveItemKey(rows[nextIndex].dataset.itemKey, { scroll: true });
+    return true;
+  }
+
   async function updateFileList() {
     const fileList = document.getElementById('photoPickerFileList');
 
@@ -441,7 +520,7 @@ const PhotoPicker = (() => {
       fileList.innerHTML = topLevelLocations
         .map(
           (loc) => `
-        <div class="photo-picker-item" data-real-path="${loc.path}" data-type="location">
+        <div class="photo-picker-item" data-real-path="${loc.path}" data-item-path="${loc.path}" data-item-key="${getPhotoItemKey('location', loc.path)}" data-type="location" aria-selected="false">
           <span class="photo-picker-icon material-symbols-outlined">folder</span>
           <span class="photo-picker-name">${loc.name}</span>
           <span class="photo-picker-arrow">→</span>
@@ -456,6 +535,7 @@ const PhotoPicker = (() => {
           navigateTo(item.dataset.realPath);
         });
       });
+      syncActiveListItem();
       return;
     }
 
@@ -466,6 +546,7 @@ const PhotoPicker = (() => {
       if (folders.length === 0 && files.length === 0) {
         // Show placeholder boxes to fill vertical space (matches folder picker pattern)
         // Calculated to fit available photo-picker-list height without scrolling
+        activeItemKey = null;
         fileList.innerHTML = `
           <div class="photo-picker-placeholder-container">
             <div class="photo-picker-placeholder"></div>
@@ -498,7 +579,7 @@ const PhotoPicker = (() => {
         }
 
         html += `
-          <div class="photo-picker-item folder-item" data-folder-path="${folderPath}" data-type="folder" data-index="${itemIndex}">
+          <div class="photo-picker-item folder-item" data-folder-path="${folderPath}" data-item-path="${folderPath}" data-item-key="${getPhotoItemKey('folder', folderPath)}" data-type="folder" data-index="${itemIndex}" aria-selected="false">
             <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${folderPath}" data-type="folder">${iconClass}</span>
             <span class="photo-picker-name">${folder.name}</span>
             <span class="photo-picker-arrow">→</span>
@@ -532,7 +613,7 @@ const PhotoPicker = (() => {
           : sizeText;
 
         html += `
-          <div class="photo-picker-item file-item" data-file-path="${filePath}" data-type="file" data-index="${itemIndex}">
+          <div class="photo-picker-item file-item" data-file-path="${filePath}" data-item-path="${filePath}" data-item-key="${getPhotoItemKey('file', filePath)}" data-type="file" data-index="${itemIndex}" aria-selected="false">
             <span class="photo-picker-checkbox material-symbols-outlined ${stateClass}" data-path="${filePath}" data-type="file">${iconClass}</span>
             <div class="photo-picker-thumbnail-container">
               <img class="photo-picker-thumbnail" data-path="${filePath}" alt="">
@@ -576,6 +657,7 @@ const PhotoPicker = (() => {
 
           if (shouldTriggerShiftSelect) {
             e.stopPropagation();
+            activeItemKey = item.dataset.itemKey || null;
             await handleShiftSelect(index);
             return;
           }
@@ -584,6 +666,7 @@ const PhotoPicker = (() => {
         // Checkbox clicked
         if (e.target.classList.contains('photo-picker-checkbox')) {
           e.stopPropagation();
+          activeItemKey = item.dataset.itemKey || null;
           if (type === 'folder') {
             await toggleFolder(path);
             await updateFileList(); // Re-render to get correct state
@@ -612,13 +695,16 @@ const PhotoPicker = (() => {
           navigateTo(path);
         } else if (type === 'file') {
           // File row - toggle selection
+          activeItemKey = item.dataset.itemKey || null;
           checkbox.click();
         }
       };
 
       fileList.addEventListener('click', fileListClickHandler);
+      syncActiveListItem();
     } catch (error) {
       fileList.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
+      activeItemKey = null;
     }
   }
 
@@ -630,7 +716,10 @@ const PhotoPicker = (() => {
     const count = selectedPaths.size;
 
     if (count === 0) {
-      countEl.textContent = 'No items selected';
+      const activeLabel = getActiveItemLabel();
+      countEl.textContent = activeLabel
+        ? `Highlighted: ${activeLabel}`
+        : 'No items selected';
       if (importBtn) importBtn.disabled = true;
       if (clearBtn) clearBtn.style.visibility = 'hidden';
       return;
@@ -668,6 +757,7 @@ const PhotoPicker = (() => {
     selectedPaths.clear();
     folderStateCache.clear();
     lastClickedIndex = null; // Reset shift-select anchor
+    activeItemKey = null;
     updateSelectionCount();
     updateFileList();
   }
@@ -683,6 +773,7 @@ const PhotoPicker = (() => {
     selectedPaths.clear();
     folderStateCache.clear();
     lastClickedIndex = null; // Reset shift-select anchor when navigating
+    activeItemKey = null;
 
     currentPath = path || VIRTUAL_ROOT;
     updateBreadcrumb();
@@ -697,6 +788,25 @@ const PhotoPicker = (() => {
   // ===========================================================================
 
   async function handleKeyboard(e) {
+    if (PickerUtils.isTypingTarget(e.target)) {
+      return;
+    }
+
+    if (
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+    ) {
+      const moved = moveActiveItem(e.key === 'ArrowUp' ? -1 : 1);
+      if (moved) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
+
     // Enter key - trigger Import button if enabled
     if (e.key === 'Enter') {
       const importBtn = document.getElementById('photoPickerImportBtn');
@@ -807,6 +917,7 @@ const PhotoPicker = (() => {
         folderStateCache = new Map();
         invalidateBackgroundCounting();
         lastClickedIndex = null; // Reset shift-select anchor for new session
+        activeItemKey = null;
 
         // Determine initial path
         let initialPath = VIRTUAL_ROOT;

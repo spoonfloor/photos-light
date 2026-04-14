@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v299';
+const MAIN_JS_VERSION = 'v307';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -1359,12 +1359,7 @@ function loadDateChangeProgressOverlay() {
 
       if (closeBtn)
         closeBtn.addEventListener('click', hideDateChangeProgressOverlay);
-      if (doneBtn)
-        doneBtn.addEventListener('click', () => {
-          hideDateChangeProgressOverlay();
-          // Reload grid after successful date change
-          loadAndRenderPhotos(false);
-        });
+      if (doneBtn) doneBtn.addEventListener('click', hideDateChangeProgressOverlay);
 
       
     })
@@ -1384,6 +1379,7 @@ function showDateChangeProgressOverlay(photoCount) {
   const statusText = document.getElementById('dateChangeProgressStatusText');
   const stats = document.getElementById('dateChangeProgressStats');
   const currentEl = document.getElementById('dateChangeProgressCurrent');
+  const closeBtn = document.getElementById('dateChangeProgressCloseBtn');
 
   // Set title based on count
   if (title) {
@@ -1411,6 +1407,7 @@ function showDateChangeProgressOverlay(photoCount) {
   // Hide done button initially
   const doneBtn = document.getElementById('dateChangeProgressDoneBtn');
   if (doneBtn) doneBtn.style.display = 'none';
+  if (closeBtn) closeBtn.style.display = 'none';
 
   overlay.style.display = 'flex';
   
@@ -1440,28 +1437,15 @@ function updateDateChangeProgress(current, total) {
   // Status text stays static (no updates during progress)
 }
 
-/**
- * Show date change complete
- */
-function showDateChangeComplete(count) {
-  const statusText = document.getElementById('dateChangeProgressStatusText');
-  const doneBtn = document.getElementById('dateChangeProgressDoneBtn');
-  const title = document.getElementById('dateChangeProgressTitle');
+function finalizeDateChangeSuccess({ message, originalDates, clearSelection }) {
+  hideDateChangeProgressOverlay();
 
-  if (title) {
-    title.textContent = count === 1 ? 'Date updated' : 'Dates updated';
+  if (clearSelection) {
+    deselectAllPhotos();
   }
 
-  if (statusText) {
-    const plural = count > 1 ? 's' : '';
-    statusText.innerHTML = `<p>Successfully updated ${count} photo${plural}.</p>`;
-  }
-
-  if (doneBtn) {
-    doneBtn.style.display = 'block';
-  }
-
-  
+  loadAndRenderPhotos(false);
+  showToast(message, () => undoDateEdit(originalDates));
 }
 
 /**
@@ -1587,20 +1571,16 @@ async function saveDateEdit() {
 
         eventSource.close();
 
-        // Show completion
-        showDateChangeComplete(data.updated_count);
+        let message = `Updated ${data.updated_count} photo${data.updated_count !== 1 ? 's' : ''}`;
+        if (data.duplicate_count > 0) {
+          message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
+        }
 
-        // Clear selection state
-        deselectAllPhotos();
-
-        // Show toast with undo after a delay
-        setTimeout(() => {
-          let message = `Updated ${data.updated_count} photo${data.updated_count !== 1 ? 's' : ''}`;
-          if (data.duplicate_count > 0) {
-            message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
-          }
-          showToast(message, () => undoDateEdit(originalDates));
-        }, 500);
+        finalizeDateChangeSuccess({
+          message,
+          originalDates,
+          clearSelection: true,
+        });
       });
 
       eventSource.addEventListener('error', (e) => {
@@ -1634,18 +1614,15 @@ async function saveDateEdit() {
       });
 
       eventSource.addEventListener('complete', (e) => {
-        const data = JSON.parse(e.data);
-        
+        JSON.parse(e.data);
 
         eventSource.close();
 
-        // Show completion
-        showDateChangeComplete(1);
-
-        // Show toast with undo after a delay
-        setTimeout(() => {
-          showToast('Date updated', () => undoDateEdit(originalDates));
-        }, 500);
+        finalizeDateChangeSuccess({
+          message: 'Date updated',
+          originalDates,
+          clearSelection: false,
+        });
       });
 
       eventSource.addEventListener('error', (e) => {
@@ -2122,22 +2099,6 @@ function getPhotoThumbnailUrl(photoId) {
     : `/api/photo/${photoId}/thumbnail`;
 }
 
-function getCurrentLightboxImageDebugInfo() {
-  const liveImg = document.querySelector('#lightboxContent img.lightbox-media-element');
-  if (!liveImg) {
-    return null;
-  }
-
-  return {
-    src: liveImg.getAttribute('src'),
-    currentSrc: liveImg.currentSrc,
-    naturalWidth: liveImg.naturalWidth,
-    naturalHeight: liveImg.naturalHeight,
-    renderedWidth: liveImg.offsetWidth,
-    renderedHeight: liveImg.offsetHeight,
-  };
-}
-
 function invalidatePendingLightboxReloads() {
   state.lightboxReloadToken += 1;
 }
@@ -2200,13 +2161,6 @@ function reloadOpenLightboxMedia(photoId) {
           getLightboxPreviewRotation(photoId),
         );
         currentFrame.replaceChild(nextImg, currentImg);
-        console.log('[rotate] lightbox image swapped', {
-          photoId,
-          src: nextImg.getAttribute('src'),
-          currentSrc: nextImg.currentSrc,
-          naturalWidth: nextImg.naturalWidth,
-          naturalHeight: nextImg.naturalHeight,
-        });
       };
       nextImg.onerror = () => {
         console.error(`❌ Reloaded image ${photoId} failed to load`);
@@ -2277,13 +2231,6 @@ function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
   };
 
   state.lightboxMediaVersions[updatedPhoto.id] = Date.now();
-  console.log('[rotate] committed photo update', {
-    photoId: updatedPhoto.id,
-    width: updatedPhoto.width,
-    height: updatedPhoto.height,
-    fileUrl: getPhotoFileUrl(updatedPhoto.id),
-    liveLightboxImage: getCurrentLightboxImageDebugInfo(),
-  });
 
   if (options.deferThumbnailRefresh) {
     scheduleGridPhotoThumbnailRefresh(updatedPhoto.id);
@@ -2359,13 +2306,6 @@ async function processImmediateRotationSession(photoId) {
     if (stillNeededAfterCommit === 0) {
       reloadOpenLightboxMedia(photoId);
     }
-    console.log('[rotate] immediate rotate committed', {
-      photoId,
-      requestDegrees,
-      rotateElapsedMs: Number(rotateElapsedMs.toFixed(1)),
-      stillNeeded: stillNeededAfterCommit,
-      liveLightboxImage: getCurrentLightboxImageDebugInfo(),
-    });
 
     if (stillNeededAfterCommit !== 0) {
       processImmediateRotationSession(photoId);
@@ -2907,13 +2847,6 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
         img.alt = filename;
 
         frame.appendChild(img);
-        console.log('[rotate] lightbox image loaded', {
-          photoId: photo.id,
-          src: img.getAttribute('src'),
-          currentSrc: img.currentSrc,
-          naturalWidth: img.naturalWidth,
-          naturalHeight: img.naturalHeight,
-        });
       };
 
       img.onerror = async () => {
@@ -4565,11 +4498,13 @@ function enableMenuItem(buttonId, enabled) {
 // ==========================
 
 let updateIndexState = {
-  missingFiles: 0,
-  untrackedFiles: 0,
-  nameUpdates: 0,
-  emptyFolders: 0,
+  misfiledMedia: 0,
+  trashCandidates: 0,
+  dbRepairs: 0,
+  metadataFixes: 0,
+  layoutRepairs: 0,
   details: null,
+  resultStats: null,
 };
 
 /**
@@ -4641,11 +4576,13 @@ async function openUpdateIndexOverlay() {
 
   // Reset state
   updateIndexState = {
-    missingFiles: 0,
-    untrackedFiles: 0,
-    nameUpdates: 0,
-    emptyFolders: 0,
+    misfiledMedia: 0,
+    trashCandidates: 0,
+    dbRepairs: 0,
+    metadataFixes: 0,
+    layoutRepairs: 0,
     details: null,
+    resultStats: null,
   };
 
   // Reset UI to initial state
@@ -4662,39 +4599,34 @@ async function openUpdateIndexOverlay() {
   showUpdateIndexButtons('cancel');
 
   try {
-    const response = await fetch('/api/utilities/update-index/scan');
-    if (!response.ok) throw new Error('Failed to scan index');
-
+    const response = await fetch('/api/library/make-perfect/scan');
     const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to scan clean library');
+    }
 
-    updateIndexState.missingFiles = data.missing_files;
-    updateIndexState.untrackedFiles = data.untracked_files;
-    updateIndexState.nameUpdates = data.name_updates;
-    updateIndexState.emptyFolders = data.empty_folders;
+    updateIndexState.misfiledMedia = data.summary?.misfiled_media || 0;
+    updateIndexState.trashCandidates = data.summary?.trash_candidates || 0;
+    updateIndexState.dbRepairs = data.summary?.db_repairs || 0;
+    updateIndexState.metadataFixes = data.summary?.metadata_fixes || 0;
+    updateIndexState.layoutRepairs = data.summary?.layout_repairs || 0;
+    updateIndexState.details = data.details || null;
 
-    
-
-    // Check if any changes are needed
-    const hasChanges =
-      data.missing_files > 0 ||
-      data.untracked_files > 0 ||
-      data.name_updates > 0 ||
-      data.empty_folders > 0;
+    const hasChanges = (data.summary?.issue_count || 0) > 0;
+    showUpdateIndexStats();
+    renderUpdateIndexDetails();
 
     if (hasChanges) {
-      // Phase 2: Review (has changes - show proceed)
       updateUpdateIndexUI('Scan complete. Ready to continue?', false);
-      showUpdateIndexStats();
       showUpdateIndexButtons('cancel', 'proceed');
     } else {
-      // Phase 2: No changes needed - done immediately
-      updateUpdateIndexUI('Library is up to date. No changes required.', false);
+      updateUpdateIndexUI('Library is already clean. No changes required.', false);
       showUpdateIndexButtons('done');
     }
   } catch (error) {
-    console.error('❌ Failed to scan index:', error);
+    console.error('❌ Failed to scan clean library:', error);
     updateUpdateIndexUI('Failed to scan', false);
-    showToast('Failed to scan index', null);
+    showToast('Failed to scan clean library', null);
   }
 }
 
@@ -4702,95 +4634,29 @@ async function openUpdateIndexOverlay() {
  * Phase 3: Execute update (after user clicks Continue)
  */
 async function executeUpdateIndex() {
-  
-
-  // Phase 3: Execution
-  updateUpdateIndexUI('Removing missing files...', false);
+  updateUpdateIndexUI('Cleaning library...', true);
   showUpdateIndexButtons('cancel-disabled');
 
   try {
-    const response = await fetch('/api/utilities/update-index/execute', {
+    const response = await fetch('/api/library/make-perfect', {
       method: 'POST',
     });
+    const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(`Update failed: ${response.status}`);
+      throw new Error(data.error || `Clean library failed: ${response.status}`);
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    // Read SSE stream
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-
-        if (line.startsWith('data:')) {
-          const data = JSON.parse(line.substring(5).trim());
-
-          // Progress updates
-          if (data.phase) {
-            if (data.phase === 'removing_deleted') {
-              updateUpdateIndexUI('Removing missing files...', false);
-            } else if (data.phase === 'adding_untracked') {
-              updateUpdateIndexUI('Adding untracked files...', false);
-            } else if (data.phase === 'updating_names') {
-              updateUpdateIndexUI('Updating names...', false);
-            } else if (data.phase === 'removing_empty') {
-              updateUpdateIndexUI('Removing empty folders...', false);
-            }
-          }
-
-          // Completion data (comes BEFORE event: complete)
-          if (data.stats && data.details) {
-            // Update final stats
-            updateIndexState.missingFiles = data.stats.missing_files;
-            updateIndexState.untrackedFiles = data.stats.untracked_files;
-            updateIndexState.nameUpdates = data.stats.name_updates;
-            updateIndexState.emptyFolders = data.stats.empty_folders;
-            updateIndexState.details = data.details;
-
-            
-            
-          }
-
-          if (data.error) {
-            throw new Error(data.error);
-          }
-        }
-      }
-
-      // Check for complete event AFTER processing all data lines
-      for (const line of lines) {
-        if (line.startsWith('event: complete')) {
-          // Phase 4: Confirmation (hide stats, show only details)
-          
-          updateUpdateIndexUI('Library updated', false);
-          hideUpdateIndexStats();
-          
-          renderUpdateIndexDetails();
-          
-          showUpdateIndexButtons('done');
-        }
-      }
-    }
+    updateIndexState.resultStats = data.stats || null;
+    updateUpdateIndexUI('Library cleaned', false);
+    showUpdateIndexStats();
+    renderUpdateIndexDetails();
+    showUpdateIndexButtons('done');
 
     // Reload grid
     await loadAndRenderPhotos(false);
   } catch (error) {
-    console.error('❌ Failed to execute update:', error);
+    console.error('❌ Failed to clean library:', error);
     updateUpdateIndexUI('Failed to clean library', false);
     showToast('Failed to clean library', null);
     showUpdateIndexButtons('cancel');
@@ -4817,17 +4683,18 @@ function updateUpdateIndexUI(statusText, showSpinner = false) {
  */
 function showUpdateIndexStats() {
   const statsEl = document.getElementById('updateIndexStats');
-  const missingEl = document.getElementById('missingFilesCount');
-  const untrackedEl = document.getElementById('untrackedFilesCount');
-  const nameUpdatesEl = document.getElementById('nameUpdatesCount');
-  const emptyFoldersEl = document.getElementById('emptyFoldersCount');
+  const misfiledEl = document.getElementById('misfiledMediaCount');
+  const trashEl = document.getElementById('trashCandidatesCount');
+  const dbRepairsEl = document.getElementById('dbRepairsCount');
+  const metadataEl = document.getElementById('metadataFixesCount');
+  const layoutEl = document.getElementById('layoutRepairsCount');
 
   if (statsEl) statsEl.style.display = 'flex';
-  if (missingEl) missingEl.textContent = updateIndexState.missingFiles;
-  if (untrackedEl) untrackedEl.textContent = updateIndexState.untrackedFiles;
-  if (nameUpdatesEl) nameUpdatesEl.textContent = updateIndexState.nameUpdates;
-  if (emptyFoldersEl)
-    emptyFoldersEl.textContent = updateIndexState.emptyFolders;
+  if (misfiledEl) misfiledEl.textContent = updateIndexState.misfiledMedia;
+  if (trashEl) trashEl.textContent = updateIndexState.trashCandidates;
+  if (dbRepairsEl) dbRepairsEl.textContent = updateIndexState.dbRepairs;
+  if (metadataEl) metadataEl.textContent = updateIndexState.metadataFixes;
+  if (layoutEl) layoutEl.textContent = updateIndexState.layoutRepairs;
 }
 
 /**
@@ -4871,19 +4738,8 @@ function showUpdateIndexButtons(...buttons) {
  * Render details (Phase 4 only)
  */
 function renderUpdateIndexDetails() {
-  
-  
-
-  if (!updateIndexState.details) {
-    console.warn('⚠️ No details in state!');
-    return;
-  }
-
   const detailsSection = document.getElementById('updateIndexDetailsSection');
   const detailsList = document.getElementById('updateIndexDetailsList');
-
-  
-  
 
   if (!detailsSection || !detailsList) {
     console.warn('⚠️ Details elements not found in DOM!');
@@ -4891,76 +4747,106 @@ function renderUpdateIndexDetails() {
   }
 
   const details = updateIndexState.details;
+  const resultStats = updateIndexState.resultStats;
   let html = '';
 
-  // Missing Files
-  if (details.missing_files && details.missing_files.length > 0) {
+  if (resultStats) {
+    html += '<div class="update-detail-section"><strong>Changes Applied:</strong><ul>';
+    html += `<li>Moved to trash: ${resultStats.moved_to_trash || 0}</li>`;
+    html += `<li>Duplicates trashed: ${resultStats.duplicates_trashed || 0}</li>`;
+    html += `<li>Metadata fixes: ${resultStats.metadata_fixed || 0}</li>`;
+    html += `<li>Media moved: ${resultStats.media_moved || 0}</li>`;
+    html += `<li>Folders removed: ${resultStats.folders_removed || 0}</li>`;
+    html += `<li>DB rows rebuilt: ${resultStats.db_rows_rebuilt || 0}</li>`;
+    html += '</ul></div>';
+  }
+
+  if (details?.misfiled_media?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>Missing Files:</strong><ul>';
-    details.missing_files.slice(0, 20).forEach((path) => {
-      html += `<li>${path}</li>`;
+      '<div class="update-detail-section"><strong>Misfiled Media:</strong><ul>';
+    details.misfiled_media.slice(0, 20).forEach((path) => {
+      html += `<li>${escapeHtml(path)}</li>`;
     });
-    if (details.missing_files.length > 20) {
+    if (details.misfiled_media.length > 20) {
       html += `<li><em>... and ${
-        details.missing_files.length - 20
+        details.misfiled_media.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
   }
 
-  // Untracked Files
-  if (details.untracked_files && details.untracked_files.length > 0) {
+  if (details?.trash_candidates?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>Untracked Files:</strong><ul>';
-    details.untracked_files.slice(0, 20).forEach((path) => {
-      html += `<li>${path}</li>`;
+      '<div class="update-detail-section"><strong>Trash Candidates:</strong><ul>';
+    details.trash_candidates.slice(0, 20).forEach((path) => {
+      html += `<li>${escapeHtml(path)}</li>`;
     });
-    if (details.untracked_files.length > 20) {
+    if (details.trash_candidates.length > 20) {
       html += `<li><em>... and ${
-        details.untracked_files.length - 20
+        details.trash_candidates.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
   }
 
-  // Name Updates
-  if (details.name_updates && details.name_updates.length > 0) {
+  if (details?.db_repairs?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>Name Updates:</strong><ul>';
-    details.name_updates.slice(0, 20).forEach((path) => {
-      html += `<li>${path}</li>`;
+      '<div class="update-detail-section"><strong>DB Repairs:</strong><ul>';
+    details.db_repairs.slice(0, 20).forEach((path) => {
+      html += `<li>${escapeHtml(path)}</li>`;
     });
-    if (details.name_updates.length > 20) {
+    if (details.db_repairs.length > 20) {
       html += `<li><em>... and ${
-        details.name_updates.length - 20
+        details.db_repairs.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
   }
 
-  // Empty Folders
-  if (details.empty_folders && details.empty_folders.length > 0) {
+  if (details?.metadata_fixes?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>Empty Folders:</strong><ul>';
-    details.empty_folders.slice(0, 20).forEach((path) => {
-      html += `<li>${path}</li>`;
+      '<div class="update-detail-section"><strong>Metadata Fixes:</strong><ul>';
+    details.metadata_fixes.slice(0, 20).forEach((path) => {
+      html += `<li>${escapeHtml(path)}</li>`;
     });
-    if (details.empty_folders.length > 20) {
+    if (details.metadata_fixes.length > 20) {
       html += `<li><em>... and ${
-        details.empty_folders.length - 20
+        details.metadata_fixes.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
   }
 
-  // Always show details section in Phase 4
+  if (details?.layout_repairs?.length > 0) {
+    html +=
+      '<div class="update-detail-section"><strong>Layout Repairs:</strong><ul>';
+    details.layout_repairs.slice(0, 20).forEach((path) => {
+      html += `<li>${escapeHtml(path)}</li>`;
+    });
+    if (details.layout_repairs.length > 20) {
+      html += `<li><em>... and ${
+        details.layout_repairs.length - 20
+      } more</em></li>`;
+    }
+    html += '</ul></div>';
+  }
+
   if (html) {
     detailsList.innerHTML = html;
   } else {
     detailsList.innerHTML =
-      '<div class="update-detail-section"><em>No changes were needed.</em></div>';
+      '<div class="update-detail-section"><em>No issues found.</em></div>';
   }
   detailsSection.style.display = 'block';
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 /**
@@ -5302,6 +5188,7 @@ async function showNameLibraryDialog(options = {}) {
     const showGoBack = wizardActions && !!options.showGoBack;
     let listenersDetached = false;
     let isSubmitting = false;
+    let latestValidationTicket = 0;
 
     function setActionButtonsDisabled(disabled) {
       cancelBtn.disabled = disabled;
@@ -5338,6 +5225,9 @@ async function showNameLibraryDialog(options = {}) {
       options.initialLibraryName != null && options.initialLibraryName !== ''
         ? options.initialLibraryName
         : 'Photo Library';
+    isSubmitting = false;
+    setActionButtonsDisabled(false);
+    confirmBtn.disabled = !!options.parentPath;
     input.value = defaultName;
     errorDiv.style.visibility = 'hidden';
     errorDiv.textContent = '';
@@ -5361,19 +5251,21 @@ async function showNameLibraryDialog(options = {}) {
     }
 
     // Validate name
-    async function validateName(name) {
+    async function computeNameValidation(name) {
       const sanitized = sanitizeFolderName(name);
 
       if (!sanitized) {
-        errorDiv.textContent = 'Please enter a valid name';
-        errorDiv.style.visibility = 'visible';
-        return null;
+        return {
+          sanitized: null,
+          errorMessage: 'Please enter a valid name',
+        };
       }
 
       if (sanitized.length > 255) {
-        errorDiv.textContent = 'Name is too long (max 255 characters)';
-        errorDiv.style.visibility = 'visible';
-        return null;
+        return {
+          sanitized: null,
+          errorMessage: 'Name is too long (max 255 characters)',
+        };
       }
 
       // Check if folder exists at parent location (if parentPath provided)
@@ -5392,9 +5284,10 @@ async function showNameLibraryDialog(options = {}) {
             );
 
             if (existingFolders.includes(sanitized)) {
-              errorDiv.textContent = `A folder named "${sanitized}" already exists here`;
-              errorDiv.style.visibility = 'visible';
-              return null;
+              return {
+                sanitized: null,
+                errorMessage: `A folder named "${sanitized}" already exists here`,
+              };
             }
           }
         } catch (error) {
@@ -5403,9 +5296,34 @@ async function showNameLibraryDialog(options = {}) {
         }
       }
 
-      // All validations passed - hide error
-      errorDiv.style.visibility = 'hidden';
-      return sanitized;
+      return {
+        sanitized,
+        errorMessage: null,
+      };
+    }
+
+    async function validateName(name) {
+      const ticket = ++latestValidationTicket;
+      const result = await computeNameValidation(name);
+
+      // Ignore stale async responses while user keeps typing.
+      if (ticket !== latestValidationTicket) {
+        return result.sanitized;
+      }
+
+      if (result.errorMessage) {
+        errorDiv.textContent = result.errorMessage;
+        errorDiv.style.visibility = 'visible';
+      } else {
+        errorDiv.style.visibility = 'hidden';
+        errorDiv.textContent = '';
+      }
+
+      if (!isSubmitting) {
+        confirmBtn.disabled = !result.sanitized;
+      }
+
+      return result.sanitized;
     }
 
     // Remove listeners (clone nodes). Optionally hide — wizard handoff keeps overlay
@@ -5468,19 +5386,32 @@ async function showNameLibraryDialog(options = {}) {
 
       isSubmitting = true;
       setActionButtonsDisabled(true);
-      const validated = await validateName(input.value);
-      if (validated) {
+      try {
+        const validated = await validateName(input.value);
+        if (!validated) {
+          isSubmitting = false;
+          setActionButtonsDisabled(false);
+          confirmBtn.disabled = true;
+          return;
+        }
+
+        isSubmitting = false;
+        setActionButtonsDisabled(false);
+
         if (wizardActions) {
           detachListeners();
         } else {
           cleanup();
         }
-        resolve(validated);
-        return;
-      }
 
-      isSubmitting = false;
-      setActionButtonsDisabled(false);
+        resolve(validated);
+      } catch (error) {
+        console.error('❌ Failed to confirm library name:', error);
+        isSubmitting = false;
+        setActionButtonsDisabled(false);
+        errorDiv.textContent = 'Something went wrong. Please try again.';
+        errorDiv.style.visibility = 'visible';
+      }
     };
 
     // Handle Enter key
@@ -5502,6 +5433,10 @@ async function showNameLibraryDialog(options = {}) {
 
       // Hide error immediately while typing
       errorDiv.style.visibility = 'hidden';
+      errorDiv.textContent = '';
+      if (!isSubmitting) {
+        confirmBtn.disabled = true;
+      }
 
       // Schedule validation after 150ms of no typing
       debounceTimeout = setTimeout(async () => {
@@ -6324,15 +6259,22 @@ async function createNewLibraryWithName(dialogOptions = {}) {
   try {
     let phase = 'name';
     let libraryName = null;
-    let duplicateParentPath = null;
+    let selectedParentPath = null;
+    let showDuplicateCopy = false;
 
     while (true) {
       if (phase === 'name') {
         const nameResult = await showNameLibraryDialog({
           ...dialogOptions,
+          ...(showDuplicateCopy
+            ? {
+                title: 'Folder already exists',
+                subtitle: 'Give your library a unique name to continue adding photos.',
+              }
+            : {}),
           wizardActions: true,
-          showGoBack: duplicateParentPath !== null,
-          parentPath: duplicateParentPath,
+          showGoBack: selectedParentPath !== null,
+          parentPath: selectedParentPath,
           initialLibraryName: libraryName,
         });
 
@@ -6348,14 +6290,15 @@ async function createNewLibraryWithName(dialogOptions = {}) {
           typeof nameResult === 'object' &&
           nameResult.action === 'back'
         ) {
-          duplicateParentPath = null;
+          selectedParentPath = null;
+          showDuplicateCopy = false;
           phase = 'folder';
           continue;
         }
 
         libraryName = nameResult;
-        duplicateParentPath = null;
-        phase = 'folder';
+        showDuplicateCopy = false;
+        phase = selectedParentPath ? 'create' : 'folder';
         continue;
       }
 
@@ -6381,23 +6324,35 @@ async function createNewLibraryWithName(dialogOptions = {}) {
           typeof folderResult === 'object' &&
           folderResult.action === 'back'
         ) {
+          selectedParentPath = null;
+          showDuplicateCopy = false;
           phase = 'name';
           continue;
         }
 
-        const parentPath = folderResult;
+        selectedParentPath = folderResult;
+        phase = 'create';
+        continue;
+      }
+
+      if (phase === 'create') {
+        if (!selectedParentPath) {
+          phase = 'folder';
+          continue;
+        }
+
         const taken = await libraryFolderNameExistsAtParent(
-          parentPath,
+          selectedParentPath,
           libraryName,
         );
         if (taken) {
           FolderPicker.hide();
-          duplicateParentPath = parentPath;
+          showDuplicateCopy = true;
           phase = 'name';
           continue;
         }
 
-        const cleanParentPath = parentPath.replace(/\/+$/, '');
+        const cleanParentPath = selectedParentPath.replace(/\/+$/, '');
         const fullLibraryPath = `${cleanParentPath}/${libraryName}`;
 
         const createResponse = await fetch('/api/library/create', {
@@ -6411,6 +6366,17 @@ async function createNewLibraryWithName(dialogOptions = {}) {
         const createResult = await createResponse.json();
 
         if (!createResponse.ok) {
+          const errorMessage = createResult.error || 'Failed to create library';
+          if (
+            createResponse.status === 400 &&
+            /already exists/i.test(errorMessage)
+          ) {
+            FolderPicker.hide();
+            showDuplicateCopy = true;
+            phase = 'name';
+            continue;
+          }
+
           throw new Error(createResult.error || 'Failed to create library');
         }
 

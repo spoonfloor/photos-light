@@ -24,19 +24,24 @@ from PIL import Image
 
 from db_schema import create_database_schema
 from file_operations import extract_exif_date, extract_exif_rating, strip_exif_rating
-from hash_cache import HashCache
+from hash_cache import HashCache, compute_hash_legacy
 from rotation_utils import (
     bake_orientation as shared_bake_orientation,
     can_bake_losslessly as shared_can_bake_losslessly,
     get_orientation_flag as shared_get_orientation_flag,
 )
 from library_cleanliness import (
+    ALL_MEDIA_EXTENSIONS,
+    PHOTO_MEDIA_EXTENSIONS,
+    VIDEO_MEDIA_EXTENSIONS,
     IGNORED_LIBRARY_FILES,
     INFRASTRUCTURE_DIRS,
     canonical_relative_path,
     in_infrastructure,
+    is_supported_media_extension,
     is_day_folder_name,
     is_year_folder_name,
+    media_kind_for_extension,
     parse_metadata_datetime,
     path_parts,
     root_entry_allowed,
@@ -50,42 +55,9 @@ from library_layout import (
     resolve_db_path,
 )
 
-
-PHOTO_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".heic",
-    ".heif",
-    ".png",
-    ".gif",
-    ".tiff",
-    ".tif",
-    ".webp",
-    ".avif",
-    ".jp2",
-    ".raw",
-    ".cr2",
-    ".nef",
-    ".arw",
-    ".dng",
-}
-VIDEO_EXTENSIONS = {
-    ".mov",
-    ".mp4",
-    ".m4v",
-    ".mkv",
-    ".wmv",
-    ".webm",
-    ".flv",
-    ".3gp",
-    ".mpg",
-    ".mpeg",
-    ".vob",
-    ".ts",
-    ".mts",
-    ".avi",
-}
-SUPPORTED_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
+PHOTO_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS
+VIDEO_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS
+SUPPORTED_MEDIA_EXTENSIONS = ALL_MEDIA_EXTENSIONS
 PIL_VERIFY_EXTENSIONS = {
     ".jpg",
     ".jpeg",
@@ -222,6 +194,67 @@ def format_issue(kind: str, path: str, detail: str = "") -> Dict[str, str]:
     return {"kind": kind, "path": path, "detail": detail}
 
 
+class _ReadOnlyHashCache:
+    """Hash helper used by scan-only cleaner audits."""
+
+    def get_hash(self, file_path: str) -> Tuple[Optional[str], bool]:
+        try:
+            return compute_hash_legacy(file_path), False
+        except Exception:
+            return None, False
+
+
+def _format_issue_entry(issue: Dict[str, str]) -> str:
+    path = issue["path"]
+    detail = issue.get("detail") or ""
+    return f"{path} ({detail})" if detail else path
+
+
+def summarize_clean_library_issues(issues: List[Dict[str, str]]) -> Dict[str, Any]:
+    details = {
+        "misfiled_media": [],
+        "trash_candidates": [],
+        "db_repairs": [],
+        "metadata_fixes": [],
+        "layout_repairs": [],
+    }
+
+    for issue in issues:
+        kind = issue["kind"]
+        entry = _format_issue_entry(issue)
+
+        if kind == "misnamed_or_misfiled":
+            details["misfiled_media"].append(entry)
+        elif kind in {"duplicate_media", "corrupted_media", "unsupported_or_nonmedia"}:
+            details["trash_candidates"].append(entry)
+        elif kind in {"ghost_db_reference", "mole_missing_from_db", "db_hash_mismatch"}:
+            details["db_repairs"].append(entry)
+        elif kind in {"unbaked_rotation", "rating_zero"}:
+            details["metadata_fixes"].append(entry)
+        elif kind in {
+            "empty_folder",
+            "noncanonical_folder",
+            "noncanonical_root_folder",
+            "noncanonical_root_file",
+            "missing_library_metadata_dir",
+            "missing_library_db",
+            "invalid_library_db",
+            "unexpected_library_metadata_dir",
+            "unexpected_library_metadata_file",
+        }:
+            details["layout_repairs"].append(entry)
+
+    summary = {
+        "misfiled_media": len(details["misfiled_media"]),
+        "trash_candidates": len(details["trash_candidates"]),
+        "db_repairs": len(details["db_repairs"]),
+        "metadata_fixes": len(details["metadata_fixes"]),
+        "layout_repairs": len(details["layout_repairs"]),
+        "issue_count": len(issues),
+    }
+    return {"summary": summary, "details": details}
+
+
 class LibraryCleaner:
     def __init__(self, library_path: str, db_path: Optional[str] = None):
         self.library_path = os.path.abspath(library_path)
@@ -290,6 +323,22 @@ class LibraryCleaner:
                 self.manifest.close()
             if self.db_conn is not None:
                 self.db_conn.close()
+
+    def scan(self) -> Dict[str, Any]:
+        try:
+            if os.path.exists(self.db_path) and db_is_valid(self.db_path):
+                self.db_conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+                self.db_conn.row_factory = sqlite3.Row
+            self.hash_cache = _ReadOnlyHashCache()
+            issues = self.final_audit()
+            payload = summarize_clean_library_issues(issues)
+            payload["status"] = "DIRTY" if issues else "CLEAN"
+            return payload
+        finally:
+            self.hash_cache = None
+            if self.db_conn is not None:
+                self.db_conn.close()
+                self.db_conn = None
 
     def setup(self) -> None:
         for folder in [LIBRARY_METADATA_DIR, ".db_backups", ".logs", ".thumbnails", ".trash"]:
@@ -387,7 +436,7 @@ class LibraryCleaner:
         ext = os.path.splitext(full_path)[1].lower()
         original_filename = os.path.basename(full_path)
 
-        if ext not in SUPPORTED_MEDIA_EXTENSIONS:
+        if not is_supported_media_extension(ext):
             self.move_to_trash(full_path, "non_media")
             return None
 
@@ -436,7 +485,7 @@ class LibraryCleaner:
             full_path=full_path,
             rel_path=rel_path,
             ext=ext,
-            file_type="video" if ext in VIDEO_EXTENSIONS else "photo",
+            file_type=media_kind_for_extension(ext) or "photo",
             content_hash=content_hash,
             date_taken=date_taken,
             date_obj=date_obj,
@@ -641,7 +690,7 @@ class LibraryCleaner:
                 rel_path = os.path.relpath(full_path, self.library_path)
 
                 ext = os.path.splitext(filename)[1].lower()
-                if ext not in SUPPORTED_MEDIA_EXTENSIONS:
+                if not is_supported_media_extension(ext):
                     issues.append(format_issue("unsupported_or_nonmedia", rel_path))
                     continue
 
@@ -693,11 +742,13 @@ class LibraryCleaner:
                 active_paths.add(rel_path)
                 _ = date_taken  # Keep the date normalization in the audit path explicit.
 
-        assert self.db_conn is not None
-        cursor = self.db_conn.cursor()
-        cursor.execute("SELECT current_path, content_hash FROM photos")
-        db_rows = cursor.fetchall()
-        db_paths = {row["current_path"] for row in db_rows}
+        db_rows: List[sqlite3.Row] = []
+        db_paths: set[str] = set()
+        if self.db_conn is not None:
+            cursor = self.db_conn.cursor()
+            cursor.execute("SELECT current_path, content_hash FROM photos")
+            db_rows = cursor.fetchall()
+            db_paths = {row["current_path"] for row in db_rows}
 
         for ghost_path in sorted(db_paths - active_paths):
             issues.append(format_issue("ghost_db_reference", ghost_path))
@@ -725,6 +776,11 @@ class LibraryCleaner:
 
 class DBNormalizationEngine(LibraryCleaner):
     """Authoritative DB normalization engine for library cleanup and repair."""
+
+
+def scan_library_cleanliness(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    engine = DBNormalizationEngine(library_path, db_path=db_path)
+    return engine.scan()
 
 
 def run_db_normalization_engine(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:

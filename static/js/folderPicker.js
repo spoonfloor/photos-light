@@ -25,6 +25,7 @@ const FolderPicker = (() => {
   let folderListClickHandler = null; // Store reference to event handler for cleanup
   let folderListRequestId = 0;
   let selectionProbeRequestId = 0;
+  let activeItemKey = null; // Keyboard-highlighted row in the visible list
 
   async function readErrorMessage(response, fallbackMessage) {
     try {
@@ -222,6 +223,82 @@ const FolderPicker = (() => {
     });
   }
 
+  function getFolderItemKey(type, path) {
+    return `${type}:${path}`;
+  }
+
+  function getFolderPickerRows() {
+    const folderList = document.getElementById('folderPickerFolderList');
+    return PickerUtils.getNavigableRows(folderList, '.folder-item[data-item-key]');
+  }
+
+  function syncFolderPickerState(options = {}) {
+    const rows = getFolderPickerRows();
+    let activeRow = null;
+
+    rows.forEach((row) => {
+      const isActive = row.dataset.itemKey === activeItemKey;
+      row.classList.toggle('picker-keyboard-active', isActive);
+      row.setAttribute('aria-selected', isActive ? 'true' : 'false');
+
+      if (isActive) {
+        activeRow = row;
+      }
+
+      const checkbox = row.querySelector('.folder-checkbox');
+      if (!checkbox) {
+        return;
+      }
+
+      const isSelected = row.dataset.itemPath === selectedPath;
+      checkbox.textContent = isSelected ? 'check_box' : 'folder';
+      checkbox.classList.toggle('selected', isSelected);
+    });
+
+    if (!activeRow) {
+      activeItemKey = null;
+      return;
+    }
+
+    if (options.scroll) {
+      PickerUtils.scrollRowIntoView(activeRow);
+    }
+  }
+
+  async function setActiveFolderItem(itemKey, options = {}) {
+    const targetRow = getFolderPickerRows().find(
+      (row) => row.dataset.itemKey === itemKey,
+    );
+    if (!targetRow) {
+      return false;
+    }
+
+    activeItemKey = itemKey;
+    selectedPath = targetRow.dataset.itemPath || VIRTUAL_ROOT;
+    updateSelectedPath();
+    syncFolderPickerState(options);
+    await syncSelectedPathProbe();
+    return true;
+  }
+
+  async function moveActiveFolderItem(direction) {
+    const rows = getFolderPickerRows();
+    const currentIndex = rows.findIndex(
+      (row) => row.dataset.itemKey === activeItemKey,
+    );
+    const nextIndex = PickerUtils.getNextFocusIndex(
+      currentIndex,
+      direction,
+      rows.length,
+    );
+
+    if (nextIndex === null) {
+      return false;
+    }
+
+    return setActiveFolderItem(rows[nextIndex].dataset.itemKey, { scroll: true });
+  }
+
   async function updateFolderList() {
     const folderList = document.getElementById('folderPickerFolderList');
     const requestId = ++folderListRequestId;
@@ -237,7 +314,7 @@ const FolderPicker = (() => {
       folderList.innerHTML = topLevelLocations
         .map(
           (loc) => `
-        <div class="folder-item" data-real-path="${loc.path}">
+        <div class="folder-item" data-real-path="${loc.path}" data-item-key="${getFolderItemKey('location', loc.path)}" data-item-path="${loc.path}" aria-selected="false">
           <span class="folder-icon material-symbols-outlined">folder</span>
           <span class="folder-name">${loc.name}</span>
           <span class="folder-arrow">→</span>
@@ -259,6 +336,7 @@ const FolderPicker = (() => {
       };
       
       folderList.addEventListener('click', folderListClickHandler);
+      syncFolderPickerState();
       return;
     }
 
@@ -283,6 +361,7 @@ const FolderPicker = (() => {
       if (folders.length === 0 && !currentHasDb) {
         // Show placeholder boxes to fill vertical space without scrolling
         // Calculated to fit available folder-list height (~350px / 54px per item = 6)
+        activeItemKey = null;
         folderList.innerHTML = `
           <div class="folder-placeholder-container">
             <div class="folder-placeholder"></div>
@@ -306,7 +385,7 @@ const FolderPicker = (() => {
         const selectedClass = isSelected ? 'selected' : '';
         
         html += `
-          <div class="folder-item" data-folder="${folder}" data-folder-path="${folderPath}">
+          <div class="folder-item" data-folder="${folder}" data-folder-path="${folderPath}" data-item-key="${getFolderItemKey('folder', folderPath)}" data-item-path="${folderPath}" aria-selected="false">
             <span class="folder-checkbox material-symbols-outlined ${selectedClass}" data-path="${folderPath}">${iconClass}</span>
             <span class="folder-name">${folder}</span>
             <span class="folder-arrow">→</span>
@@ -317,7 +396,7 @@ const FolderPicker = (() => {
       // Show database file at bottom if it exists
       if (currentHasDb) {
         html += `
-          <div class="folder-item folder-item-db" data-is-db="true">
+          <div class="folder-item folder-item-db" data-is-db="true" data-item-key="${getFolderItemKey('db', currentPath)}" data-item-path="${currentPath}" aria-selected="false">
             <span class="folder-icon material-symbols-outlined">description</span>
             <span class="folder-name">photo_library.db</span>
           </div>
@@ -340,6 +419,10 @@ const FolderPicker = (() => {
           if (dbItem) {
             // Same action as clicking "Choose" button
             if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
+              activeItemKey = dbItem.dataset.itemKey || null;
+              selectedPath = currentPath;
+              updateSelectedPath();
+              syncFolderPickerState();
               localStorage.setItem('picker.lastPath', currentPath);
               
               
@@ -359,6 +442,7 @@ const FolderPicker = (() => {
         // Checkbox clicked - select this folder
         if (e.target.classList.contains('folder-checkbox')) {
           e.stopPropagation();
+          activeItemKey = item.dataset.itemKey || null;
           selectFolder(folderPath);
           return;
         }
@@ -370,11 +454,13 @@ const FolderPicker = (() => {
       };
 
       folderList.addEventListener('click', folderListClickHandler);
+      syncFolderPickerState();
     } catch (error) {
       if (requestId !== folderListRequestId || pathForRequest !== currentPath) {
         return;
       }
       folderList.innerHTML = `<div class="empty-state">Error: ${error.message}</div>`;
+      activeItemKey = null;
       currentHasDb = false;
       currentHasOpenableDb = false;
       if (shouldUseOpenLibraryCta() && selectedPath === currentPath) {
@@ -448,9 +534,11 @@ const FolderPicker = (() => {
     // Toggle behavior - clicking same folder deselects it
     if (selectedPath === path) {
       selectedPath = currentPath; // Revert to current location
+      activeItemKey = null;
       
     } else {
       selectedPath = path; // Select (radio button - clears others)
+      activeItemKey = getFolderItemKey('folder', path);
       
     }
     
@@ -461,6 +549,7 @@ const FolderPicker = (() => {
   }
 
   async function navigateTo(path) {
+    activeItemKey = null;
     currentPath = path || VIRTUAL_ROOT;
     // When navigating, selected path becomes where you are (unless you explicitly checked something)
     selectedPath = currentPath;
@@ -475,6 +564,25 @@ const FolderPicker = (() => {
   // ===========================================================================
 
   async function handleKeyboard(e) {
+    if (PickerUtils.isTypingTarget(e.target)) {
+      return;
+    }
+
+    if (
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.shiftKey &&
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+    ) {
+      const moved = await moveActiveFolderItem(e.key === 'ArrowUp' ? -1 : 1);
+      if (moved) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
+
     // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
     if (e.metaKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
       e.preventDefault();
@@ -575,6 +683,7 @@ const FolderPicker = (() => {
         currentHasDb = false;
         currentHasOpenableDb = false;
         selectedHasOpenableDb = false;
+        activeItemKey = null;
 
         // Initialize UI
         updateBreadcrumb();

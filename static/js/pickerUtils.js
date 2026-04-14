@@ -43,9 +43,60 @@ const PickerUtils = (() => {
     return VIRTUAL_ROOT;
   }
 
+  function isTypingTarget(target) {
+    if (!(target instanceof HTMLElement)) {
+      return false;
+    }
+
+    if (target.isContentEditable) {
+      return true;
+    }
+
+    const tagName = target.tagName;
+    return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+  }
+
+  function getNavigableRows(container, selector) {
+    if (!container) {
+      return [];
+    }
+
+    return Array.from(container.querySelectorAll(selector)).filter(
+      (row) => row instanceof HTMLElement,
+    );
+  }
+
+  function getNextFocusIndex(currentIndex, direction, totalCount) {
+    if (!Number.isInteger(totalCount) || totalCount <= 0) {
+      return null;
+    }
+
+    if (!Number.isInteger(currentIndex) || currentIndex < 0 || currentIndex >= totalCount) {
+      return direction < 0 ? totalCount - 1 : 0;
+    }
+
+    const nextIndex = currentIndex + direction;
+    return Math.max(0, Math.min(totalCount - 1, nextIndex));
+  }
+
+  function scrollRowIntoView(row) {
+    if (!(row instanceof HTMLElement)) {
+      return;
+    }
+
+    row.scrollIntoView({
+      block: 'nearest',
+      inline: 'nearest',
+    });
+  }
+
   return {
     VIRTUAL_ROOT,
-    getDefaultPath
+    getDefaultPath,
+    isTypingTarget,
+    getNavigableRows,
+    getNextFocusIndex,
+    scrollRowIntoView,
   };
 })();
 

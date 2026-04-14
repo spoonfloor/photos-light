@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from library_layout import ROOT_INFRASTRUCTURE_DIRS
 
@@ -23,6 +23,57 @@ SUPPORTED_METADATA_DATE_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y:%m:%d %H:%M:%S%z",
     "%Y-%m-%dT%H:%M:%S",
+)
+PHOTO_MEDIA_EXTENSIONS = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".heic",
+        ".heif",
+        ".png",
+        ".gif",
+        ".tiff",
+        ".tif",
+        ".webp",
+        ".avif",
+        ".jp2",
+        ".raw",
+        ".cr2",
+        ".nef",
+        ".arw",
+        ".dng",
+    }
+)
+VIDEO_MEDIA_EXTENSIONS = frozenset(
+    {
+        ".mov",
+        ".mp4",
+        ".m4v",
+        ".mkv",
+        ".wmv",
+        ".webm",
+        ".flv",
+        ".3gp",
+        ".mpg",
+        ".mpeg",
+        ".vob",
+        ".ts",
+        ".mts",
+        ".avi",
+    }
+)
+ALL_MEDIA_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS | VIDEO_MEDIA_EXTENSIONS
+EXIF_WRITABLE_PHOTO_EXTENSIONS = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".heic",
+        ".heif",
+        ".png",
+        ".gif",
+        ".tiff",
+        ".tif",
+    }
 )
 
 
@@ -57,6 +108,19 @@ def build_canonical_photo_path(date_taken: str, content_hash: str, ext: str) -> 
     date_obj = datetime.strptime(date_taken, CANONICAL_DB_DATE_FORMAT)
     relative_path = canonical_relative_path(date_obj, content_hash, ext)
     return relative_path, os.path.basename(relative_path)
+
+
+def is_supported_media_extension(ext: str) -> bool:
+    return ext.lower() in ALL_MEDIA_EXTENSIONS
+
+
+def media_kind_for_extension(ext: str) -> Optional[Literal["photo", "video"]]:
+    normalized = ext.lower()
+    if normalized in PHOTO_MEDIA_EXTENSIONS:
+        return "photo"
+    if normalized in VIDEO_MEDIA_EXTENSIONS:
+        return "video"
+    return None
 
 
 def is_year_folder_name(name: str) -> bool:

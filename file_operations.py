@@ -14,6 +14,7 @@ import os
 import subprocess
 import json
 from PIL import Image
+from library_cleanliness import VIDEO_MEDIA_EXTENSIONS
 
 
 def extract_exif_date(file_path):
@@ -29,10 +30,8 @@ def extract_exif_date(file_path):
     try:
         # Determine file type
         ext = os.path.splitext(file_path)[1].lower()
-        video_exts = {'.mov', '.mp4', '.m4v', '.mkv', '.wmv', '.webm', '.flv', 
-                      '.3gp', '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'}
-        
-        if ext in video_exts:
+
+        if ext in VIDEO_MEDIA_EXTENSIONS:
             # Use ffprobe for video files
             result = subprocess.run([
                 'ffprobe',
@@ -91,10 +90,8 @@ def get_dimensions(file_path):
     """
     try:
         ext = os.path.splitext(file_path)[1].lower()
-        video_exts = {'.mov', '.mp4', '.m4v', '.mkv', '.wmv', '.webm', '.flv',
-                      '.3gp', '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'}
-        
-        if ext in video_exts:
+
+        if ext in VIDEO_MEDIA_EXTENSIONS:
             # Don't extract dimensions for videos here
             # (caller should use ffprobe if needed)
             return None, None

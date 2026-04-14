@@ -49,7 +49,14 @@ from pillow_heif import register_heif_opener
 from io import BytesIO
 from db_health import DBStatus, check_database_health
 from db_schema import create_database_schema
-from library_cleanliness import build_canonical_photo_path, parse_metadata_datetime
+from library_cleanliness import (
+    ALL_MEDIA_EXTENSIONS,
+    EXIF_WRITABLE_PHOTO_EXTENSIONS,
+    PHOTO_MEDIA_EXTENSIONS,
+    VIDEO_MEDIA_EXTENSIONS,
+    build_canonical_photo_path,
+    parse_metadata_datetime,
+)
 from library_sync import synchronize_library_generator, count_media_files, estimate_duration
 from library_layout import (
     LIBRARY_METADATA_DIR,
@@ -91,26 +98,9 @@ TRASH_DIR = None
 DB_BACKUP_DIR = None
 IMPORT_TEMP_DIR = None
 LOG_DIR = None
-# Supported media file extensions (wide net for discovery)
-# Note: BMP excluded - exiftool cannot write EXIF to BMP (EXIF write is required)
-PHOTO_EXTENSIONS = {
-    '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif',
-    '.webp', '.avif', '.jp2',
-    '.raw', '.cr2', '.nef', '.arw', '.dng'
-}
-VIDEO_EXTENSIONS = {
-    '.mov', '.mp4', '.m4v', '.mkv',
-    '.wmv', '.webm', '.flv', '.3gp',
-    '.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi'
-}
-ALL_MEDIA_EXTENSIONS = PHOTO_EXTENSIONS | VIDEO_EXTENSIONS
-
-# Subset: Formats that support EXIF writes via exiftool
-# Excludes: RAW formats (read-only), WebP/AVIF/JP2 (ambiguous lossy/lossless)
-# Used by: Date change restore, EXIF metadata operations
-EXIF_WRITABLE_PHOTO_EXTENSIONS = {
-    '.jpg', '.jpeg', '.heic', '.heif', '.png', '.gif', '.tiff', '.tif'
-}
+# Shared media classification policy
+PHOTO_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS
+VIDEO_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS
 
 # ============================================================================
 # LOGGING CONFIGURATION (Hybrid Approach: print() + persistent logs)
@@ -144,7 +134,7 @@ def get_image_dimensions(file_path):
     try:
         # Check if it's a video file
         ext = os.path.splitext(file_path)[1].lower()
-        if ext in ['.mov', '.mp4', '.m4v', '.avi', '.mpg', '.mpeg']:
+        if ext in VIDEO_EXTENSIONS:
             # Use ffprobe for videos
             import subprocess
             import json
@@ -4972,6 +4962,38 @@ def api_make_library_perfect():
     except Exception as e:
         print(f"\n❌ Make Library Perfect failed: {str(e)}")
         error_logger.error(f"Make Library Perfect failed: {e}")
+        error_logger.error(traceback.format_exc())
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/library/make-perfect/scan', methods=['GET'])
+def api_scan_make_library_perfect():
+    """
+    Preflight scan for Clean library using the DB normalization engine's audit rulebook.
+    """
+    try:
+        from make_library_perfect import scan_library_cleanliness
+
+        if not LIBRARY_PATH:
+            return jsonify({'error': 'No library configured'}), 400
+
+        if not os.path.isdir(LIBRARY_PATH):
+            return jsonify({'error': 'Configured library path is missing or invalid'}), 400
+
+        if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+            return jsonify({'error': 'Configured library path is not accessible'}), 503
+
+        print(f"\n{'='*60}")
+        print(f"🔎 CLEAN LIBRARY SCAN: {LIBRARY_PATH}")
+        print(f"{'='*60}\n")
+
+        result = scan_library_cleanliness(LIBRARY_PATH, db_path=DB_PATH)
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"\n❌ Clean library scan failed: {str(e)}")
+        error_logger.error(f"Clean library scan failed: {e}")
         error_logger.error(traceback.format_exc())
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500

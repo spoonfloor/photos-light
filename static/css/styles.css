@@ -1560,6 +1560,12 @@ input[type="radio"] {
   border-color: #765fff;
 }
 
+.folder-item.picker-keyboard-active {
+  background: rgba(118, 95, 255, 0.16);
+  border-color: #765fff;
+  box-shadow: 0 0 0 1px rgba(118, 95, 255, 0.35);
+}
+
 /* Empty state placeholder boxes */
 .folder-placeholder {
   height: 46px; /* padding (14px * 2) + border (1px * 2) + content */
@@ -1757,6 +1763,18 @@ input[type="radio"] {
 .photo-picker-item:hover {
   background: #2a2a2a;
   border-color: #765fff;
+}
+
+.photo-picker-item.picker-keyboard-active {
+  background: rgba(118, 95, 255, 0.16);
+  border-color: #765fff;
+  box-shadow: 0 0 0 1px rgba(118, 95, 255, 0.35);
+}
+
+.photo-picker-item.picker-keyboard-active .photo-picker-meta,
+.folder-item.picker-keyboard-active .folder-arrow,
+.photo-picker-item.picker-keyboard-active .photo-picker-arrow {
+  color: #d8d1ff;
 }
 
 .photo-picker-checkbox {

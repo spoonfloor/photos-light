@@ -49,9 +49,6 @@ class HashCache:
             'total_queries': 0
         }
         
-        # IMPORTANT: We return 7-char hashes to match app.py's compute_hash()
-        # But store full 64-char hashes in DB for uniqueness
-    
     def get_hash(self, file_path):
         """
         Get hash for file (from cache or compute).
@@ -83,9 +80,7 @@ class HashCache:
             # Move to end (mark as recently used)
             self.memory_cache.move_to_end(cache_key)
             self.stats['memory_hits'] += 1
-            # Memory cache stores full hash, return truncated
-            full_hash = self.memory_cache[cache_key]
-            return full_hash[:7], True
+            return self.memory_cache[cache_key], True
         
         # Level 2: Check database cache
         cursor = self.db_conn.cursor()
@@ -103,8 +98,7 @@ class HashCache:
             self._add_to_memory_cache(cache_key, content_hash)
             
             self.stats['db_hits'] += 1
-            # Return truncated hash to match app.py's compute_hash() (7 chars)
-            return content_hash[:7], True
+            return content_hash, True
         
         # Cache miss - compute hash
         content_hash = self._compute_hash(file_path)
@@ -117,8 +111,7 @@ class HashCache:
         self._add_to_db_cache(cache_key, content_hash)
         
         self.stats['misses'] += 1
-        # Return truncated hash to match app.py's compute_hash() (7 chars)
-        return content_hash[:7], False
+        return content_hash, False
     
     def _compute_hash(self, file_path):
         """
