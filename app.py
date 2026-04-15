@@ -43,6 +43,7 @@ import json
 import logging
 import tempfile
 from logging.handlers import RotatingFileHandler
+from dataclasses import dataclass
 from datetime import datetime
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
@@ -74,6 +75,7 @@ from library_layout import (
 )
 from media_finalization import finalize_mutated_media
 from photo_canonicalization import (
+    CanonicalizedPhoto,
     canonicalize_photo_file,
     write_photo_date_metadata,
 )
@@ -382,6 +384,173 @@ def write_video_metadata(file_path, new_date):
         raise Exception("ffmpeg timeout after 60s")
     except FileNotFoundError:
         raise Exception("ffmpeg not found")
+
+
+@dataclass
+class StagedCanonicalPhoto:
+    staged_path: str
+    canonical_photo: CanonicalizedPhoto
+
+
+def cleanup_staged_file(staged_path):
+    """Best-effort cleanup for staged temp files."""
+    if not staged_path:
+        return
+    try:
+        if os.path.exists(staged_path):
+            os.remove(staged_path)
+    except Exception as cleanup_error:
+        print(f"   ⚠️  Couldn't delete staged file: {cleanup_error}")
+
+
+def stage_photo_for_canonicalization(source_path, *, temp_prefix, temp_dir=None):
+    """
+    Copy a photo into temp space, canonicalize it there, and return final identity.
+
+    This is the shared photo ingest primitive used by import and convert so both
+    paths resolve date fallback, metadata writes, canonical bytes, and canonical
+    relative path through the same rulebook.
+    """
+    staging_dir = temp_dir or IMPORT_TEMP_DIR
+    if not staging_dir:
+        raise RuntimeError("No import temp directory configured for photo staging")
+    os.makedirs(staging_dir, exist_ok=True)
+    _, ext = os.path.splitext(source_path)
+    fd, staged_path = tempfile.mkstemp(
+        prefix=temp_prefix,
+        suffix=ext.lower(),
+        dir=staging_dir,
+    )
+    os.close(fd)
+    shutil.copy2(source_path, staged_path)
+
+    try:
+        canonical_photo = canonicalize_photo_file(
+            staged_path,
+            extract_exif_date=extract_exif_date,
+            bake_orientation=bake_orientation,
+            get_dimensions=get_image_dimensions,
+            compute_hash=compute_full_hash,
+            write_photo_exif=write_photo_exif,
+            extract_exif_rating=extract_exif_rating,
+            strip_exif_rating=strip_exif_rating,
+        )
+        if not os.path.exists(staged_path):
+            raise RuntimeError(f"Canonicalized staged photo disappeared: {staged_path}")
+        if not canonical_photo.content_hash:
+            raise RuntimeError(f"Failed to compute canonical hash for {source_path}")
+        if canonical_photo.width is None or canonical_photo.height is None:
+            raise RuntimeError(f"Failed to read canonical dimensions for {source_path}")
+        return StagedCanonicalPhoto(staged_path=staged_path, canonical_photo=canonical_photo)
+    except Exception:
+        cleanup_staged_file(staged_path)
+        raise
+
+
+def insert_canonical_photo_row(conn, *, original_filename, relative_path, canonical_photo):
+    cursor = conn.cursor()
+    cursor.execute(
+        '''
+            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''',
+        (
+            relative_path,
+            original_filename,
+            canonical_photo.content_hash,
+            canonical_photo.file_size,
+            'photo',
+            canonical_photo.date_taken,
+            canonical_photo.width,
+            canonical_photo.height,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def commit_staged_canonical_photo(
+    conn,
+    *,
+    library_path,
+    source_path,
+    original_filename,
+    staged_photo,
+    remove_source_after_commit,
+):
+    """
+    Move a verified staged photo into its canonical location and persist the DB row.
+    """
+    canonical_photo = staged_photo.canonical_photo
+    staged_path = staged_photo.staged_path
+    target_path = os.path.join(library_path, canonical_photo.relative_path)
+    source_abs = os.path.abspath(source_path)
+    target_abs = os.path.abspath(target_path)
+    source_matches_target = source_abs == target_abs
+
+    if os.path.exists(target_path) and not source_matches_target:
+        raise RuntimeError(
+            f"Refusing to overwrite existing file at canonical path {canonical_photo.relative_path}"
+        )
+
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    if source_matches_target:
+        os.replace(staged_path, target_path)
+    else:
+        shutil.move(staged_path, target_path)
+    staged_photo.staged_path = None
+
+    try:
+        photo_id = insert_canonical_photo_row(
+            conn,
+            original_filename=original_filename,
+            relative_path=canonical_photo.relative_path,
+            canonical_photo=canonical_photo,
+        )
+    except Exception:
+        if not source_matches_target and os.path.exists(target_path):
+            os.remove(target_path)
+        raise
+
+    if remove_source_after_commit and not source_matches_target and os.path.exists(source_path):
+        os.remove(source_path)
+
+    return photo_id, target_path
+
+
+def move_file_to_category_trash(library_path, trash_dir, source_path, category):
+    """Move a file into a categorized trash folder while preserving its relative path."""
+    rel_path = os.path.relpath(source_path, library_path)
+    target_path = os.path.join(trash_dir, category, rel_path)
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+    candidate = target_path
+    counter = 1
+    base, ext = os.path.splitext(target_path)
+    while os.path.exists(candidate):
+        candidate = f"{base}_{counter}{ext}"
+        counter += 1
+
+    shutil.move(source_path, candidate)
+    return candidate
+
+
+def categorize_processing_error(error):
+    error_str = str(error).lower()
+    if 'timeout' in error_str:
+        return 'timeout', "Processing timeout (file too large or slow storage)"
+    if 'unique constraint' in error_str and 'content_hash' in error_str:
+        return 'duplicate', "Duplicate file (detected after processing)"
+    if ('not a valid' in error_str or 'corrupt' in error_str or
+            'invalid data' in error_str or 'moov atom' in error_str):
+        return 'corrupted', "File corrupted or invalid format"
+    if 'not found' in error_str and 'exiftool' in error_str:
+        return 'missing_tool', "Required tool not installed (exiftool)"
+    if 'not found' in error_str and 'ffmpeg' in error_str:
+        return 'missing_tool', "Required tool not installed (ffmpeg)"
+    if 'permission' in error_str or 'denied' in error_str:
+        return 'permission', "Permission denied"
+    return 'unsupported', str(error)
 
 def parse_filename(filename):
     """
@@ -2412,26 +2581,13 @@ def import_from_paths():
                     if file_type == 'photo':
                         staged_path = None
                         try:
-                            os.makedirs(IMPORT_TEMP_DIR, exist_ok=True)
-                            fd, staged_path = tempfile.mkstemp(
-                                prefix='import_photo_',
-                                suffix=ext.lower(),
-                                dir=IMPORT_TEMP_DIR,
+                            staged_photo = stage_photo_for_canonicalization(
+                                source_path,
+                                temp_prefix='import_photo_',
                             )
-                            os.close(fd)
-                            shutil.copy2(source_path, staged_path)
+                            staged_path = staged_photo.staged_path
+                            canonical_photo = staged_photo.canonical_photo
                             print(f"   📦 Staged photo for canonicalization: {os.path.basename(staged_path)}")
-
-                            canonical_photo = canonicalize_photo_file(
-                                staged_path,
-                                extract_exif_date=extract_exif_date,
-                                bake_orientation=bake_orientation,
-                                get_dimensions=get_image_dimensions,
-                                compute_hash=compute_full_hash,
-                                write_photo_exif=write_photo_exif,
-                                extract_exif_rating=extract_exif_rating,
-                                strip_exif_rating=strip_exif_rating,
-                            )
                             print(
                                 f"   🔎 Canonical photo: date={canonical_photo.date_taken} "
                                 f"hash={canonical_photo.content_hash[:16]}... "
@@ -2452,7 +2608,7 @@ def import_from_paths():
 
                             if existing:
                                 print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
-                                os.remove(staged_path)
+                                cleanup_staged_file(staged_path)
                                 staged_path = None
                                 duplicate_count += 1
                                 if not (yield from emit_event('progress', {
@@ -2469,7 +2625,7 @@ def import_from_paths():
                             target_path = os.path.join(LIBRARY_PATH, relative_path)
                             if os.path.exists(target_path):
                                 print(f"   ⏭️  Duplicate canonical path already exists: {relative_path}")
-                                os.remove(staged_path)
+                                cleanup_staged_file(staged_path)
                                 staged_path = None
                                 duplicate_count += 1
                                 if not (yield from emit_event('progress', {
@@ -2482,60 +2638,24 @@ def import_from_paths():
                                     break
                                 continue
 
-                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                            shutil.move(staged_path, target_path)
+                            photo_id, target_path = commit_staged_canonical_photo(
+                                conn,
+                                library_path=LIBRARY_PATH,
+                                source_path=source_path,
+                                original_filename=filename,
+                                staged_photo=staged_photo,
+                                remove_source_after_commit=False,
+                            )
                             staged_path = None
                             print(f"   ✅ Canonical photo stored at: {relative_path}")
-
-                            cursor.execute('''
-                                INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ''', (
-                                relative_path,
-                                filename,
-                                canonical_photo.content_hash,
-                                canonical_photo.file_size,
-                                file_type,
-                                canonical_photo.date_taken,
-                                canonical_photo.width,
-                                canonical_photo.height,
-                            ))
-                            photo_id = cursor.lastrowid
-                            conn.commit()
                             print(
                                 f"   ✅ Imported canonical photo: photo_id={photo_id} "
                                 f"path={relative_path} hash={canonical_photo.content_hash[:8]}"
                             )
                         except Exception as exif_error:
                             print(f"   ❌ EXIF write failed: {exif_error}")
-
-                            try:
-                                if staged_path and os.path.exists(staged_path):
-                                    os.remove(staged_path)
-                                    print("   🗑️  Deleted staged file")
-                            except Exception as cleanup_error:
-                                print(f"   ⚠️  Couldn't delete staged file: {cleanup_error}")
-
-                            error_str = str(exif_error).lower()
-                            if 'timeout' in error_str:
-                                category = 'timeout'
-                                user_message = "Processing timeout (file too large or slow storage)"
-                            elif 'unique constraint' in error_str and 'content_hash' in error_str:
-                                category = 'duplicate'
-                                user_message = "Duplicate file (detected after processing)"
-                            elif ('not a valid' in error_str or 'corrupt' in error_str or
-                                  'invalid data' in error_str or 'moov atom' in error_str):
-                                category = 'corrupted'
-                                user_message = "File corrupted or invalid format"
-                            elif 'not found' in error_str and 'exiftool' in error_str:
-                                category = 'missing_tool'
-                                user_message = "Required tool not installed (exiftool)"
-                            elif 'permission' in error_str or 'denied' in error_str:
-                                category = 'permission'
-                                user_message = "Permission denied"
-                            else:
-                                category = 'unsupported'
-                                user_message = str(exif_error)
+                            cleanup_staged_file(staged_path)
+                            category, user_message = categorize_processing_error(exif_error)
 
                             if category == 'duplicate':
                                 duplicate_count += 1
@@ -4125,6 +4245,7 @@ def cleanup_terraform_folders(library_path):
     
     # Whitelist: allowed folder names at root level
     INFRASTRUCTURE_FOLDERS = set(ROOT_INFRASTRUCTURE_DIRS)
+    ignored_entries = {'.DS_Store'}
     
     for item in root_items:
         item_path = os.path.join(library_path, item)
@@ -4147,13 +4268,9 @@ def cleanup_terraform_folders(library_path):
                     year_item_path = os.path.join(item_path, year_item)
                     
                     if not os.path.isdir(year_item_path):
-                        # Files in year folder not allowed - delete
-                        try:
-                            os.remove(year_item_path)
-                            print(f"    🗑️  Removed file: {os.path.relpath(year_item_path, library_path)}")
-                            removed_count += 1
-                        except Exception as e:
-                            print(f"    ⚠️  Could not remove {year_item_path}: {e}")
+                        # Preserve non-directory entries so failed converts never
+                        # lose the only remaining copy of a media file.
+                        print(f"    ⚠️  Preserving file during cleanup: {os.path.relpath(year_item_path, library_path)}")
                         continue
                     
                     # Check if this is a valid date folder (YYYY-MM-DD)
@@ -4167,8 +4284,21 @@ def cleanup_terraform_folders(library_path):
                     )
                     
                     if not is_valid_date_folder:
-                        # Not a valid date folder - delete it
+                        visible_entries = [entry for entry in os.listdir(year_item_path) if entry not in ignored_entries]
+                        if visible_entries:
+                            print(
+                                f"    ⚠️  Preserving noncanonical folder with remaining files: "
+                                f"{os.path.relpath(year_item_path, library_path)}"
+                            )
+                            continue
+
+                        # Not a valid date folder - delete it if now empty/noise-only
                         try:
+                            for ignored_entry in os.listdir(year_item_path):
+                                if ignored_entry in ignored_entries:
+                                    ignored_path = os.path.join(year_item_path, ignored_entry)
+                                    if os.path.isfile(ignored_path):
+                                        os.remove(ignored_path)
                             shutil.rmtree(year_item_path)
                             print(f"    🗑️  Removed folder: {os.path.relpath(year_item_path, library_path)}")
                             removed_count += 1
@@ -4181,6 +4311,15 @@ def cleanup_terraform_folders(library_path):
         
         # Not infrastructure, not a year folder - DELETE IT
         try:
+            visible_entries = [entry for entry in os.listdir(item_path) if entry not in ignored_entries]
+            if visible_entries:
+                print(f"    ⚠️  Preserving noncanonical folder with remaining files: {os.path.relpath(item_path, library_path)}")
+                continue
+            for ignored_entry in os.listdir(item_path):
+                if ignored_entry in ignored_entries:
+                    ignored_path = os.path.join(item_path, ignored_entry)
+                    if os.path.isfile(ignored_path):
+                        os.remove(ignored_path)
             shutil.rmtree(item_path)
             print(f"    🗑️  Removed folder: {os.path.relpath(item_path, library_path)}")
             removed_count += 1
@@ -4375,8 +4514,9 @@ def terraform_library():
             thumbnails_dir = os.path.join(library_path, '.thumbnails')
             db_backups_dir = os.path.join(library_path, '.db_backups')
             logs_dir = os.path.join(library_path, '.logs')
+            import_temp_dir = os.path.join(library_path, '.import_temp')
             
-            for directory in [library_meta_dir, trash_dir, thumbnails_dir, db_backups_dir, logs_dir]:
+            for directory in [library_meta_dir, trash_dir, thumbnails_dir, db_backups_dir, logs_dir, import_temp_dir]:
                 os.makedirs(directory, exist_ok=True)
             
             # Create manifest log
@@ -4434,17 +4574,12 @@ def terraform_library():
                 
                 for non_media_path in non_media_files:
                     try:
-                        filename = os.path.basename(non_media_path)
-                        trash_path = os.path.join(error_dir, filename)
-                        
-                        # Handle naming collisions
-                        counter = 1
-                        while os.path.exists(trash_path):
-                            base, ext = os.path.splitext(filename)
-                            trash_path = os.path.join(error_dir, f"{base}_{counter}{ext}")
-                            counter += 1
-                        
-                        shutil.move(non_media_path, trash_path)
+                        trash_path = move_file_to_category_trash(
+                            library_path,
+                            trash_dir,
+                            non_media_path,
+                            'errors',
+                        )
                         log_manifest('non_media', {'original': non_media_path, 'moved_to': trash_path})
                         print(f"   🗑️  {os.path.relpath(non_media_path, library_path)} → trash")
                     except Exception as e:
@@ -4459,6 +4594,7 @@ def terraform_library():
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row  # Return rows as dictionaries
             cursor = conn.cursor()
+            hash_cache = HashCache(conn)
             
             # Create schema
             from db_schema import create_database_schema
@@ -4477,257 +4613,214 @@ def terraform_library():
                     filename = os.path.basename(source_path)
                     print(f"{file_index}/{total_files}. Processing: {filename}")
                     
-                    log_manifest('processing', {'file': source_path})
-                    
-                    # 1. Hash the file
-                    content_hash = compute_hash(source_path)
-                    print(f"   Hash: {content_hash[:16]}...")
-                    
-                    # 2. Check for duplicates
+                    _, ext = os.path.splitext(filename)
+                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
+                    log_manifest('processing', {'file': source_path, 'file_type': file_type})
+
+                    if file_type == 'photo':
+                        staged_path = None
+                        try:
+                            staged_photo = stage_photo_for_canonicalization(
+                                source_path,
+                                temp_prefix='convert_photo_',
+                                temp_dir=import_temp_dir,
+                            )
+                            staged_path = staged_photo.staged_path
+                            canonical_photo = staged_photo.canonical_photo
+                            print(
+                                f"   📦 Canonical photo staged: {os.path.basename(staged_path)} "
+                                f"→ {canonical_photo.relative_path}"
+                            )
+
+                            cursor.execute(
+                                "SELECT id, current_path FROM photos WHERE content_hash = ?",
+                                (canonical_photo.content_hash,),
+                            )
+                            existing = cursor.fetchone()
+                            if existing:
+                                dup_path = move_file_to_category_trash(
+                                    library_path,
+                                    trash_dir,
+                                    source_path,
+                                    'duplicates',
+                                )
+                                cleanup_staged_file(staged_path)
+                                staged_path = None
+                                print(f"   ⏭️  Duplicate canonical photo -> {os.path.relpath(dup_path, library_path)}")
+                                log_manifest(
+                                    'duplicate',
+                                    {
+                                        'original': source_path,
+                                        'staged': staged_path,
+                                        'moved_to': dup_path,
+                                        'hash': canonical_photo.content_hash,
+                                        'canonical_path': canonical_photo.relative_path,
+                                        'existing_id': existing['id'],
+                                        'existing_path': existing['current_path'],
+                                    },
+                                )
+                                duplicate_count += 1
+                                yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                                continue
+
+                            photo_id, target_path = commit_staged_canonical_photo(
+                                conn,
+                                library_path=library_path,
+                                source_path=source_path,
+                                original_filename=filename,
+                                staged_photo=staged_photo,
+                                remove_source_after_commit=True,
+                            )
+                            staged_path = None
+                            print(f"   ✅ Canonical photo committed: {canonical_photo.relative_path}")
+                            log_manifest(
+                                'success',
+                                {
+                                    'original': source_path,
+                                    'canonical_path': canonical_photo.relative_path,
+                                    'new': target_path,
+                                    'hash': canonical_photo.content_hash,
+                                    'id': photo_id,
+                                    'file_type': 'photo',
+                                    'date_taken': canonical_photo.date_taken,
+                                },
+                            )
+
+                            processed_count += 1
+                            yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                            continue
+                        except Exception as photo_error:
+                            print(f"   ❌ Photo convert failed: {photo_error}")
+                            cleanup_staged_file(staged_path)
+                            category, user_message = categorize_processing_error(photo_error)
+                            log_manifest(
+                                'failed',
+                                {
+                                    'file': source_path,
+                                    'staged': staged_path,
+                                    'reason': str(photo_error),
+                                    'category': category,
+                                    'preserved_original': os.path.exists(source_path),
+                                },
+                            )
+
+                            if category == 'duplicate':
+                                duplicate_count += 1
+                            else:
+                                error_count += 1
+                            yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
+                            yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(photo_error)})}\n\n"
+                            continue
+
+                    content_hash, cache_hit = hash_cache.get_hash(source_path)
+                    if cache_hit:
+                        print(f"   Hash: {content_hash[:16]}... (cached)")
+                    else:
+                        print(f"   Hash: {content_hash[:16]}...")
+
+                    if content_hash is None:
+                        raise RuntimeError("Failed to hash file")
+
                     cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
                     existing = cursor.fetchone()
-                    
                     if existing:
-                        print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
-                        
-                        # Move to .trash/duplicates/
-                        dup_dir = os.path.join(trash_dir, 'duplicates')
-                        os.makedirs(dup_dir, exist_ok=True)
-                        dup_path = os.path.join(dup_dir, filename)
-                        
-                        counter = 1
-                        while os.path.exists(dup_path):
-                            base, ext = os.path.splitext(filename)
-                            dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
-                            counter += 1
-                        
-                        shutil.move(source_path, dup_path)
-                        print(f"   🗑️  Moved to: {os.path.relpath(dup_path, library_path)}")
-                        
+                        dup_path = move_file_to_category_trash(
+                            library_path,
+                            trash_dir,
+                            source_path,
+                            'duplicates',
+                        )
+                        print(f"   ⏭️  Duplicate video -> {os.path.relpath(dup_path, library_path)}")
                         log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
-                        
                         duplicate_count += 1
                         yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
                         continue
-                    
-                    # 3. Extract date
-                    date_taken = extract_exif_date(source_path)
-                    if not date_taken:
-                        date_taken = datetime.fromtimestamp(os.path.getmtime(source_path)).strftime('%Y:%m:%d %H:%M:%S')
+
+                    date_taken, _ = parse_metadata_datetime(
+                        extract_exif_date(source_path),
+                        os.path.getmtime(source_path),
+                    )
                     print(f"   Date: {date_taken}")
-                    
-                    # 4. Get dimensions
+
                     dimensions = get_image_dimensions(source_path)
                     width = dimensions[0] if dimensions else None
                     height = dimensions[1] if dimensions else None
-                    
-                    # 4b. Bake orientation into pixels (only when lossless)
-                    print(f"   🔄 Checking orientation for: {filename}")
-                    
-                    # Check dimensions BEFORE baking
-                    before_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', source_path], 
-                                                 capture_output=True, text=True, timeout=5)
-                    before_info = before_check.stdout.strip().split('\n')
-                    print(f"   📊 BEFORE baking: {before_info}")
-                    
-                    bake_success, bake_message, orient_value = bake_orientation(source_path)
-                    
-                    print(f"   🎯 Baking result: success={bake_success}, message='{bake_message}', orient={orient_value}")
-                    
-                    if bake_success:
-                        print(f"   ✅ {bake_message}")
-                        log_manifest('orientation_baked', {'file': source_path, 'message': bake_message})
-                        
-                        # Check dimensions AFTER baking
-                        after_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', source_path], 
-                                                    capture_output=True, text=True, timeout=5)
-                        after_info = after_check.stdout.strip().split('\n')
-                        print(f"   📊 AFTER baking: {after_info}")
-                        
-                        # Dimensions may have changed after rotation - re-read
-                        dimensions = get_image_dimensions(source_path)
-                        width = dimensions[0] if dimensions else None
-                        height = dimensions[1] if dimensions else None
-                        print(f"   📏 get_image_dimensions() returned: {width}×{height}")
-                        
-                        # Hash changed after rotation - re-hash
-                        content_hash = compute_hash(source_path)
-                        print(f"   📝 Hash updated after baking: {content_hash[:16]}...")
-                        
-                        # Check for duplicates again after baking
-                        cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
-                        existing = cursor.fetchone()
-                        
-                        if existing:
-                            print(f"   ⏭️  Duplicate detected after baking (existing ID: {existing['id']})")
-                            
-                            # Move to .trash/duplicates/
-                            dup_dir = os.path.join(trash_dir, 'duplicates')
-                            os.makedirs(dup_dir, exist_ok=True)
-                            dup_path = os.path.join(dup_dir, filename)
-                            
-                            counter = 1
-                            while os.path.exists(dup_path):
-                                base, ext = os.path.splitext(filename)
-                                dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
-                                counter += 1
-                            
-                            shutil.move(source_path, dup_path)
-                            print(f"   🗑️  Moved to: {os.path.relpath(dup_path, library_path)}")
-                            
-                            log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
-                            
-                            duplicate_count += 1
-                            yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                            continue
-                    else:
-                        if orient_value:
-                            # Orientation exists but couldn't be baked losslessly
-                            print(f"   ⚠️  {bake_message}")
-                            log_manifest('orientation_kept', {'file': source_path, 'message': bake_message})
-                        elif bake_message and "Error:" in bake_message:
-                            # Error occurred during baking attempt
-                            print(f"   ⚠️  {bake_message}")
-                            log_manifest('orientation_error', {'file': source_path, 'message': bake_message})
-                        # else: No orientation or not applicable, no message needed
-                    
-                    # 5. Write EXIF (IN PLACE)
-                    _, ext = os.path.splitext(source_path)
-                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
-                    
-                    print(f"   🔧 Writing EXIF metadata...")
-                    try:
-                        if file_type == 'photo':
-                            write_photo_exif(source_path, date_taken)
-                        else:
-                            write_video_metadata(source_path, date_taken)
-                        print(f"   ✅ EXIF written")
-                    except Exception as exif_error:
-                        # EXIF write failed - move to trash
-                        print(f"   ❌ EXIF write failed: {exif_error}")
-                        
-                        error_dir = os.path.join(trash_dir, 'exif_failed')
-                        os.makedirs(error_dir, exist_ok=True)
-                        error_path = os.path.join(error_dir, filename)
-                        
-                        counter = 1
-                        while os.path.exists(error_path):
-                            base, ext_orig = os.path.splitext(filename)
-                            error_path = os.path.join(error_dir, f"{base}_{counter}{ext_orig}")
-                            counter += 1
-                        
-                        shutil.move(source_path, error_path)
-                        print(f"   🗑️  Moved to: {os.path.relpath(error_path, library_path)}")
-                        
-                        log_manifest('failed', {'file': source_path, 'reason': str(exif_error), 'category': 'exif_failed', 'moved_to': error_path})
-                        
-                        error_count += 1
-                        yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                        yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': str(exif_error), 'category': 'exif_failed'})}\n\n"
-                        continue
-                    
-                    # 6. Rehash after EXIF write
-                    print(f"   🔄 Rehashing after EXIF write...")
-                    new_hash = compute_hash(source_path)
-                    if new_hash != content_hash:
-                        print(f"   📝 Hash changed: {content_hash[:8]} → {new_hash[:8]}")
-                        content_hash = new_hash
-                    
-                    # 6b. Check for duplicates AGAIN after EXIF write (hash may have changed)
+
+                    print("   🔧 Writing video metadata...")
+                    write_video_metadata(source_path, date_taken)
+
+                    content_hash = compute_full_hash(source_path)
+                    if not content_hash:
+                        raise RuntimeError("Failed to compute canonical video hash after metadata write")
+
                     cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
                     existing = cursor.fetchone()
-                    
                     if existing:
-                        print(f"   ⏭️  Duplicate detected after EXIF write (existing ID: {existing['id']})")
-                        
-                        # Move to .trash/duplicates/
-                        dup_dir = os.path.join(trash_dir, 'duplicates')
-                        os.makedirs(dup_dir, exist_ok=True)
-                        dup_path = os.path.join(dup_dir, filename)
-                        
-                        counter = 1
-                        while os.path.exists(dup_path):
-                            base, ext = os.path.splitext(filename)
-                            dup_path = os.path.join(dup_dir, f"{base}_{counter}{ext}")
-                            counter += 1
-                        
-                        shutil.move(source_path, dup_path)
-                        print(f"   🗑️  Moved to: {os.path.relpath(dup_path, library_path)}")
-                        
+                        dup_path = move_file_to_category_trash(
+                            library_path,
+                            trash_dir,
+                            source_path,
+                            'duplicates',
+                        )
+                        print(f"   ⏭️  Duplicate video after metadata write -> {os.path.relpath(dup_path, library_path)}")
                         log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
-                        
                         duplicate_count += 1
                         yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
                         continue
-                    
-                    # 7. Build target path
-                    date_obj = datetime.strptime(date_taken, '%Y:%m:%d %H:%M:%S')
-                    year = date_obj.strftime('%Y')
-                    date_folder = date_obj.strftime('%Y-%m-%d')
-                    target_dir = os.path.join(library_path, year, date_folder)
-                    os.makedirs(target_dir, exist_ok=True)
-                    
-                    # 8. Generate canonical filename
-                    short_hash = content_hash[:8]
-                    base_name = f"img_{date_obj.strftime('%Y%m%d')}_{short_hash}"
-                    canonical_name = base_name + ext.lower()
-                    target_path = os.path.join(target_dir, canonical_name)
-                    
-                    # Handle naming collisions
-                    counter = 1
-                    while os.path.exists(target_path):
-                        canonical_name = f"{base_name}_{counter}{ext.lower()}"
-                        target_path = os.path.join(target_dir, canonical_name)
-                        counter += 1
-                    
-                    # 9. Move file
-                    shutil.move(source_path, target_path)
-                    relative_path = os.path.relpath(target_path, library_path)
-                    print(f"   ✅ Moved to: {relative_path}")
-                    
-                    # 10. Insert DB record
+
+                    relative_path, _ = build_canonical_photo_path(date_taken, content_hash, ext)
+                    target_path = os.path.join(library_path, relative_path)
+                    if os.path.exists(target_path) and os.path.abspath(target_path) != os.path.abspath(source_path):
+                        raise RuntimeError(
+                            f"Refusing to overwrite existing file at canonical path {relative_path}"
+                        )
+
+                    if os.path.abspath(target_path) != os.path.abspath(source_path):
+                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                        shutil.move(source_path, target_path)
+
                     file_size = os.path.getsize(target_path)
-                    
-                    cursor.execute('''
-                        INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, width, height))
-                    
+                    cursor.execute(
+                        '''
+                            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ''',
+                        (relative_path, filename, content_hash, file_size, file_type, date_taken, width, height),
+                    )
                     photo_id = cursor.lastrowid
                     conn.commit()
-                    
-                    log_manifest('success', {'original': source_path, 'new': target_path, 'hash': content_hash, 'id': photo_id})
-                    
+
+                    log_manifest(
+                        'success',
+                        {
+                            'original': source_path,
+                            'new': target_path,
+                            'canonical_path': relative_path,
+                            'hash': content_hash,
+                            'id': photo_id,
+                            'file_type': file_type,
+                            'date_taken': date_taken,
+                        },
+                    )
+
                     processed_count += 1
                     yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
                     
                 except Exception as e:
-                    # Unexpected error
                     print(f"   ❌ Error: {e}")
-                    
-                    # Try to move to trash
-                    try:
-                        error_dir = os.path.join(trash_dir, 'errors')
-                        os.makedirs(error_dir, exist_ok=True)
-                        error_path = os.path.join(error_dir, filename)
-                        
-                        counter = 1
-                        while os.path.exists(error_path):
-                            base, ext_orig = os.path.splitext(filename)
-                            error_path = os.path.join(error_dir, f"{base}_{counter}{ext_orig}")
-                            counter += 1
-                        
-                        if os.path.exists(source_path):
-                            shutil.move(source_path, error_path)
-                            print(f"   🗑️  Moved to: {os.path.relpath(error_path, library_path)}")
-                    except Exception as move_error:
-                        print(f"   ⚠️  Could not move to trash: {move_error}")
-                    
-                    log_manifest('failed', {'file': source_path, 'reason': str(e), 'category': 'error'})
-                    
+                    category, user_message = categorize_processing_error(e)
+                    log_manifest(
+                        'failed',
+                        {
+                            'file': source_path,
+                            'reason': str(e),
+                            'category': category,
+                            'preserved_original': os.path.exists(source_path),
+                        },
+                    )
                     error_count += 1
                     yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                    yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': str(e), 'category': 'error'})}\n\n"
+                    yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(e)})}\n\n"
             
             # Cleanup ALL folders except allowed ones
             print("\n🧹 Cleaning up folders...")
