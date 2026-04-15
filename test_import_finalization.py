@@ -82,11 +82,19 @@ class ImportFinalizationRouteTest(unittest.TestCase):
         with patch.object(photo_app, "extract_exif_date", return_value=date_taken), patch.object(
             photo_app,
             "bake_orientation",
-            return_value=(False, "No orientation flag", None),
+            return_value=(True, "Baked orientation", 6),
         ), patch.object(
             photo_app,
             "get_image_dimensions",
             return_value=(640, 480),
+        ), patch.object(
+            photo_app,
+            "extract_exif_rating",
+            return_value=None,
+        ), patch.object(
+            photo_app,
+            "strip_exif_rating",
+            return_value=True,
         ), patch.object(
             photo_app,
             "write_photo_exif",

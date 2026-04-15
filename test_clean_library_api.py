@@ -53,18 +53,18 @@ class CleanLibraryApiTest(unittest.TestCase):
             "status": "DIRTY",
             "summary": {
                 "misfiled_media": 2,
-                "trash_candidates": 3,
-                "db_repairs": 4,
-                "metadata_fixes": 1,
-                "layout_repairs": 5,
+                "duplicates": 1,
+                "unsupported_files": 2,
+                "database_repairs": 4,
+                "metadata_cleanup": 1,
                 "issue_count": 15,
             },
             "details": {
-                "misfiled_media": ["foo.jpg"],
-                "trash_candidates": ["bar.png"],
-                "db_repairs": ["ghost.png"],
-                "metadata_fixes": ["rot.jpg"],
-                "layout_repairs": ["misc"],
+                "misfiled_media": [{"kind": "misnamed_or_misfiled", "path": "foo.jpg", "message": "foo.jpg should be filed as 1900/x.jpg"}],
+                "duplicates": [{"kind": "duplicate_media", "path": "dup.jpg", "message": "dup.jpg duplicates keep.jpg"}],
+                "unsupported_files": [{"kind": "unsupported_or_nonmedia", "path": "bar.png", "message": "bar.png is not a supported media file"}],
+                "database_repairs": [{"kind": "ghost_db_reference", "path": "ghost.png", "message": "ghost.png is missing on disk but still present in the database"}],
+                "metadata_cleanup": [{"kind": "unbaked_rotation", "path": "rot.jpg", "message": "rot.jpg has unbaked rotation (8)"}],
             },
         }
 

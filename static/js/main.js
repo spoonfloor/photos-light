@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v307';
+const MAIN_JS_VERSION = 'v313';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -4499,10 +4499,10 @@ function enableMenuItem(buttonId, enabled) {
 
 let updateIndexState = {
   misfiledMedia: 0,
-  trashCandidates: 0,
-  dbRepairs: 0,
-  metadataFixes: 0,
-  layoutRepairs: 0,
+  duplicates: 0,
+  unsupportedFiles: 0,
+  metadataCleanup: 0,
+  databaseRepairs: 0,
   details: null,
   resultStats: null,
 };
@@ -4577,10 +4577,10 @@ async function openUpdateIndexOverlay() {
   // Reset state
   updateIndexState = {
     misfiledMedia: 0,
-    trashCandidates: 0,
-    dbRepairs: 0,
-    metadataFixes: 0,
-    layoutRepairs: 0,
+    duplicates: 0,
+    unsupportedFiles: 0,
+    metadataCleanup: 0,
+    databaseRepairs: 0,
     details: null,
     resultStats: null,
   };
@@ -4606,10 +4606,10 @@ async function openUpdateIndexOverlay() {
     }
 
     updateIndexState.misfiledMedia = data.summary?.misfiled_media || 0;
-    updateIndexState.trashCandidates = data.summary?.trash_candidates || 0;
-    updateIndexState.dbRepairs = data.summary?.db_repairs || 0;
-    updateIndexState.metadataFixes = data.summary?.metadata_fixes || 0;
-    updateIndexState.layoutRepairs = data.summary?.layout_repairs || 0;
+    updateIndexState.duplicates = data.summary?.duplicates || 0;
+    updateIndexState.unsupportedFiles = data.summary?.unsupported_files || 0;
+    updateIndexState.metadataCleanup = data.summary?.metadata_cleanup || 0;
+    updateIndexState.databaseRepairs = data.summary?.database_repairs || 0;
     updateIndexState.details = data.details || null;
 
     const hasChanges = (data.summary?.issue_count || 0) > 0;
@@ -4684,17 +4684,17 @@ function updateUpdateIndexUI(statusText, showSpinner = false) {
 function showUpdateIndexStats() {
   const statsEl = document.getElementById('updateIndexStats');
   const misfiledEl = document.getElementById('misfiledMediaCount');
-  const trashEl = document.getElementById('trashCandidatesCount');
-  const dbRepairsEl = document.getElementById('dbRepairsCount');
-  const metadataEl = document.getElementById('metadataFixesCount');
-  const layoutEl = document.getElementById('layoutRepairsCount');
+  const duplicatesEl = document.getElementById('duplicatesCount');
+  const unsupportedEl = document.getElementById('unsupportedFilesCount');
+  const metadataEl = document.getElementById('metadataCleanupCount');
+  const dbRepairsEl = document.getElementById('databaseRepairsCount');
 
   if (statsEl) statsEl.style.display = 'flex';
   if (misfiledEl) misfiledEl.textContent = updateIndexState.misfiledMedia;
-  if (trashEl) trashEl.textContent = updateIndexState.trashCandidates;
-  if (dbRepairsEl) dbRepairsEl.textContent = updateIndexState.dbRepairs;
-  if (metadataEl) metadataEl.textContent = updateIndexState.metadataFixes;
-  if (layoutEl) layoutEl.textContent = updateIndexState.layoutRepairs;
+  if (duplicatesEl) duplicatesEl.textContent = updateIndexState.duplicates;
+  if (unsupportedEl) unsupportedEl.textContent = updateIndexState.unsupportedFiles;
+  if (metadataEl) metadataEl.textContent = updateIndexState.metadataCleanup;
+  if (dbRepairsEl) dbRepairsEl.textContent = updateIndexState.databaseRepairs;
 }
 
 /**
@@ -4751,21 +4751,48 @@ function renderUpdateIndexDetails() {
   let html = '';
 
   if (resultStats) {
+    const duplicateCopiesRemoved = resultStats.duplicates_trashed || 0;
+    const otherTrashMoves = Math.max(
+      0,
+      (resultStats.moved_to_trash || 0) - duplicateCopiesRemoved
+    );
+    const changesApplied = [];
+
+    if (duplicateCopiesRemoved > 0) {
+      changesApplied.push(`Duplicate copies removed: ${duplicateCopiesRemoved}`);
+    }
+    if (otherTrashMoves > 0) {
+      changesApplied.push(`Unsupported files moved to trash: ${otherTrashMoves}`);
+    }
+    if ((resultStats.metadata_fixed || 0) > 0) {
+      changesApplied.push(`Metadata cleanup applied: ${resultStats.metadata_fixed}`);
+    }
+    if ((resultStats.media_moved || 0) > 0) {
+      changesApplied.push(`Media moved into canonical folders: ${resultStats.media_moved}`);
+    }
+    if ((resultStats.folders_removed || 0) > 0) {
+      changesApplied.push(`Empty folders removed: ${resultStats.folders_removed}`);
+    }
+    if ((resultStats.db_rows_rebuilt || 0) > 0) {
+      changesApplied.push('Database updated to match library');
+    }
+
     html += '<div class="update-detail-section"><strong>Changes Applied:</strong><ul>';
-    html += `<li>Moved to trash: ${resultStats.moved_to_trash || 0}</li>`;
-    html += `<li>Duplicates trashed: ${resultStats.duplicates_trashed || 0}</li>`;
-    html += `<li>Metadata fixes: ${resultStats.metadata_fixed || 0}</li>`;
-    html += `<li>Media moved: ${resultStats.media_moved || 0}</li>`;
-    html += `<li>Folders removed: ${resultStats.folders_removed || 0}</li>`;
-    html += `<li>DB rows rebuilt: ${resultStats.db_rows_rebuilt || 0}</li>`;
+    if (changesApplied.length === 0) {
+      html += '<li>No visible library changes were required.</li>';
+    } else {
+      changesApplied.forEach((message) => {
+        html += `<li>${escapeHtml(message)}</li>`;
+      });
+    }
     html += '</ul></div>';
   }
 
   if (details?.misfiled_media?.length > 0) {
     html +=
       '<div class="update-detail-section"><strong>Misfiled Media:</strong><ul>';
-    details.misfiled_media.slice(0, 20).forEach((path) => {
-      html += `<li>${escapeHtml(path)}</li>`;
+    details.misfiled_media.slice(0, 20).forEach((item) => {
+      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
     });
     if (details.misfiled_media.length > 20) {
       html += `<li><em>... and ${
@@ -4775,57 +4802,57 @@ function renderUpdateIndexDetails() {
     html += '</ul></div>';
   }
 
-  if (details?.trash_candidates?.length > 0) {
+  if (details?.duplicates?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>Trash Candidates:</strong><ul>';
-    details.trash_candidates.slice(0, 20).forEach((path) => {
-      html += `<li>${escapeHtml(path)}</li>`;
+      '<div class="update-detail-section"><strong>Duplicates:</strong><ul>';
+    details.duplicates.slice(0, 20).forEach((item) => {
+      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
     });
-    if (details.trash_candidates.length > 20) {
+    if (details.duplicates.length > 20) {
       html += `<li><em>... and ${
-        details.trash_candidates.length - 20
+        details.duplicates.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
   }
 
-  if (details?.db_repairs?.length > 0) {
+  if (details?.unsupported_files?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>DB Repairs:</strong><ul>';
-    details.db_repairs.slice(0, 20).forEach((path) => {
-      html += `<li>${escapeHtml(path)}</li>`;
+      '<div class="update-detail-section"><strong>Unsupported Files:</strong><ul>';
+    details.unsupported_files.slice(0, 20).forEach((item) => {
+      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
     });
-    if (details.db_repairs.length > 20) {
+    if (details.unsupported_files.length > 20) {
       html += `<li><em>... and ${
-        details.db_repairs.length - 20
+        details.unsupported_files.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
   }
 
-  if (details?.metadata_fixes?.length > 0) {
+  if (details?.metadata_cleanup?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>Metadata Fixes:</strong><ul>';
-    details.metadata_fixes.slice(0, 20).forEach((path) => {
-      html += `<li>${escapeHtml(path)}</li>`;
+      '<div class="update-detail-section"><strong>Metadata Cleanup:</strong><ul>';
+    details.metadata_cleanup.slice(0, 20).forEach((item) => {
+      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
     });
-    if (details.metadata_fixes.length > 20) {
+    if (details.metadata_cleanup.length > 20) {
       html += `<li><em>... and ${
-        details.metadata_fixes.length - 20
+        details.metadata_cleanup.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
   }
 
-  if (details?.layout_repairs?.length > 0) {
+  if (details?.database_repairs?.length > 0) {
     html +=
-      '<div class="update-detail-section"><strong>Layout Repairs:</strong><ul>';
-    details.layout_repairs.slice(0, 20).forEach((path) => {
-      html += `<li>${escapeHtml(path)}</li>`;
+      '<div class="update-detail-section"><strong>Database Repairs:</strong><ul>';
+    details.database_repairs.slice(0, 20).forEach((item) => {
+      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
     });
-    if (details.layout_repairs.length > 20) {
+    if (details.database_repairs.length > 20) {
       html += `<li><em>... and ${
-        details.layout_repairs.length - 20
+        details.database_repairs.length - 20
       } more</em></li>`;
     }
     html += '</ul></div>';
@@ -4838,6 +4865,13 @@ function renderUpdateIndexDetails() {
       '<div class="update-detail-section"><em>No issues found.</em></div>';
   }
   detailsSection.style.display = 'block';
+}
+
+function renderUpdateIndexDetailMessage(item) {
+  if (item && typeof item === 'object') {
+    return item.message || item.path || '';
+  }
+  return String(item || '');
 }
 
 function escapeHtml(value) {

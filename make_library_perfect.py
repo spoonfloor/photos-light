@@ -15,6 +15,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
@@ -54,6 +55,11 @@ from library_layout import (
     is_library_metadata_file,
     resolve_db_path,
 )
+from photo_canonicalization import (
+    canonicalize_photo_date,
+    canonicalize_photo_file,
+    write_photo_date_metadata,
+)
 
 PHOTO_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS
 VIDEO_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS
@@ -84,6 +90,7 @@ class MediaRecord:
     width: Optional[int]
     height: Optional[int]
     rating: Optional[int]
+    metadata_cleaned: bool
     birth_time: float
     modified_time: float
 
@@ -194,6 +201,19 @@ def format_issue(kind: str, path: str, detail: str = "") -> Dict[str, str]:
     return {"kind": kind, "path": path, "detail": detail}
 
 
+def visible_directory_entries(dir_path: str) -> List[str]:
+    return [entry for entry in os.listdir(dir_path) if entry not in IGNORED_LIBRARY_FILES]
+
+
+def remove_ignored_directory_files(dir_path: str) -> None:
+    for entry in os.listdir(dir_path):
+        if entry not in IGNORED_LIBRARY_FILES:
+            continue
+        entry_path = os.path.join(dir_path, entry)
+        if os.path.isfile(entry_path):
+            os.remove(entry_path)
+
+
 class _ReadOnlyHashCache:
     """Hash helper used by scan-only cleaner audits."""
 
@@ -204,53 +224,178 @@ class _ReadOnlyHashCache:
             return None, False
 
 
-def _format_issue_entry(issue: Dict[str, str]) -> str:
+@dataclass
+class AuditMediaIdentity:
+    canonical_hash: str
+    date_taken: str
+    date_obj: datetime
+
+
+def _detail_message_for_issue(issue: Dict[str, str]) -> str:
+    kind = issue["kind"]
     path = issue["path"]
     detail = issue.get("detail") or ""
+
+    if kind == "misnamed_or_misfiled":
+        expected = detail.removeprefix("expected ").strip() if detail.startswith("expected ") else detail
+        return f"{path} should be filed as {expected}" if expected else f"{path} is misfiled"
+    if kind == "noncanonical_root_file":
+        return f"{path} is outside the YYYY/YYYY-MM-DD library structure"
+    if kind == "noncanonical_root_folder":
+        return f"{path} is a noncanonical root folder"
+    if kind == "noncanonical_folder":
+        return f"{path} is a noncanonical YYYY/YYYY-MM-DD folder"
+    if kind == "empty_folder":
+        return f"{path} is an empty folder"
+    if kind == "duplicate_media":
+        other = detail.removeprefix("same hash as ").strip() if detail.startswith("same hash as ") else detail
+        return f"{path} duplicates {other}" if other else f"{path} is a duplicate"
+    if kind == "unsupported_or_nonmedia":
+        return f"{path} is not a supported media file"
+    if kind == "corrupted_media":
+        return f"{path} appears corrupted or unreadable"
+    if kind == "unbaked_rotation":
+        return f"{path} has unbaked rotation ({detail})" if detail else f"{path} has unbaked rotation"
+    if kind == "rating_zero":
+        return f"{path} has rating=0 metadata that should be stripped"
+    if kind == "ghost_db_reference":
+        return f"{path} is missing on disk but still present in the database"
+    if kind == "mole_missing_from_db":
+        return f"{path} is missing from the database"
+    if kind == "db_hash_mismatch":
+        return f"{path} hash mismatch ({detail})" if detail else f"{path} hash mismatch"
+    if kind == "missing_library_metadata_dir":
+        return f"{path} metadata folder is missing"
+    if kind == "missing_library_db":
+        return f"{path} database file is missing"
+    if kind == "invalid_library_db":
+        return f"{path} database file is invalid"
+    if kind == "unexpected_library_metadata_dir":
+        return f"{path} is an unexpected folder inside .library"
+    if kind == "unexpected_library_metadata_file":
+        return f"{path} is an unexpected file inside .library"
     return f"{path} ({detail})" if detail else path
 
 
+def _detail_item(issue: Dict[str, str]) -> Dict[str, str]:
+    return {
+        "kind": issue["kind"],
+        "path": issue["path"],
+        "message": _detail_message_for_issue(issue),
+    }
+
+
+def _compute_photo_audit_identity(full_path: str) -> AuditMediaIdentity:
+    with tempfile.TemporaryDirectory(prefix="clean_scan_photo_") as temp_dir:
+        staged_path = os.path.join(temp_dir, os.path.basename(full_path))
+        shutil.copy2(full_path, staged_path)
+        canonical_photo = canonicalize_photo_file(
+            staged_path,
+            extract_exif_date=extract_exif_date,
+            bake_orientation=bake_orientation,
+            get_dimensions=lambda path: read_dimensions(path),
+            compute_hash=compute_hash_legacy,
+            write_photo_exif=write_photo_date_metadata,
+            extract_exif_rating=extract_exif_rating,
+            strip_exif_rating=strip_exif_rating,
+        )
+    return AuditMediaIdentity(
+        canonical_hash=canonical_photo.content_hash,
+        date_taken=canonical_photo.date_taken,
+        date_obj=canonical_photo.date_obj,
+    )
+
+
+def _compute_audit_media_identity(
+    full_path: str,
+    file_type: str,
+    stat_result: os.stat_result,
+    current_hash: str,
+) -> AuditMediaIdentity:
+    if file_type == "photo":
+        return _compute_photo_audit_identity(full_path)
+
+    date_taken, date_obj = parse_metadata_datetime(
+        extract_exif_date(full_path),
+        stat_result.st_mtime,
+    )
+    return AuditMediaIdentity(
+        canonical_hash=current_hash,
+        date_taken=date_taken,
+        date_obj=date_obj,
+    )
+
+
 def summarize_clean_library_issues(issues: List[Dict[str, str]]) -> Dict[str, Any]:
+    duplicate_paths = {issue["path"] for issue in issues if issue["kind"] == "duplicate_media"}
+    unsupported_paths = {
+        issue["path"]
+        for issue in issues
+        if issue["kind"] in {"corrupted_media", "unsupported_or_nonmedia"}
+    }
+    trash_paths = duplicate_paths | unsupported_paths
+
+    misfiled_by_path: Dict[str, Dict[str, str]] = {}
     details = {
         "misfiled_media": [],
-        "trash_candidates": [],
-        "db_repairs": [],
-        "metadata_fixes": [],
-        "layout_repairs": [],
+        "duplicates": [],
+        "unsupported_files": [],
+        "metadata_cleanup": [],
+        "database_repairs": [],
     }
 
     for issue in issues:
         kind = issue["kind"]
-        entry = _format_issue_entry(issue)
+        path = issue["path"]
 
-        if kind == "misnamed_or_misfiled":
-            details["misfiled_media"].append(entry)
-        elif kind in {"duplicate_media", "corrupted_media", "unsupported_or_nonmedia"}:
-            details["trash_candidates"].append(entry)
-        elif kind in {"ghost_db_reference", "mole_missing_from_db", "db_hash_mismatch"}:
-            details["db_repairs"].append(entry)
+        if kind == "duplicate_media":
+            details["duplicates"].append(_detail_item(issue))
+        elif kind in {"corrupted_media", "unsupported_or_nonmedia"}:
+            details["unsupported_files"].append(_detail_item(issue))
         elif kind in {"unbaked_rotation", "rating_zero"}:
-            details["metadata_fixes"].append(entry)
+            if path not in trash_paths:
+                details["metadata_cleanup"].append(_detail_item(issue))
         elif kind in {
+            "misnamed_or_misfiled",
             "empty_folder",
             "noncanonical_folder",
             "noncanonical_root_folder",
             "noncanonical_root_file",
+        }:
+            if path in trash_paths:
+                continue
+            candidate = _detail_item(issue)
+            existing = misfiled_by_path.get(path)
+            if existing is None or kind == "misnamed_or_misfiled":
+                misfiled_by_path[path] = candidate
+        elif kind in {
+            "ghost_db_reference",
+            "mole_missing_from_db",
+            "db_hash_mismatch",
             "missing_library_metadata_dir",
             "missing_library_db",
             "invalid_library_db",
             "unexpected_library_metadata_dir",
             "unexpected_library_metadata_file",
         }:
-            details["layout_repairs"].append(entry)
+            if path not in trash_paths:
+                details["database_repairs"].append(_detail_item(issue))
+
+    details["misfiled_media"] = list(misfiled_by_path.values())
 
     summary = {
         "misfiled_media": len(details["misfiled_media"]),
-        "trash_candidates": len(details["trash_candidates"]),
-        "db_repairs": len(details["db_repairs"]),
-        "metadata_fixes": len(details["metadata_fixes"]),
-        "layout_repairs": len(details["layout_repairs"]),
-        "issue_count": len(issues),
+        "duplicates": len(details["duplicates"]),
+        "unsupported_files": len(details["unsupported_files"]),
+        "metadata_cleanup": len(details["metadata_cleanup"]),
+        "database_repairs": len(details["database_repairs"]),
+        "issue_count": (
+            len(details["misfiled_media"])
+            + len(details["duplicates"])
+            + len(details["unsupported_files"])
+            + len(details["metadata_cleanup"])
+            + len(details["database_repairs"])
+        ),
     }
     return {"summary": summary, "details": details}
 
@@ -292,6 +437,7 @@ class LibraryCleaner:
             records = self.scan_and_normalize()
             deduped = self.trash_duplicates(records)
             canonicalized = self.move_to_canonical_locations(deduped)
+            self.stats["metadata_fixed"] = sum(1 for record in canonicalized if record.metadata_cleaned)
             self.remove_empty_noncanonical_folders()
             self.rebuild_photos_table(canonicalized)
             issues = self.final_audit()
@@ -445,53 +591,101 @@ class LibraryCleaner:
             self.move_to_trash(full_path, "corrupted")
             return None
 
-        orientation = get_orientation_flag(full_path)
-        if orientation not in (None, 1) and ext in LOSSLESS_ROTATION_EXTENSIONS:
-            baked, message, baked_orientation = bake_orientation(full_path)
-            if baked:
-                self.stats["metadata_fixed"] += 1
-                self.log("orientation_baked", file=rel_path, message=message)
-            elif baked_orientation is not None:
-                self.log("orientation_kept", file=rel_path, message=message)
-
-        rating = extract_exif_rating(full_path)
-        if rating == 0:
-            if not strip_exif_rating(full_path):
-                raise CleanLibraryError(f"Failed to strip rating=0 from {rel_path}")
-            self.stats["metadata_fixed"] += 1
-            self.log("rating_stripped", file=rel_path)
-
-        valid, _ = verify_media_file(full_path)
-        if not valid:
-            self.move_to_trash(full_path, "corrupted")
-            return None
-
-        assert self.hash_cache is not None
-        content_hash, _ = self.hash_cache.get_hash(full_path)
-        if not content_hash:
-            self.move_to_trash(full_path, "corrupted")
-            return None
-
         stat_result = os.stat(full_path)
-        date_taken, date_obj = parse_metadata_datetime(
-            extract_exif_date(full_path),
-            stat_result.st_mtime,
-        )
-        width, height = read_dimensions(full_path)
-        rating = extract_exif_rating(full_path)
+        file_type = media_kind_for_extension(ext) or "photo"
+        metadata_cleaned = False
+
+        if file_type == "photo":
+            assert self.hash_cache is not None
+            try:
+                canonical_photo = canonicalize_photo_file(
+                    full_path,
+                    extract_exif_date=extract_exif_date,
+                    bake_orientation=bake_orientation,
+                    get_dimensions=lambda path: read_dimensions(path),
+                    compute_hash=lambda path: self.hash_cache.get_hash(path)[0],
+                    write_photo_exif=write_photo_date_metadata,
+                    extract_exif_rating=extract_exif_rating,
+                    strip_exif_rating=strip_exif_rating,
+                )
+            except Exception as exc:
+                raise CleanLibraryError(str(exc)) from exc
+
+            if canonical_photo.orientation_baked:
+                self.log("orientation_baked", file=rel_path, message="canonicalized")
+            else:
+                orientation = get_orientation_flag(full_path)
+                if orientation not in (None, 1) and ext in LOSSLESS_ROTATION_EXTENSIONS:
+                    self.log("orientation_kept", file=rel_path, message=str(orientation))
+
+            if canonical_photo.rating_stripped:
+                self.log("rating_stripped", file=rel_path)
+
+            if canonical_photo.metadata_changed and not (
+                canonical_photo.orientation_baked or canonical_photo.rating_stripped
+            ):
+                self.log("date_metadata_canonicalized", file=rel_path, date=canonical_photo.date_taken)
+
+            valid, _ = verify_media_file(full_path)
+            if not valid:
+                self.move_to_trash(full_path, "corrupted")
+                return None
+
+            content_hash = canonical_photo.content_hash
+            date_taken = canonical_photo.date_taken
+            date_obj = canonical_photo.date_obj
+            width = canonical_photo.width
+            height = canonical_photo.height
+            rating = canonical_photo.rating
+            metadata_cleaned = canonical_photo.metadata_changed
+        else:
+            orientation = get_orientation_flag(full_path)
+            if orientation not in (None, 1) and ext in LOSSLESS_ROTATION_EXTENSIONS:
+                baked, message, baked_orientation = bake_orientation(full_path)
+                if baked:
+                    metadata_cleaned = True
+                    self.log("orientation_baked", file=rel_path, message=message)
+                elif baked_orientation is not None:
+                    self.log("orientation_kept", file=rel_path, message=message)
+
+            rating = extract_exif_rating(full_path)
+            if rating == 0:
+                if not strip_exif_rating(full_path):
+                    raise CleanLibraryError(f"Failed to strip rating=0 from {rel_path}")
+                metadata_cleaned = True
+                self.log("rating_stripped", file=rel_path)
+
+            valid, _ = verify_media_file(full_path)
+            if not valid:
+                self.move_to_trash(full_path, "corrupted")
+                return None
+
+            assert self.hash_cache is not None
+            content_hash, _ = self.hash_cache.get_hash(full_path)
+            if not content_hash:
+                self.move_to_trash(full_path, "corrupted")
+                return None
+
+            date_taken, date_obj = parse_metadata_datetime(
+                extract_exif_date(full_path),
+                stat_result.st_mtime,
+            )
+            width, height = read_dimensions(full_path)
+            rating = extract_exif_rating(full_path)
 
         return MediaRecord(
             original_filename=original_filename,
             full_path=full_path,
             rel_path=rel_path,
             ext=ext,
-            file_type=media_kind_for_extension(ext) or "photo",
+            file_type=file_type,
             content_hash=content_hash,
             date_taken=date_taken,
             date_obj=date_obj,
             width=width,
             height=height,
             rating=rating if rating != 0 else None,
+            metadata_cleaned=metadata_cleaned,
             birth_time=get_birth_time(stat_result),
             modified_time=float(stat_result.st_mtime),
         )
@@ -572,7 +766,8 @@ class LibraryCleaner:
                 continue
             if in_infrastructure(rel_root):
                 continue
-            if os.path.isdir(root) and not os.listdir(root):
+            if os.path.isdir(root) and not visible_directory_entries(root):
+                remove_ignored_directory_files(root)
                 os.rmdir(root)
                 self.stats["folders_removed"] += 1
                 self.log("folder_removed", path=rel_root)
@@ -646,7 +841,8 @@ class LibraryCleaner:
     def final_audit(self) -> List[Dict[str, str]]:
         issues: List[Dict[str, str]] = []
         active_paths: set[str] = set()
-        active_hashes: Dict[str, str] = {}
+        path_to_canonical_hash: Dict[str, str] = {}
+        canonical_hash_groups: Dict[str, List[Tuple[str, str]]] = {}
 
         for item in os.listdir(self.library_path):
             if item in IGNORED_LIBRARY_FILES:
@@ -672,7 +868,7 @@ class LibraryCleaner:
                 else:
                     issues.append(format_issue("noncanonical_folder", rel_root))
 
-                if not os.listdir(root):
+                if not visible_directory_entries(root):
                     issues.append(format_issue("empty_folder", rel_root))
 
             for dirname in dirs:
@@ -700,28 +896,25 @@ class LibraryCleaner:
                     continue
 
                 assert self.hash_cache is not None
-                content_hash, _ = self.hash_cache.get_hash(full_path)
-                if not content_hash:
+                current_hash, _ = self.hash_cache.get_hash(full_path)
+                if not current_hash:
                     issues.append(format_issue("corrupted_media", rel_path))
                     continue
 
-                if content_hash in active_hashes:
-                    issues.append(
-                        format_issue(
-                            "duplicate_media",
-                            rel_path,
-                            f"same hash as {active_hashes[content_hash]}",
-                        )
-                    )
-                else:
-                    active_hashes[content_hash] = rel_path
-
                 stat_result = os.stat(full_path)
-                date_taken, date_obj = parse_metadata_datetime(
-                    extract_exif_date(full_path),
-                    stat_result.st_mtime,
+                file_type = media_kind_for_extension(ext) or "photo"
+                identity = _compute_audit_media_identity(
+                    full_path=full_path,
+                    file_type=file_type,
+                    stat_result=stat_result,
+                    current_hash=current_hash,
                 )
-                expected_rel = canonical_relative_path(date_obj, content_hash, ext)
+                canonical_hash = identity.canonical_hash
+                path_to_canonical_hash[rel_path] = canonical_hash
+
+                date_taken = identity.date_taken
+                expected_rel = canonical_relative_path(identity.date_obj, canonical_hash, ext)
+                canonical_hash_groups.setdefault(canonical_hash, []).append((rel_path, expected_rel))
                 if rel_path != expected_rel:
                     issues.append(
                         format_issue(
@@ -742,6 +935,26 @@ class LibraryCleaner:
                 active_paths.add(rel_path)
                 _ = date_taken  # Keep the date normalization in the audit path explicit.
 
+        for _canonical_hash, group in canonical_hash_groups.items():
+            if len(group) < 2:
+                continue
+            ordered = sorted(
+                group,
+                key=lambda item: (
+                    0 if item[0] == item[1] else 1,
+                    item[0].lower(),
+                ),
+            )
+            winner_rel = ordered[0][0]
+            for loser_rel, _expected_rel in ordered[1:]:
+                issues.append(
+                    format_issue(
+                        "duplicate_media",
+                        loser_rel,
+                        f"same hash as {winner_rel}",
+                    )
+                )
+
         db_rows: List[sqlite3.Row] = []
         db_paths: set[str] = set()
         if self.db_conn is not None:
@@ -756,12 +969,7 @@ class LibraryCleaner:
             issues.append(format_issue("mole_missing_from_db", mole_path))
 
         for row in db_rows:
-            disk_hash = None
-            if row["current_path"] in active_hashes.values():
-                for content_hash, rel_path in active_hashes.items():
-                    if rel_path == row["current_path"]:
-                        disk_hash = content_hash
-                        break
+            disk_hash = path_to_canonical_hash.get(row["current_path"])
             if disk_hash is not None and row["content_hash"] != disk_hash:
                 issues.append(
                     format_issue(

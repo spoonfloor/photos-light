@@ -1099,6 +1099,16 @@ input[type="radio"] {
   overflow: hidden;
 }
 
+#updateIndexOverlay .import-card {
+  width: 640px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
+#updateIndexOverlay .import-progress-section {
+  padding-bottom: 4px;
+}
+
 .import-header {
   display: flex;
   align-items: center;
@@ -1210,6 +1220,31 @@ input[type="radio"] {
   line-height: 1; /* Tight line-height, no extra descender space */
 }
 
+#updateIndexOverlay .import-stats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(72px, max-content));
+  column-gap: 14px;
+  row-gap: 8px;
+  align-items: end;
+  justify-content: space-between;
+}
+
+#updateIndexOverlay .import-stat {
+  display: grid;
+  grid-template-rows: minmax(28px, auto) auto;
+  gap: 8px;
+  align-content: end;
+}
+
+#updateIndexOverlay .import-stat-label {
+  max-width: 92px;
+  line-height: 1.15;
+}
+
+#updateIndexOverlay .import-stat-value {
+  align-self: end;
+}
+
 .import-details-section {
   padding: 12px 20px;
 }
@@ -1244,6 +1279,11 @@ input[type="radio"] {
   overflow-y: auto;
   margin-top: 8px;
   padding: 8px 0;
+}
+
+#updateIndexOverlay .import-details-list {
+  max-height: none;
+  overflow-y: visible;
 }
 
 .import-detail-item {

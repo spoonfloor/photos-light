@@ -19,6 +19,7 @@ LIBRARY_METADATA_DIR = ".library"
 ROOT_INFRASTRUCTURE_DIRS: Set[str] = {
     LIBRARY_METADATA_DIR,
     ".db_backups",
+    ".import_temp",
     ".logs",
     ".thumbnails",
     ".trash",

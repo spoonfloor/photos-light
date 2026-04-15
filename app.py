@@ -49,6 +49,11 @@ from pillow_heif import register_heif_opener
 from io import BytesIO
 from db_health import DBStatus, check_database_health
 from db_schema import create_database_schema
+from file_operations import (
+    extract_exif_date as shared_extract_exif_date,
+    extract_exif_rating,
+    strip_exif_rating,
+)
 from library_cleanliness import (
     ALL_MEDIA_EXTENSIONS,
     EXIF_WRITABLE_PHOTO_EXTENSIONS,
@@ -68,6 +73,10 @@ from library_layout import (
     resolve_db_path,
 )
 from media_finalization import finalize_mutated_media
+from photo_canonicalization import (
+    canonicalize_photo_file,
+    write_photo_date_metadata,
+)
 from rotation_utils import (
     JPEG_LOSSY_QUALITY,
     ROTATION_SUPPORTED_EXTENSIONS,
@@ -204,48 +213,8 @@ def save_and_hash(file_storage, dest_path):
     return sha256.hexdigest()[:7]
 
 def extract_exif_date(file_path):
-    """Extract EXIF/metadata date using exiftool (photos) or ffprobe (videos)"""
-    try:
-        # Determine file type
-        ext = os.path.splitext(file_path)[1].lower()
-        # v223: Use global constant instead of duplicating extension list
-        
-        if ext in VIDEO_EXTENSIONS:
-            # Try ffprobe for video metadata
-            result = subprocess.run(
-                ['ffprobe', '-v', 'quiet', '-show_entries', 'format_tags=creation_time', 
-                 '-of', 'default=noprint_wrappers=1:nokey=1', file_path],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                # Convert ISO 8601 to EXIF format: 2000-01-01T08:00:06.000000Z -> 2000:01:01 08:00:06
-                iso_date = result.stdout.strip()
-                if 'T' in iso_date:
-                    date_part, time_part = iso_date.split('T')
-                    time_part = time_part.split('.')[0].split('Z')[0]  # Remove microseconds and Z
-                    exif_date = date_part.replace('-', ':') + ' ' + time_part
-                    return exif_date
-        else:
-            # Try exiftool for photo EXIF
-            result = subprocess.run(
-                ['exiftool', '-DateTimeOriginal', '-s3', '-d', '%Y:%m:%d %H:%M:%S', file_path],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        
-        # Fall back to file modification time
-        mtime = os.path.getmtime(file_path)
-        return datetime.fromtimestamp(mtime).strftime('%Y:%m:%d %H:%M:%S')
-    except Exception as e:
-        print(f"Error extracting EXIF date: {e}")
-        # Ultimate fallback
-        mtime = os.path.getmtime(file_path)
-        return datetime.fromtimestamp(mtime).strftime('%Y:%m:%d %H:%M:%S')
+    """Extract EXIF/metadata date using the shared app-wide helper."""
+    return shared_extract_exif_date(file_path)
 
 def convert_to_rgb_properly(img):
     """
@@ -364,47 +333,11 @@ def delete_thumbnail_for_hash(content_hash):
         cleanup_empty_thumbnail_folders(thumbnail_path)
 
 def write_photo_exif(file_path, new_date):
-    """Write EXIF date to photo using exiftool"""
+    """Write canonical photo date metadata using the shared helper."""
     print(f"🔧 Writing EXIF to: {os.path.basename(file_path)}")
     print(f"   Target date: {new_date}")
-    
-    try:
-        cmd = [
-            'exiftool',
-            f'-DateTimeOriginal={new_date}',
-            f'-CreateDate={new_date}',
-            f'-ModifyDate={new_date}',
-            '-overwrite_original',
-            '-P',
-            file_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        print(f"   exiftool exit code: {result.returncode}")
-        print(f"   exiftool stdout: {result.stdout.strip()}")
-        
-        if result.returncode != 0:
-            print(f"   ❌ exiftool stderr: {result.stderr}")
-            raise Exception(f"exiftool failed: {result.stderr}")
-        
-        # Verify write succeeded by reading back
-        print(f"   🔍 Verifying write...")
-        verify_cmd = ['exiftool', '-DateTimeOriginal', '-s3', file_path]
-        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=5)
-        
-        if verify_result.returncode == 0:
-            read_date = verify_result.stdout.strip()
-            print(f"   Read back: {read_date}")
-            if read_date != new_date:
-                raise Exception(f"EXIF verification failed: wrote {new_date}, read back {read_date}")
-            print(f"   ✅ EXIF write verified")
-        else:
-            raise Exception(f"EXIF verification failed: could not read back date")
-            
-    except subprocess.TimeoutExpired:
-        raise Exception("exiftool timeout after 30s")
-    except FileNotFoundError:
-        raise Exception("exiftool not found")
+    write_photo_date_metadata(file_path, new_date)
+    print("   ✅ EXIF write verified")
 
 def write_video_metadata(file_path, new_date):
     """Write metadata to video using ffmpeg"""
@@ -2473,157 +2406,184 @@ def import_from_paths():
                     filename = os.path.basename(source_path)
                     print(f"{file_index}. Processing: {filename}")
                     
-                    # Hash the file (with caching)
-                    content_hash, cache_hit = hash_cache.get_hash(source_path)
-                    if cache_hit:
-                        print(f"   Hash: {content_hash[:16]}... (cached)")
-                    else:
-                        print(f"   Hash: {content_hash[:16]}...")
-                    
-                    if content_hash is None:
-                        print(f"   ❌ Failed to hash file")
-                        error_count += 1
-                        if not (yield from emit_event('progress', {
-                            'imported': imported_count,
-                            'duplicates': duplicate_count,
-                            'errors': error_count,
-                            'current': file_index,
-                            'total': total_files
-                        })):
-                            break
-                        continue
-                    
-                    # Check for duplicates
-                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
-                    existing = cursor.fetchone()
-                    print(
-                        f"   🔎 Import preflight: source={source_path} "
-                        f"initial_hash={content_hash} "
-                        f"existing_match={existing['id'] if existing else None} "
-                        f"existing_path={existing['current_path'] if existing else None}"
-                    )
-                    
-                    if existing:
-                        print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
-                        duplicate_count += 1
-                        if not (yield from emit_event('progress', {
-                            'imported': imported_count,
-                            'duplicates': duplicate_count,
-                            'errors': error_count,
-                            'current': file_index,
-                            'total': total_files
-                        })):
-                            break
-                        continue
-                    
-                    # Determine date_taken
-                    date_taken, _ = parse_metadata_datetime(
-                        extract_exif_date(source_path),
-                        os.path.getmtime(source_path),
-                    )
-                    print(f"   Date: {date_taken}")
-                    
-                    # Build target path
                     _, ext = os.path.splitext(filename)
-                    relative_path, canonical_name = build_canonical_photo_path(date_taken, content_hash, ext)
-                    target_path = os.path.join(LIBRARY_PATH, relative_path)
-                    target_dir = os.path.dirname(target_path)
-                    os.makedirs(target_dir, exist_ok=True)
-                    base_name, _ = os.path.splitext(canonical_name)
-                    
-                    # Handle naming collisions
-                    counter = 1
-                    while os.path.exists(target_path):
-                        canonical_name = f"{base_name}_{counter}{ext.lower()}"
-                        relative_path = os.path.join(os.path.dirname(relative_path), canonical_name)
-                        target_path = os.path.join(target_dir, canonical_name)
-                        counter += 1
-                    
-                    # Insert into DB FIRST (atomic) - dimensions will be updated after baking
-                    file_size = os.path.getsize(source_path)
                     file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
-                    
-                    cursor.execute('''
-                        INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, None, None))
-                    
-                    photo_id = cursor.lastrowid
-                    conn.commit()
-                    print(f"   DB: Inserted ID {photo_id}")
-                    
-                    # Copy file to library
-                    shutil.copy2(source_path, target_path)
-                    print(f"   ✅ Copied to: {relative_path}")
-                    
-                    # Bake orientation into pixels (before EXIF write to avoid flag stripping)
-                    print(f"   🔄 Checking orientation for: {os.path.basename(target_path)}")
-                    
-                    # Check dimensions BEFORE baking
-                    import subprocess
-                    before_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', target_path], 
-                                                 capture_output=True, text=True, timeout=5)
-                    before_info = before_check.stdout.strip().split('\n')
-                    print(f"   📊 BEFORE baking: {before_info}")
-                    
-                    bake_success, bake_message, orient_value = bake_orientation(target_path)
-                    
-                    print(f"   🎯 Baking result: success={bake_success}, message='{bake_message}', orient={orient_value}")
-                    
-                    if bake_success:
-                        print(f"   ✅ {bake_message}")
-                    else:
-                        if orient_value is not None:
-                            # Orientation exists but couldn't be baked (e.g., JPEG not divisible by 16)
-                            print(f"   ⚠️  {bake_message}")
-                        # else: No orientation flag, nothing to report
-                    
-                    # Check dimensions AFTER baking
-                    after_check = subprocess.run(['exiftool', '-ImageWidth', '-ImageHeight', '-Orientation', '-s3', target_path], 
-                                                capture_output=True, text=True, timeout=5)
-                    after_info = after_check.stdout.strip().split('\n')
-                    print(f"   📊 AFTER baking: {after_info}")
-                    
-                    # Get dimensions AFTER baking (pixels may have been rotated)
-                    dimensions = get_image_dimensions(target_path)
-                    width = dimensions[0] if dimensions else None
-                    height = dimensions[1] if dimensions else None
-                    print(f"   📏 Final dimensions for DB: {width}×{height}")
 
-                    # Write EXIF metadata to file
-                    try:
-                        print(f"   🔧 Writing EXIF metadata...")
-                        if file_type == 'photo':
-                            write_photo_exif(target_path, date_taken)
-                        elif file_type == 'video':
-                            write_video_metadata(target_path, date_taken)
+                    if file_type == 'photo':
+                        staged_path = None
+                        try:
+                            os.makedirs(IMPORT_TEMP_DIR, exist_ok=True)
+                            fd, staged_path = tempfile.mkstemp(
+                                prefix='import_photo_',
+                                suffix=ext.lower(),
+                                dir=IMPORT_TEMP_DIR,
+                            )
+                            os.close(fd)
+                            shutil.copy2(source_path, staged_path)
+                            print(f"   📦 Staged photo for canonicalization: {os.path.basename(staged_path)}")
+
+                            canonical_photo = canonicalize_photo_file(
+                                staged_path,
+                                extract_exif_date=extract_exif_date,
+                                bake_orientation=bake_orientation,
+                                get_dimensions=get_image_dimensions,
+                                compute_hash=compute_full_hash,
+                                write_photo_exif=write_photo_exif,
+                                extract_exif_rating=extract_exif_rating,
+                                strip_exif_rating=strip_exif_rating,
+                            )
+                            print(
+                                f"   🔎 Canonical photo: date={canonical_photo.date_taken} "
+                                f"hash={canonical_photo.content_hash[:16]}... "
+                                f"path={canonical_photo.relative_path}"
+                            )
+
+                            cursor.execute(
+                                "SELECT id, current_path FROM photos WHERE content_hash = ?",
+                                (canonical_photo.content_hash,),
+                            )
+                            existing = cursor.fetchone()
+                            print(
+                                f"   🔎 Import canonical preflight: source={source_path} "
+                                f"final_hash={canonical_photo.content_hash} "
+                                f"existing_match={existing['id'] if existing else None} "
+                                f"existing_path={existing['current_path'] if existing else None}"
+                            )
+
+                            if existing:
+                                print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
+                                os.remove(staged_path)
+                                staged_path = None
+                                duplicate_count += 1
+                                if not (yield from emit_event('progress', {
+                                    'imported': imported_count,
+                                    'duplicates': duplicate_count,
+                                    'errors': error_count,
+                                    'current': file_index,
+                                    'total': total_files
+                                })):
+                                    break
+                                continue
+
+                            relative_path = canonical_photo.relative_path
+                            target_path = os.path.join(LIBRARY_PATH, relative_path)
+                            if os.path.exists(target_path):
+                                print(f"   ⏭️  Duplicate canonical path already exists: {relative_path}")
+                                os.remove(staged_path)
+                                staged_path = None
+                                duplicate_count += 1
+                                if not (yield from emit_event('progress', {
+                                    'imported': imported_count,
+                                    'duplicates': duplicate_count,
+                                    'errors': error_count,
+                                    'current': file_index,
+                                    'total': total_files
+                                })):
+                                    break
+                                continue
+
+                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                            shutil.move(staged_path, target_path)
+                            staged_path = None
+                            print(f"   ✅ Canonical photo stored at: {relative_path}")
+
+                            cursor.execute('''
+                                INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (
+                                relative_path,
+                                filename,
+                                canonical_photo.content_hash,
+                                canonical_photo.file_size,
+                                file_type,
+                                canonical_photo.date_taken,
+                                canonical_photo.width,
+                                canonical_photo.height,
+                            ))
+                            photo_id = cursor.lastrowid
+                            conn.commit()
+                            print(
+                                f"   ✅ Imported canonical photo: photo_id={photo_id} "
+                                f"path={relative_path} hash={canonical_photo.content_hash[:8]}"
+                            )
+                        except Exception as exif_error:
+                            print(f"   ❌ EXIF write failed: {exif_error}")
+
+                            try:
+                                if staged_path and os.path.exists(staged_path):
+                                    os.remove(staged_path)
+                                    print("   🗑️  Deleted staged file")
+                            except Exception as cleanup_error:
+                                print(f"   ⚠️  Couldn't delete staged file: {cleanup_error}")
+
+                            error_str = str(exif_error).lower()
+                            if 'timeout' in error_str:
+                                category = 'timeout'
+                                user_message = "Processing timeout (file too large or slow storage)"
+                            elif 'unique constraint' in error_str and 'content_hash' in error_str:
+                                category = 'duplicate'
+                                user_message = "Duplicate file (detected after processing)"
+                            elif ('not a valid' in error_str or 'corrupt' in error_str or
+                                  'invalid data' in error_str or 'moov atom' in error_str):
+                                category = 'corrupted'
+                                user_message = "File corrupted or invalid format"
+                            elif 'not found' in error_str and 'exiftool' in error_str:
+                                category = 'missing_tool'
+                                user_message = "Required tool not installed (exiftool)"
+                            elif 'permission' in error_str or 'denied' in error_str:
+                                category = 'permission'
+                                user_message = "Permission denied"
+                            else:
+                                category = 'unsupported'
+                                user_message = str(exif_error)
+
+                            if category == 'duplicate':
+                                duplicate_count += 1
+                            else:
+                                error_count += 1
+
+                            if not (yield from emit_event('rejected', {
+                                'file': filename,
+                                'source_path': source_path,
+                                'reason': user_message,
+                                'category': category,
+                                'technical_error': str(exif_error)
+                            })):
+                                break
+                            continue
+                    else:
+                        # Hash the file (with caching)
+                        content_hash, cache_hit = hash_cache.get_hash(source_path)
+                        if cache_hit:
+                            print(f"   Hash: {content_hash[:16]}... (cached)")
                         else:
-                            raise Exception(f"Unknown file type: {file_type}")
-                        print(f"   ✅ EXIF written and verified")
-                        finalize_result = finalize_mutated_media(
-                            conn=conn,
-                            photo_id=photo_id,
-                            library_path=LIBRARY_PATH,
-                            current_rel_path=relative_path,
-                            date_taken=date_taken,
-                            old_hash=content_hash,
-                            build_canonical_path=build_canonical_photo_path,
-                            compute_hash=compute_full_hash,
-                            get_dimensions=get_image_dimensions,
-                            delete_thumbnail_for_hash=delete_thumbnail_for_hash,
-                            duplicate_policy='delete',
-                        )
+                            print(f"   Hash: {content_hash[:16]}...")
+
+                        if content_hash is None:
+                            print(f"   ❌ Failed to hash file")
+                            error_count += 1
+                            if not (yield from emit_event('progress', {
+                                'imported': imported_count,
+                                'duplicates': duplicate_count,
+                                'errors': error_count,
+                                'current': file_index,
+                                'total': total_files
+                            })):
+                                break
+                            continue
+
+                        # Check for duplicates
+                        cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
+                        existing = cursor.fetchone()
                         print(
-                            f"   🔎 Import finalize: photo_id={photo_id} "
-                            f"status={finalize_result.status} "
-                            f"final_hash={finalize_result.content_hash} "
-                            f"final_path={finalize_result.current_path} "
-                            f"matched_id={finalize_result.duplicate.photo_id if finalize_result.duplicate else None} "
-                            f"matched_path={finalize_result.duplicate.current_path if finalize_result.duplicate else None}"
+                            f"   🔎 Import preflight: source={source_path} "
+                            f"initial_hash={content_hash} "
+                            f"existing_match={existing['id'] if existing else None} "
+                            f"existing_path={existing['current_path'] if existing else None}"
                         )
-                        conn.commit()
-                        if finalize_result.status == 'duplicate_removed':
-                            print("   ⏭️  Duplicate detected after metadata write; removed imported copy")
+
+                        if existing:
+                            print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
                             duplicate_count += 1
                             if not (yield from emit_event('progress', {
                                 'imported': imported_count,
@@ -2635,78 +2595,152 @@ def import_from_paths():
                                 break
                             continue
 
-                        target_path = finalize_result.full_path
-                        relative_path = finalize_result.current_path
-                        print(
-                            f"   ✅ Finalized import path/hash: "
-                            f"{finalize_result.current_path} ({finalize_result.content_hash[:8]})"
+                        # Determine date_taken
+                        date_taken, _ = parse_metadata_datetime(
+                            extract_exif_date(source_path),
+                            os.path.getmtime(source_path),
                         )
-                        
-                    except Exception as exif_error:
-                        # EXIF write failed - rollback this file
-                        print(f"   ❌ EXIF write failed: {exif_error}")
-                        
-                        # Clean up: Delete copied file
+                        print(f"   Date: {date_taken}")
+
+                        # Build target path
+                        relative_path, canonical_name = build_canonical_photo_path(date_taken, content_hash, ext)
+                        target_path = os.path.join(LIBRARY_PATH, relative_path)
+                        target_dir = os.path.dirname(target_path)
+                        os.makedirs(target_dir, exist_ok=True)
+                        base_name, _ = os.path.splitext(canonical_name)
+
+                        # Handle naming collisions
+                        counter = 1
+                        while os.path.exists(target_path):
+                            canonical_name = f"{base_name}_{counter}{ext.lower()}"
+                            relative_path = os.path.join(os.path.dirname(relative_path), canonical_name)
+                            target_path = os.path.join(target_dir, canonical_name)
+                            counter += 1
+
+                        # Insert into DB FIRST (atomic) - dimensions will be updated after baking
+                        file_size = os.path.getsize(source_path)
+
+                        cursor.execute('''
+                            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, None, None))
+
+                        photo_id = cursor.lastrowid
+                        conn.commit()
+                        print(f"   DB: Inserted ID {photo_id}")
+
+                        # Copy file to library
+                        shutil.copy2(source_path, target_path)
+                        print(f"   ✅ Copied to: {relative_path}")
+
+                        # Write metadata to file
                         try:
-                            if os.path.exists(target_path):
-                                os.remove(target_path)
-                                print(f"   🗑️  Deleted copied file")
-                        except Exception as cleanup_error:
-                            print(f"   ⚠️  Couldn't delete file: {cleanup_error}")
-                        
-                        # Clean up: Delete database record
-                        try:
-                            cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+                            print(f"   🔧 Writing EXIF metadata...")
+                            write_video_metadata(target_path, date_taken)
+                            finalize_result = finalize_mutated_media(
+                                conn=conn,
+                                photo_id=photo_id,
+                                library_path=LIBRARY_PATH,
+                                current_rel_path=relative_path,
+                                date_taken=date_taken,
+                                old_hash=content_hash,
+                                build_canonical_path=build_canonical_photo_path,
+                                compute_hash=compute_full_hash,
+                                get_dimensions=get_image_dimensions,
+                                delete_thumbnail_for_hash=delete_thumbnail_for_hash,
+                                duplicate_policy='delete',
+                            )
+                            print(
+                                f"   🔎 Import finalize: photo_id={photo_id} "
+                                f"status={finalize_result.status} "
+                                f"final_hash={finalize_result.content_hash} "
+                                f"final_path={finalize_result.current_path} "
+                                f"matched_id={finalize_result.duplicate.photo_id if finalize_result.duplicate else None} "
+                                f"matched_path={finalize_result.duplicate.current_path if finalize_result.duplicate else None}"
+                            )
                             conn.commit()
-                            print(f"   🗑️  Deleted database record (ID: {photo_id})")
-                        except Exception as db_error:
-                            print(f"   ⚠️  Couldn't delete DB record: {db_error}")
-                        
-                        # Categorize error
-                        error_str = str(exif_error).lower()
-                        if 'timeout' in error_str:
-                            category = 'timeout'
-                            user_message = "Processing timeout (file too large or slow storage)"
-                        # Check for duplicate hash collision (UNIQUE constraint during rehash update)
-                        elif 'unique constraint' in error_str and 'content_hash' in error_str:
-                            category = 'duplicate'
-                            user_message = "Duplicate file (detected after processing)"
-                        # Check for corruption BEFORE tool detection (avoid false positives)
-                        elif ('not a valid' in error_str or 'corrupt' in error_str or 
-                              'invalid data' in error_str or 'moov atom' in error_str):
-                            category = 'corrupted'
-                            user_message = "File corrupted or invalid format"
-                        elif 'not found' in error_str and 'exiftool' in error_str:
-                            category = 'missing_tool'
-                            user_message = "Required tool not installed (exiftool)"
-                        elif 'not found' in error_str and 'ffmpeg' in error_str:
-                            category = 'missing_tool'
-                            user_message = "Required tool not installed (ffmpeg)"
-                        elif 'permission' in error_str or 'denied' in error_str:
-                            category = 'permission'
-                            user_message = "Permission denied"
-                        else:
-                            category = 'unsupported'
-                            user_message = str(exif_error)
-                        
-                        # Track rejection count (duplicate vs error)
-                        if category == 'duplicate':
-                            duplicate_count += 1
-                        else:
-                            error_count += 1
-                        
-                        # Yield rejection event (special type of error with extra metadata)
-                        if not (yield from emit_event('rejected', {
-                            'file': filename,
-                            'source_path': source_path,
-                            'reason': user_message,
-                            'category': category,
-                            'technical_error': str(exif_error)
-                        })):
-                            break
-                        
-                        # Continue to next file (don't increment imported_count)
-                        continue
+                            if finalize_result.status == 'duplicate_removed':
+                                print("   ⏭️  Duplicate detected after metadata write; removed imported copy")
+                                duplicate_count += 1
+                                if not (yield from emit_event('progress', {
+                                    'imported': imported_count,
+                                    'duplicates': duplicate_count,
+                                    'errors': error_count,
+                                    'current': file_index,
+                                    'total': total_files
+                                })):
+                                    break
+                                continue
+
+                            target_path = finalize_result.full_path
+                            relative_path = finalize_result.current_path
+                            print(
+                                f"   ✅ Finalized import path/hash: "
+                                f"{finalize_result.current_path} ({finalize_result.content_hash[:8]})"
+                            )
+
+                        except Exception as exif_error:
+                            # EXIF write failed - rollback this file
+                            print(f"   ❌ EXIF write failed: {exif_error}")
+
+                            # Clean up: Delete copied file
+                            try:
+                                if os.path.exists(target_path):
+                                    os.remove(target_path)
+                                    print(f"   🗑️  Deleted copied file")
+                            except Exception as cleanup_error:
+                                print(f"   ⚠️  Couldn't delete file: {cleanup_error}")
+
+                            # Clean up: Delete database record
+                            try:
+                                cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+                                conn.commit()
+                                print(f"   🗑️  Deleted database record (ID: {photo_id})")
+                            except Exception as db_error:
+                                print(f"   ⚠️  Couldn't delete DB record: {db_error}")
+
+                            # Categorize error
+                            error_str = str(exif_error).lower()
+                            if 'timeout' in error_str:
+                                category = 'timeout'
+                                user_message = "Processing timeout (file too large or slow storage)"
+                            # Check for duplicate hash collision (UNIQUE constraint during rehash update)
+                            elif 'unique constraint' in error_str and 'content_hash' in error_str:
+                                category = 'duplicate'
+                                user_message = "Duplicate file (detected after processing)"
+                            # Check for corruption BEFORE tool detection (avoid false positives)
+                            elif ('not a valid' in error_str or 'corrupt' in error_str or
+                                  'invalid data' in error_str or 'moov atom' in error_str):
+                                category = 'corrupted'
+                                user_message = "File corrupted or invalid format"
+                            elif 'not found' in error_str and 'ffmpeg' in error_str:
+                                category = 'missing_tool'
+                                user_message = "Required tool not installed (ffmpeg)"
+                            elif 'permission' in error_str or 'denied' in error_str:
+                                category = 'permission'
+                                user_message = "Permission denied"
+                            else:
+                                category = 'unsupported'
+                                user_message = str(exif_error)
+
+                            # Track rejection count (duplicate vs error)
+                            if category == 'duplicate':
+                                duplicate_count += 1
+                            else:
+                                error_count += 1
+
+                            # Yield rejection event (special type of error with extra metadata)
+                            if not (yield from emit_event('rejected', {
+                                'file': filename,
+                                'source_path': source_path,
+                                'reason': user_message,
+                                'category': category,
+                                'technical_error': str(exif_error)
+                            })):
+                                break
+
+                            # Continue to next file (don't increment imported_count)
+                            continue
                     
                     # SUCCESS - file imported with EXIF
                     imported_count += 1
