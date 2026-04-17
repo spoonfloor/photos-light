@@ -19,7 +19,7 @@ import tempfile
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image
 
@@ -53,6 +53,7 @@ from library_layout import (
     db_is_valid,
     db_sidecar_paths,
     is_library_metadata_file,
+    quarantine_unexpected_metadata_entries,
     resolve_db_path,
 )
 from photo_canonicalization import (
@@ -415,6 +416,11 @@ class LibraryCleaner:
             "folders_removed": 0,
             "db_rows_rebuilt": 0,
         }
+        self._progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def _emit(self, payload: Dict[str, Any]) -> None:
+        if self._progress_callback:
+            self._progress_callback(dict(payload))
 
     def log(self, action: str, **payload: Any) -> None:
         if not self.manifest:
@@ -431,23 +437,91 @@ class LibraryCleaner:
         )
         self.manifest.flush()
 
-    def run(self) -> Dict[str, Any]:
+    def run(
+        self,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        self._progress_callback = progress_callback
         try:
+            self._emit({"type": "phase", "phase": "setup", "status": "starting"})
             self.setup()
-            records = self.scan_and_normalize()
+            self._emit({"type": "phase", "phase": "setup", "status": "complete"})
+
+            candidate_total = self._count_walk_files()
+            self._emit(
+                {
+                    "type": "phase",
+                    "phase": "scan",
+                    "status": "starting",
+                    "total_candidates": candidate_total,
+                }
+            )
+            records = self.scan_and_normalize(candidate_total)
+            self._emit(
+                {
+                    "type": "phase",
+                    "phase": "scan",
+                    "status": "complete",
+                    "records": len(records),
+                }
+            )
+
+            self._emit({"type": "phase", "phase": "dedupe", "status": "starting"})
             deduped = self.trash_duplicates(records)
+            self._emit(
+                {
+                    "type": "phase",
+                    "phase": "dedupe",
+                    "status": "complete",
+                    "remaining": len(deduped),
+                }
+            )
+
+            self._emit(
+                {
+                    "type": "phase",
+                    "phase": "canonicalize",
+                    "status": "starting",
+                    "total": len(deduped),
+                }
+            )
             canonicalized = self.move_to_canonical_locations(deduped)
+            self._emit({"type": "phase", "phase": "canonicalize", "status": "complete"})
+
             self.stats["metadata_fixed"] = sum(1 for record in canonicalized if record.metadata_cleaned)
+            self._emit({"type": "phase", "phase": "folders", "status": "starting"})
             self.remove_empty_noncanonical_folders()
+            self._emit({"type": "phase", "phase": "folders", "status": "complete"})
+
+            self._emit(
+                {
+                    "type": "phase",
+                    "phase": "rebuild_db",
+                    "status": "starting",
+                    "total": len(canonicalized),
+                }
+            )
             self.rebuild_photos_table(canonicalized)
-            issues = self.final_audit()
+            self._emit({"type": "phase", "phase": "rebuild_db", "status": "complete"})
+
+            self._emit({"type": "phase", "phase": "audit", "status": "starting"})
+            issues = self.final_audit(audit_progress_total=len(canonicalized))
             if issues:
                 preview = issues[:10]
                 self.log("final_audit_failed", issue_count=len(issues), issues=preview)
+                self._emit(
+                    {
+                        "type": "phase",
+                        "phase": "audit",
+                        "status": "failed",
+                        "issue_count": len(issues),
+                    }
+                )
                 raise CleanLibraryError(
                     f"Final audit failed with {len(issues)} issue(s): "
                     + "; ".join(f"{item['kind']}:{item['path']}" for item in preview)
                 )
+            self._emit({"type": "phase", "phase": "audit", "status": "complete"})
 
             self.log("operation_complete", stats=self.stats)
             return {"status": "SUCCESS", "stats": self.stats}
@@ -460,6 +534,7 @@ class LibraryCleaner:
             )
             raise
         finally:
+            self._progress_callback = None
             if self.hash_cache is not None:
                 try:
                     self.hash_cache.cleanup_stale_entries(self.library_path)
@@ -492,6 +567,11 @@ class LibraryCleaner:
 
         self.migrate_db_to_canonical_location()
 
+        quarantined_metadata = quarantine_unexpected_metadata_entries(
+            self.library_path,
+            reason="make_perfect",
+        )
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if os.path.exists(self.db_path):
             backup_path = os.path.join(
@@ -508,6 +588,11 @@ class LibraryCleaner:
         )
         self.manifest = open(manifest_path, "a", encoding="utf-8")
         self.log("operation_started", library_path=self.library_path, db_path=self.db_path)
+        if quarantined_metadata:
+            self.log(
+                "metadata_artifacts_quarantined",
+                paths=[os.path.relpath(path, self.library_path) for path in quarantined_metadata],
+            )
 
         self.db_conn = sqlite3.connect(self.db_path)
         self.db_conn.row_factory = sqlite3.Row
@@ -690,15 +775,40 @@ class LibraryCleaner:
             modified_time=float(stat_result.st_mtime),
         )
 
-    def scan_and_normalize(self) -> List[MediaRecord]:
+    def _count_walk_files(self) -> int:
+        """Count supported media files under the library (matches scan progress ticks)."""
+        n = 0
+        for root, _, files in self.active_walk():
+            for filename in files:
+                if filename in IGNORED_LIBRARY_FILES:
+                    continue
+                ext = os.path.splitext(filename)[1].lower()
+                if is_supported_media_extension(ext):
+                    n += 1
+        return n
+
+    def scan_and_normalize(self, candidate_total: int) -> List[MediaRecord]:
         records: List[MediaRecord] = []
+        processed = 0
 
         for root, _, files in self.active_walk():
-            rel_root = os.path.relpath(root, self.library_path)
             for filename in files:
                 if filename in IGNORED_LIBRARY_FILES:
                     continue
                 full_path = os.path.join(root, filename)
+                ext = os.path.splitext(filename)[1].lower()
+                if not is_supported_media_extension(ext):
+                    self.normalize_media_file(full_path)
+                    continue
+                processed += 1
+                self._emit(
+                    {
+                        "type": "progress",
+                        "phase": "scan",
+                        "processed": processed,
+                        "total": max(candidate_total, 1),
+                    }
+                )
                 record = self.normalize_media_file(full_path)
                 if record is not None:
                     records.append(record)
@@ -715,7 +825,16 @@ class LibraryCleaner:
             grouped.setdefault(record.content_hash, []).append(record)
 
         survivors: List[MediaRecord] = []
-        for content_hash, group in grouped.items():
+        total_groups = len(grouped)
+        for gi, (content_hash, group) in enumerate(grouped.items(), start=1):
+            self._emit(
+                {
+                    "type": "progress",
+                    "phase": "dedupe",
+                    "processed": gi,
+                    "total": max(total_groups, 1),
+                }
+            )
             ordered = sorted(group, key=self.duplicate_sort_key)
             winner = ordered[0]
             survivors.append(winner)
@@ -735,8 +854,20 @@ class LibraryCleaner:
     def move_to_canonical_locations(self, records: List[MediaRecord]) -> List[MediaRecord]:
         occupied: set[str] = set()
         canonicalized: List[MediaRecord] = []
+        sorted_records = sorted(
+            records, key=lambda item: (item.date_taken, item.content_hash, item.rel_path.lower())
+        )
+        total = len(sorted_records)
 
-        for record in sorted(records, key=lambda item: (item.date_taken, item.content_hash, item.rel_path.lower())):
+        for idx, record in enumerate(sorted_records, start=1):
+            self._emit(
+                {
+                    "type": "progress",
+                    "phase": "canonicalize",
+                    "processed": idx,
+                    "total": max(total, 1),
+                }
+            )
             target_rel = canonical_relative_path(record.date_obj, record.content_hash, record.ext)
             if target_rel in occupied:
                 raise CleanLibraryError(f"Canonical path collision for {target_rel}")
@@ -777,7 +908,18 @@ class LibraryCleaner:
         cursor = self.db_conn.cursor()
         cursor.execute("DELETE FROM photos")
 
-        for record in sorted(records, key=lambda item: (item.date_taken, item.rel_path.lower())):
+        sorted_rows = sorted(records, key=lambda item: (item.date_taken, item.rel_path.lower()))
+        total = len(sorted_rows)
+
+        for idx, record in enumerate(sorted_rows, start=1):
+            self._emit(
+                {
+                    "type": "progress",
+                    "phase": "rebuild_db",
+                    "processed": idx,
+                    "total": max(total, 1),
+                }
+            )
             file_size = os.path.getsize(record.full_path)
             cursor.execute(
                 """
@@ -838,11 +980,29 @@ class LibraryCleaner:
 
         return issues
 
-    def final_audit(self) -> List[Dict[str, str]]:
+    def _count_supported_media_leaf_files(self) -> int:
+        """Matches which paths final_audit() counts as supported media (for progress totals)."""
+        n = 0
+        for root, _dirs, files in self.active_walk():
+            for filename in files:
+                if filename in IGNORED_LIBRARY_FILES:
+                    continue
+                ext = os.path.splitext(filename)[1].lower()
+                if is_supported_media_extension(ext):
+                    n += 1
+        return n
+
+    def final_audit(self, audit_progress_total: Optional[int] = None) -> List[Dict[str, str]]:
         issues: List[Dict[str, str]] = []
         active_paths: set[str] = set()
         path_to_canonical_hash: Dict[str, str] = {}
         canonical_hash_groups: Dict[str, List[Tuple[str, str]]] = {}
+
+        if audit_progress_total is not None:
+            audit_total = max(audit_progress_total, 1)
+        else:
+            audit_total = max(self._count_supported_media_leaf_files(), 1)
+        audit_idx = 0
 
         for item in os.listdir(self.library_path):
             if item in IGNORED_LIBRARY_FILES:
@@ -889,6 +1049,16 @@ class LibraryCleaner:
                 if not is_supported_media_extension(ext):
                     issues.append(format_issue("unsupported_or_nonmedia", rel_path))
                     continue
+
+                audit_idx += 1
+                self._emit(
+                    {
+                        "type": "progress",
+                        "phase": "audit",
+                        "processed": audit_idx,
+                        "total": max(audit_total, audit_idx, 1),
+                    }
+                )
 
                 valid, _ = verify_media_file(full_path)
                 if not valid:
@@ -991,9 +1161,13 @@ def scan_library_cleanliness(library_path: str, db_path: Optional[str] = None) -
     return engine.scan()
 
 
-def run_db_normalization_engine(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+def run_db_normalization_engine(
+    library_path: str,
+    db_path: Optional[str] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
     engine = DBNormalizationEngine(library_path, db_path=db_path)
-    return engine.run()
+    return engine.run(progress_callback=progress_callback)
 
 
 def make_library_perfect(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:

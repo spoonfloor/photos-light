@@ -10,6 +10,8 @@ maintenance flows can normalize them.
 from __future__ import annotations
 
 import os
+import shutil
+from datetime import datetime
 from typing import Optional, Set
 
 from db_health import DBStatus, check_database_health
@@ -28,6 +30,9 @@ ALLOWED_LIBRARY_METADATA_FILES: Set[str] = {
     DB_FILENAME,
     f"{DB_FILENAME}-wal",
     f"{DB_FILENAME}-shm",
+}
+IGNORED_LIBRARY_METADATA_FILES: Set[str] = {
+    ".DS_Store",
 }
 
 
@@ -49,6 +54,46 @@ def is_library_metadata_file(filename: str) -> bool:
 
 def db_sidecar_paths(db_path: str) -> list[str]:
     return [f"{db_path}-wal", f"{db_path}-shm"]
+
+
+def quarantine_unexpected_metadata_entries(
+    library_path: str,
+    *,
+    reason: str = "cleanup",
+) -> list[str]:
+    """Move stray `.library` artifacts into `.db_backups` without destroying them."""
+    metadata_dir = canonical_db_dir(library_path)
+    if not os.path.isdir(metadata_dir):
+        return []
+
+    backup_dir = os.path.join(os.path.abspath(library_path), ".db_backups")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    quarantine_root = os.path.join(
+        backup_dir,
+        f"library_metadata_{reason}_{timestamp}",
+    )
+    quarantined_paths: list[str] = []
+
+    for item in sorted(os.listdir(metadata_dir)):
+        if item in ALLOWED_LIBRARY_METADATA_FILES or item in IGNORED_LIBRARY_METADATA_FILES:
+            continue
+
+        source_path = os.path.join(metadata_dir, item)
+        target_path = os.path.join(quarantine_root, item)
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+        candidate_path = target_path
+        counter = 1
+        while os.path.exists(candidate_path):
+            candidate_path = f"{target_path}_{counter}"
+            counter += 1
+
+        shutil.move(source_path, candidate_path)
+        quarantined_paths.append(candidate_path)
+
+    return quarantined_paths
 
 
 def detect_existing_db_path(library_path: str) -> Optional[str]:

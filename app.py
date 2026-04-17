@@ -35,8 +35,10 @@ def handle_db_corruption(f):
             raise
     return decorated_function
 import os
+import queue
 import subprocess
 import shutil
+import threading
 import time
 import hashlib
 import json
@@ -63,14 +65,21 @@ from library_cleanliness import (
     build_canonical_photo_path,
     parse_metadata_datetime,
 )
-from library_sync import synchronize_library_generator, count_media_files, estimate_duration
+from library_sync import (
+    synchronize_library_generator,
+    count_media_files,
+    count_media_files_by_type,
+    estimate_duration,
+)
 from library_layout import (
     LIBRARY_METADATA_DIR,
     ROOT_INFRASTRUCTURE_DIRS,
     canonical_db_path,
+    db_sidecar_paths,
     detect_existing_db_path,
     library_has_db,
     library_has_openable_db,
+    quarantine_unexpected_metadata_entries,
     resolve_db_path,
 )
 from media_finalization import finalize_mutated_media
@@ -910,6 +919,23 @@ def get_file_counts():
         return jsonify({'error': str(e)}), 500
 
 
+def month_key_for_photo_grid(date_taken, current_path):
+    """
+    YYYY-MM bucket for the main grid. When EXIF date is missing, infer from canonical
+    path (YYYY/YYYY-MM-DD/...) so undated rows still appear.
+    """
+    if date_taken:
+        date_normalized = str(date_taken).replace(':', '-', 2)
+        return date_normalized[:7]
+    norm = (current_path or '').replace('\\', '/')
+    parts = norm.split('/')
+    if len(parts) >= 2:
+        seg = parts[1]
+        if len(seg) >= 7 and seg[4] == '-' and seg[:4].isdigit():
+            return seg[:7]
+    return 'undated'
+
+
 @app.route('/api/photos')
 @handle_db_corruption
 def get_photos():
@@ -924,8 +950,8 @@ def get_photos():
     offset = request.args.get('offset', 0, type=int)
     sort_order = request.args.get('sort', 'newest')
     
-    # Determine sort direction
-    order_by = 'DESC' if sort_order == 'newest' else 'ASC'
+    # Sort direction for dated rows; undated rows sort last
+    date_sort = 'DESC' if sort_order == 'newest' else 'ASC'
     
     try:
         conn = get_db_connection()
@@ -942,8 +968,7 @@ def get_photos():
                 height,
                 rating
             FROM photos
-            WHERE date_taken IS NOT NULL
-            ORDER BY date_taken {order_by}, current_path ASC
+            ORDER BY (date_taken IS NOT NULL) DESC, date_taken {date_sort}, current_path ASC
         """
         
         # Only add LIMIT if specified
@@ -958,13 +983,8 @@ def get_photos():
         # Convert to list of dicts
         photos = []
         for row in rows:
-            # Extract month from date_taken
             date_str = row['date_taken']
-            if date_str:
-                date_normalized = date_str.replace(':', '-', 2)
-                month = date_normalized[:7]
-            else:
-                month = None
+            month = month_key_for_photo_grid(date_str, row['current_path'])
             
             photos.append({
                 'id': row['id'],
@@ -3667,13 +3687,7 @@ def probe_library_path():
         if not os.path.isdir(library_path):
             return jsonify({'error': 'Path is not a directory'}), 400
 
-        db_path = detect_existing_db_path(library_path)
-        return jsonify({
-            'library_path': library_path,
-            'has_db': db_path is not None,
-            'has_openable_db': library_has_openable_db(library_path),
-            'db_path': db_path,
-        })
+        return jsonify(inspect_library_path(library_path))
     except Exception as e:
         error_logger.error(f"Library path probe failed: {e}")
         return jsonify({'error': str(e)}), 500
@@ -4021,9 +4035,200 @@ def browse_library():
         error_logger.error(f"Browse library failed: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+DESKTOP_WARNING_FILE_EXTENSIONS = {
+    '.app',
+    '.csv',
+    '.doc',
+    '.docx',
+    '.dmg',
+    '.key',
+    '.md',
+    '.numbers',
+    '.pages',
+    '.pdf',
+    '.ppt',
+    '.pptx',
+    '.rtf',
+    '.txt',
+    '.xls',
+    '.xlsx',
+    '.zip',
+}
+DESKTOP_WARNING_FOLDER_NAMES = {
+    'applications',
+    'desktop',
+    'documents',
+    'downloads',
+    'movies',
+    'music',
+    'notes',
+    'projects',
+    'work',
+    'workspace',
+}
+
+
+def ensure_library_support_dirs(library_path):
+    """Create the hidden support folders required for a usable library."""
+    abs_library_path = os.path.abspath(library_path)
+    metadata_dir = os.path.join(abs_library_path, LIBRARY_METADATA_DIR)
+    support_dirs = [
+        metadata_dir,
+        os.path.join(abs_library_path, '.thumbnails'),
+        os.path.join(abs_library_path, '.trash'),
+        os.path.join(abs_library_path, '.db_backups'),
+        os.path.join(abs_library_path, '.logs'),
+        os.path.join(abs_library_path, '.import_temp'),
+    ]
+
+    for directory in support_dirs:
+        os.makedirs(directory, exist_ok=True)
+
+    return canonical_db_path(abs_library_path)
+
+
+def initialize_library_database(db_path):
+    """Create an empty usable database at the requested path."""
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        create_database_schema(cursor)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def quarantine_recovery_db(existing_db_path, library_path):
+    """Preserve a non-openable DB before writing a recovered replacement."""
+    if not existing_db_path or not os.path.exists(existing_db_path):
+        return []
+
+    backup_dir = os.path.join(os.path.abspath(library_path), '.db_backups')
+    os.makedirs(backup_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    stem = os.path.splitext(os.path.basename(existing_db_path))[0]
+    quarantined_paths = []
+
+    for source_path in [existing_db_path, *db_sidecar_paths(existing_db_path)]:
+        if not os.path.exists(source_path):
+            continue
+
+        suffix = source_path[len(existing_db_path):]
+        backup_name = f'{stem}_recovery_backup_{timestamp}{suffix}'
+        backup_path = os.path.join(backup_dir, backup_name)
+        shutil.move(source_path, backup_path)
+        quarantined_paths.append(backup_path)
+
+    return quarantined_paths
+
+
+def analyze_general_purpose_folder(library_path, media_count):
+    """Cheap, explainable warning heuristic for desktop/workspace folders."""
+    try:
+        root_entries = [
+            entry for entry in os.listdir(library_path)
+            if entry and not entry.startswith('.')
+        ]
+    except (PermissionError, OSError):
+        return {
+            'show': False,
+            'non_media_count': 0,
+            'visible_root_items': 0,
+            'visible_folder_count': 0,
+            'visible_file_count': 0,
+            'obvious_signals_present': False,
+            'reasons': [],
+        }
+
+    visible_file_count = 0
+    visible_folder_count = 0
+    non_media_count = 0
+    obvious_signals_present = False
+
+    for entry in root_entries:
+        entry_path = os.path.join(library_path, entry)
+        entry_lower = entry.lower()
+
+        if os.path.isdir(entry_path):
+            visible_folder_count += 1
+            if entry_lower in DESKTOP_WARNING_FOLDER_NAMES:
+                obvious_signals_present = True
+            continue
+
+        if not os.path.isfile(entry_path):
+            continue
+
+        visible_file_count += 1
+        ext = os.path.splitext(entry_lower)[1]
+        if ext not in ALL_MEDIA_EXTENSIONS:
+            non_media_count += 1
+            if ext in DESKTOP_WARNING_FILE_EXTENSIONS:
+                obvious_signals_present = True
+
+    visible_root_items = visible_file_count + visible_folder_count
+    mixed_file_types_and_folders = visible_root_items >= 15 and visible_file_count > 0 and visible_folder_count > 0
+
+    reasons = []
+    if non_media_count >= 20:
+        reasons.append('many_non_media_files')
+    if media_count >= 0 and non_media_count > media_count * 2:
+        reasons.append('non_media_outnumbers_media')
+    if mixed_file_types_and_folders:
+        reasons.append('busy_mixed_root')
+    if obvious_signals_present:
+        reasons.append('desktop_like_contents')
+
+    return {
+        'show': bool(reasons),
+        'non_media_count': non_media_count,
+        'visible_root_items': visible_root_items,
+        'visible_folder_count': visible_folder_count,
+        'visible_file_count': visible_file_count,
+        'obvious_signals_present': obvious_signals_present,
+        'reasons': reasons,
+    }
+
+
+def inspect_library_path(library_path):
+    """Shared open-library probe used by both picker UX and recovery flow."""
+    abs_library_path = os.path.abspath(library_path)
+    existing_db_path = detect_existing_db_path(abs_library_path)
+    db_path = existing_db_path or canonical_db_path(abs_library_path)
+    db_report = check_database_health(db_path)
+
+    try:
+        counts = count_media_files_by_type(abs_library_path)
+    except Exception as e:
+        print(f"  ⚠️  Error counting media files: {e}")
+        counts = {'photo_count': 0, 'video_count': 0, 'total_count': 0}
+
+    media_count = counts['total_count']
+    _, media_eta = estimate_duration(media_count)
+    folder_warning = analyze_general_purpose_folder(abs_library_path, media_count)
+
+    has_openable_db = library_has_openable_db(abs_library_path)
+    return {
+        'exists': has_openable_db,
+        'has_db': existing_db_path is not None,
+        'has_openable_db': has_openable_db,
+        'db_path': db_path,
+        'db_status': db_report.status.value,
+        'db_message': db_report.get_user_message(),
+        'has_media': media_count > 0,
+        'media_count': media_count,
+        'photo_count': counts['photo_count'],
+        'video_count': counts['video_count'],
+        'media_eta': media_eta,
+        'folder_warning': folder_warning,
+        'library_path': abs_library_path,
+    }
+
+
 @app.route('/api/library/check', methods=['POST'])
 def check_library():
-    """Check if a path contains a valid library and count media files if no DB exists"""
+    """Check whether a folder is directly openable and whether recovery is needed."""
     try:
         data = request.json
         library_path = data.get('library_path')
@@ -4035,43 +4240,27 @@ def check_library():
         if not os.path.exists(library_path):
             return jsonify({
                 'exists': False,
+                'has_db': False,
+                'has_openable_db': False,
                 'has_media': False,
                 'media_count': 0,
                 'library_path': library_path,
-                'db_path': None
+                'db_path': None,
+                'db_status': DBStatus.MISSING.value,
+                'db_message': 'No library database found.',
+                'media_eta': 'less than a minute',
+                'folder_warning': {
+                    'show': False,
+                    'non_media_count': 0,
+                    'visible_root_items': 0,
+                    'visible_folder_count': 0,
+                    'visible_file_count': 0,
+                    'obvious_signals_present': False,
+                    'reasons': [],
+                },
             })
-        
-        db_path = detect_existing_db_path(library_path)
-        exists = db_path is not None
-        
-        # Always scan for media files (needed for terraform decision)
-        has_media = False
-        media_count = 0
-        photo_count = 0
-        video_count = 0
-        
-        print(f"  📊 Scanning for media files...")
-        from library_sync import count_media_files_by_type
-        try:
-            counts = count_media_files_by_type(library_path)
-            photo_count = counts['photo_count']
-            video_count = counts['video_count']
-            media_count = counts['total_count']
-            has_media = media_count > 0
-            print(f"  ✅ Found {photo_count} photo(s) and {video_count} video(s)")
-        except Exception as e:
-            print(f"  ⚠️  Error counting media files: {e}")
-            # Continue with has_media=False if counting fails
-        
-        return jsonify({
-            'exists': exists,
-            'has_media': has_media,
-            'media_count': media_count,
-            'photo_count': photo_count,
-            'video_count': video_count,
-            'library_path': library_path,
-            'db_path': db_path or canonical_db_path(library_path)
-        })
+
+        return jsonify(inspect_library_path(library_path))
         
     except Exception as e:
         app.logger.error(f"Error checking library: {e}")
@@ -4087,8 +4276,6 @@ def create_library():
         if not library_path:
             return jsonify({'error': 'Missing library_path'}), 400
 
-        db_path = canonical_db_path(library_path)
-        
         print(f"\n📦 Creating new library at: {library_path}")
         
         # Check if library already exists
@@ -4099,23 +4286,9 @@ def create_library():
         # Let OS errors pass through with accurate error messages
         os.makedirs(library_path, exist_ok=False)
         print(f"  ✅ Created: {library_path}")
-        
-        # Create subdirectories
-        os.makedirs(os.path.join(library_path, LIBRARY_METADATA_DIR), exist_ok=True)
-        os.makedirs(os.path.join(library_path, '.thumbnails'), exist_ok=True)
-        os.makedirs(os.path.join(library_path, '.trash'), exist_ok=True)
-        os.makedirs(os.path.join(library_path, '.db_backups'), exist_ok=True)
-        os.makedirs(os.path.join(library_path, '.logs'), exist_ok=True)
-        
-        # Create empty database with schema
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # Create all tables and indices using centralized schema
-        create_database_schema(cursor)
-        
-        conn.commit()
-        conn.close()
+
+        db_path = ensure_library_support_dirs(library_path)
+        initialize_library_database(db_path)
         
         print(f"  ✅ Created database: {db_path}")
         print(f"  ✅ Created directory structure")
@@ -4129,6 +4302,56 @@ def create_library():
     except Exception as e:
         error_logger.error(f"Create library failed: {e}")
         print(f"\n❌ Create library failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/library/recover-database', methods=['POST'])
+def recover_library_database():
+    """Recover a usable canonical DB in an existing folder without destroying evidence."""
+    try:
+        data = request.json
+        library_path = (data.get('library_path') or '').strip()
+
+        if not library_path:
+            return jsonify({'error': 'Missing library_path'}), 400
+
+        if not os.path.exists(library_path):
+            return jsonify({'error': 'Path does not exist', 'code': 'path_not_found'}), 400
+
+        if not os.path.isdir(library_path):
+            return jsonify({'error': 'Path is not a directory'}), 400
+
+        abs_library_path = os.path.abspath(library_path)
+        existing_db_path = detect_existing_db_path(abs_library_path)
+        db_report = check_database_health(existing_db_path or canonical_db_path(abs_library_path))
+
+        quarantined_paths = []
+        if existing_db_path and db_report.status == DBStatus.CORRUPTED:
+            quarantined_paths = quarantine_recovery_db(existing_db_path, abs_library_path)
+
+        db_path = ensure_library_support_dirs(abs_library_path)
+        quarantined_paths.extend(
+            quarantine_unexpected_metadata_entries(
+                abs_library_path,
+                reason='recovery',
+            )
+        )
+        initialize_library_database(db_path)
+
+        verification = check_database_health(db_path)
+        if verification.status == DBStatus.CORRUPTED:
+            raise RuntimeError(verification.error_message or 'Recovered database is still corrupted')
+
+        return jsonify({
+            'status': 'recovered',
+            'library_path': abs_library_path,
+            'db_path': db_path,
+            'db_status': verification.status.value,
+            'quarantined_paths': quarantined_paths,
+        })
+    except Exception as e:
+        error_logger.error(f"Recover database failed: {e}")
+        print(f"\n❌ Recover database failed: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/library/switch', methods=['POST'])
@@ -5092,6 +5315,80 @@ def api_make_library_perfect():
         error_logger.error(traceback.format_exc())
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/library/make-perfect/stream', methods=['POST'])
+def api_make_library_perfect_stream():
+    """
+    Same engine as POST /api/library/make-perfect, but streams JSON events (SSE)
+    for live processed/total progress. Final event: {"type":"complete","result":...}
+    or {"type":"error","error":"..."}.
+    """
+    if not LIBRARY_PATH:
+        return jsonify({'error': 'No library configured'}), 400
+
+    if not os.path.isdir(LIBRARY_PATH):
+        return jsonify({'error': 'Configured library path is missing or invalid'}), 400
+
+    if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+        return jsonify({'error': 'Configured library path is not accessible'}), 503
+
+    if not DB_PATH:
+        return jsonify({'error': 'No database configured'}), 400
+
+    db_dir = os.path.dirname(DB_PATH) or '.'
+    if not os.path.isdir(db_dir):
+        return jsonify({'error': 'Configured database path is invalid'}), 400
+
+    from make_library_perfect import run_db_normalization_engine
+
+    event_queue: queue.Queue = queue.Queue()
+
+    def run_op():
+        try:
+
+            def progress_callback(ev):
+                event_queue.put(('evt', ev))
+
+            result = run_db_normalization_engine(
+                LIBRARY_PATH,
+                db_path=DB_PATH,
+                progress_callback=progress_callback,
+            )
+            event_queue.put(('done', result))
+        except Exception as e:
+            error_logger.error(f"Make Library Perfect stream failed: {e}")
+            error_logger.error(traceback.format_exc())
+            event_queue.put(('err', str(e)))
+
+    threading.Thread(target=run_op, daemon=True).start()
+
+    @stream_with_context
+    def generate():
+        while True:
+            try:
+                kind, payload = event_queue.get(timeout=600)
+            except queue.Empty:
+                yield f"data: {json.dumps({'type': 'error', 'error': 'Timed out waiting for progress'})}\n\n"
+                break
+            if kind == 'evt':
+                yield f"data: {json.dumps(payload)}\n\n"
+            elif kind == 'done':
+                yield f"data: {json.dumps({'type': 'complete', 'result': payload})}\n\n"
+                break
+            elif kind == 'err':
+                yield f"data: {json.dumps({'type': 'error', 'error': payload})}\n\n"
+                break
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 
 @app.route('/api/library/make-perfect/scan', methods=['GET'])

@@ -649,30 +649,42 @@ const FolderPicker = (() => {
 
         // Determine initial path
         let initialPath = options.initialPath || VIRTUAL_ROOT;
-        
+
         // If no initial path provided and currentPath is set from previous session, use it
         if (!options.initialPath && currentPath !== VIRTUAL_ROOT) {
-          initialPath = currentPath;
-          
+          try {
+            await listDirectory(currentPath);
+            initialPath = currentPath;
+          } catch {
+            currentPath = VIRTUAL_ROOT;
+            initialPath = VIRTUAL_ROOT;
+          }
         }
         // Otherwise try to use last saved path from localStorage
         else if (initialPath === VIRTUAL_ROOT) {
           const savedPath = localStorage.getItem('picker.lastPath');
           if (savedPath) {
-            
             try {
               // Validate saved path exists and is accessible
               await listDirectory(savedPath);
               initialPath = savedPath;
-              
-            } catch (error) {
-              
+            } catch {
               // Fall through to Desktop default
             }
           }
-          
+
           // If still at virtual root, use shared utility to get default path
           if (initialPath === VIRTUAL_ROOT) {
+            initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
+          }
+        }
+
+        if (initialPath !== VIRTUAL_ROOT) {
+          try {
+            await listDirectory(initialPath);
+          } catch {
+            currentPath = VIRTUAL_ROOT;
+            initialPath = VIRTUAL_ROOT;
             initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
           }
         }

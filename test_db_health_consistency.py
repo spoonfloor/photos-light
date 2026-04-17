@@ -266,6 +266,167 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertFalse(payload["has_openable_db"])
         self.assertEqual(payload["db_path"], db_path)
 
+    def test_library_check_uses_openable_db_not_raw_db_existence(self):
+        library_path = self._make_library("check-corrupt")
+        db_path = canonical_db_path(library_path)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        with open(db_path, "w", encoding="utf-8") as fh:
+            fh.write("not a sqlite database")
+
+        response = self.client.post("/api/library/check", json={"library_path": library_path})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["has_db"])
+        self.assertFalse(payload["has_openable_db"])
+        self.assertFalse(payload["exists"])
+        self.assertEqual(payload["db_status"], DBStatus.CORRUPTED.value)
+        self.assertEqual(payload["db_path"], db_path)
+
+    def test_library_check_reports_desktop_like_warning(self):
+        library_path = self._make_library("check-desktop-like")
+        with open(os.path.join(library_path, "report.pdf"), "w", encoding="utf-8") as fh:
+            fh.write("notes")
+        with open(os.path.join(library_path, "todo.docx"), "w", encoding="utf-8") as fh:
+            fh.write("notes")
+
+        response = self.client.post("/api/library/check", json={"library_path": library_path})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["folder_warning"]["show"])
+        self.assertTrue(payload["folder_warning"]["obvious_signals_present"])
+
+    def test_get_photos_keeps_null_dates_and_infers_month_from_canonical_path(self):
+        library_path = self._make_library("photos-null-dates")
+        db_path = self._create_healthy_db(library_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename,
+                current_path,
+                date_taken,
+                content_hash,
+                file_size,
+                file_type,
+                width,
+                height,
+                rating
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "dated.jpg",
+                "2024/2024-01-03/img_20240103_deadbeef.jpg",
+                "2024:01:03 10:11:12",
+                "deadbeef000000000000000000000000",
+                123,
+                "photo",
+                1,
+                1,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename,
+                current_path,
+                date_taken,
+                content_hash,
+                file_size,
+                file_type,
+                width,
+                height,
+                rating
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "undated.jpg",
+                "2025/2025-04-15/img_20250415_feedface.jpg",
+                None,
+                "feedface000000000000000000000000",
+                456,
+                "photo",
+                1,
+                1,
+                None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        photo_app.LIBRARY_PATH = library_path
+        photo_app.DB_PATH = db_path
+
+        response = self.client.get("/api/photos?sort=newest")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual([photo["path"] for photo in payload["photos"]], [
+            "2024/2024-01-03/img_20240103_deadbeef.jpg",
+            "2025/2025-04-15/img_20250415_feedface.jpg",
+        ])
+        self.assertEqual(payload["photos"][0]["month"], "2024-01")
+        self.assertIsNone(payload["photos"][1]["date"])
+        self.assertEqual(payload["photos"][1]["month"], "2025-04")
+
+    def test_recover_database_quarantines_corrupt_db_and_creates_usable_canonical_db(self):
+        library_path = self._make_library("recover-corrupt")
+        db_path = canonical_db_path(library_path)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        with open(db_path, "w", encoding="utf-8") as fh:
+            fh.write("not a sqlite database")
+        with open(f"{db_path}-wal", "w", encoding="utf-8") as fh:
+            fh.write("sidecar")
+
+        response = self.client.post(
+            "/api/library/recover-database",
+            json={"library_path": library_path},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "recovered")
+        self.assertEqual(payload["db_path"], db_path)
+        self.assertTrue(os.path.exists(db_path))
+        self.assertFalse(os.path.exists(f"{db_path}-wal"))
+        self.assertGreaterEqual(len(payload["quarantined_paths"]), 1)
+        for backup_path in payload["quarantined_paths"]:
+            self.assertTrue(os.path.exists(backup_path))
+
+        report = check_database_health(db_path)
+        self.assertEqual(report.status, DBStatus.HEALTHY)
+
+    def test_recover_database_quarantines_unexpected_library_metadata_artifacts(self):
+        library_path = self._make_library("recover-stray-metadata")
+        db_path = canonical_db_path(library_path)
+        metadata_dir = os.path.dirname(db_path)
+        os.makedirs(metadata_dir, exist_ok=True)
+        stray_artifact = os.path.join(metadata_dir, "photo_library.db.zip")
+        with open(stray_artifact, "w", encoding="utf-8") as fh:
+            fh.write("backup bytes")
+
+        response = self.client.post(
+            "/api/library/recover-database",
+            json={"library_path": library_path},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "recovered")
+        self.assertTrue(os.path.exists(db_path))
+        self.assertFalse(os.path.exists(stray_artifact))
+        self.assertTrue(
+            any(path.endswith("photo_library.db.zip") for path in payload["quarantined_paths"])
+        )
+        for backup_path in payload["quarantined_paths"]:
+            self.assertTrue(os.path.exists(backup_path))
+
     def test_list_directory_separates_db_presence_from_openable_db(self):
         library_path = self._make_library("list-directory-corrupt")
         db_path = canonical_db_path(library_path)

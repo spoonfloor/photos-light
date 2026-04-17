@@ -33,6 +33,8 @@
   --z-dropdown: 10000;
   --z-dialog: 20000;
   --z-toast: 21000;
+  /* Full-screen pickers must sit above library recovery dock (toast layer). */
+  --z-folder-picker: 22000;
 }
 
 /* --- Reset --- */
@@ -1100,9 +1102,19 @@ input[type="radio"] {
 }
 
 #updateIndexOverlay .import-card {
-  width: 640px;
+  display: flex;
+  flex-direction: column;
+  /* Between content-tight (~320px) and original full width (640px) */
+  width: min(480px, calc(100vw - 40px));
+  height: auto;
   max-height: calc(100vh - 40px);
+  overflow-x: hidden;
   overflow-y: auto;
+}
+
+#updateIndexOverlay .import-header,
+#updateIndexOverlay .import-actions {
+  flex-shrink: 0;
 }
 
 #updateIndexOverlay .import-progress-section {
@@ -1136,6 +1148,23 @@ input[type="radio"] {
 
 .import-close-btn:hover {
   background: var(--hover-bg);
+}
+
+.library-recovery-card .import-header {
+  position: relative;
+  z-index: 4;
+}
+
+.library-recovery-card .import-close-btn {
+  position: relative;
+  z-index: 5;
+  flex-shrink: 0;
+  pointer-events: auto;
+}
+
+/* Clicks land on the button, not only the glyph */
+.library-recovery-card .import-close-btn .material-symbols-outlined {
+  pointer-events: none;
 }
 
 .import-progress-section {
@@ -1218,6 +1247,73 @@ input[type="radio"] {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums; /* Monospaced numbers for smooth animation */
   line-height: 1; /* Tight line-height, no extra descender space */
+}
+
+.library-recovery-dock {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  z-index: var(--z-toast);
+  pointer-events: none;
+}
+
+.library-recovery-card {
+  width: min(420px, calc(100vw - 32px));
+  margin: 0;
+  pointer-events: auto;
+}
+
+.library-recovery-card .import-stats {
+  flex-wrap: wrap;
+}
+
+.library-recovery-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.library-recovery-error {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(244, 67, 54, 0.12);
+  border: 1px solid rgba(244, 67, 54, 0.28);
+  color: #ffb4ab;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+body.library-recovery-active #appBarMount,
+body.library-recovery-active .page-main {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Picker closed → next modal (recover DB / warning): hide main so no flash during /api/library/check */
+body.open-library-modal-handoff #appBarMount,
+body.open-library-modal-handoff .page-main {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+body.library-recovery-active .library-recovery-dock {
+  display: block;
+}
+
+@media (max-width: 640px) {
+  .library-recovery-dock {
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+  }
+
+  .library-recovery-card {
+    width: 100%;
+  }
 }
 
 #updateIndexOverlay .import-stats {
@@ -1439,7 +1535,7 @@ input[type="radio"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: var(--z-dialog);
+  z-index: var(--z-folder-picker);
 }
 
 .picker-card {

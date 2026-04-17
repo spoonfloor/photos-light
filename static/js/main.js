@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v313';
+const MAIN_JS_VERSION = 'v334';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -11,6 +11,7 @@ const state = {
   selectedPhotos: new Set(),
   photos: [],
   loading: false,
+  libraryGeneration: 0,
   libraryTransitionActive: false,
   lastClickedIndex: null, // For shift-select
   lightboxOpen: false,
@@ -28,7 +29,24 @@ const state = {
   lightboxClosing: false,
 };
 
-const ROTATABLE_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.tif', '.tiff']);
+const libraryRecoveryState = {
+  shellHidden: false,
+  hasSwitchedLibrary: false,
+  rebuildTotal: 0,
+  rebuildAdded: 0,
+};
+
+let currentPhotoLoad = null;
+let currentPhotoLoadAbortController = null;
+let photoLoadRequestId = 0;
+
+const ROTATABLE_IMAGE_EXTENSIONS = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.tif',
+  '.tiff',
+]);
 
 // ============================================================================
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
@@ -63,6 +81,20 @@ function checkForDatabaseCorruption(responseData) {
     }
   }
   return false;
+}
+
+function isCalendarMonthKey(monthKey) {
+  return typeof monthKey === 'string' && /^\d{4}-\d{2}$/.test(monthKey);
+}
+
+function parsePhotoDate(photo) {
+  if (!photo || !photo.date) {
+    return null;
+  }
+
+  const dateStr = photo.date.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+  const date = new Date(dateStr);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 // ============================================================================
@@ -128,14 +160,11 @@ function wireAppBar() {
   const utilitiesBtn = document.getElementById('utilitiesBtn');
 
   if (menuBtn) {
-    menuBtn.addEventListener('click', () => {
-      
-    });
+    menuBtn.addEventListener('click', () => {});
   }
 
   if (utilitiesBtn) {
     utilitiesBtn.addEventListener('click', (e) => {
-      
       e.stopPropagation();
       toggleUtilitiesMenu();
     });
@@ -145,7 +174,6 @@ function wireAppBar() {
 
   if (addPhotoBtn) {
     addPhotoBtn.addEventListener('click', () => {
-      
       triggerImport();
     });
   }
@@ -153,7 +181,6 @@ function wireAppBar() {
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
       const count = state.selectedPhotos.size;
-      
 
       if (count === 0) return;
 
@@ -171,7 +198,7 @@ function wireAppBar() {
   if (editDateBtn) {
     editDateBtn.addEventListener('click', () => {
       const count = state.selectedPhotos.size;
-      
+
       if (count === 0) return;
 
       const selectedIds = Array.from(state.selectedPhotos);
@@ -202,11 +229,9 @@ function wireAppBar() {
       if (state.currentSortOrder === 'newest') {
         sortIcon.textContent = 'hourglass_arrow_down';
         sortToggleBtn.title = 'Newest first';
-        
       } else {
         sortIcon.textContent = 'hourglass_arrow_up';
         sortToggleBtn.title = 'Oldest first';
-        
       }
 
       // Reload photos with new sort
@@ -277,8 +302,6 @@ async function populateDatePicker() {
         datePickerContainer.style.visibility = 'hidden';
       }
     }
-
-    
   } catch (error) {
     console.warn('⚠️  Date picker disabled:', error.message);
   }
@@ -296,10 +319,7 @@ function enablePhotoRelatedActions() {
   }
 
   // Enable utility menu items (except Switch library which is always enabled)
-  const utilityItems = [
-    'cleanOrganizeBtn',
-    'rebuildDatabaseBtn',
-  ];
+  const utilityItems = ['cleanOrganizeBtn', 'rebuildDatabaseBtn'];
 
   utilityItems.forEach((id) => {
     const btn = document.getElementById(id);
@@ -331,8 +351,6 @@ function wireDatePicker() {
     const year = yearPicker.value;
     const targetMonth = `${year}-${month}`;
 
-    
-
     // Check if month section already exists in DOM
     const monthSection = document.getElementById(`month-${targetMonth}`);
 
@@ -344,7 +362,6 @@ function wireDatePicker() {
       window.scrollTo({ top: targetY, behavior: 'smooth' });
     } else {
       // Not rendered - need to find nearest valid month
-      
 
       try {
         const nearestResponse = await fetch(
@@ -353,12 +370,10 @@ function wireDatePicker() {
         const nearestData = await nearestResponse.json();
 
         if (!nearestData.nearest_month) {
-          
           return;
         }
 
         const actualMonth = nearestData.nearest_month;
-        
 
         // Check if that section exists
         const actualSection = document.getElementById(`month-${actualMonth}`);
@@ -368,7 +383,6 @@ function wireDatePicker() {
           const targetY = actualSection.offsetTop - appBarHeight - 20; // 20px padding
           window.scrollTo({ top: targetY, behavior: 'smooth' });
         } else {
-          
         }
       } catch (error) {
         console.error('❌ Error finding nearest month:', error);
@@ -401,15 +415,16 @@ function wireDatePicker() {
 
       // Get all month sections in DOM order, find first visible one
       const allSections = document.querySelectorAll('.month-section');
-      const topmostVisibleSection = Array.from(allSections).find((section) =>
-        sectionVisibility.has(section.dataset.month),
-      );
+      const topmostVisibleSection = Array.from(allSections).find((section) => {
+        const monthKey = section.dataset.month;
+        return isCalendarMonthKey(monthKey) && sectionVisibility.has(monthKey);
+      });
 
       if (!topmostVisibleSection) return;
 
       const monthId = topmostVisibleSection.dataset.month;
 
-      if (monthId) {
+      if (isCalendarMonthKey(monthId)) {
         const [year, month] = monthId.split('-');
 
         // Set flag to prevent triggering jump
@@ -456,7 +471,6 @@ function deselectAllPhotos() {
   });
   updateDeleteButtonVisibility();
   updateMonthCircleStates(); // Update month circles
-  
 }
 
 /**
@@ -508,10 +522,8 @@ let originalDialogButtonsHTML = null;
  * Handle dialog confirm click (single persistent listener)
  */
 function handleDialogConfirm() {
-  
   hideDialog();
   if (currentDialogCallback) {
-    
     currentDialogCallback();
     currentDialogCallback = null;
   } else {
@@ -569,7 +581,6 @@ function loadCriticalErrorModal() {
     })
     .then((html) => {
       mount.innerHTML = html;
-      
     })
     .catch((err) => {
       console.error('❌ Critical error modal load failed:', err);
@@ -612,8 +623,6 @@ function loadRebuildDatabaseOverlay() {
           hideRebuildDatabaseOverlay();
           loadAndRenderPhotos(); // Reload photos after rebuild
         });
-
-      
     })
     .catch((err) => {
       console.error('❌ Rebuild database overlay load failed:', err);
@@ -712,13 +721,263 @@ function hideCriticalError() {
 // =====================
 
 /**
+ * Run the authoritative clean-library engine and refresh the UI.
+ */
+async function requestMakeLibraryPerfect(options = {}) {
+  const { signal } = options;
+  const response = await fetch('/api/library/make-perfect', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    signal,
+  });
+
+  const contentType = response.headers.get('content-type') || '';
+  let data;
+
+  if (contentType.includes('application/json')) {
+    data = await response.json();
+  } else {
+    const responseText = await response.text();
+    const isHtmlError = contentType.includes('text/html');
+    data = {
+      error:
+        (isHtmlError ? '' : responseText.replace(/\s+/g, ' ').trim()) ||
+        `Server returned ${response.status} ${response.statusText}`,
+    };
+  }
+
+  if (!response.ok) {
+    throw new Error(data.error || `Operation failed: ${response.statusText}`);
+  }
+
+  return data;
+}
+
+const LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL = {
+  setup: 'Preparing library',
+  scan: 'Adding media',
+  dedupe: 'Adding media',
+  canonicalize: 'Adding media',
+  folders: 'Adding media',
+  rebuild_db: 'Adding media',
+  audit: 'Verifying library',
+};
+
+function updateLibraryRecoveryMakePerfectProgress(ev) {
+  const statusEl = document.getElementById('libraryRecoveryStatus');
+  const total = Math.max(Number(libraryRecoveryState.rebuildTotal || 0), 1);
+  if (ev.type === 'phase' && statusEl && ev.status === 'starting') {
+    const label =
+      LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL[ev.phase] || ev.phase;
+    statusEl.style.display = 'flex';
+    if (ev.phase === 'audit') {
+      setLibraryRecoveryStats([]);
+      statusEl.innerHTML = `${label}…<span class="import-spinner"></span>`;
+    } else {
+      statusEl.textContent = `${label}…`;
+      setLibraryRecoveryStats([
+        { label: 'Added', value: libraryRecoveryState.rebuildAdded || 0 },
+        { label: 'Total', value: total },
+      ]);
+    }
+    return;
+  }
+  if (
+    ev.type === 'phase' &&
+    statusEl &&
+    ev.status === 'complete' &&
+    ev.phase === 'audit'
+  ) {
+    statusEl.style.display = 'flex';
+    statusEl.textContent = 'Library verified';
+    return;
+  }
+  if (ev.type === 'progress') {
+    const phaseLabel =
+      LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL[ev.phase] ||
+      ev.phase ||
+      'Working';
+    if (statusEl) {
+      statusEl.style.display = 'flex';
+      if (ev.phase === 'audit') {
+        setLibraryRecoveryStats([]);
+        statusEl.innerHTML = `${phaseLabel}…<span class="import-spinner"></span>`;
+        return;
+      }
+      statusEl.textContent = `${phaseLabel}…`;
+    }
+    if (ev.phase === 'canonicalize' || ev.phase === 'rebuild_db') {
+      libraryRecoveryState.rebuildAdded = Math.max(
+        Number(libraryRecoveryState.rebuildAdded || 0),
+        Math.min(Number(ev.processed ?? 0), total),
+      );
+    }
+    setLibraryRecoveryStats([
+      { label: 'Added', value: libraryRecoveryState.rebuildAdded || 0 },
+      { label: 'Total', value: total },
+    ]);
+  }
+}
+
+/**
+ * Same engine as POST /api/library/make-perfect, with SSE progress events.
+ */
+async function streamMakeLibraryPerfect(options = {}) {
+  const { signal, onProgress } = options;
+  const response = await fetch('/api/library/make-perfect/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    signal,
+  });
+
+  const contentType = response.headers.get('content-type') || '';
+
+  if (!response.ok) {
+    let data;
+    if (contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const responseText = await response.text();
+      const isHtmlError = contentType.includes('text/html');
+      data = {
+        error:
+          (isHtmlError ? '' : responseText.replace(/\s+/g, ' ').trim()) ||
+          `Server returned ${response.status} ${response.statusText}`,
+      };
+    }
+    throw new Error(data.error || `Operation failed: ${response.statusText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('No response body');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  let onAbort;
+  if (signal) {
+    onAbort = () => {
+      reader.cancel().catch(() => {});
+    };
+    if (signal.aborted) {
+      onAbort();
+    } else {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  }
+
+  function consumeDataLine(line) {
+    if (!line.startsWith('data: ')) return null;
+    let payload;
+    try {
+      payload = JSON.parse(line.slice(6));
+    } catch {
+      return null;
+    }
+    if (payload.type === 'complete') {
+      return { done: true, result: payload.result };
+    }
+    if (payload.type === 'error') {
+      throw new Error(payload.error || 'Unknown error');
+    }
+    if (typeof onProgress === 'function') {
+      onProgress(payload);
+    }
+    return null;
+  }
+
+  try {
+    while (true) {
+      let done;
+      let value;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (readErr) {
+        if (
+          signal &&
+          (signal.aborted ||
+            readErr.name === 'AbortError' ||
+            readErr?.name === 'AbortError')
+        ) {
+          throw new DOMException('The operation was aborted.', 'AbortError');
+        }
+        throw readErr;
+      }
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+      }
+
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of chunk.split('\n')) {
+          const fin = consumeDataLine(line);
+          if (fin) {
+            return fin.result;
+          }
+        }
+      }
+
+      if (done) {
+        for (const line of buffer.split('\n')) {
+          const fin = consumeDataLine(line);
+          if (fin) {
+            return fin.result;
+          }
+        }
+        break;
+      }
+    }
+  } finally {
+    if (signal && onAbort) {
+      signal.removeEventListener('abort', onAbort);
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  throw new Error('Stream ended without complete event');
+}
+
+async function runMakeLibraryPerfectOperation(options = {}) {
+  const {
+    startMessage = 'Starting library cleanup...',
+    reloadingMessage = 'Library cleanup complete! Reloading photos...',
+    successMessage = '✅ Library is now perfectly organized',
+    failurePrefix = 'Operation failed',
+  } = options;
+
+  try {
+    showToast(startMessage, null);
+    await requestMakeLibraryPerfect();
+
+    showToast(reloadingMessage, null);
+    await loadAndRenderPhotos(false, { throwOnError: true });
+    showToast(successMessage, null);
+    return true;
+  } catch (error) {
+    console.error('❌ Make Library Perfect failed:', error);
+    showToast(`${failurePrefix}: ${error.message}`, null);
+    return false;
+  }
+}
+
+/**
  * Start "Make Library Perfect" operation (unified Clean + Rebuild)
  * Entry point from utilities menu "Clean library" option
  */
 async function startMakeLibraryPerfect() {
   try {
-    
-
     // Show confirmation dialog
     const confirmed = await showDialog(
       'Clean library',
@@ -730,54 +989,10 @@ async function startMakeLibraryPerfect() {
     );
 
     if (!confirmed) {
-      
       return;
     }
 
-    // Show progress toast
-    showToast('Starting library cleanup...', null);
-
-    
-
-    // Call the backend endpoint
-    const response = await fetch('/api/library/make-perfect', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    let data;
-
-    if (contentType.includes('application/json')) {
-      data = await response.json();
-    } else {
-      const responseText = await response.text();
-      const isHtmlError = contentType.includes('text/html');
-      data = {
-        error:
-          (isHtmlError
-            ? ''
-            : responseText.replace(/\s+/g, ' ').trim()) ||
-          `Server returned ${response.status} ${response.statusText}`,
-      };
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        data.error || `Operation failed: ${response.statusText}`,
-      );
-    }
-
-    
-
-    showToast('Library cleanup complete! Reloading photos...', null);
-
-    // Reload photos to show updated library
-    await loadPhotos();
-
-    showToast('✅ Library is now perfectly organized', null);
+    await runMakeLibraryPerfectOperation();
   } catch (error) {
     console.error('❌ Make Library Perfect failed:', error);
     showToast(`Operation failed: ${error.message}`, 'error');
@@ -799,7 +1014,6 @@ async function startRebuildDatabase() {
     }
 
     // Pre-scan: count files and get estimate
-    
 
     const overlay = document.getElementById('rebuildDatabaseOverlay');
     const statusText = document.getElementById('rebuildDatabaseStatusText');
@@ -821,7 +1035,6 @@ async function startRebuildDatabase() {
     }
 
     const data = await response.json();
-    
 
     // Show warning if large library
     if (data.requires_warning) {
@@ -859,12 +1072,9 @@ async function startRebuildDatabase() {
  * Execute rebuild database (after user confirms)
  */
 async function executeRebuildDatabase() {
-  
-
   // Close lightbox if open (user should see grid during rebuild)
   const lightbox = document.getElementById('lightboxOverlay');
   if (lightbox && lightbox.style.display !== 'none') {
-    
     closeLightbox();
   }
 
@@ -891,7 +1101,6 @@ async function executeRebuildDatabase() {
 
     eventSource.addEventListener('progress', (e) => {
       const data = JSON.parse(e.data);
-      
 
       if (data.phase === 'adding_untracked') {
         indexedCount.textContent = data.current.toLocaleString();
@@ -904,7 +1113,6 @@ async function executeRebuildDatabase() {
 
     eventSource.addEventListener('complete', (e) => {
       const data = JSON.parse(e.data);
-      
 
       // Update title and status (State 4)
       title.textContent = 'Database rebuilt';
@@ -915,7 +1123,7 @@ async function executeRebuildDatabase() {
       eventSource.close();
 
       // Check library health and reload photos
-      
+
       checkLibraryHealthAndInit().catch((err) => {
         console.error('❌ Failed to reload after rebuild:', err);
       });
@@ -950,8 +1158,6 @@ async function executeRebuildDatabase() {
  * Show confirmation dialog (old callback-based version)
  */
 function showDialogOld(title, message, onConfirm, confirmLabel = 'Delete') {
-  
-
   const overlay = document.getElementById('dialogOverlay');
   const titleEl = document.getElementById('dialogTitle');
   const messageEl = document.getElementById('dialogMessage');
@@ -983,7 +1189,6 @@ function showDialogOld(title, message, onConfirm, confirmLabel = 'Delete') {
 
   // Store the callback for the handler to use
   currentDialogCallback = onConfirm;
-  
 
   overlay.style.display = 'flex';
 }
@@ -1072,6 +1277,251 @@ function hideDialog() {
   if (overlay) {
     overlay.style.display = 'none';
   }
+}
+
+async function loadLibraryRecoveryDock() {
+  if (document.getElementById('libraryRecoveryDock')) {
+    return;
+  }
+
+  const mount = document.getElementById('dialogMount');
+  if (!mount) {
+    console.error('❌ Library recovery dock mount not found');
+    return;
+  }
+
+  try {
+    const response = await fetch('fragments/libraryRecoveryDock.html?v=3');
+    if (!response.ok) {
+      throw new Error(
+        `Failed to load library recovery dock (${response.status})`,
+      );
+    }
+
+    mount.insertAdjacentHTML('beforeend', await response.text());
+  } catch (error) {
+    console.error('❌ Library recovery dock load failed:', error);
+  }
+}
+
+async function ensureLibraryRecoveryDock() {
+  if (!document.getElementById('libraryRecoveryDock')) {
+    await loadLibraryRecoveryDock();
+  }
+  return document.getElementById('libraryRecoveryDock');
+}
+
+function setLibraryRecoveryShellHidden(hidden) {
+  libraryRecoveryState.shellHidden = hidden;
+  document.body.classList.toggle('library-recovery-active', hidden);
+}
+
+/**
+ * Hide app bar + photo grid between folder picker close and the next modal
+ * (covers async /api/library/check). Cleared on healthy switch, cancel, or recovery end.
+ */
+function setOpenLibraryModalHandoffShellHidden(hidden) {
+  document.body.classList.toggle('open-library-modal-handoff', hidden);
+}
+
+function hideLibraryRecoveryDock() {
+  const dock = document.getElementById('libraryRecoveryDock');
+  if (dock) {
+    dock.style.display = 'none';
+  }
+}
+
+function finishLibraryRecoveryJourney() {
+  hideLibraryRecoveryDock();
+  setLibraryRecoveryShellHidden(false);
+  setOpenLibraryModalHandoffShellHidden(false);
+  libraryRecoveryState.hasSwitchedLibrary = false;
+  libraryRecoveryState.rebuildTotal = 0;
+  libraryRecoveryState.rebuildAdded = 0;
+}
+
+function setLibraryRecoveryStats(stats = []) {
+  const statsEl = document.getElementById('libraryRecoveryStats');
+  if (!statsEl) return;
+
+  if (!stats.length) {
+    statsEl.style.display = 'none';
+    statsEl.innerHTML = '';
+    return;
+  }
+
+  statsEl.innerHTML = stats
+    .map((stat) => {
+      const rawValue = stat.value ?? 0;
+      const formattedValue =
+        typeof rawValue === 'number'
+          ? rawValue.toLocaleString()
+          : `${rawValue}`;
+      return `
+        <span class="import-stat">
+          <span class="import-stat-label">${stat.label}</span>
+          <span class="import-stat-value">${formattedValue}</span>
+        </span>
+      `;
+    })
+    .join('');
+  statsEl.style.display = 'flex';
+}
+
+function setLibraryRecoveryActions(actions = [], resolveAction = null) {
+  const actionsEl = document.getElementById('libraryRecoveryActions');
+  if (!actionsEl) return;
+
+  actionsEl.innerHTML = '';
+  if (!actions.length) {
+    actionsEl.style.display = 'none';
+    return;
+  }
+
+  actions.forEach((action) => {
+    const button = document.createElement('button');
+    button.className = `btn ${action.primary ? 'btn-primary' : 'btn-secondary'}`;
+    button.textContent = action.text;
+    button.disabled = !!action.disabled;
+    button.addEventListener('click', async () => {
+      if (typeof action.onClick === 'function') {
+        await action.onClick();
+      }
+      if (resolveAction) {
+        resolveAction(action.value);
+      }
+    });
+    actionsEl.appendChild(button);
+  });
+
+  actionsEl.style.display = 'flex';
+}
+
+async function showLibraryRecoveryDockCard(options = {}) {
+  const dock = await ensureLibraryRecoveryDock();
+  if (!dock) {
+    return false;
+  }
+
+  const titleEl = document.getElementById('libraryRecoveryTitle');
+  const bodyEl = document.getElementById('libraryRecoveryBody');
+  const statusEl = document.getElementById('libraryRecoveryStatus');
+  const errorEl = document.getElementById('libraryRecoveryError');
+
+  if (titleEl) {
+    titleEl.textContent = options.title || '';
+  }
+  if (bodyEl) {
+    bodyEl.textContent = options.body || '';
+  }
+
+  if (statusEl) {
+    if (options.statusText) {
+      statusEl.innerHTML = `${options.statusText}${
+        options.statusSpinner ? '<span class="import-spinner"></span>' : ''
+      }`;
+      statusEl.style.display = 'flex';
+    } else {
+      statusEl.style.display = 'none';
+      statusEl.textContent = '';
+    }
+  }
+
+  if (errorEl) {
+    if (options.errorText) {
+      errorEl.textContent = options.errorText;
+      errorEl.style.display = 'block';
+    } else {
+      errorEl.style.display = 'none';
+      errorEl.textContent = '';
+    }
+  }
+
+  setLibraryRecoveryStats(options.stats || []);
+  setLibraryRecoveryActions(options.actions || []);
+
+  const actionsEl = document.getElementById('libraryRecoveryActions');
+  if (actionsEl) {
+    if (options.actionsJustify) {
+      actionsEl.style.justifyContent = options.actionsJustify;
+    } else {
+      actionsEl.style.removeProperty('justify-content');
+    }
+  }
+
+  const closeBtn = document.getElementById('libraryRecoveryCloseBtn');
+  if (closeBtn) {
+    const newCloseBtn = closeBtn.cloneNode(true);
+    closeBtn.parentNode.replaceChild(newCloseBtn, closeBtn);
+    if (options.showCloseButton && typeof options.onClose === 'function') {
+      newCloseBtn.style.display = 'flex';
+      newCloseBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        options.onClose();
+      });
+    } else {
+      newCloseBtn.style.display = 'none';
+    }
+  }
+
+  dock.style.display = 'block';
+  return true;
+}
+
+async function promptLibraryRecoveryDock(options = {}) {
+  return new Promise(async (resolve) => {
+    const userOnClose = options.onClose;
+    const closeValue = options.closeActionValue ?? 'cancel';
+    const shown = await showLibraryRecoveryDockCard({
+      ...options,
+      showCloseButton: options.showCloseButton !== false,
+      onClose: () => {
+        if (typeof userOnClose === 'function') {
+          userOnClose();
+        }
+        resolve(closeValue);
+      },
+    });
+    if (!shown) {
+      resolve(false);
+      return;
+    }
+    setLibraryRecoveryActions(options.actions || [], resolve);
+  });
+}
+
+function getRecoveryFailureCopy(stage, hasSwitchedLibrary) {
+  if (stage === 'recover_database') {
+    return {
+      title: "Couldn't recover library",
+      body: "We couldn't add a new database for this folder.",
+      errorText:
+        'Nothing was changed. Please try again or pick a different folder.',
+    };
+  }
+
+  if (stage === 'add_media') {
+    return {
+      title: "Couldn't finish rebuilding library",
+      body: "Your library is open, but we couldn't finish adding media.",
+      errorText: 'You can keep using your library and try again later.',
+    };
+  }
+
+  if (hasSwitchedLibrary) {
+    return {
+      title: "Couldn't finish opening library",
+      body: "Your library is open, but we couldn't finish checking it for media to add.",
+      errorText: 'You can keep using your library and try again later.',
+    };
+  }
+
+  return {
+    title: "Couldn't open library",
+    body: "We couldn't finish opening this folder as a library.",
+    errorText: 'Please try again or pick a different folder.',
+  };
 }
 
 // =====================
@@ -1260,9 +1710,11 @@ function openDateEditor(photoIdOrIds) {
     return;
   }
 
-  // Parse the date from EXIF format (YYYY:MM:DD HH:MM:SS)
-  const dateStr = photo.date.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
-  const date = new Date(dateStr);
+  const date = parsePhotoDate(photo);
+  if (!date) {
+    showToast('This photo is missing a usable library date', null);
+    return;
+  }
 
   // Populate fields
   document.getElementById('dateEditorYear').value = date.getFullYear();
@@ -1316,8 +1768,6 @@ function openDateEditor(photoIdOrIds) {
 
   // Show overlay
   overlay.style.display = 'flex';
-
-  
 }
 
 /**
@@ -1331,7 +1781,6 @@ function closeDateEditor() {
   state.dateEditorOpen = false;
 
   overlay.style.display = 'none';
-  
 }
 
 /**
@@ -1359,9 +1808,8 @@ function loadDateChangeProgressOverlay() {
 
       if (closeBtn)
         closeBtn.addEventListener('click', hideDateChangeProgressOverlay);
-      if (doneBtn) doneBtn.addEventListener('click', hideDateChangeProgressOverlay);
-
-      
+      if (doneBtn)
+        doneBtn.addEventListener('click', hideDateChangeProgressOverlay);
     })
     .catch((err) => {
       console.error('❌ Date change progress overlay load failed:', err);
@@ -1410,7 +1858,6 @@ function showDateChangeProgressOverlay(photoCount) {
   if (closeBtn) closeBtn.style.display = 'none';
 
   overlay.style.display = 'flex';
-  
 }
 
 /**
@@ -1420,7 +1867,6 @@ function hideDateChangeProgressOverlay() {
   const overlay = document.getElementById('dateChangeProgressOverlay');
   if (overlay) {
     overlay.style.display = 'none';
-    
   }
 }
 
@@ -1507,8 +1953,6 @@ async function saveDateEdit() {
   // Format as EXIF format (YYYY:MM:DD HH:MM:SS)
   const newDate = `${year}:${month}:${day} ${hour24}:${minute}:00`;
 
-  
-
   // Capture original dates BEFORE edit for undo
   const originalDates = photoIds.map((id) => {
     const photo = state.photos.find((p) => p.id === id);
@@ -1561,13 +2005,12 @@ async function saveDateEdit() {
 
       eventSource.addEventListener('progress', (e) => {
         const data = JSON.parse(e.data);
-        
+
         updateDateChangeProgress(data.current, data.total);
       });
 
       eventSource.addEventListener('complete', (e) => {
         const data = JSON.parse(e.data);
-        
 
         eventSource.close();
 
@@ -1609,7 +2052,7 @@ async function saveDateEdit() {
 
       eventSource.addEventListener('progress', (e) => {
         const data = JSON.parse(e.data);
-        
+
         updateDateChangeProgress(data.current || 0, data.total || 1);
       });
 
@@ -1673,6 +2116,7 @@ function showToast(message, onUndo, duration) {
   const messageEl = document.getElementById('toastMessage');
   const undoBtn = document.getElementById('toastUndoBtn');
   const closeBtn = document.getElementById('toastCloseBtn');
+  const undoCallback = typeof onUndo === 'function' ? onUndo : null;
 
   if (!toast) return;
 
@@ -1680,22 +2124,21 @@ function showToast(message, onUndo, duration) {
 
   // Auto-select duration based on whether undo is provided
   if (duration === undefined) {
-    duration = onUndo ? TOAST_DURATION_WITH_UNDO : TOAST_DURATION;
+    duration = undoCallback ? TOAST_DURATION_WITH_UNDO : TOAST_DURATION;
   }
 
   // Log actual duration being used
-  
 
   // Show/hide undo button based on whether undo callback exists
   const newUndoBtn = undoBtn.cloneNode(true);
   undoBtn.parentNode.replaceChild(newUndoBtn, undoBtn);
 
-  if (onUndo) {
+  if (undoCallback) {
     // Show undo button and add listener
     newUndoBtn.style.display = 'block';
     newUndoBtn.addEventListener('click', () => {
       hideToast();
-      onUndo();
+      undoCallback();
     });
   } else {
     // Hide undo button
@@ -1743,7 +2186,6 @@ async function loadCriticalErrorModal() {
         `Failed to load critical error modal (${response.status})`,
       );
     mount.insertAdjacentHTML('beforeend', await response.text());
-    
   } catch (error) {
     console.error('❌ Critical Error Modal load failed:', error);
   }
@@ -2059,12 +2501,13 @@ function applyLightboxMediaStyles(frameEl, mediaEl, photo, rotationDegrees) {
 
   // Diagnostic: report what the browser actually rendered after layout
   requestAnimationFrame(() => {
-    const fw = frameEl.offsetWidth, fh = frameEl.offsetHeight;
-    const mw = mediaEl.offsetWidth, mh = mediaEl.offsetHeight;
+    const fw = frameEl.offsetWidth,
+      fh = frameEl.offsetHeight;
+    const mw = mediaEl.offsetWidth,
+      mh = mediaEl.offsetHeight;
     const pos = frameEl.style.position;
     const parentClass = frameEl.parentElement?.className || '(no parent)';
     const mediaClass = mediaEl.className || mediaEl.tagName;
-    
   });
 }
 
@@ -2139,7 +2582,9 @@ function reloadOpenLightboxMedia(photoId) {
         }
 
         const currentFrame = content.querySelector('.lightbox-media-frame');
-        const currentImg = currentFrame?.querySelector('img.lightbox-media-element');
+        const currentImg = currentFrame?.querySelector(
+          'img.lightbox-media-element',
+        );
         if (!currentFrame || !currentImg) {
           return;
         }
@@ -2192,7 +2637,9 @@ function getRotateDisabledReason(photo) {
   return null;
 }
 
-function updateLightboxRotateButtonState(photo = state.photos[state.lightboxPhotoIndex]) {
+function updateLightboxRotateButtonState(
+  photo = state.photos[state.lightboxPhotoIndex],
+) {
   const rotateBtn = document.getElementById('lightboxRotateBtn');
   if (!rotateBtn) return;
 
@@ -2205,7 +2652,9 @@ function updateLightboxRotateButtonState(photo = state.photos[state.lightboxPhot
 }
 
 function refreshGridPhotoThumbnail(photoId) {
-  const thumb = document.querySelector(`.photo-thumb[data-photo-id="${photoId}"]`);
+  const thumb = document.querySelector(
+    `.photo-thumb[data-photo-id="${photoId}"]`,
+  );
   if (!thumb) return;
 
   if (thumb.getAttribute('src')) {
@@ -2220,7 +2669,9 @@ function scheduleGridPhotoThumbnailRefresh(photoId, delayMs = 1200) {
 }
 
 function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
-  const photoIndex = state.photos.findIndex((photo) => photo.id === updatedPhoto.id);
+  const photoIndex = state.photos.findIndex(
+    (photo) => photo.id === updatedPhoto.id,
+  );
   if (photoIndex === -1) return;
 
   state.photos[photoIndex] = {
@@ -2241,7 +2692,10 @@ function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
 
 async function handleDuplicateRemovedRotation(photoId, message) {
   delete state.lightboxRotationSessions[photoId];
-  if (state.lightboxOpen && state.photos[state.lightboxPhotoIndex]?.id === photoId) {
+  if (
+    state.lightboxOpen &&
+    state.photos[state.lightboxPhotoIndex]?.id === photoId
+  ) {
     await closeLightbox();
   }
   await loadAndRenderPhotos();
@@ -2326,14 +2780,13 @@ async function processImmediateRotationSession(photoId) {
 async function commitPendingLightboxRotations() {
   const pendingEntries = Object.entries(state.lightboxRotationSessions).filter(
     ([photoId, session]) =>
-      session.mode === 'staged' && getRotationStillNeeded(Number(photoId)) !== 0,
+      session.mode === 'staged' &&
+      getRotationStillNeeded(Number(photoId)) !== 0,
   );
 
   if (pendingEntries.length === 0) {
     return true;
   }
-
-  
 
   for (const [photoIdString, session] of pendingEntries) {
     const photoId = Number(photoIdString);
@@ -2364,7 +2817,6 @@ async function commitPendingLightboxRotations() {
       });
       delete state.lightboxRotationSessions[photoId];
       const saveElapsedMs = performance.now() - saveStartedAt;
-      
     } catch (error) {
       session.displayRotation = session.persistedRotation;
       session.mode = null;
@@ -2387,7 +2839,9 @@ async function handleLightboxRotate() {
   if (state.lightboxClosing) return;
 
   const session = getLightboxRotationSession(photo.id, true);
-  session.displayRotation = normalizeRotationDegrees(session.displayRotation + 90);
+  session.displayRotation = normalizeRotationDegrees(
+    session.displayRotation + 90,
+  );
   invalidatePendingLightboxReloads();
   applyCurrentLightboxPreviewRotation();
 
@@ -2431,11 +2885,9 @@ function wireLightbox() {
       if (isVisible) {
         infoPanel.style.display = 'none';
         if (overlay) overlay.classList.remove('info-open');
-        
       } else {
         infoPanel.style.display = 'block';
         if (overlay) overlay.classList.add('info-open');
-        
       }
     });
   }
@@ -2447,7 +2899,6 @@ function wireLightbox() {
       const overlay = document.getElementById('lightboxOverlay');
       infoPanel.style.display = 'none';
       if (overlay) overlay.classList.remove('info-open');
-      
     });
   }
 
@@ -2465,8 +2916,6 @@ function wireLightbox() {
       const starIcon = starBtn.querySelector('.material-symbols-outlined');
       const isFilled = starIcon.classList.contains('filled');
 
-      
-
       try {
         // Optimistically toggle UI
         starIcon.classList.toggle('filled');
@@ -2482,9 +2931,12 @@ function wireLightbox() {
         }
 
         const result = await response.json();
-        
+
         if (result.duplicate_removed) {
-          if (state.lightboxOpen && state.photos[state.lightboxPhotoIndex]?.id === photoId) {
+          if (
+            state.lightboxOpen &&
+            state.photos[state.lightboxPhotoIndex]?.id === photoId
+          ) {
             await closeLightbox();
           }
           await loadAndRenderPhotos();
@@ -2543,7 +2995,7 @@ function wireLightbox() {
   if (editDateBtn) {
     editDateBtn.addEventListener('click', () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      
+
       openDateEditor(photoId);
     });
   }
@@ -2551,7 +3003,6 @@ function wireLightbox() {
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      
 
       if (!photoId) return;
 
@@ -2640,7 +3091,6 @@ function handleLightboxKeyboard(e) {
     // Don't trigger if photo picker is open (it has its own Enter handler)
     const photoPickerOverlay = document.getElementById('photoPickerOverlay');
     if (photoPickerOverlay && photoPickerOverlay.style.display !== 'none') {
-      
       return;
     }
 
@@ -2652,7 +3102,6 @@ function handleLightboxKeyboard(e) {
         activeElement.tagName === 'TEXTAREA' ||
         activeElement.tagName === 'SELECT')
     ) {
-      
       return; // Let the input handle Enter naturally
     }
 
@@ -2670,11 +3119,9 @@ function handleLightboxKeyboard(e) {
     }
 
     if (primaryBtn) {
-      
       primaryBtn.click();
       e.preventDefault(); // Prevent any default Enter behavior
     } else {
-      
     }
   } else if (e.key === 'ArrowLeft' && state.lightboxOpen) {
     navigateLightbox(-1);
@@ -2770,7 +3217,9 @@ function createPlaceholder(photo, dims, isDebug = false) {
  * Helper function to load media into lightbox content
  */
 function loadMediaIntoContent(content, photo, isVideo, options = {}) {
-  const rotationDegrees = normalizeRotationDegrees(options.rotationDegrees || 0);
+  const rotationDegrees = normalizeRotationDegrees(
+    options.rotationDegrees || 0,
+  );
   const dims = calculateMediaDimensions(photo, rotationDegrees);
 
   if (isVideo) {
@@ -2855,15 +3304,12 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
         // Check if failure was due to database corruption
         try {
           const response = await fetch(`/api/photo/${photo.id}/file`);
-          
 
           if (!response.ok) {
             const contentType = response.headers.get('content-type');
-            
 
             if (contentType && contentType.includes('application/json')) {
               const data = await response.json();
-              
 
               if (checkForDatabaseCorruption(data)) {
                 return; // Corruption dialog shown, stop here
@@ -2952,35 +3398,37 @@ async function openLightbox(photoIndex) {
   const infoFilename = document.getElementById('infoFilename');
 
   if (infoDate) {
-    // Convert EXIF format (YYYY:MM:DD HH:MM:SS) to ISO format (YYYY-MM-DD HH:MM:SS)
-    const dateStr = photo.date.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
-    const date = new Date(dateStr);
+    const date = parsePhotoDate(photo);
+    const month = photo.month;
+    const canJumpToMonth = isCalendarMonthKey(month);
 
-    // Format: "Nov 2, 2025 at 3:45 PM"
-    const dateString = date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-    const timeString = date.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-    infoDate.textContent = `${dateString} at ${timeString}`;
+    if (date) {
+      const dateString = date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+      const timeString = date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      });
+      infoDate.textContent = `${dateString} at ${timeString}`;
+    } else {
+      infoDate.textContent = 'No date in library';
+    }
 
-    // Wire up click to jump to month in grid
-    infoDate.onclick = (e) => {
-      e.preventDefault();
-      const month = photo.month; // YYYY-MM format
-      
-
-      // Set flag to navigate to month instead of photo
-      state.navigateToMonth = month;
-
-      // Close lightbox
-      closeLightbox();
-    };
+    if (date && canJumpToMonth) {
+      infoDate.onclick = (e) => {
+        e.preventDefault();
+        state.navigateToMonth = month;
+        closeLightbox();
+      };
+      infoDate.style.cursor = 'pointer';
+    } else {
+      infoDate.onclick = null;
+      infoDate.style.cursor = 'default';
+    }
   }
 
   if (infoFilename) {
@@ -2996,7 +3444,7 @@ async function openLightbox(photoIndex) {
       const filename = photo.path
         ? photo.path.split('/').pop()
         : photo.filename || photo.id;
-      
+
       try {
         const response = await fetch(`/api/photo/${photo.id}/reveal`, {
           method: 'POST',
@@ -3006,7 +3454,6 @@ async function openLightbox(photoIndex) {
           const error = await response.json();
           console.error('❌ Failed to reveal in Finder:', error);
         } else {
-          
         }
       } catch (error) {
         console.error('❌ Error revealing in Finder:', error);
@@ -3071,13 +3518,12 @@ async function closeLightbox() {
 
   state.lightboxClosing = true;
   updateLightboxRotateButtonState();
-  
 
   const saved = await commitPendingLightboxRotations();
   if (!saved) {
     state.lightboxClosing = false;
     updateLightboxRotateButtonState();
-    
+
     return;
   }
 
@@ -3121,12 +3567,11 @@ async function closeLightbox() {
     // Scroll to month header after lightbox closes
     setTimeout(() => {
       const monthSection = document.getElementById(`month-${month}`);
-      
+
       if (monthSection) {
         const monthHeader = monthSection.querySelector('.month-header');
         const target = monthHeader || monthSection;
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        
       } else {
         console.warn('⚠️ Month section not found:', month);
       }
@@ -3134,7 +3579,6 @@ async function closeLightbox() {
   }
 
   state.lightboxClosing = false;
-  
 }
 
 /**
@@ -3174,7 +3618,6 @@ function navigateLightbox(direction) {
 
   // Bounds check
   if (newIndex < 0 || newIndex >= state.photos.length) {
-    
     return;
   }
 
@@ -3209,61 +3652,122 @@ async function fetchPhotos(offset = 0, limit = 100) {
  * Load ALL photos metadata at once (lightweight)
  */
 async function loadAndRenderPhotos(append = false, options = {}) {
-  if (state.loading) return;
+  const {
+    throwOnError = false,
+    generation = state.libraryGeneration,
+    sortOrder = state.currentSortOrder,
+  } = options;
 
+  if (currentPhotoLoadAbortController) {
+    currentPhotoLoadAbortController.abort();
+  }
+
+  const loadId = ++photoLoadRequestId;
+  const abortController = new AbortController();
+  currentPhotoLoadAbortController = abortController;
   state.loading = true;
-  const { throwOnError = false } = options;
 
-  
+  const loadPromise = (async () => {
+    try {
+      // Fetch ALL photos (no limit) - just id, date, month, file_type
+      const response = await fetch(`/api/photos?sort=${sortOrder}`, {
+        signal: abortController.signal,
+      });
+      const data = await response.json();
+
+      const isStaleLoad =
+        abortController.signal.aborted ||
+        loadId !== photoLoadRequestId ||
+        !isCurrentLibraryGeneration(generation) ||
+        sortOrder !== state.currentSortOrder;
+
+      if (isStaleLoad) {
+        return false;
+      }
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load photos');
+      }
+
+      // Check for database corruption
+      if (checkForDatabaseCorruption(data)) {
+        throw new Error(
+          data.error || data.message || 'Database appears corrupted',
+        );
+      }
+
+      state.photos = data.photos;
+      state.hasDatabase = true; // Database exists if we successfully loaded photos
+
+      // Reset shift-select anchor when reloading (indices may have changed)
+      if (!append) {
+        state.lastClickedIndex = null;
+      }
+
+      // Render entire grid structure immediately (placeholders)
+      renderPhotoGrid(state.photos, false);
+
+      // Setup lazy loading for thumbnails
+      setupThumbnailLazyLoading();
+
+      // Update utility menu availability after loading photos
+      updateUtilityMenuAvailability();
+
+      // Update date picker to reflect current photo years (show/hide as needed)
+      await populateDatePicker();
+
+      const isStaleAfterPicker =
+        abortController.signal.aborted ||
+        loadId !== photoLoadRequestId ||
+        !isCurrentLibraryGeneration(generation) ||
+        sortOrder !== state.currentSortOrder;
+
+      if (isStaleAfterPicker) {
+        return false;
+      }
+
+      // Re-enable app bar buttons after transition
+      enableAppBarButtons();
+      return true;
+    } catch (error) {
+      const isExpectedAbort =
+        error.name === 'AbortError' || abortController.signal.aborted;
+      const isStaleError =
+        loadId !== photoLoadRequestId || !isCurrentLibraryGeneration(generation);
+
+      if (isExpectedAbort || isStaleError) {
+        return false;
+      }
+      console.error('❌ Error loading photos:', error);
+      state.hasDatabase = false; // Mark database as unavailable on error
+      throw error;
+    } finally {
+      if (currentPhotoLoad?.id === loadId) {
+        currentPhotoLoad = null;
+      }
+      if (currentPhotoLoadAbortController === abortController) {
+        currentPhotoLoadAbortController = null;
+      }
+      state.loading = currentPhotoLoad !== null;
+    }
+  })();
+
+  currentPhotoLoad = {
+    id: loadId,
+    append,
+    generation,
+    sortOrder,
+    promise: loadPromise,
+  };
+
+  if (throwOnError) {
+    return await loadPromise;
+  }
 
   try {
-    // Fetch ALL photos (no limit) - just id, date, month, file_type
-    const response = await fetch(`/api/photos?sort=${state.currentSortOrder}`);
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to load photos');
-    }
-
-    // Check for database corruption
-    if (checkForDatabaseCorruption(data)) {
-      if (throwOnError) {
-        throw new Error(data.error || data.message || 'Database appears corrupted');
-      }
-      return;
-    }
-
-    state.photos = data.photos;
-    state.hasDatabase = true; // Database exists if we successfully loaded photos
-    
-
-    // Reset shift-select anchor when reloading (indices may have changed)
-    if (!append) {
-      state.lastClickedIndex = null;
-    }
-
-    // Render entire grid structure immediately (placeholders)
-    renderPhotoGrid(state.photos, false);
-
-    // Setup lazy loading for thumbnails
-    setupThumbnailLazyLoading();
-
-    // Update utility menu availability after loading photos
-    updateUtilityMenuAvailability();
-
-    // Update date picker to reflect current photo years (show/hide as needed)
-    await populateDatePicker();
-
-    // Re-enable app bar buttons after transition
-    enableAppBarButtons();
-  } catch (error) {
-    console.error('❌ Error loading photos:', error);
-    state.hasDatabase = false; // Mark database as unavailable on error
-    if (throwOnError) {
-      throw error;
-    }
-  } finally {
-    state.loading = false;
+    return await loadPromise;
+  } catch {
+    return false;
   }
 }
 
@@ -3322,8 +3826,6 @@ function setupThumbnailLazyLoading() {
   // Observe all thumbnail images that don't have src yet
   const thumbnails = document.querySelectorAll('.photo-thumb:not([src])');
   thumbnails.forEach((thumb) => thumbnailObserver.observe(thumb));
-
-  
 }
 
 // =====================
@@ -3331,7 +3833,7 @@ function setupThumbnailLazyLoading() {
 // =====================
 
 /**
- * Render empty state (used for both first-run and empty library)
+ * First run or no library configured — open library + add photos
  */
 function renderFirstRunEmptyState() {
   const container = document.getElementById('photoContainer');
@@ -3340,7 +3842,7 @@ function renderFirstRunEmptyState() {
   container.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
       <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">No photos to display</div>
+        <div style="font-size: 18px; margin-bottom: 8px;">Create a library</div>
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
@@ -3349,6 +3851,29 @@ function renderFirstRunEmptyState() {
           <span>Open library</span>
         </button>
         <button class="btn btn-primary" onclick="triggerImportWithLibraryCheck()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
+          <span>Add photos</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Library is open but contains no photos — add photos only
+ */
+function renderEmptyLibraryState() {
+  const container = document.getElementById('photoContainer');
+  if (!container) return;
+
+  container.innerHTML = `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
+      <div style="text-align: center;">
+        <div style="font-size: 18px; margin-bottom: 8px;">This library is empty</div>
+        <div style="font-size: 14px; color: var(--text-secondary);">Add some photos to get started.</div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn btn-primary" onclick="triggerImport()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
           <span>Add photos</span>
         </button>
@@ -3370,8 +3895,11 @@ function renderPhotoGrid(photos, append = false) {
 
   if (!photos || photos.length === 0) {
     if (!append) {
-      // Use the shared empty state function instead of duplicating HTML
-      renderFirstRunEmptyState();
+      if (state.hasDatabase) {
+        renderEmptyLibraryState();
+      } else {
+        renderFirstRunEmptyState();
+      }
     }
     return;
   }
@@ -3379,25 +3907,31 @@ function renderPhotoGrid(photos, append = false) {
   // Group photos by month
   const photosByMonth = {};
   photos.forEach((photo, idx) => {
-    if (!photo.month) return;
-    if (!photosByMonth[photo.month]) {
-      photosByMonth[photo.month] = [];
+    const monthKey = photo.month || 'undated';
+    if (!photosByMonth[monthKey]) {
+      photosByMonth[monthKey] = [];
     }
     // Use globalIndex if provided, otherwise use idx
     const globalIndex =
       photo.globalIndex !== undefined ? photo.globalIndex : idx;
-    photosByMonth[photo.month].push({ ...photo, globalIndex });
+    photosByMonth[monthKey].push({ ...photo, globalIndex });
   });
 
   // Render each month section
   let html = '';
 
   Object.keys(photosByMonth).forEach((month) => {
-    const [year, monthNum] = month.split('-');
-    const monthName = new Date(
-      parseInt(year),
-      parseInt(monthNum) - 1,
-    ).toLocaleString('default', { month: 'long' });
+    let monthLabel;
+    if (month === 'undated') {
+      monthLabel = 'Undated';
+    } else {
+      const [year, monthNum] = month.split('-');
+      const monthName = new Date(
+        parseInt(year, 10),
+        parseInt(monthNum, 10) - 1,
+      ).toLocaleString('default', { month: 'long' });
+      monthLabel = `${monthName} ${year}`;
+    }
 
     // Check if this month section already exists (for append mode)
     const existingSection = append
@@ -3437,7 +3971,7 @@ function renderPhotoGrid(photos, append = false) {
       html += `
         <div class="month-section" id="month-${month}" data-month="${month}">
           <div class="month-header">
-            <span class="month-label">${monthName} ${year}</span>
+            <span class="month-label">${monthLabel}</span>
             <div class="month-select-circle"></div>
           </div>
           <div class="photo-grid">
@@ -3556,26 +4090,19 @@ function togglePhotoSelection(card, e) {
     const start = Math.min(state.lastClickedIndex, index);
     const end = Math.max(state.lastClickedIndex, index);
 
-    
-    
-
     // Get all photo cards in the DOM
     const allCards = Array.from(document.querySelectorAll('.photo-card'));
-    
 
     // Debug: show sample of indices
     const sampleIndices = allCards
       .slice(0, 10)
       .map((c) => parseInt(c.dataset.index));
-    
 
     // Filter to cards within the range
     const cardsInRange = allCards.filter((c) => {
       const cardIndex = parseInt(c.dataset.index);
       return cardIndex >= start && cardIndex <= end;
     });
-
-    
 
     // Debug: if we found fewer than expected, show what's missing
     if (cardsInRange.length < end - start + 1) {
@@ -3599,18 +4126,15 @@ function togglePhotoSelection(card, e) {
     });
 
     updateDeleteButtonVisibility();
-    
   }
   // NORMAL CLICK: Toggle single
   else {
     if (card.classList.contains('selected')) {
       card.classList.remove('selected');
       state.selectedPhotos.delete(id);
-      
     } else {
       card.classList.add('selected');
       state.selectedPhotos.add(id);
-      
     }
 
     // Update last clicked index for next shift-select
@@ -3649,8 +4173,6 @@ function wireMonthSelectors() {
         const start = Math.min(state.lastClickedIndex, lastPhotoIndex);
         const end = Math.max(state.lastClickedIndex, lastPhotoIndex);
 
-        
-
         // Get all photo cards and select those in range
         const allCards = Array.from(document.querySelectorAll('.photo-card'));
         const cardsInRange = allCards.filter((c) => {
@@ -3663,8 +4185,6 @@ function wireMonthSelectors() {
           card.classList.add('selected');
           state.selectedPhotos.add(cardId);
         });
-
-        
 
         // Update anchor to this month's last photo
         state.lastClickedIndex = lastPhotoIndex;
@@ -3703,7 +4223,6 @@ function toggleMonthSelection(month) {
       const id = parseInt(card.dataset.id);
       state.selectedPhotos.delete(id);
     });
-    
   } else {
     // Select all photos in this month
     photoCards.forEach((card) => {
@@ -3711,7 +4230,6 @@ function toggleMonthSelection(month) {
       const id = parseInt(card.dataset.id);
       state.selectedPhotos.add(id);
     });
-    
   }
 
   updateDeleteButtonVisibility();
@@ -3768,8 +4286,6 @@ async function deletePhotos(photoIds) {
     }
 
     const result = await response.json();
-    
-    
 
     // Clear selection and shift-select anchor
     state.selectedPhotos.clear();
@@ -3802,8 +4318,6 @@ async function deletePhotos(photoIds) {
  */
 async function undoDateEdit(originalDates) {
   try {
-    
-
     // Restore each photo to its original date
     const promises = originalDates.map(({ id, originalDate }) =>
       fetch('/api/photo/update_date', {
@@ -3819,8 +4333,6 @@ async function undoDateEdit(originalDates) {
     const allSucceeded = responses.every((r) => r.ok);
 
     if (allSucceeded) {
-      
-
       // Reload grid to reflect restored dates
       await loadAndRenderPhotos(false);
 
@@ -3850,7 +4362,6 @@ async function undoDelete(photoIds) {
     }
 
     const result = await response.json();
-    
 
     // Reload grid to show restored photos
     await loadAndRenderPhotos(false);
@@ -3981,7 +4492,6 @@ async function loadImportOverlay() {
     const html = await response.text();
     mount.insertAdjacentHTML('beforeend', html);
     wireImportOverlay();
-    
   } catch (error) {
     console.error('❌ Import overlay load failed:', error);
   }
@@ -4135,7 +4645,6 @@ function scrollToImportedPhoto(photoIds) {
       `[data-photo-id="${firstVisibleId}"]`,
     );
     if (element) {
-      
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
       // Optional: briefly highlight the photo
@@ -4185,8 +4694,6 @@ async function showImportComplete() {
       // Extract month from date (YYYY:MM:DD HH:MM:SS -> YYYY-MM)
       const dateStr = firstImported.date.replace(/:/g, '-');
       const monthStr = dateStr.substring(0, 7); // YYYY-MM
-
-      
 
       // Wait for grid to render, then scroll to the month section
       setTimeout(() => {
@@ -4298,8 +4805,6 @@ async function undoImport() {
   }
 
   try {
-    
-
     // Delete all imported photos
     const response = await fetch('/api/photos/delete', {
       method: 'POST',
@@ -4312,7 +4817,6 @@ async function undoImport() {
     }
 
     const result = await response.json();
-    
 
     showToast(`Undid import of ${result.deleted} photos`, null);
     closeImportOverlay();
@@ -4351,7 +4855,6 @@ async function loadUtilitiesMenu() {
 
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
-        
         hideUtilitiesMenu();
         browseSwitchLibrary();
       });
@@ -4359,7 +4862,6 @@ async function loadUtilitiesMenu() {
 
     if (cleanOrganizeBtn) {
       cleanOrganizeBtn.addEventListener('click', () => {
-        
         hideUtilitiesMenu();
         openUpdateIndexOverlay();
       });
@@ -4399,16 +4901,12 @@ async function toggleUtilitiesMenu() {
   const menu = document.getElementById('utilitiesMenu');
   const utilitiesBtn = document.getElementById('utilitiesBtn');
 
-  
-
   if (!menu || !utilitiesBtn) {
     console.warn('⚠️ Menu or button not found');
     return;
   }
 
   const isVisible = menu.style.display === 'block';
-
-  
 
   if (isVisible) {
     hideUtilitiesMenu();
@@ -4428,8 +4926,6 @@ async function toggleUtilitiesMenu() {
     menu.style.top = `${btnRect.bottom + 8}px`;
     menu.style.right = `${window.innerWidth - btnRect.right + insetExtra}px`;
     menu.style.display = 'block';
-
-    
   }
 }
 
@@ -4456,8 +4952,6 @@ function hideUtilitiesMenu() {
 function updateUtilityMenuAvailability() {
   const hasDatabase = state.hasDatabase;
   const hasPhotos = state.photos && state.photos.length > 0;
-
-  
 
   // Switch library - ALWAYS available (never disabled)
   enableMenuItem('switchLibraryBtn', true);
@@ -4565,7 +5059,6 @@ async function openUpdateIndexOverlay() {
   // Check if already open
   const existingOverlay = document.getElementById('updateIndexOverlay');
   if (existingOverlay && existingOverlay.style.display === 'flex') {
-    
     return;
   }
 
@@ -4620,7 +5113,10 @@ async function openUpdateIndexOverlay() {
       updateUpdateIndexUI('Scan complete. Ready to continue?', false);
       showUpdateIndexButtons('cancel', 'proceed');
     } else {
-      updateUpdateIndexUI('Library is already clean. No changes required.', false);
+      updateUpdateIndexUI(
+        'Library is already clean. No changes required.',
+        false,
+      );
       showUpdateIndexButtons('done');
     }
   } catch (error) {
@@ -4692,7 +5188,8 @@ function showUpdateIndexStats() {
   if (statsEl) statsEl.style.display = 'flex';
   if (misfiledEl) misfiledEl.textContent = updateIndexState.misfiledMedia;
   if (duplicatesEl) duplicatesEl.textContent = updateIndexState.duplicates;
-  if (unsupportedEl) unsupportedEl.textContent = updateIndexState.unsupportedFiles;
+  if (unsupportedEl)
+    unsupportedEl.textContent = updateIndexState.unsupportedFiles;
   if (metadataEl) metadataEl.textContent = updateIndexState.metadataCleanup;
   if (dbRepairsEl) dbRepairsEl.textContent = updateIndexState.databaseRepairs;
 }
@@ -4754,30 +5251,41 @@ function renderUpdateIndexDetails() {
     const duplicateCopiesRemoved = resultStats.duplicates_trashed || 0;
     const otherTrashMoves = Math.max(
       0,
-      (resultStats.moved_to_trash || 0) - duplicateCopiesRemoved
+      (resultStats.moved_to_trash || 0) - duplicateCopiesRemoved,
     );
     const changesApplied = [];
 
     if (duplicateCopiesRemoved > 0) {
-      changesApplied.push(`Duplicate copies removed: ${duplicateCopiesRemoved}`);
+      changesApplied.push(
+        `Duplicate copies removed: ${duplicateCopiesRemoved}`,
+      );
     }
     if (otherTrashMoves > 0) {
-      changesApplied.push(`Unsupported files moved to trash: ${otherTrashMoves}`);
+      changesApplied.push(
+        `Unsupported files moved to trash: ${otherTrashMoves}`,
+      );
     }
     if ((resultStats.metadata_fixed || 0) > 0) {
-      changesApplied.push(`Metadata cleanup applied: ${resultStats.metadata_fixed}`);
+      changesApplied.push(
+        `Metadata cleanup applied: ${resultStats.metadata_fixed}`,
+      );
     }
     if ((resultStats.media_moved || 0) > 0) {
-      changesApplied.push(`Media moved into canonical folders: ${resultStats.media_moved}`);
+      changesApplied.push(
+        `Media moved into canonical folders: ${resultStats.media_moved}`,
+      );
     }
     if ((resultStats.folders_removed || 0) > 0) {
-      changesApplied.push(`Empty folders removed: ${resultStats.folders_removed}`);
+      changesApplied.push(
+        `Empty folders removed: ${resultStats.folders_removed}`,
+      );
     }
     if ((resultStats.db_rows_rebuilt || 0) > 0) {
       changesApplied.push('Database updated to match library');
     }
 
-    html += '<div class="update-detail-section"><strong>Changes Applied:</strong><ul>';
+    html +=
+      '<div class="update-detail-section"><strong>Changes Applied:</strong><ul>';
     if (changesApplied.length === 0) {
       html += '<li>No visible library changes were required.</li>';
     } else {
@@ -4949,8 +5457,6 @@ async function loadRebuildThumbnailsOverlay() {
           }
         });
       });
-
-    
   } catch (error) {
     console.error('❌ Failed to load rebuild thumbnails overlay:', error);
   }
@@ -4986,8 +5492,6 @@ async function openRebuildThumbnailsOverlay() {
       throw new Error(result.error || 'Failed to check thumbnails');
     }
 
-    
-
     // If no thumbnails exist, show info message with Done button only
     if (result.thumbnail_count === 0) {
       statusText.innerHTML =
@@ -5010,8 +5514,6 @@ async function openRebuildThumbnailsOverlay() {
     proceedBtn.style.display = 'none';
     doneBtn.style.display = 'block';
   }
-
-  
 }
 
 /**
@@ -5034,8 +5536,6 @@ async function executeRebuildThumbnails() {
   const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
 
   try {
-    
-
     // Immediately show Phase 2 (spinner)
     statusText.innerHTML =
       '<p>Clearing thumbnails<span class="import-spinner"></span></p>';
@@ -5054,12 +5554,8 @@ async function executeRebuildThumbnails() {
       throw new Error(result.error || 'Failed to rebuild thumbnails');
     }
 
-    
-
     // Visual confirmation: Clear all thumbnail images
     if (result.cleared_count > 0) {
-      
-
       // Clear the grid to show user that purge happened
       const container = document.getElementById('photoContainer');
       if (container) {
@@ -5070,7 +5566,7 @@ async function executeRebuildThumbnails() {
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       // Reload grid with fresh thumbnails
-      
+
       await loadAndRenderPhotos(false);
     }
 
@@ -5127,8 +5623,6 @@ async function loadRebuildDatabaseOverlay() {
     document
       .getElementById('rebuildDatabaseDoneBtn')
       .addEventListener('click', hideRebuildDatabaseOverlay);
-
-    
   } catch (error) {
     console.error('❌ Rebuild Database Overlay load failed:', error);
   }
@@ -5160,8 +5654,6 @@ async function loadSwitchLibraryOverlay() {
     document
       .getElementById('switchLibraryResetBtn')
       ?.addEventListener('click', resetLibraryConfig);
-
-    
   } catch (error) {
     console.error('❌ Failed to load switch library overlay:', error);
   }
@@ -5177,8 +5669,6 @@ async function loadCreateLibraryOverlay() {
     document.body.insertAdjacentHTML('beforeend', html);
 
     // Event listeners wired up when showing overlay
-
-    
   } catch (error) {
     console.error('❌ Failed to load create library overlay:', error);
   }
@@ -5192,7 +5682,6 @@ async function loadNameLibraryOverlay() {
     const response = await fetch('/fragments/nameLibraryOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
   } catch (error) {
     console.error('❌ Failed to load name library overlay:', error);
   }
@@ -5507,11 +5996,11 @@ async function openSwitchLibraryOverlay() {
   const currentLibrary = await fetchCurrentLibraryInfo();
   const pathElement = document.getElementById('currentLibraryPath');
   if (pathElement) {
-    pathElement.textContent = currentLibrary?.library_path || '(unable to load)';
+    pathElement.textContent =
+      currentLibrary?.library_path || '(unable to load)';
   }
 
   document.getElementById('switchLibraryOverlay').style.display = 'block';
-  
 }
 
 /**
@@ -5549,7 +6038,6 @@ async function loadTerraformChoiceOverlay() {
     const response = await fetch('/fragments/terraformChoiceOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
   } catch (error) {
     console.error('❌ Failed to load terraform choice overlay:', error);
   }
@@ -5613,7 +6101,6 @@ async function loadTerraformPreviewOverlay() {
     const response = await fetch('/fragments/terraformPreviewOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
   } catch (error) {
     console.error('❌ Failed to load terraform preview overlay:', error);
   }
@@ -5675,7 +6162,6 @@ async function loadTerraformWarningOverlay() {
     const response = await fetch('/fragments/terraformWarningOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
   } catch (error) {
     console.error('❌ Failed to load terraform warning overlay:', error);
   }
@@ -5736,7 +6222,6 @@ async function loadTerraformProgressOverlay() {
     const response = await fetch('/fragments/terraformProgressOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
   } catch (error) {
     console.error('❌ Failed to load terraform progress overlay:', error);
   }
@@ -5750,7 +6235,6 @@ async function loadTerraformCompleteOverlay() {
     const response = await fetch('/fragments/terraformCompleteOverlay.html');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    
   } catch (error) {
     console.error('❌ Failed to load terraform complete overlay:', error);
   }
@@ -5829,7 +6313,7 @@ async function executeTerraformFlow(options = {}) {
     }
 
     // Step 1: Preview
-    
+
     const continuePreview = await showTerraformPreviewDialog({
       path,
       photo_count: finalPhotoCount,
@@ -5837,12 +6321,10 @@ async function executeTerraformFlow(options = {}) {
     });
 
     if (!continuePreview) {
-      
       return false;
     }
 
     // Step 2: Warning
-    
 
     // Estimate time: ~2 seconds per file
     const estimated_seconds = Math.ceil(media_count * 2);
@@ -5858,12 +6340,10 @@ async function executeTerraformFlow(options = {}) {
     });
 
     if (!continueWarning) {
-      
       return false;
     }
 
     // Step 3: Execute terraform
-    
 
     // Load progress overlay
     let progressOverlay = document.getElementById('terraformProgressOverlay');
@@ -5946,7 +6426,7 @@ async function executeTerraformFlow(options = {}) {
     progressOverlay.style.display = 'none';
 
     // Step 4: Show completion
-    
+
     await showTerraformCompleteDialog({
       processed,
       duplicates,
@@ -6043,7 +6523,11 @@ async function restorePreviousLibraryAfterFailedSwitch(previousLibrary) {
       throw new Error(result.error || 'Failed to restore previous library');
     }
 
-    await loadAndRenderPhotos(false, { throwOnError: true });
+    const restoredGeneration = advanceLibraryGeneration();
+    await loadAndRenderPhotos(false, {
+      throwOnError: true,
+      generation: restoredGeneration,
+    });
     return true;
   } catch (error) {
     console.error('❌ Failed to restore previous library:', error);
@@ -6051,7 +6535,17 @@ async function restorePreviousLibraryAfterFailedSwitch(previousLibrary) {
   }
 }
 
+function advanceLibraryGeneration() {
+  state.libraryGeneration += 1;
+  return state.libraryGeneration;
+}
+
+function isCurrentLibraryGeneration(generation) {
+  return generation === state.libraryGeneration;
+}
+
 function renderSafeLibraryFallback() {
+  advanceLibraryGeneration();
   state.photos = [];
   state.hasDatabase = false;
   state.selectedPhotos.clear();
@@ -6101,18 +6595,312 @@ function enableAppBarButtons() {
   updateUtilityMenuAvailability();
 }
 
+async function createAndSwitchLibraryInSubfolder(parentPath) {
+  const libraryName = await showNameLibraryDialog({
+    title: 'Name your library',
+    parentPath,
+  });
+
+  if (!libraryName) {
+    return false;
+  }
+
+  const libraryPath = `${parentPath}/${libraryName}`;
+  const createResponse = await fetch('/api/library/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ library_path: libraryPath }),
+  });
+
+  const createResult = await createResponse.json();
+  if (!createResponse.ok) {
+    throw new Error(createResult.error || 'Failed to create library');
+  }
+
+  return await switchToLibrary(libraryPath, createResult.db_path);
+}
+
+/**
+ * Phrase after "It should take " — avoids "about less than a minute".
+ * Matches backend `estimate_duration` strings (e.g. "2-3 minutes", "1 hour" ranges).
+ */
+function formatDurationEstimateForItShouldTake(estimatedTime) {
+  const fallback = 'less than a minute';
+  const raw = (estimatedTime || fallback).trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (raw.toLowerCase() === 'less than a minute') {
+    return fallback;
+  }
+  return `about ${raw}`;
+}
+
+async function showRecoverDatabaseDialog() {
+  return await showDialog(
+    'Add new database',
+    "The selected folder doesn't have a usable library database. Add a new database to continue.",
+    [
+      { text: 'Cancel', value: 'cancel', primary: false },
+      { text: 'Add database', value: 'continue', primary: true },
+    ],
+  );
+}
+
+async function showGeneralPurposeFolderWarningDialog() {
+  return await showDialog(
+    'Use this folder for your library?',
+    'This folder has many non-media files. You can continue, or create a subfolder instead.',
+    [
+      { text: 'Cancel', value: 'cancel', primary: false },
+      {
+        text: 'Create subfolder',
+        value: 'create_subfolder',
+        primary: true,
+      },
+      { text: 'Continue', value: 'continue', primary: false },
+    ],
+  );
+}
+
+async function showRecoverMediaDialog(options = {}) {
+  const count = Number(options.media_count || 0).toLocaleString();
+  const eta = options.estimated_time || 'less than a minute';
+  return await showDialog(
+    'Recover media',
+    `This folder has ${count} untracked media files. It should take ${formatDurationEstimateForItShouldTake(eta)} to process them. Add them to your library?`,
+    [
+      { text: 'Cancel', value: 'cancel', primary: false },
+      { text: 'See my library', value: 'see_library', primary: false },
+      { text: 'Add media', value: 'add_media', primary: true },
+    ],
+  );
+}
+
+async function scanRecoverMediaAfterOpen(fallback = {}, streamOptions = {}) {
+  const { signal } = streamOptions;
+  try {
+    const response = await fetch('/api/library/make-perfect/scan', { signal });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to scan recovered library');
+    }
+
+    const summary = data.summary || {};
+    const scannedAddableCount = Number(summary.database_repairs);
+    return {
+      // `database_repairs` is the number of files the recovery flow can add.
+      // `fallback.media_count` is only the raw folder count used when scan fails.
+      media_count: Number.isFinite(scannedAddableCount)
+        ? Math.max(scannedAddableCount, 0)
+        : Number(fallback.media_count) || 0,
+      duplicate_count: summary.duplicates ?? 0,
+      incompatible_count: summary.unsupported_files ?? 0,
+      estimated_time: fallback.media_eta || 'less than a minute',
+    };
+  } catch (error) {
+    console.warn('⚠️ Failed to scan recovered media:', error);
+    return {
+      media_count: fallback.media_count || 0,
+      duplicate_count: 0,
+      incompatible_count: 0,
+      estimated_time: fallback.media_eta || 'less than a minute',
+    };
+  }
+}
+
+async function runLibraryRecoveryJourney(selectedPath, checkResult) {
+  libraryRecoveryState.hasSwitchedLibrary = false;
+  setLibraryRecoveryShellHidden(true);
+  let failureStage = 'recover_database';
+  const recoveryJourneyAbort = new AbortController();
+
+  await showLibraryRecoveryDockCard({
+    title: 'Scanning library',
+    body: 'Reviewing the database and searching for available media.',
+    statusText: 'Preparing your library',
+    statusSpinner: true,
+    showCloseButton: true,
+    onClose: () => recoveryJourneyAbort.abort(),
+  });
+
+  try {
+    const recoverResponse = await fetch('/api/library/recover-database', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: selectedPath }),
+      signal: recoveryJourneyAbort.signal,
+    });
+    const recoverResult = await recoverResponse.json();
+
+    if (!recoverResponse.ok) {
+      throw new Error(recoverResult.error || 'Failed to recover database');
+    }
+
+    if (recoveryJourneyAbort.signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    failureStage = 'switch';
+    await switchToLibrary(selectedPath, recoverResult.db_path, {
+      deferPhotoReload: true,
+      skipTransitionOverlay: true,
+      suppressSuccessToast: true,
+      suppressFailureToast: true,
+      throwOnError: true,
+      signal: recoveryJourneyAbort.signal,
+    });
+    libraryRecoveryState.hasSwitchedLibrary = true;
+    failureStage = 'scan';
+
+    const recoverMediaInfo = await scanRecoverMediaAfterOpen(
+      {
+        media_count: checkResult.media_count || 0,
+        media_eta: checkResult.media_eta || 'less than a minute',
+      },
+      { signal: recoveryJourneyAbort.signal },
+    );
+
+    if (!recoverMediaInfo.media_count) {
+      await loadAndRenderPhotos(false, { throwOnError: true });
+      finishLibraryRecoveryJourney();
+      return true;
+    }
+
+    const mediaCount = Number(recoverMediaInfo.media_count || 0);
+    const mediaCountLabel = mediaCount.toLocaleString();
+    const mediaFileLabel = mediaCount === 1 ? 'media file' : 'media files';
+    const addClosingPhrase =
+      mediaCount === 1 ? 'Add the file' : 'Add the files';
+    const duplicateCount = Number(recoverMediaInfo.duplicate_count ?? 0);
+    const incompatibleCount = Number(recoverMediaInfo.incompatible_count ?? 0);
+    const recoverMediaChoice = await promptLibraryRecoveryDock({
+      title: 'Scan complete',
+      body: `This folder has ${mediaCountLabel} ${mediaFileLabel} that could be added to your library. It should take ${formatDurationEstimateForItShouldTake(recoverMediaInfo.estimated_time)}. ${addClosingPhrase} or go directly to your library.`,
+      stats: [
+        { label: 'Media files', value: mediaCount },
+        { label: 'Duplicates', value: duplicateCount },
+        { label: 'Incompatible', value: incompatibleCount },
+      ],
+      actions: [
+        { text: 'Cancel', value: 'cancel', primary: false },
+        { text: 'See my library', value: 'see_library', primary: false },
+        { text: 'Add media', value: 'add_media', primary: true },
+      ],
+    });
+
+    if (recoverMediaChoice !== 'add_media') {
+      await loadAndRenderPhotos(false, { throwOnError: true });
+      finishLibraryRecoveryJourney();
+      return true;
+    }
+
+    const rebuildAbort = new AbortController();
+    libraryRecoveryState.rebuildTotal = mediaCount;
+    libraryRecoveryState.rebuildAdded = 0;
+    let rebuildDismissed = false;
+    const dismissRebuild = () => {
+      if (rebuildDismissed) {
+        return;
+      }
+      rebuildDismissed = true;
+      rebuildAbort.abort();
+      finishLibraryRecoveryJourney();
+    };
+    const continueToLibrary = async () => {
+      try {
+        await loadAndRenderPhotos(false, { throwOnError: true });
+        finishLibraryRecoveryJourney();
+      } catch (error) {
+        console.error('❌ Failed to show recovered library:', error);
+        showToast(`Error: ${error.message}`);
+      }
+    };
+
+    await showLibraryRecoveryDockCard({
+      title: 'Rebuilding library',
+      body: `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database.`,
+      stats: [
+        { label: 'Added', value: 0 },
+        { label: 'Total', value: mediaCount },
+      ],
+      showCloseButton: true,
+      onClose: dismissRebuild,
+      actionsJustify: 'flex-end',
+      actions: [
+        {
+          text: 'Cancel',
+          primary: false,
+          onClick: dismissRebuild,
+        },
+        {
+          text: 'Continue',
+          primary: true,
+          onClick: continueToLibrary,
+        },
+      ],
+    });
+
+    try {
+      await streamMakeLibraryPerfect({
+        signal: rebuildAbort.signal,
+        onProgress: updateLibraryRecoveryMakePerfectProgress,
+      });
+      await loadAndRenderPhotos(false, { throwOnError: true });
+      finishLibraryRecoveryJourney();
+      showToast('Library ready');
+      return true;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        if (!rebuildDismissed) {
+          finishLibraryRecoveryJourney();
+        }
+        return true;
+      }
+      console.error('❌ Recover media failed:', error);
+      const failureCopy = getRecoveryFailureCopy('add_media', true);
+      await promptLibraryRecoveryDock({
+        ...failureCopy,
+        actions: [
+          { text: 'Close', value: 'close', primary: false },
+          { text: 'See my library', value: 'see_library', primary: true },
+        ],
+      });
+      finishLibraryRecoveryJourney();
+      return true;
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      finishLibraryRecoveryJourney();
+      return false;
+    }
+    console.error('❌ Library recovery journey failed:', error);
+    const hasSwitchedLibrary = libraryRecoveryState.hasSwitchedLibrary;
+    const failureCopy = getRecoveryFailureCopy(
+      failureStage,
+      hasSwitchedLibrary,
+    );
+    const actions = hasSwitchedLibrary
+      ? [
+          { text: 'Close', value: 'close', primary: false },
+          { text: 'See my library', value: 'see_library', primary: true },
+        ]
+      : [{ text: 'Close', value: 'close', primary: true }];
+    await promptLibraryRecoveryDock({
+      ...failureCopy,
+      actions,
+    });
+    finishLibraryRecoveryJourney();
+    return hasSwitchedLibrary;
+  }
+}
+
 /**
  * Browse for library (uses custom folder picker)
- * Handles 3 scenarios:
- * 1. Folder has DB → open it (imports do not matter)
- * 2. Folder has no DB, no media → create blank library
- * 3. Folder has no DB, has media → show terraform choice dialog
+ * Healthy libraries open immediately. Missing/corrupt DBs recover in place and
+ * optionally hand off into the same full cleanup engine as Clean library.
  */
 async function browseSwitchLibrary() {
   try {
-    
-
-    // Hide Switch Library overlay before showing FolderPicker
     closeSwitchLibraryOverlay();
 
     const selectedPath = await FolderPicker.show({
@@ -6123,136 +6911,49 @@ async function browseSwitchLibrary() {
     });
 
     if (!selectedPath) {
-      
       return false;
     }
 
-    
+    setOpenLibraryModalHandoffShellHidden(true);
 
-    // Try to check if library exists via backend
     const checkResponse = await fetch('/api/library/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ library_path: selectedPath }),
     });
-
     const checkResult = await checkResponse.json();
 
-    if (checkResult.exists) {
-      // SCENARIO 1: Valid library on disk — open it (media scan is for terraform only)
-      closeSwitchLibraryOverlay();
-      const switched = await switchToLibrary(selectedPath, checkResult.db_path);
-      if (!switched) {
-        return false;
+    if (!checkResponse.ok) {
+      throw new Error(checkResult.error || 'Failed to inspect selected folder');
+    }
+
+    if (checkResult.has_openable_db) {
+      setOpenLibraryModalHandoffShellHidden(false);
+      return await switchToLibrary(selectedPath, checkResult.db_path);
+    }
+
+    const recoverChoice = await showRecoverDatabaseDialog();
+    if (recoverChoice !== 'continue') {
+      setOpenLibraryModalHandoffShellHidden(false);
+      return false;
+    }
+
+    if (checkResult.folder_warning?.show) {
+      const warningChoice = await showGeneralPurposeFolderWarningDialog();
+      if (warningChoice === 'create_subfolder') {
+        setOpenLibraryModalHandoffShellHidden(false);
+        return await createAndSwitchLibraryInSubfolder(selectedPath);
       }
-    } else if (!checkResult.has_media) {
-      // SCENARIO 2: No DB, no media - create blank library here
-      
-
-      // Get library name
-      const libraryName = await showNameLibraryDialog({
-        title: 'Name your library',
-        parentPath: selectedPath,
-      });
-
-      if (!libraryName) {
-        
-        return false;
-      }
-
-      // Create library in subfolder
-      const libraryPath = selectedPath + '/' + libraryName;
-      const createResponse = await fetch('/api/library/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ library_path: libraryPath }),
-      });
-
-      const createResult = await createResponse.json();
-
-      if (!createResponse.ok) {
-        throw new Error(createResult.error || 'Failed to create library');
-      }
-
-      
-
-      // Switch to new library
-      const switched = await switchToLibrary(libraryPath, createResult.db_path);
-      if (!switched) {
-        return false;
-      }
-    } else {
-      // SCENARIO 3: No DB, has media - show terraform choice dialog
-      
-
-      // Show choice dialog
-      const choice = await showTerraformChoiceDialog({
-        path: selectedPath,
-        media_count: checkResult.media_count,
-      });
-
-      if (choice === 'blank') {
-        // User chose to create blank library
-        
-
-        // Get library name
-        const libraryName = await showNameLibraryDialog({
-          title: 'Name your library',
-          parentPath: selectedPath,
-        });
-
-        if (!libraryName) {
-          
-          return false;
-        }
-
-        // Create library in subfolder
-        const libraryPath = selectedPath + '/' + libraryName;
-        const createResponse = await fetch('/api/library/create', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ library_path: libraryPath }),
-        });
-
-        const createResult = await createResponse.json();
-
-        if (!createResponse.ok) {
-          throw new Error(createResult.error || 'Failed to create library');
-        }
-
-        
-
-        // Switch to new library
-        const switched = await switchToLibrary(libraryPath, createResult.db_path);
-        if (!switched) {
-          return false;
-        }
-      } else if (choice === 'terraform') {
-        // User chose to terraform
-        
-
-        // Execute full terraform flow
-        const success = await executeTerraformFlow({
-          path: selectedPath,
-          media_count: checkResult.media_count,
-          photo_count: checkResult.photo_count || 0,
-          video_count: checkResult.video_count || 0,
-        });
-
-        if (!success) {
-          
-          return false;
-        }
-      } else {
-        // User cancelled
-        
+      if (warningChoice !== 'continue') {
+        setOpenLibraryModalHandoffShellHidden(false);
         return false;
       }
     }
 
-    return true;
+    return await runLibraryRecoveryJourney(selectedPath, checkResult);
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
+    setOpenLibraryModalHandoffShellHidden(false);
     showToast(`Error: ${error.message}`);
     return false;
   }
@@ -6303,7 +7004,8 @@ async function createNewLibraryWithName(dialogOptions = {}) {
           ...(showDuplicateCopy
             ? {
                 title: 'Folder already exists',
-                subtitle: 'Give your library a unique name to continue adding photos.',
+                subtitle:
+                  'Give your library a unique name to continue adding photos.',
               }
             : {}),
           wizardActions: true,
@@ -6443,8 +7145,6 @@ async function createNewLibraryWithName(dialogOptions = {}) {
  * Reset library configuration to first-run state (debug)
  */
 async function resetLibraryConfig() {
-  
-
   try {
     const response = await fetch('/api/library/reset', {
       method: 'DELETE',
@@ -6453,7 +7153,6 @@ async function resetLibraryConfig() {
     const data = await response.json();
 
     if (data.status === 'success') {
-      
       window.location.reload();
     } else {
       throw new Error(data.error || 'Reset failed');
@@ -6498,7 +7197,6 @@ async function showCreateLibraryConfirmation(libraryPath, dbPath) {
   });
 
   overlay.style.display = 'block';
-  
 }
 
 /**
@@ -6506,8 +7204,6 @@ async function showCreateLibraryConfirmation(libraryPath, dbPath) {
  */
 async function createAndSwitchLibrary(libraryPath, dbPath) {
   try {
-    
-
     // Show loading
     const confirmBtn = document.getElementById('createLibraryConfirmBtn');
     confirmBtn.textContent = 'Creating...';
@@ -6525,8 +7221,6 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
     if (!createResponse.ok) {
       throw new Error(createResult.error || 'Failed to create library');
     }
-
-    
 
     // Close create overlay
     document.getElementById('createLibraryOverlay').style.display = 'none';
@@ -6552,8 +7246,13 @@ async function createAndSwitchLibrary(libraryPath, dbPath) {
  * Switch to a different library
  */
 async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
+  const deferPhotoReload = !!switchOptions.deferPhotoReload;
   const deferTransitionHide = !!switchOptions.deferTransitionHide;
   const skipTransitionOverlay = !!switchOptions.skipTransitionOverlay;
+  const suppressSuccessToast = !!switchOptions.suppressSuccessToast;
+  const suppressFailureToast = !!switchOptions.suppressFailureToast;
+  const throwOnError = !!switchOptions.throwOnError;
+  const { signal } = switchOptions;
   const previousLibrary = await fetchCurrentLibraryInfo();
   const folderName = libraryPath.split('/').filter(Boolean).pop() || 'library';
   let switchedLibrary = false;
@@ -6571,6 +7270,7 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ library_path: libraryPath, db_path: dbPath }),
+      signal,
     });
 
     const result = await response.json();
@@ -6579,6 +7279,7 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
       throw new Error(result.error || 'Failed to switch library');
     }
     switchedLibrary = true;
+    const switchedGeneration = advanceLibraryGeneration();
 
     // Close overlays
     closeSwitchLibraryOverlay();
@@ -6586,13 +7287,25 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     if (createOverlay) createOverlay.style.display = 'none';
 
     // Reload photos from new library
-    await loadAndRenderPhotos(false, { throwOnError: true });
-    if (!deferTransitionHide && !skipTransitionOverlay) {
+    if (!deferPhotoReload) {
+      await loadAndRenderPhotos(false, {
+        throwOnError: true,
+        generation: switchedGeneration,
+      });
+    }
+    if (
+      !deferTransitionHide &&
+      !skipTransitionOverlay &&
+      !suppressSuccessToast
+    ) {
       showToast(`Opened ${folderName}`);
     }
     success = true;
     return true;
   } catch (error) {
+    if (error.name === 'AbortError') {
+      throw error;
+    }
     console.error('❌ Failed to switch library:', error);
     let restoredPreviousLibrary = false;
     const shouldAttemptRestore =
@@ -6602,7 +7315,8 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
       if (!skipTransitionOverlay) {
         await showLibraryTransitionOverlay({
           title: 'Restoring previous library',
-          message: 'Returning to your previous library after the switch failed.',
+          message:
+            'Returning to your previous library after the switch failed.',
         });
       }
       restoredPreviousLibrary =
@@ -6616,7 +7330,12 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     const errorMessage = restoredPreviousLibrary
       ? `Couldn't open ${folderName}. Restored your previous library.`
       : `Error: ${error.message}`;
-    showToast(errorMessage);
+    if (!suppressFailureToast) {
+      showToast(errorMessage);
+    }
+    if (throwOnError) {
+      throw new Error(errorMessage);
+    }
     return false;
   } finally {
     if (!skipTransitionOverlay && (!deferTransitionHide || !success)) {
@@ -6640,7 +7359,6 @@ async function triggerImportWithLibraryCheck() {
 
     if (status.status === 'not_configured') {
       // No library - prompt to create one first
-      
 
       // Create new library with naming (custom copy for Add photos flow)
       const created = await createNewLibraryWithName({
@@ -6651,7 +7369,6 @@ async function triggerImportWithLibraryCheck() {
 
       // If user cancelled at any point, show empty state
       if (!created) {
-        
         renderFirstRunEmptyState();
         return;
       }
@@ -6731,8 +7448,6 @@ async function triggerImport(options = {}) {
  */
 async function importFiles() {
   try {
-    
-
     // Blur browser window to ensure focus shifts to native file picker
     window.blur();
 
@@ -6748,7 +7463,6 @@ async function importFiles() {
     if (!response.ok) {
       const error = await response.json();
       if (error.status === 'cancelled') {
-        
         return;
       }
       throw new Error(error.error || 'Failed to select files');
@@ -6758,11 +7472,9 @@ async function importFiles() {
     const paths = result.paths || [];
 
     if (paths.length === 0) {
-      
       return;
     }
 
-    
     await scanAndConfirmImport(paths);
   } catch (error) {
     console.error('❌ Failed to import files:', error);
@@ -6775,8 +7487,6 @@ async function importFiles() {
  */
 async function importFolders() {
   try {
-    
-
     // Blur browser window to ensure focus shifts to native folder picker
     window.blur();
 
@@ -6792,7 +7502,6 @@ async function importFolders() {
     if (!response.ok) {
       const error = await response.json();
       if (error.status === 'cancelled') {
-        
         return;
       }
       throw new Error(error.error || 'Failed to select folder');
@@ -6802,11 +7511,9 @@ async function importFolders() {
     const paths = result.paths || [];
 
     if (paths.length === 0) {
-      
       return;
     }
 
-    
     await scanAndConfirmImport(paths);
   } catch (error) {
     console.error('❌ Failed to import folders:', error);
@@ -6883,7 +7590,6 @@ async function scanAndConfirmImport(paths) {
     ]);
 
     if (!confirmed) {
-      
       return;
     }
 
@@ -6900,8 +7606,6 @@ async function scanAndConfirmImport(paths) {
  */
 async function startImportFromPaths(filePaths) {
   try {
-    
-
     if (importState.isImporting) {
       console.warn('⚠️ Import already in progress');
       return;
@@ -6968,7 +7672,6 @@ async function startImportFromPaths(filePaths) {
     }
   } catch (error) {
     if (error.name === 'AbortError') {
-      
       return;
     }
 
@@ -6984,8 +7687,6 @@ async function startImportFromPaths(filePaths) {
  * Handle import SSE events
  */
 function handleImportEvent(event, data) {
-  
-
   const statusText = document.getElementById('importStatusText');
   const stats = document.getElementById('importStats');
   const importedCount = document.getElementById('importedCount');
@@ -7129,12 +7830,8 @@ function handleImportEvent(event, data) {
       showUndo: importState.importedCount > 0,
     });
 
-    // Reload photos if any were imported
-    const importedPhotos = importState.importedCount;
-    if (importedPhotos > 0) {
-      
-      loadAndRenderPhotos();
-    }
+    // Reload grid so the library matches the DB (imports, dupes-only, or mixed)
+    loadAndRenderPhotos(false);
   }
 
   if (event === 'error') {
@@ -7157,19 +7854,16 @@ async function checkLibraryHealthAndInit() {
     const response = await fetch('/api/library/status');
     const status = await response.json();
 
-    
-
     switch (status.status) {
       case 'not_configured':
         // First-time setup - show empty state
-        
+
         state.hasDatabase = false;
         renderFirstRunEmptyState();
         return;
 
       case 'library_missing':
       case 'library_inaccessible':
-        
         state.hasDatabase = false;
         showCriticalErrorModal('library_not_found', status.library_path);
         return;
@@ -7177,19 +7871,16 @@ async function checkLibraryHealthAndInit() {
       case 'db_missing':
       case 'db_corrupted':
       case 'db_inaccessible':
-        
         state.hasDatabase = false;
         showCriticalErrorModal(status.status, status.db_path);
         return;
 
       case 'needs_migration':
-        
         state.hasDatabase = false;
         showCriticalErrorModal('db_needs_migration', status.message);
         return;
 
       case 'healthy':
-        
         state.hasDatabase = true;
         // Load photos (date picker will be populated automatically)
         await loadAndRenderPhotos();
@@ -7404,7 +8095,6 @@ async function copyRejectedFiles() {
     }
 
     if (!destFolder) {
-      
       return;
     }
 
