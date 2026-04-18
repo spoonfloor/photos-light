@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v338';
+const MAIN_JS_VERSION = 'v348';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -84,7 +84,7 @@ function checkForDatabaseCorruption(responseData) {
 }
 
 function logOpenLibraryAccessPoint(source) {
-  console.log(`[open-library disabled] ${source}`);
+  console.log(`[open-library] ${source}`);
 }
 
 function isCalendarMonthKey(monthKey) {
@@ -687,7 +687,7 @@ function showCriticalError(title, message, buttons) {
       } else if (action === 'switch_library') {
         hideCriticalError();
         await loadSwitchLibraryOverlay();
-        logOpenLibraryAccessPoint('critical-error-legacy');
+        logOpenLibraryAccessPoint('critical-error-legacy-overlay');
       } else if (action === 'retry') {
         // Check if library is accessible now
         try {
@@ -1370,6 +1370,72 @@ function setLibraryRecoveryStats(stats = []) {
     })
     .join('');
   statsEl.style.display = 'flex';
+}
+
+function createLibraryRecoveryStatsCountdown(initialStats = []) {
+  const countdownStats = initialStats.map((stat) => ({
+    label: stat.label,
+    value: Math.max(0, Number(stat.value) || 0),
+  }));
+  const totalSteps = countdownStats.reduce((sum, stat) => sum + stat.value, 0);
+  const stepDelayMs = Math.max(
+    10,
+    Math.min(90, Math.floor(3000 / Math.max(totalSteps, 1)) || 10),
+  );
+  let nextIndex = 0;
+  let timerId = null;
+  let resolved = false;
+  let resolvePromise = null;
+
+  const finish = () => {
+    if (timerId !== null) {
+      window.clearInterval(timerId);
+      timerId = null;
+    }
+    if (!resolved) {
+      resolved = true;
+      resolvePromise?.();
+    }
+  };
+
+  setLibraryRecoveryStats(countdownStats);
+
+  const promise = new Promise((resolve) => {
+    resolvePromise = resolve;
+
+    if (!totalSteps) {
+      finish();
+      return;
+    }
+
+    timerId = window.setInterval(() => {
+      let decremented = false;
+
+      for (let offset = 0; offset < countdownStats.length; offset += 1) {
+        const statIndex = (nextIndex + offset) % countdownStats.length;
+        if (countdownStats[statIndex].value > 0) {
+          countdownStats[statIndex].value -= 1;
+          nextIndex = (statIndex + 1) % countdownStats.length;
+          decremented = true;
+          break;
+        }
+      }
+
+      setLibraryRecoveryStats(countdownStats);
+
+      if (
+        !decremented ||
+        countdownStats.every((stat) => Number(stat.value || 0) === 0)
+      ) {
+        finish();
+      }
+    }, stepDelayMs);
+  });
+
+  return {
+    promise,
+    cancel: finish,
+  };
 }
 
 function setLibraryRecoveryActions(actions = [], resolveAction = null) {
@@ -2224,6 +2290,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
       logOpenLibraryAccessPoint('critical-error-db-missing');
+      void browseSwitchLibrary();
     };
 
     const rebuildBtn = document.createElement('button');
@@ -2247,6 +2314,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
       logOpenLibraryAccessPoint('critical-error-db-needs-migration');
+      void browseSwitchLibrary();
     };
 
     const reloadBtn = document.createElement('button');
@@ -2274,6 +2342,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
       logOpenLibraryAccessPoint('critical-error-library-not-found');
+      void browseSwitchLibrary();
     };
 
     const retryBtn = document.createElement('button');
@@ -3878,7 +3947,7 @@ function renderFirstRunEmptyState() {
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
-        <button class="btn" onclick="logOpenLibraryAccessPoint('first-run-empty-state')" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
+        <button class="btn" onclick="logOpenLibraryAccessPoint('first-run-empty-state'); void browseSwitchLibrary();" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
           <span>Open library</span>
         </button>
@@ -4888,7 +4957,8 @@ async function loadUtilitiesMenu() {
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
-        logOpenLibraryAccessPoint('utilities-menu-open-library');
+        logOpenLibraryAccessPoint('utilities-menu');
+        void browseSwitchLibrary();
       });
     }
 
@@ -6649,7 +6719,10 @@ async function createAndSwitchLibraryInSubfolder(parentPath) {
     throw new Error(createResult.error || 'Failed to create library');
   }
 
-  return await switchToLibrary(libraryPath, createResult.db_path);
+  return await switchToLibraryWithBlockingNormalize(
+    libraryPath,
+    createResult.db_path,
+  );
 }
 
 /**
@@ -6711,34 +6784,79 @@ async function showRecoverMediaDialog(options = {}) {
 
 async function scanRecoverMediaAfterOpen(fallback = {}, streamOptions = {}) {
   const { signal } = streamOptions;
-  try {
-    const response = await fetch('/api/library/make-perfect/scan', { signal });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to scan recovered library');
-    }
+  const waitBeforeRetry = (ms) =>
+    new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+        return;
+      }
 
-    const summary = data.summary || {};
-    const scannedAddableCount = Number(summary.database_repairs);
-    return {
-      // `database_repairs` is the number of files the recovery flow can add.
-      // `fallback.media_count` is only the raw folder count used when scan fails.
-      media_count: Number.isFinite(scannedAddableCount)
-        ? Math.max(scannedAddableCount, 0)
-        : Number(fallback.media_count) || 0,
-      duplicate_count: summary.duplicates ?? 0,
-      incompatible_count: summary.unsupported_files ?? 0,
-      estimated_time: fallback.media_eta || 'less than a minute',
-    };
-  } catch (error) {
-    console.warn('⚠️ Failed to scan recovered media:', error);
-    return {
-      media_count: fallback.media_count || 0,
-      duplicate_count: 0,
-      incompatible_count: 0,
-      estimated_time: fallback.media_eta || 'less than a minute',
-    };
+      const timeoutId = window.setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        window.clearTimeout(timeoutId);
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch('/api/library/make-perfect/scan', { signal });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to scan recovered library');
+      }
+
+      const summary = data.summary || {};
+      const details = data.details || {};
+      const scannedAddableCount = Number(summary.database_repairs);
+      const duplicateCount = Number(summary.duplicates);
+      const incompatibleCount = Number(summary.unsupported_files);
+      return {
+        // `database_repairs` is the number of files the recovery flow can add.
+        media_count: Number.isFinite(scannedAddableCount)
+          ? Math.max(scannedAddableCount, 0)
+          : Array.isArray(details.database_repairs)
+            ? details.database_repairs.length
+            : Number(fallback.media_count) || 0,
+        duplicate_count: Number.isFinite(duplicateCount)
+          ? Math.max(duplicateCount, 0)
+          : Array.isArray(details.duplicates)
+            ? details.duplicates.length
+            : 0,
+        incompatible_count: Number.isFinite(incompatibleCount)
+          ? Math.max(incompatibleCount, 0)
+          : Array.isArray(details.unsupported_files)
+            ? details.unsupported_files.length
+            : 0,
+        estimated_time: fallback.media_eta || 'less than a minute',
+        scan_succeeded: true,
+      };
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        throw error;
+      }
+      lastError = error;
+      if (attempt === 0) {
+        await waitBeforeRetry(150);
+      }
+    }
   }
+
+  console.warn('⚠️ Failed to scan recovered media:', lastError);
+  return {
+    media_count: fallback.media_count || 0,
+    duplicate_count: 0,
+    incompatible_count: 0,
+    estimated_time: fallback.media_eta || 'less than a minute',
+    scan_succeeded: false,
+    scan_error: lastError?.message || 'Failed to scan recovered library',
+  };
 }
 
 async function runLibraryRecoveryJourney(selectedPath, checkResult) {
@@ -6950,10 +7068,353 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
   }
 }
 
+// =============================================================================
+// LEGACY open-library flow (dialogs + recovery dock + streaming rebuild)
+// -----------------------------------------------------------------------------
+// Do not call from product UI or from `browseSwitchLibrary`. For DevTools / manual
+// comparison only (`window.__browseSwitchLibraryLegacyAfterCheck`). Production:
+// `browseSwitchLibrary` → `openLibraryFromBrowseUnified` only.
+// Delete with `runLibraryRecoveryJourney` when unified path is fully verified.
+//
+// DevTools: `await __browseSwitchLibraryLegacyAfterCheck(selectedPath, checkResult)`
+// (`checkResult` = JSON from POST /api/library/check).
+// =============================================================================
+async function browseSwitchLibraryLegacyAfterCheck(selectedPath, checkResult) {
+  if (checkResult.has_openable_db) {
+    setOpenLibraryModalHandoffShellHidden(false);
+    return await switchToLibrary(selectedPath, checkResult.db_path);
+  }
+
+  const recoverChoice = await showRecoverDatabaseDialog();
+  if (recoverChoice !== 'continue') {
+    setOpenLibraryModalHandoffShellHidden(false);
+    return false;
+  }
+
+  if (checkResult.folder_warning?.show) {
+    const warningChoice = await showGeneralPurposeFolderWarningDialog();
+    if (warningChoice === 'create_subfolder') {
+      setOpenLibraryModalHandoffShellHidden(false);
+      return await createAndSwitchLibraryInSubfolder(selectedPath);
+    }
+    if (warningChoice !== 'continue') {
+      setOpenLibraryModalHandoffShellHidden(false);
+      return false;
+    }
+  }
+
+  return await runLibraryRecoveryJourney(selectedPath, checkResult);
+}
+
+if (typeof window !== 'undefined') {
+  window.__browseSwitchLibraryLegacyAfterCheck = browseSwitchLibraryLegacyAfterCheck;
+}
+
 /**
- * Browse for library (uses custom folder picker)
- * Healthy libraries open immediately. Missing/corrupt DBs recover in place and
- * optionally hand off into the same full cleanup engine as Clean library.
+ * After the server library is set: blocking make-perfect (same as Clean), then grid.
+ */
+async function runSwitchDeferReloadNormalizeAndLoad(libraryPath, dbPath) {
+  const folderName = libraryPath.split('/').filter(Boolean).pop() || 'library';
+  const switched = await switchToLibrary(libraryPath, dbPath, {
+    deferPhotoReload: true,
+    skipTransitionOverlay: true,
+    suppressSuccessToast: true,
+    suppressFailureToast: false,
+  });
+
+  if (!switched) {
+    return false;
+  }
+
+  await requestMakeLibraryPerfect();
+  await loadAndRenderPhotos(false, { throwOnError: true });
+  showToast(`Opened ${folderName}`);
+  return true;
+}
+
+// -----------------------------------------------------------------------------
+// INVARIANT — Product “Open library” (More menu, first-run, overlay Browse, etc.)
+//
+// • `browseSwitchLibrary` must call only `openLibraryFromBrowseUnified` after check.
+// • No UI path may call `browseSwitchLibraryLegacyAfterCheck` (legacy is DevTools-only:
+//   `window.__browseSwitchLibraryLegacyAfterCheck`).
+// • Pipeline: picker → /api/library/check → [recover-database if needed] → switch →
+//   blocking POST /api/library/make-perfect → load grid.
+// -----------------------------------------------------------------------------
+
+/**
+ * Unified open-library path: optional recover-database, then switch + blocking
+ * make-perfect + grid. Legacy reference: `browseSwitchLibraryLegacyAfterCheck`.
+ */
+async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
+  const scanCopy = window.LibraryRecoveryUI?.dock?.scanLibrary || {
+    title: 'Scanning library',
+    body: 'Reviewing the database and searching for available media.',
+    statusText: 'Preparing your library',
+    statusSpinner: true,
+    showCloseButton: true,
+  };
+  const scanCompleteCopy = window.LibraryRecoveryUI?.dock?.scanComplete || {
+    title: 'Scan complete',
+    buildBody({ mediaCountLabel, mediaFileLabel, etaLabel, addClosingPhrase }) {
+      return `This folder has ${mediaCountLabel} ${mediaFileLabel} that could be added to your library. It should take ${etaLabel}. ${addClosingPhrase} or go directly to your library.`;
+    },
+    stats: [
+      { label: 'Media files', key: 'media_count' },
+      { label: 'Duplicates', key: 'duplicate_count' },
+      { label: 'Incompatible', key: 'incompatible_count' },
+    ],
+    actions: [
+      { text: 'Cancel', value: 'cancel', primary: false },
+      { text: 'See my library', value: 'see_library', primary: false },
+      { text: 'Add media', value: 'add_media', primary: true },
+    ],
+  };
+  const rebuildingCopy = window.LibraryRecoveryUI?.dock?.rebuildingLibrary || {
+    title: 'Rebuilding library',
+    buildBody({ mediaCountLabel, mediaFileLabel }) {
+      return `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database. Stay on this screen until it finishes.`;
+    },
+    actionsJustify: 'flex-end',
+    actions: [{ text: 'Cancel', value: 'cancel', primary: false }],
+    showCloseButton: true,
+  };
+  const openingCopy = window.LibraryRecoveryUI?.dock?.openingLibrary || {
+    title: 'Opening library',
+    body: 'Loading your photos into the app.',
+    statusText: 'Almost done',
+    statusSpinner: true,
+    showCloseButton: false,
+    actions: [],
+  };
+  const generalPurposeFolderWarningCopy =
+    window.LibraryRecoveryUI?.dialogs?.generalPurposeFolderWarning || {
+      title: 'Use this folder for your library?',
+      body: 'This folder has many non-media files. You can continue, or create a subfolder instead.',
+    };
+  const folderName = selectedPath.split('/').filter(Boolean).pop() || 'library';
+  let dockFlowActive = false;
+  let switchedGeneration = null;
+  let rebuildCountdown = null;
+  const finishDockFlow = () => {
+    if (!dockFlowActive) {
+      return;
+    }
+    dockFlowActive = false;
+    finishLibraryRecoveryJourney();
+  };
+
+  try {
+    if (checkResult.has_openable_db) {
+      showToast('Error: Selected folder already has a usable library database');
+      return false;
+    }
+
+    const recoverChoice = await showRecoverDatabaseDialog();
+    if (recoverChoice !== 'continue') {
+      return false;
+    }
+
+    if (checkResult.folder_warning?.show) {
+      showToast(`Error: ${generalPurposeFolderWarningCopy.body}`);
+      return false;
+    }
+
+    const recoverAbort = new AbortController();
+    setLibraryRecoveryShellHidden(true);
+    dockFlowActive = true;
+    const dockShown = await showLibraryRecoveryDockCard({
+      title: scanCopy.title,
+      body: scanCopy.body,
+      statusText: scanCopy.statusText,
+      statusSpinner: scanCopy.statusSpinner,
+      showCloseButton: scanCopy.showCloseButton,
+      onClose: () => recoverAbort.abort(),
+    });
+    if (!dockShown) {
+      finishDockFlow();
+      showToast(`Error: ${scanCopy.title}`);
+      return false;
+    }
+
+    const recoverResponse = await fetch('/api/library/recover-database', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ library_path: selectedPath }),
+      signal: recoverAbort.signal,
+    });
+    const recoverResult = await recoverResponse.json();
+
+    if (!recoverResponse.ok) {
+      throw new Error(recoverResult.error || 'Failed to create library database');
+    }
+
+    if (recoverAbort.signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
+    await switchToLibrary(selectedPath, recoverResult.db_path, {
+      deferPhotoReload: true,
+      skipTransitionOverlay: true,
+      suppressSuccessToast: true,
+      suppressFailureToast: true,
+      throwOnError: true,
+      signal: recoverAbort.signal,
+    });
+    switchedGeneration = state.libraryGeneration;
+
+    const recoverMediaInfo = await scanRecoverMediaAfterOpen(
+      {
+        media_count: checkResult.media_count || 0,
+        media_eta: checkResult.media_eta || 'less than a minute',
+      },
+      { signal: recoverAbort.signal },
+    );
+
+    if (recoverMediaInfo.scan_succeeded === false) {
+      try {
+        if (switchedGeneration !== null) {
+          await loadAndRenderPhotosCommitted(switchedGeneration);
+        }
+      } catch (hydrateErr) {
+        console.error('❌ Failed to show library after scan failure:', hydrateErr);
+        showToast(`Error: ${hydrateErr.message}`);
+      }
+      finishDockFlow();
+      showToast(`Error: ${recoverMediaInfo.scan_error}`);
+      return true;
+    }
+
+    const mediaCount = Number(recoverMediaInfo.media_count || 0);
+    let shouldUseRebuildingCountdown = false;
+
+    if (mediaCount > 0) {
+      const mediaCountLabel = mediaCount.toLocaleString();
+      const mediaFileLabel = mediaCount === 1 ? 'media file' : 'media files';
+      const addClosingPhrase =
+        mediaCount === 1 ? 'Add the file' : 'Add the files';
+      const scanCompleteStats = (scanCompleteCopy.stats || []).map((stat) => ({
+        label: stat.label,
+        value: Number(recoverMediaInfo[stat.key] ?? 0),
+      }));
+      const scanCompleteChoice = await promptLibraryRecoveryDock({
+        title: scanCompleteCopy.title,
+        body: scanCompleteCopy.buildBody({
+          mediaCountLabel,
+          mediaFileLabel,
+          etaLabel: formatDurationEstimateForItShouldTake(
+            recoverMediaInfo.estimated_time,
+          ),
+          addClosingPhrase,
+        }),
+        stats: scanCompleteStats,
+        actions: scanCompleteCopy.actions,
+      });
+
+      if (scanCompleteChoice !== 'add_media') {
+        try {
+          if (switchedGeneration !== null) {
+            await loadAndRenderPhotosCommitted(switchedGeneration);
+          }
+        } catch (hydrateErr) {
+          console.error(
+            '❌ Failed to show library after unsupported scan-complete choice:',
+            hydrateErr,
+          );
+          showToast(`Error: ${hydrateErr.message}`);
+        }
+        finishDockFlow();
+        showToast('Error: This path is not available yet');
+        return true;
+      }
+
+      const rebuildingStats = scanCompleteStats.map((stat) => ({
+        label: stat.label,
+        value: Number(stat.value || 0),
+      }));
+      const rebuildingActions = (rebuildingCopy.actions || []).map((action) => ({
+        ...action,
+        onClick: () => {
+          showToast('Error: This path is not available yet');
+        },
+      }));
+      const rebuildingShown = await showLibraryRecoveryDockCard({
+        title: rebuildingCopy.title,
+        body: rebuildingCopy.buildBody({
+          mediaCountLabel,
+          mediaFileLabel,
+        }),
+        stats: rebuildingStats,
+        showCloseButton: rebuildingCopy.showCloseButton,
+        onClose: () => {
+          showToast('Error: This path is not available yet');
+        },
+        actionsJustify: rebuildingCopy.actionsJustify,
+        actions: rebuildingActions,
+      });
+      if (!rebuildingShown) {
+        finishDockFlow();
+        showToast(`Error: ${rebuildingCopy.title}`);
+        return false;
+      }
+      rebuildCountdown = createLibraryRecoveryStatsCountdown(rebuildingStats);
+      shouldUseRebuildingCountdown = true;
+    }
+
+    if (shouldUseRebuildingCountdown && rebuildCountdown) {
+      await Promise.all([requestMakeLibraryPerfect(), rebuildCountdown.promise]);
+      await showLibraryRecoveryDockCard({
+        title: openingCopy.title,
+        body: openingCopy.body,
+        statusText: openingCopy.statusText,
+        statusSpinner: openingCopy.statusSpinner,
+        showCloseButton: openingCopy.showCloseButton,
+        actions: openingCopy.actions,
+      });
+    } else {
+      finishDockFlow();
+      await showLibraryTransitionOverlay({
+        title: 'Cleaning library',
+        message:
+          'Normalizing your library. Please keep this window open until it finishes.',
+      });
+      await requestMakeLibraryPerfect();
+    }
+    finishDockFlow();
+    if (switchedGeneration !== null) {
+      await loadAndRenderPhotosCommitted(switchedGeneration);
+    } else {
+      await loadAndRenderPhotos(false, { throwOnError: true });
+    }
+    showToast(`Opened ${folderName}`);
+    return true;
+  } catch (error) {
+    finishDockFlow();
+    if (error.name === 'AbortError') {
+      if (switchedGeneration !== null) {
+        try {
+          await loadAndRenderPhotosCommitted(switchedGeneration);
+          return true;
+        } catch (hydrateErr) {
+          console.error('❌ Failed to hydrate aborted recovery flow:', hydrateErr);
+          showToast(`Error: ${hydrateErr.message}`);
+        }
+      }
+      return false;
+    }
+    console.error('❌ Open library failed:', error);
+    showToast(`Error: ${error.message}`);
+    return false;
+  } finally {
+    rebuildCountdown?.cancel();
+    finishDockFlow();
+    hideLibraryTransitionOverlay();
+  }
+}
+
+/**
+ * Browse for library (custom folder picker). Invariant: after `/api/library/check`,
+ * always `openLibraryFromBrowseUnified` — never the legacy flow.
  */
 async function browseSwitchLibrary() {
   try {
@@ -6983,30 +7444,10 @@ async function browseSwitchLibrary() {
       throw new Error(checkResult.error || 'Failed to inspect selected folder');
     }
 
-    if (checkResult.has_openable_db) {
-      setOpenLibraryModalHandoffShellHidden(false);
-      return await switchToLibrary(selectedPath, checkResult.db_path);
-    }
+    setOpenLibraryModalHandoffShellHidden(false);
 
-    const recoverChoice = await showRecoverDatabaseDialog();
-    if (recoverChoice !== 'continue') {
-      setOpenLibraryModalHandoffShellHidden(false);
-      return false;
-    }
-
-    if (checkResult.folder_warning?.show) {
-      const warningChoice = await showGeneralPurposeFolderWarningDialog();
-      if (warningChoice === 'create_subfolder') {
-        setOpenLibraryModalHandoffShellHidden(false);
-        return await createAndSwitchLibraryInSubfolder(selectedPath);
-      }
-      if (warningChoice !== 'continue') {
-        setOpenLibraryModalHandoffShellHidden(false);
-        return false;
-      }
-    }
-
-    return await runLibraryRecoveryJourney(selectedPath, checkResult);
+    // INVARIANT: single pipeline — no branch to `browseSwitchLibraryLegacyAfterCheck`.
+    return await openLibraryFromBrowseUnified(selectedPath, checkResult);
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
     setOpenLibraryModalHandoffShellHidden(false);
@@ -7397,6 +7838,31 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     if (!skipTransitionOverlay && (!deferTransitionHide || !success)) {
       hideLibraryTransitionOverlay();
     }
+  }
+}
+
+/**
+ * Switch to a library, run blocking POST /api/library/make-perfect (same engine as
+ * Clean library), then load the photo grid.
+ */
+async function switchToLibraryWithBlockingNormalize(libraryPath, dbPath) {
+  await showLibraryTransitionOverlay({
+    title: 'Cleaning library',
+    message:
+      'Normalizing your library. Please keep this window open until it finishes.',
+  });
+
+  try {
+    return await runSwitchDeferReloadNormalizeAndLoad(libraryPath, dbPath);
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw error;
+    }
+    console.error('❌ Library normalize after switch failed:', error);
+    showToast(`Error: ${error.message}`);
+    return false;
+  } finally {
+    hideLibraryTransitionOverlay();
   }
 }
 

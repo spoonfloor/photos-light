@@ -10,6 +10,7 @@ table to the repaired library, and then runs a read-only final audit.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from db_schema import create_database_schema
 from file_operations import extract_exif_date, extract_exif_rating, strip_exif_rating
@@ -57,6 +58,7 @@ from library_layout import (
     resolve_db_path,
 )
 from photo_canonicalization import (
+    UNKNOWN_PHOTO_DATE_TAKEN,
     canonicalize_photo_date,
     canonicalize_photo_file,
     write_photo_date_metadata,
@@ -86,6 +88,7 @@ class MediaRecord:
     ext: str
     file_type: str
     content_hash: str
+    duplicate_key: str
     date_taken: str
     date_obj: datetime
     width: Optional[int]
@@ -98,6 +101,31 @@ class MediaRecord:
 
 class CleanLibraryError(RuntimeError):
     """Operation failed and the library may still be dirty."""
+
+
+def _compute_photo_duplicate_key(full_path: str, fallback_hash: Optional[str] = None) -> str:
+    """
+    Return a pixel-level duplicate key for a normalized photo.
+
+    Photos that render to the same bitmap should dedupe together even when
+    metadata or container-level encoding differs. When Pillow cannot decode the
+    photo, fall back to the canonical file hash so non-raster formats still
+    participate in duplicate grouping.
+    """
+    try:
+        with Image.open(full_path) as image:
+            rendered = ImageOps.exif_transpose(image).convert("RGBA")
+            duplicate_key = hashlib.sha256()
+            duplicate_key.update(
+                f"pixels:{rendered.width}x{rendered.height}:RGBA".encode("utf-8")
+            )
+            duplicate_key.update(rendered.tobytes())
+            return duplicate_key.hexdigest()
+    except Exception:
+        duplicate_key = fallback_hash or compute_hash_legacy(full_path)
+        if not duplicate_key:
+            raise CleanLibraryError(f"Failed to compute duplicate key for {full_path}")
+        return duplicate_key
 
 def get_birth_time(stat_result: os.stat_result) -> float:
     """Use birthtime when available, otherwise fall back to mtime."""
@@ -228,6 +256,7 @@ class _ReadOnlyHashCache:
 @dataclass
 class AuditMediaIdentity:
     canonical_hash: str
+    duplicate_key: str
     date_taken: str
     date_obj: datetime
 
@@ -300,8 +329,13 @@ def _compute_photo_audit_identity(full_path: str) -> AuditMediaIdentity:
             extract_exif_rating=extract_exif_rating,
             strip_exif_rating=strip_exif_rating,
         )
+        duplicate_key = _compute_photo_duplicate_key(
+            staged_path,
+            fallback_hash=canonical_photo.content_hash,
+        )
     return AuditMediaIdentity(
         canonical_hash=canonical_photo.content_hash,
+        duplicate_key=duplicate_key,
         date_taken=canonical_photo.date_taken,
         date_obj=canonical_photo.date_obj,
     )
@@ -322,6 +356,7 @@ def _compute_audit_media_identity(
     )
     return AuditMediaIdentity(
         canonical_hash=current_hash,
+        duplicate_key=current_hash,
         date_taken=date_taken,
         date_obj=date_obj,
     )
@@ -717,6 +752,10 @@ class LibraryCleaner:
                 return None
 
             content_hash = canonical_photo.content_hash
+            duplicate_key = _compute_photo_duplicate_key(
+                full_path,
+                fallback_hash=canonical_photo.content_hash,
+            )
             date_taken = canonical_photo.date_taken
             date_obj = canonical_photo.date_obj
             width = canonical_photo.width
@@ -750,6 +789,7 @@ class LibraryCleaner:
             if not content_hash:
                 self.move_to_trash(full_path, "corrupted")
                 return None
+            duplicate_key = content_hash
 
             date_taken, date_obj = parse_metadata_datetime(
                 extract_exif_date(full_path),
@@ -765,6 +805,7 @@ class LibraryCleaner:
             ext=ext,
             file_type=file_type,
             content_hash=content_hash,
+            duplicate_key=duplicate_key,
             date_taken=date_taken,
             date_obj=date_obj,
             width=width,
@@ -816,17 +857,24 @@ class LibraryCleaner:
         self.log("scan_complete", media_count=len(records))
         return records
 
-    def duplicate_sort_key(self, record: MediaRecord) -> Tuple[datetime, float, float, str]:
-        return (record.date_obj, record.birth_time, record.modified_time, record.rel_path.lower())
+    def duplicate_sort_key(self, record: MediaRecord) -> Tuple[int, datetime, float, float, str]:
+        prefers_unknown_date_last = 1 if record.date_taken == UNKNOWN_PHOTO_DATE_TAKEN else 0
+        return (
+            prefers_unknown_date_last,
+            record.date_obj,
+            record.birth_time,
+            record.modified_time,
+            record.rel_path.lower(),
+        )
 
     def trash_duplicates(self, records: List[MediaRecord]) -> List[MediaRecord]:
         grouped: Dict[str, List[MediaRecord]] = {}
         for record in records:
-            grouped.setdefault(record.content_hash, []).append(record)
+            grouped.setdefault(record.duplicate_key, []).append(record)
 
         survivors: List[MediaRecord] = []
         total_groups = len(grouped)
-        for gi, (content_hash, group) in enumerate(grouped.items(), start=1):
+        for gi, (duplicate_key, group) in enumerate(grouped.items(), start=1):
             self._emit(
                 {
                     "type": "progress",
@@ -846,7 +894,7 @@ class LibraryCleaner:
                     "duplicate_trashed",
                     winner=winner.rel_path,
                     loser=loser.rel_path,
-                    content_hash=content_hash,
+                    duplicate_key=duplicate_key,
                 )
 
         return survivors
@@ -996,7 +1044,7 @@ class LibraryCleaner:
         issues: List[Dict[str, str]] = []
         active_paths: set[str] = set()
         path_to_canonical_hash: Dict[str, str] = {}
-        canonical_hash_groups: Dict[str, List[Tuple[str, str]]] = {}
+        duplicate_key_groups: Dict[str, List[Tuple[str, str]]] = {}
 
         if audit_progress_total is not None:
             audit_total = max(audit_progress_total, 1)
@@ -1084,7 +1132,9 @@ class LibraryCleaner:
 
                 date_taken = identity.date_taken
                 expected_rel = canonical_relative_path(identity.date_obj, canonical_hash, ext)
-                canonical_hash_groups.setdefault(canonical_hash, []).append((rel_path, expected_rel))
+                duplicate_key_groups.setdefault(identity.duplicate_key, []).append(
+                    (rel_path, expected_rel)
+                )
                 if rel_path != expected_rel:
                     issues.append(
                         format_issue(
@@ -1105,7 +1155,7 @@ class LibraryCleaner:
                 active_paths.add(rel_path)
                 _ = date_taken  # Keep the date normalization in the audit path explicit.
 
-        for _canonical_hash, group in canonical_hash_groups.items():
+        for _duplicate_key, group in duplicate_key_groups.items():
             if len(group) < 2:
                 continue
             ordered = sorted(

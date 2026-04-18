@@ -6,6 +6,8 @@ from datetime import datetime
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from PIL import Image
+
 from db_schema import create_database_schema
 from hash_cache import HashCache
 from library_layout import canonical_db_path, detect_existing_db_path, is_library_metadata_file
@@ -28,6 +30,7 @@ from library_cleanliness import (
 from make_library_perfect import (
     DBNormalizationEngine,
     LibraryCleaner,
+    MediaRecord,
     run_db_normalization_engine,
     scan_library_cleanliness,
     summarize_clean_library_issues,
@@ -122,6 +125,103 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
 
     def test_db_normalization_engine_alias_exists(self):
         self.assertTrue(issubclass(DBNormalizationEngine, LibraryCleaner))
+
+    def test_duplicate_sort_key_prefers_known_dates_over_unknown_placeholders(self):
+        cleaner = LibraryCleaner("/tmp/test-library")
+        known = MediaRecord(
+            original_filename="known.png",
+            full_path="/tmp/test-library/known.png",
+            rel_path="2026/2026-01-27/known.png",
+            ext=".png",
+            file_type="photo",
+            content_hash="known-hash",
+            duplicate_key="shared-duplicate-key",
+            date_taken="2026:01:27 17:22:43",
+            date_obj=datetime(2026, 1, 27, 17, 22, 43),
+            width=1,
+            height=1,
+            rating=None,
+            metadata_cleaned=False,
+            birth_time=2.0,
+            modified_time=2.0,
+        )
+        unknown = MediaRecord(
+            original_filename="unknown.png",
+            full_path="/tmp/test-library/unknown.png",
+            rel_path="1900/1900-01-01/unknown.png",
+            ext=".png",
+            file_type="photo",
+            content_hash="unknown-hash",
+            duplicate_key="shared-duplicate-key",
+            date_taken=UNKNOWN_PHOTO_DATE_TAKEN,
+            date_obj=datetime(1900, 1, 1, 0, 0, 0),
+            width=1,
+            height=1,
+            rating=None,
+            metadata_cleaned=False,
+            birth_time=1.0,
+            modified_time=1.0,
+        )
+
+        ordered = sorted([unknown, known], key=cleaner.duplicate_sort_key)
+
+        self.assertEqual([item.original_filename for item in ordered], ["known.png", "unknown.png"])
+
+    def test_trash_duplicates_groups_by_duplicate_key_not_storage_hash(self):
+        with TemporaryDirectory() as tmpdir:
+            keep_path = os.path.join(tmpdir, "keep.png")
+            lose_path = os.path.join(tmpdir, "lose.png")
+            with open(keep_path, "wb") as handle:
+                handle.write(b"keep")
+            with open(lose_path, "wb") as handle:
+                handle.write(b"lose")
+
+            cleaner = LibraryCleaner(tmpdir)
+            cleaner.log = lambda *args, **kwargs: None
+            trashed = []
+            cleaner.move_to_trash = lambda path, category: trashed.append((os.path.basename(path), category)) or path
+
+            records = [
+                MediaRecord(
+                    original_filename="keep.png",
+                    full_path=keep_path,
+                    rel_path="2026/2026-01-27/keep.png",
+                    ext=".png",
+                    file_type="photo",
+                    content_hash="dated-storage-hash",
+                    duplicate_key="shared-duplicate-key",
+                    date_taken="2026:01:27 17:22:43",
+                    date_obj=datetime(2026, 1, 27, 17, 22, 43),
+                    width=1,
+                    height=1,
+                    rating=None,
+                    metadata_cleaned=False,
+                    birth_time=2.0,
+                    modified_time=2.0,
+                ),
+                MediaRecord(
+                    original_filename="lose.png",
+                    full_path=lose_path,
+                    rel_path="1900/1900-01-01/lose.png",
+                    ext=".png",
+                    file_type="photo",
+                    content_hash="undated-storage-hash",
+                    duplicate_key="shared-duplicate-key",
+                    date_taken=UNKNOWN_PHOTO_DATE_TAKEN,
+                    date_obj=datetime(1900, 1, 1, 0, 0, 0),
+                    width=1,
+                    height=1,
+                    rating=None,
+                    metadata_cleaned=False,
+                    birth_time=1.0,
+                    modified_time=1.0,
+                ),
+            ]
+
+            survivors = cleaner.trash_duplicates(records)
+
+            self.assertEqual([record.original_filename for record in survivors], ["keep.png"])
+            self.assertEqual(trashed, [("lose.png", "duplicates")])
 
     def test_clean_library_issue_summary_groups_issue_kinds(self):
         payload = summarize_clean_library_issues(
@@ -388,6 +488,68 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                         "kind": "duplicate_media",
                         "path": "root_b.jpg",
                         "message": f"root_b.jpg duplicates {canonical_rel}",
+                    }
+                ],
+            )
+
+    def test_normalize_media_file_uses_pixel_duplicate_key_for_photos(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            keep_path = os.path.join(tmpdir, "keep.png")
+            dup_path = os.path.join(tmpdir, "dup.png")
+
+            pixels = Image.new("RGB", (4, 4), (12, 34, 56))
+            pixels.save(keep_path, format="PNG", compress_level=0)
+            pixels.save(dup_path, format="PNG", compress_level=9)
+
+            cleaner = LibraryCleaner(tmpdir, db_path=db_path)
+            cleaner.db_conn = conn
+            cleaner.db_conn.row_factory = sqlite3.Row
+            cleaner.hash_cache = HashCache(conn)
+
+            with patch("make_library_perfect.extract_exif_date", return_value=None), patch(
+                "make_library_perfect.extract_exif_rating", return_value=None
+            ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
+                "make_library_perfect.write_photo_date_metadata", return_value=None
+            ):
+                keep_record = cleaner.normalize_media_file(keep_path)
+                dup_record = cleaner.normalize_media_file(dup_path)
+
+            self.assertIsNotNone(keep_record)
+            self.assertIsNotNone(dup_record)
+            self.assertNotEqual(keep_record.content_hash, dup_record.content_hash)
+            self.assertEqual(keep_record.duplicate_key, dup_record.duplicate_key)
+            conn.close()
+
+    def test_scan_flags_pixel_duplicates_across_different_png_encodings(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+
+            keep_path = os.path.join(tmpdir, "keep.png")
+            dup_path = os.path.join(tmpdir, "dup.png")
+
+            pixels = Image.new("RGB", (4, 4), (12, 34, 56))
+            pixels.save(keep_path, format="PNG", compress_level=0)
+            pixels.save(dup_path, format="PNG", compress_level=9)
+
+            with patch("make_library_perfect.extract_exif_date", return_value=None), patch(
+                "make_library_perfect.extract_exif_rating", return_value=None
+            ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
+                "make_library_perfect.write_photo_date_metadata", return_value=None
+            ):
+                result = scan_library_cleanliness(tmpdir, db_path=db_path)
+
+            self.assertEqual(result["status"], "DIRTY")
+            self.assertEqual(result["summary"]["duplicates"], 1)
+            self.assertEqual(result["summary"]["database_repairs"], 1)
+            self.assertEqual(
+                result["details"]["duplicates"],
+                [
+                    {
+                        "kind": "duplicate_media",
+                        "path": "keep.png",
+                        "message": "keep.png duplicates dup.png",
                     }
                 ],
             )
