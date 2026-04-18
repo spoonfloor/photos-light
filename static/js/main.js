@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v354';
+const MAIN_JS_VERSION = 'v356';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -40,7 +40,9 @@ const debugFileCountState = {
   runId: 0,
   folderPath: null,
   files: [],
+  fileBuckets: [],
   scorecard: null,
+  entryState: null,
 };
 
 let currentPhotoLoad = null;
@@ -2106,10 +2108,60 @@ function resetDebugFileCountScorecard() {
   debugFileCountState.scorecard = null;
 }
 
+function captureDebugFileCountEntryState() {
+  const datePickerContainer = document.querySelector('.date-picker');
+  return {
+    hasDatabase: !!state.hasDatabase,
+    photos: Array.isArray(state.photos)
+      ? state.photos.map((photo) => ({ ...photo }))
+      : [],
+    selectedPhotoIds: Array.from(state.selectedPhotos),
+    lastClickedIndex: state.lastClickedIndex,
+    datePickerVisibility: datePickerContainer?.style.visibility || '',
+  };
+}
+
+function restoreDebugFileCountEntryState() {
+  const entryState = debugFileCountState.entryState || {
+    hasDatabase: false,
+    photos: [],
+    selectedPhotoIds: [],
+    lastClickedIndex: null,
+    datePickerVisibility: 'hidden',
+  };
+
+  advanceLibraryGeneration();
+  state.photos = entryState.photos.map((photo) => ({ ...photo }));
+  state.hasDatabase = !!entryState.hasDatabase;
+  state.selectedPhotos.clear();
+  entryState.selectedPhotoIds.forEach((photoId) => {
+    state.selectedPhotos.add(photoId);
+  });
+  state.lastClickedIndex = entryState.lastClickedIndex ?? null;
+
+  renderPhotoGrid(state.photos, false);
+  if (state.photos.length > 0) {
+    setupThumbnailLazyLoading();
+  }
+
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility =
+      state.photos.length > 0
+        ? entryState.datePickerVisibility || 'visible'
+        : 'hidden';
+  }
+
+  enableAppBarButtons();
+  updateUtilityMenuAvailability();
+  debugFileCountState.entryState = null;
+}
+
 function closeDebugFileCountOverlay() {
   debugFileCountState.runId += 1;
   debugFileCountState.folderPath = null;
   debugFileCountState.files = [];
+  debugFileCountState.fileBuckets = [];
   resetDebugFileCountScorecard();
 
   const { overlay, titleEl, closeBtn, cancelBtn, proceedBtn } =
@@ -2135,7 +2187,14 @@ function closeDebugFileCountOverlay() {
   }
 }
 
-function renderDebugFileCountReview({ folderPath, files }) {
+function renderDebugFileCountReview({
+  folderPath,
+  files,
+  fileBuckets = [],
+  uniqueMediaCount = 0,
+  duplicateMediaCount = 0,
+  otherFileCount = 0,
+}) {
   const {
     overlay,
     titleEl,
@@ -2158,6 +2217,9 @@ function renderDebugFileCountReview({ folderPath, files }) {
 
   debugFileCountState.folderPath = folderPath;
   debugFileCountState.files = Array.isArray(files) ? [...files] : [];
+  debugFileCountState.fileBuckets = Array.isArray(fileBuckets)
+    ? [...fileBuckets]
+    : [];
 
   if (titleEl) {
     titleEl.textContent = 'Debug file count';
@@ -2166,9 +2228,19 @@ function renderDebugFileCountReview({ folderPath, files }) {
   debugFileCountState.scorecard.setStatus('Ready to log every file name.');
   debugFileCountState.scorecard.setMetrics([
     {
-      key: 'file_count',
-      label: 'FILE COUNT',
-      value: debugFileCountState.files.length,
+      key: 'unique_media',
+      label: 'UNIQUE MEDIA',
+      value: uniqueMediaCount,
+    },
+    {
+      key: 'duplicate_media',
+      label: 'DUPLICATES',
+      value: duplicateMediaCount,
+    },
+    {
+      key: 'other_files',
+      label: 'OTHER FILES',
+      value: otherFileCount,
     },
   ]);
 
@@ -2198,6 +2270,7 @@ async function runDebugFileCountLogging() {
     proceedBtn,
   } = getDebugFileCountOverlayElements();
   const files = [...debugFileCountState.files];
+  const buckets = [...debugFileCountState.fileBuckets];
   const totalCount = files.length;
   const runId = ++debugFileCountState.runId;
 
@@ -2205,8 +2278,37 @@ async function runDebugFileCountLogging() {
     return false;
   }
 
+  let uniqueLeft = buckets.filter((b) => b === 'unique_media').length;
+  let duplicateLeft = buckets.filter((b) => b === 'duplicate_media').length;
+  let otherLeft = buckets.filter((b) => b === 'other_files').length;
+
+  if (
+    buckets.length !== files.length &&
+    files.length > 0
+  ) {
+    uniqueLeft = 0;
+    duplicateLeft = 0;
+    otherLeft = files.length;
+  }
+
   debugFileCountState.scorecard.setStatus('Logging file names', { spinner: true });
-  debugFileCountState.scorecard.updateMetric('file_count', { value: totalCount });
+  debugFileCountState.scorecard.setMetrics([
+    {
+      key: 'unique_media',
+      label: 'UNIQUE MEDIA',
+      value: uniqueLeft,
+    },
+    {
+      key: 'duplicate_media',
+      label: 'DUPLICATES',
+      value: duplicateLeft,
+    },
+    {
+      key: 'other_files',
+      label: 'OTHER FILES',
+      value: otherLeft,
+    },
+  ]);
 
   if (closeBtn) {
     closeBtn.disabled = true;
@@ -2225,9 +2327,24 @@ async function runDebugFileCountLogging() {
 
       const fileName = files[index].split('/').pop() || files[index];
       console.log(fileName);
-      debugFileCountState.scorecard.updateMetric('file_count', {
-        value: totalCount - index - 1,
-      });
+
+      const bucket = buckets[index];
+      if (bucket === 'unique_media') {
+        uniqueLeft = Math.max(0, uniqueLeft - 1);
+        debugFileCountState.scorecard.updateMetric('unique_media', {
+          value: uniqueLeft,
+        });
+      } else if (bucket === 'duplicate_media') {
+        duplicateLeft = Math.max(0, duplicateLeft - 1);
+        debugFileCountState.scorecard.updateMetric('duplicate_media', {
+          value: duplicateLeft,
+        });
+      } else {
+        otherLeft = Math.max(0, otherLeft - 1);
+        debugFileCountState.scorecard.updateMetric('other_files', {
+          value: otherLeft,
+        });
+      }
 
       if ((index + 1) % 25 === 0) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -2243,7 +2360,7 @@ async function runDebugFileCountLogging() {
     );
 
     if (action === 'go_to_library') {
-      showDebugSandboxLibrary();
+      restoreDebugFileCountEntryState();
     }
 
     return true;
@@ -2257,6 +2374,8 @@ async function runDebugFileCountLogging() {
 
 async function startDebugFileCountFlow() {
   try {
+    debugFileCountState.entryState = captureDebugFileCountEntryState();
+
     const selectedPath = await FolderPicker.show({
       intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
       title: 'Debug file count',
@@ -2308,24 +2427,28 @@ async function startDebugFileCountFlow() {
       proceedBtn.onclick = null;
     }
 
-    debugFileCountState.scorecard.setStatus('Counting files', { spinner: true });
+    debugFileCountState.scorecard.setStatus('Analyzing files', { spinner: true });
     debugFileCountState.scorecard.setMetrics([]);
     overlay.style.display = 'flex';
 
-    const response = await fetch('/api/import/scan-paths', {
+    const response = await fetch('/api/debug/analyze-file-count', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: [selectedPath] }),
+      body: JSON.stringify({ path: selectedPath }),
     });
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || 'Failed to count files');
+      throw new Error(result.error || 'Failed to analyze files');
     }
 
     renderDebugFileCountReview({
       folderPath: selectedPath,
       files: result.files || [],
+      fileBuckets: result.file_buckets || [],
+      uniqueMediaCount: result.unique_media_count || 0,
+      duplicateMediaCount: result.duplicate_media_count || 0,
+      otherFileCount: result.other_file_count || 0,
     });
     return true;
   } catch (error) {
@@ -4435,35 +4558,6 @@ function renderEmptyLibraryState() {
       </div>
     </div>
   `;
-}
-
-function showDebugSandboxLibrary() {
-  advanceLibraryGeneration();
-  state.photos = [];
-  state.hasDatabase = false;
-  state.selectedPhotos.clear();
-  state.lastClickedIndex = null;
-
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
-  }
-
-  renderEmptyLibraryState();
-  enableAppBarButtons();
-
-  const emptyStateAddBtn = document.querySelector(
-    '#photoContainer .btn.btn-primary',
-  );
-  if (emptyStateAddBtn) {
-    emptyStateAddBtn.disabled = true;
-  }
-
-  const addPhotoBtn = document.getElementById('addPhotoBtn');
-  if (addPhotoBtn) {
-    addPhotoBtn.style.opacity = '0.3';
-    addPhotoBtn.style.pointerEvents = 'none';
-  }
 }
 
 /**

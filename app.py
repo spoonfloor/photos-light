@@ -4,6 +4,7 @@ Photo Viewer - Flask Server with Database API
 """
 
 from flask import Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
+from collections import defaultdict
 import sqlite3
 import traceback
 from functools import wraps
@@ -63,6 +64,8 @@ from library_cleanliness import (
     PHOTO_MEDIA_EXTENSIONS,
     VIDEO_MEDIA_EXTENSIONS,
     build_canonical_photo_path,
+    is_supported_media_extension,
+    media_kind_for_extension,
     parse_metadata_datetime,
 )
 from library_sync import (
@@ -88,6 +91,7 @@ from photo_canonicalization import (
     canonicalize_photo_file,
     write_photo_date_metadata,
 )
+from make_library_perfect import _compute_photo_duplicate_key, verify_media_file
 from rotation_utils import (
     JPEG_LOSSY_QUALITY,
     ROTATION_SUPPORTED_EXTENSIONS,
@@ -401,6 +405,15 @@ class StagedCanonicalPhoto:
     canonical_photo: CanonicalizedPhoto
 
 
+@dataclass
+class DebugFileCountAnalysisResult:
+    all_files: list[str]
+    file_buckets: list[str]
+    unique_media_count: int
+    duplicate_media_count: int
+    other_file_count: int
+
+
 def cleanup_staged_file(staged_path):
     """Best-effort cleanup for staged temp files."""
     if not staged_path:
@@ -454,6 +467,95 @@ def stage_photo_for_canonicalization(source_path, *, temp_prefix, temp_dir=None)
     except Exception:
         cleanup_staged_file(staged_path)
         raise
+
+
+def iter_debug_file_count_paths(selected_path):
+    """Yield every file under the selected path."""
+    if os.path.isfile(selected_path):
+        yield selected_path
+        return
+
+    for root, _, files in os.walk(selected_path):
+        for filename in files:
+            yield os.path.join(root, filename)
+
+
+def analyze_debug_media_duplicate_key(file_path):
+    """
+    Return the cleaner-compatible duplicate identity for a media file without
+    mutating the source path.
+    """
+    valid, _ = verify_media_file(file_path)
+    if not valid:
+        raise RuntimeError(f"Unreadable media file: {file_path}")
+
+    file_type = media_kind_for_extension(os.path.splitext(file_path)[1].lower())
+    if file_type == 'photo':
+        staged_photo = stage_photo_for_canonicalization(
+            file_path,
+            temp_prefix='debug-file-count-',
+        )
+        try:
+            return _compute_photo_duplicate_key(
+                staged_photo.staged_path,
+                fallback_hash=staged_photo.canonical_photo.content_hash,
+            )
+        finally:
+            cleanup_staged_file(staged_photo.staged_path)
+
+    content_hash = compute_full_hash(file_path)
+    if not content_hash:
+        raise RuntimeError(f"Failed to hash media file: {file_path}")
+    return content_hash
+
+
+def analyze_debug_file_count_path(selected_path):
+    """Compute the debug file-count scorecard without touching source files."""
+    if not selected_path:
+        raise RuntimeError('No path selected')
+    if not os.path.exists(selected_path):
+        raise RuntimeError(f'Path not found: {selected_path}')
+
+    all_files: list[str] = []
+    path_bucket: dict[str, str] = {}
+    key_to_paths: dict[str, list[str]] = defaultdict(list)
+
+    for file_path in iter_debug_file_count_paths(selected_path):
+        all_files.append(file_path)
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if not is_supported_media_extension(ext):
+            path_bucket[file_path] = 'other_files'
+            continue
+
+        try:
+            duplicate_key = analyze_debug_media_duplicate_key(file_path)
+        except Exception as error:
+            print(f"  ⚠️  Debug analyzer counted as other file: {file_path} ({error})")
+            path_bucket[file_path] = 'other_files'
+            continue
+
+        key_to_paths[duplicate_key].append(file_path)
+
+    for paths in key_to_paths.values():
+        sorted_paths = sorted(paths)
+        path_bucket[sorted_paths[0]] = 'unique_media'
+        for extra_path in sorted_paths[1:]:
+            path_bucket[extra_path] = 'duplicate_media'
+
+    file_buckets = [path_bucket[p] for p in all_files]
+
+    unique_media_count = sum(1 for b in file_buckets if b == 'unique_media')
+    duplicate_media_count = sum(1 for b in file_buckets if b == 'duplicate_media')
+    other_file_count = sum(1 for b in file_buckets if b == 'other_files')
+
+    return DebugFileCountAnalysisResult(
+        all_files=all_files,
+        file_buckets=file_buckets,
+        unique_media_count=unique_media_count,
+        duplicate_media_count=duplicate_media_count,
+        other_file_count=other_file_count,
+    )
 
 
 def insert_canonical_photo_row(conn, *, original_filename, relative_path, canonical_photo):
@@ -2520,6 +2622,35 @@ def scan_import_paths():
     except Exception as e:
         error_logger.error(f"Scan paths failed: {e}")
         print(f"\n❌ Scan paths failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/debug/analyze-file-count', methods=['POST'])
+@handle_db_corruption
+def analyze_debug_file_count():
+    """Analyze a folder for unique media, duplicates, and other files."""
+    try:
+        data = request.json or {}
+        selected_path = data.get('path')
+
+        if not selected_path:
+            return jsonify({'error': 'No path provided'}), 400
+
+        print(f"\n🧪 Debug file count analysis: {selected_path}")
+        result = analyze_debug_file_count_path(selected_path)
+
+        return jsonify({
+            'status': 'success',
+            'path': selected_path,
+            'files': result.all_files,
+            'file_buckets': result.file_buckets,
+            'unique_media_count': result.unique_media_count,
+            'duplicate_media_count': result.duplicate_media_count,
+            'other_file_count': result.other_file_count,
+        })
+    except Exception as e:
+        error_logger.error(f"Debug file count analysis failed: {e}")
+        print(f"\n❌ Debug file count analysis failed: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photos/import-from-paths', methods=['POST'])
