@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v348';
+const MAIN_JS_VERSION = 'v352';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -825,6 +825,72 @@ function updateLibraryRecoveryMakePerfectProgress(ev) {
   }
 }
 
+function createLibraryRecoveryStatsCountdown(initialStats = []) {
+  const countdownStats = initialStats.map((stat) => ({
+    label: stat.label,
+    value: Math.max(0, Number(stat.value) || 0),
+  }));
+  const totalSteps = countdownStats.reduce((sum, stat) => sum + stat.value, 0);
+  const stepDelayMs = Math.max(
+    10,
+    Math.min(90, Math.floor(3000 / Math.max(totalSteps, 1)) || 10),
+  );
+  let nextIndex = 0;
+  let timerId = null;
+  let resolved = false;
+  let resolvePromise = null;
+
+  const finish = () => {
+    if (timerId !== null) {
+      window.clearInterval(timerId);
+      timerId = null;
+    }
+    if (!resolved) {
+      resolved = true;
+      resolvePromise?.();
+    }
+  };
+
+  setLibraryRecoveryStats(countdownStats);
+
+  const promise = new Promise((resolve) => {
+    resolvePromise = resolve;
+
+    if (!totalSteps) {
+      finish();
+      return;
+    }
+
+    timerId = window.setInterval(() => {
+      let decremented = false;
+
+      for (let offset = 0; offset < countdownStats.length; offset += 1) {
+        const statIndex = (nextIndex + offset) % countdownStats.length;
+        if (countdownStats[statIndex].value > 0) {
+          countdownStats[statIndex].value -= 1;
+          nextIndex = (statIndex + 1) % countdownStats.length;
+          decremented = true;
+          break;
+        }
+      }
+
+      setLibraryRecoveryStats(countdownStats);
+
+      if (
+        !decremented ||
+        countdownStats.every((stat) => Number(stat.value || 0) === 0)
+      ) {
+        finish();
+      }
+    }, stepDelayMs);
+  });
+
+  return {
+    promise,
+    cancel: finish,
+  };
+}
+
 /**
  * Same engine as POST /api/library/make-perfect, with SSE progress events.
  */
@@ -1370,72 +1436,6 @@ function setLibraryRecoveryStats(stats = []) {
     })
     .join('');
   statsEl.style.display = 'flex';
-}
-
-function createLibraryRecoveryStatsCountdown(initialStats = []) {
-  const countdownStats = initialStats.map((stat) => ({
-    label: stat.label,
-    value: Math.max(0, Number(stat.value) || 0),
-  }));
-  const totalSteps = countdownStats.reduce((sum, stat) => sum + stat.value, 0);
-  const stepDelayMs = Math.max(
-    10,
-    Math.min(90, Math.floor(3000 / Math.max(totalSteps, 1)) || 10),
-  );
-  let nextIndex = 0;
-  let timerId = null;
-  let resolved = false;
-  let resolvePromise = null;
-
-  const finish = () => {
-    if (timerId !== null) {
-      window.clearInterval(timerId);
-      timerId = null;
-    }
-    if (!resolved) {
-      resolved = true;
-      resolvePromise?.();
-    }
-  };
-
-  setLibraryRecoveryStats(countdownStats);
-
-  const promise = new Promise((resolve) => {
-    resolvePromise = resolve;
-
-    if (!totalSteps) {
-      finish();
-      return;
-    }
-
-    timerId = window.setInterval(() => {
-      let decremented = false;
-
-      for (let offset = 0; offset < countdownStats.length; offset += 1) {
-        const statIndex = (nextIndex + offset) % countdownStats.length;
-        if (countdownStats[statIndex].value > 0) {
-          countdownStats[statIndex].value -= 1;
-          nextIndex = (statIndex + 1) % countdownStats.length;
-          decremented = true;
-          break;
-        }
-      }
-
-      setLibraryRecoveryStats(countdownStats);
-
-      if (
-        !decremented ||
-        countdownStats.every((stat) => Number(stat.value || 0) === 0)
-      ) {
-        finish();
-      }
-    }, stepDelayMs);
-  });
-
-  return {
-    promise,
-    cancel: finish,
-  };
 }
 
 function setLibraryRecoveryActions(actions = [], resolveAction = null) {
@@ -7359,6 +7359,14 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       }
       rebuildCountdown = createLibraryRecoveryStatsCountdown(rebuildingStats);
       shouldUseRebuildingCountdown = true;
+    } else {
+      finishDockFlow();
+      await showLibraryTransitionOverlay({
+        title: 'Cleaning library',
+        message:
+          'Normalizing your library. Please keep this window open until it finishes.',
+      });
+      await requestMakeLibraryPerfect();
     }
 
     if (shouldUseRebuildingCountdown && rebuildCountdown) {
@@ -7371,15 +7379,8 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         showCloseButton: openingCopy.showCloseButton,
         actions: openingCopy.actions,
       });
-    } else {
-      finishDockFlow();
-      await showLibraryTransitionOverlay({
-        title: 'Cleaning library',
-        message:
-          'Normalizing your library. Please keep this window open until it finishes.',
-      });
-      await requestMakeLibraryPerfect();
     }
+
     finishDockFlow();
     if (switchedGeneration !== null) {
       await loadAndRenderPhotosCommitted(switchedGeneration);
