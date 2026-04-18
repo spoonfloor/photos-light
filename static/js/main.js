@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v352';
+const MAIN_JS_VERSION = 'v354';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -34,6 +34,13 @@ const libraryRecoveryState = {
   hasSwitchedLibrary: false,
   rebuildTotal: 0,
   rebuildAdded: 0,
+};
+
+const debugFileCountState = {
+  runId: 0,
+  folderPath: null,
+  files: [],
+  scorecard: null,
 };
 
 let currentPhotoLoad = null;
@@ -1410,8 +1417,7 @@ function finishLibraryRecoveryJourney() {
   libraryRecoveryState.rebuildAdded = 0;
 }
 
-function setLibraryRecoveryStats(stats = []) {
-  const statsEl = document.getElementById('libraryRecoveryStats');
+function renderScorecardStats(statsEl, stats = []) {
   if (!statsEl) return;
 
   if (!stats.length) {
@@ -1436,6 +1442,190 @@ function setLibraryRecoveryStats(stats = []) {
     })
     .join('');
   statsEl.style.display = 'flex';
+}
+
+function setLibraryRecoveryStats(stats = []) {
+  renderScorecardStats(document.getElementById('libraryRecoveryStats'), stats);
+}
+
+function createScorecardController({ statsEl, statusEl } = {}) {
+  const metrics = new Map();
+  let metricOrder = [];
+  const animationFrames = new Map();
+  let destroyed = false;
+
+  const getStatusHtml = (text, { spinner = false } = {}) =>
+    `${text}${spinner ? '<span class="import-spinner"></span>' : ''}`;
+
+  const render = () => {
+    if (destroyed || !statsEl) {
+      return;
+    }
+
+    const stats = metricOrder
+      .map((key) => metrics.get(key))
+      .filter(Boolean)
+      .map((metric) => ({
+        label: metric.label,
+        value:
+          typeof metric.formatValue === 'function'
+            ? metric.formatValue(metric.value)
+            : metric.value,
+      }));
+
+    renderScorecardStats(statsEl, stats);
+  };
+
+  const ensureMetric = (key, patch = {}) => {
+    const existing = metrics.get(key) || {
+      key,
+      label: key,
+      value: 0,
+    };
+    const next = {
+      ...existing,
+      ...patch,
+      key,
+      label: patch.label ?? existing.label ?? key,
+      value: patch.value ?? existing.value ?? 0,
+    };
+    metrics.set(key, next);
+    if (!metricOrder.includes(key)) {
+      metricOrder.push(key);
+    }
+    return next;
+  };
+
+  const stopMetricAnimation = (key) => {
+    const frameId = animationFrames.get(key);
+    if (frameId) {
+      cancelAnimationFrame(frameId);
+      animationFrames.delete(key);
+    }
+  };
+
+  return {
+    setStatus(text = '', options = {}) {
+      if (!statusEl || destroyed) {
+        return;
+      }
+      if (!text) {
+        statusEl.style.display = 'none';
+        statusEl.textContent = '';
+        return;
+      }
+      statusEl.innerHTML = getStatusHtml(text, options);
+      statusEl.style.display = 'flex';
+    },
+
+    setMetrics(nextMetrics = []) {
+      if (destroyed) {
+        return;
+      }
+      metricOrder = [];
+      metrics.clear();
+      nextMetrics.forEach((metric) => {
+        ensureMetric(metric.key, metric);
+      });
+      render();
+    },
+
+    updateMetric(key, patch = {}) {
+      if (destroyed) {
+        return;
+      }
+      ensureMetric(key, patch);
+      render();
+    },
+
+    animateMetricTo(key, nextValue, options = {}) {
+      if (destroyed) {
+        return Promise.resolve(nextValue);
+      }
+
+      const duration = Math.max(0, Number(options.duration ?? 350));
+      const round = options.round !== false;
+      const initialMetric = ensureMetric(key, options.metric || {});
+      const startValue = Number(initialMetric.value ?? 0);
+      const endValue = Number(nextValue ?? 0);
+
+      if (
+        duration === 0 ||
+        !Number.isFinite(startValue) ||
+        !Number.isFinite(endValue)
+      ) {
+        ensureMetric(key, {
+          ...options.metric,
+          value: round && Number.isFinite(endValue) ? Math.round(endValue) : nextValue,
+        });
+        render();
+        return Promise.resolve(nextValue);
+      }
+
+      stopMetricAnimation(key);
+
+      return new Promise((resolve) => {
+        const startedAt = performance.now();
+
+        const tick = (now) => {
+          if (destroyed) {
+            animationFrames.delete(key);
+            resolve(nextValue);
+            return;
+          }
+
+          const progress = Math.min(1, (now - startedAt) / duration);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          const rawValue = startValue + (endValue - startValue) * eased;
+          ensureMetric(key, {
+            ...options.metric,
+            value: round ? Math.round(rawValue) : rawValue,
+          });
+          render();
+
+          if (progress >= 1) {
+            animationFrames.delete(key);
+            resolve(nextValue);
+            return;
+          }
+
+          const frameId = requestAnimationFrame(tick);
+          animationFrames.set(key, frameId);
+        };
+
+        const frameId = requestAnimationFrame(tick);
+        animationFrames.set(key, frameId);
+      });
+    },
+
+    stop(key = null) {
+      if (key) {
+        stopMetricAnimation(key);
+        return;
+      }
+      Array.from(animationFrames.keys()).forEach((metricKey) => {
+        stopMetricAnimation(metricKey);
+      });
+    },
+
+    destroy() {
+      if (destroyed) {
+        return;
+      }
+      destroyed = true;
+      this.stop();
+      metricOrder = [];
+      metrics.clear();
+      if (statusEl) {
+        statusEl.style.display = 'none';
+        statusEl.textContent = '';
+      }
+      if (statsEl) {
+        statsEl.style.display = 'none';
+        statsEl.innerHTML = '';
+      }
+    },
+  };
 }
 
 function setLibraryRecoveryActions(actions = [], resolveAction = null) {
@@ -1884,6 +2074,266 @@ function loadDateChangeProgressOverlay() {
     .catch((err) => {
       console.error('❌ Date change progress overlay load failed:', err);
     });
+}
+
+async function loadDebugFileCountOverlay() {
+  if (document.getElementById('debugFileCountOverlay')) {
+    return;
+  }
+
+  const response = await fetch('fragments/debugFileCountOverlay.html');
+  if (!response.ok) {
+    throw new Error(`Failed to load debug file count overlay (${response.status})`);
+  }
+
+  document.body.insertAdjacentHTML('beforeend', await response.text());
+}
+
+function getDebugFileCountOverlayElements() {
+  return {
+    overlay: document.getElementById('debugFileCountOverlay'),
+    titleEl: document.getElementById('debugFileCountTitle'),
+    statusEl: document.getElementById('debugFileCountStatusText'),
+    statsEl: document.getElementById('debugFileCountStats'),
+    closeBtn: document.getElementById('debugFileCountCloseBtn'),
+    cancelBtn: document.getElementById('debugFileCountCancelBtn'),
+    proceedBtn: document.getElementById('debugFileCountProceedBtn'),
+  };
+}
+
+function resetDebugFileCountScorecard() {
+  debugFileCountState.scorecard?.destroy();
+  debugFileCountState.scorecard = null;
+}
+
+function closeDebugFileCountOverlay() {
+  debugFileCountState.runId += 1;
+  debugFileCountState.folderPath = null;
+  debugFileCountState.files = [];
+  resetDebugFileCountScorecard();
+
+  const { overlay, titleEl, closeBtn, cancelBtn, proceedBtn } =
+    getDebugFileCountOverlayElements();
+  if (titleEl) {
+    titleEl.textContent = 'Debug file count';
+  }
+  if (closeBtn) {
+    closeBtn.disabled = false;
+  }
+  if (cancelBtn) {
+    cancelBtn.disabled = false;
+    cancelBtn.style.display = 'inline-block';
+  }
+  if (proceedBtn) {
+    proceedBtn.disabled = false;
+    proceedBtn.textContent = 'Proceed';
+    proceedBtn.style.display = 'none';
+    proceedBtn.onclick = null;
+  }
+  if (overlay) {
+    overlay.style.display = 'none';
+  }
+}
+
+function renderDebugFileCountReview({ folderPath, files }) {
+  const {
+    overlay,
+    titleEl,
+    statusEl,
+    statsEl,
+    closeBtn,
+    cancelBtn,
+    proceedBtn,
+  } = getDebugFileCountOverlayElements();
+
+  if (!overlay || !statusEl || !statsEl || !proceedBtn) {
+    throw new Error('Debug file count overlay is unavailable');
+  }
+
+  resetDebugFileCountScorecard();
+  debugFileCountState.scorecard = createScorecardController({
+    statusEl,
+    statsEl,
+  });
+
+  debugFileCountState.folderPath = folderPath;
+  debugFileCountState.files = Array.isArray(files) ? [...files] : [];
+
+  if (titleEl) {
+    titleEl.textContent = 'Debug file count';
+  }
+
+  debugFileCountState.scorecard.setStatus('Ready to log every file name.');
+  debugFileCountState.scorecard.setMetrics([
+    {
+      key: 'file_count',
+      label: 'FILE COUNT',
+      value: debugFileCountState.files.length,
+    },
+  ]);
+
+  if (closeBtn) {
+    closeBtn.disabled = false;
+    closeBtn.onclick = closeDebugFileCountOverlay;
+  }
+  if (cancelBtn) {
+    cancelBtn.disabled = false;
+    cancelBtn.style.display = 'inline-block';
+    cancelBtn.onclick = closeDebugFileCountOverlay;
+  }
+  proceedBtn.disabled = false;
+  proceedBtn.textContent = 'Proceed';
+  proceedBtn.style.display = 'inline-block';
+  proceedBtn.onclick = () => {
+    void runDebugFileCountLogging();
+  };
+
+  overlay.style.display = 'flex';
+}
+
+async function runDebugFileCountLogging() {
+  const {
+    closeBtn,
+    cancelBtn,
+    proceedBtn,
+  } = getDebugFileCountOverlayElements();
+  const files = [...debugFileCountState.files];
+  const totalCount = files.length;
+  const runId = ++debugFileCountState.runId;
+
+  if (!debugFileCountState.scorecard || !proceedBtn) {
+    return false;
+  }
+
+  debugFileCountState.scorecard.setStatus('Logging file names', { spinner: true });
+  debugFileCountState.scorecard.updateMetric('file_count', { value: totalCount });
+
+  if (closeBtn) {
+    closeBtn.disabled = true;
+  }
+  if (cancelBtn) {
+    cancelBtn.disabled = true;
+  }
+  proceedBtn.disabled = true;
+  proceedBtn.textContent = 'Working...';
+
+  try {
+    for (let index = 0; index < files.length; index += 1) {
+      if (runId !== debugFileCountState.runId) {
+        return false;
+      }
+
+      const fileName = files[index].split('/').pop() || files[index];
+      console.log(fileName);
+      debugFileCountState.scorecard.updateMetric('file_count', {
+        value: totalCount - index - 1,
+      });
+
+      if ((index + 1) % 25 === 0) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+    }
+
+    closeDebugFileCountOverlay();
+
+    const action = await showDialog(
+      'Success',
+      `Logged ${totalCount.toLocaleString()} file name${totalCount === 1 ? '' : 's'}.`,
+      [{ text: 'Go to library', value: 'go_to_library', primary: true }],
+    );
+
+    if (action === 'go_to_library') {
+      showDebugSandboxLibrary();
+    }
+
+    return true;
+  } catch (error) {
+    console.error('❌ Debug file count failed:', error);
+    closeDebugFileCountOverlay();
+    showToast(`Error: ${error.message}`);
+    return false;
+  }
+}
+
+async function startDebugFileCountFlow() {
+  try {
+    const selectedPath = await FolderPicker.show({
+      intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
+      title: 'Debug file count',
+      subtitle: 'Choose a folder to count recursively.',
+    });
+
+    if (!selectedPath) {
+      return false;
+    }
+
+    await loadDebugFileCountOverlay();
+
+    const {
+      overlay,
+      titleEl,
+      statusEl,
+      statsEl,
+      closeBtn,
+      cancelBtn,
+      proceedBtn,
+    } = getDebugFileCountOverlayElements();
+
+    if (!overlay || !statusEl || !statsEl) {
+      throw new Error('Debug file count overlay is unavailable');
+    }
+
+    resetDebugFileCountScorecard();
+    debugFileCountState.scorecard = createScorecardController({
+      statusEl,
+      statsEl,
+    });
+
+    if (titleEl) {
+      titleEl.textContent = 'Debug file count';
+    }
+    if (closeBtn) {
+      closeBtn.disabled = false;
+      closeBtn.onclick = closeDebugFileCountOverlay;
+    }
+    if (cancelBtn) {
+      cancelBtn.disabled = false;
+      cancelBtn.style.display = 'inline-block';
+      cancelBtn.onclick = closeDebugFileCountOverlay;
+    }
+    if (proceedBtn) {
+      proceedBtn.style.display = 'none';
+      proceedBtn.disabled = true;
+      proceedBtn.textContent = 'Proceed';
+      proceedBtn.onclick = null;
+    }
+
+    debugFileCountState.scorecard.setStatus('Counting files', { spinner: true });
+    debugFileCountState.scorecard.setMetrics([]);
+    overlay.style.display = 'flex';
+
+    const response = await fetch('/api/import/scan-paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: [selectedPath] }),
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to count files');
+    }
+
+    renderDebugFileCountReview({
+      folderPath: selectedPath,
+      files: result.files || [],
+    });
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to start debug file count flow:', error);
+    closeDebugFileCountOverlay();
+    showToast(`Error: ${error.message}`);
+    return false;
+  }
 }
 
 /**
@@ -3955,6 +4405,10 @@ function renderFirstRunEmptyState() {
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
           <span>Add photos</span>
         </button>
+        <button class="btn" onclick="void startDebugFileCountFlow()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">bug_report</span>
+          <span>Debug</span>
+        </button>
       </div>
     </div>
   `;
@@ -3981,6 +4435,35 @@ function renderEmptyLibraryState() {
       </div>
     </div>
   `;
+}
+
+function showDebugSandboxLibrary() {
+  advanceLibraryGeneration();
+  state.photos = [];
+  state.hasDatabase = false;
+  state.selectedPhotos.clear();
+  state.lastClickedIndex = null;
+
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
+  }
+
+  renderEmptyLibraryState();
+  enableAppBarButtons();
+
+  const emptyStateAddBtn = document.querySelector(
+    '#photoContainer .btn.btn-primary',
+  );
+  if (emptyStateAddBtn) {
+    emptyStateAddBtn.disabled = true;
+  }
+
+  const addPhotoBtn = document.getElementById('addPhotoBtn');
+  if (addPhotoBtn) {
+    addPhotoBtn.style.opacity = '0.3';
+    addPhotoBtn.style.pointerEvents = 'none';
+  }
 }
 
 /**
@@ -7206,8 +7689,7 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
 
   try {
     if (checkResult.has_openable_db) {
-      showToast('Error: Selected folder already has a usable library database');
-      return false;
+      return await switchToLibrary(selectedPath, checkResult.db_path);
     }
 
     const recoverChoice = await showRecoverDatabaseDialog();
@@ -7414,8 +7896,8 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
 }
 
 /**
- * Browse for library (custom folder picker). Invariant: after `/api/library/check`,
- * always `openLibraryFromBrowseUnified` — never the legacy flow.
+ * Browse for library (custom folder picker). After `/api/library/check`,
+ * open usable libraries directly; otherwise run the no-DB recovery flow.
  */
 async function browseSwitchLibrary() {
   try {
@@ -7447,7 +7929,7 @@ async function browseSwitchLibrary() {
 
     setOpenLibraryModalHandoffShellHidden(false);
 
-    // INVARIANT: single pipeline — no branch to `browseSwitchLibraryLegacyAfterCheck`.
+    // Product path: usable DB opens directly; no-DB folders use unified recovery.
     return await openLibraryFromBrowseUnified(selectedPath, checkResult);
   } catch (error) {
     console.error('❌ Failed to browse library:', error);
