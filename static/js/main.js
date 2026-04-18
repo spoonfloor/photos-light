@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v334';
+const MAIN_JS_VERSION = 'v338';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -81,6 +81,10 @@ function checkForDatabaseCorruption(responseData) {
     }
   }
   return false;
+}
+
+function logOpenLibraryAccessPoint(source) {
+  console.log(`[open-library disabled] ${source}`);
 }
 
 function isCalendarMonthKey(monthKey) {
@@ -683,7 +687,7 @@ function showCriticalError(title, message, buttons) {
       } else if (action === 'switch_library') {
         hideCriticalError();
         await loadSwitchLibraryOverlay();
-        await browseSwitchLibrary();
+        logOpenLibraryAccessPoint('critical-error-legacy');
       } else if (action === 'retry') {
         // Check if library is accessible now
         try {
@@ -2219,7 +2223,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.textContent = 'Open library';
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
-      await browseSwitchLibrary();
+      logOpenLibraryAccessPoint('critical-error-db-missing');
     };
 
     const rebuildBtn = document.createElement('button');
@@ -2242,7 +2246,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.textContent = 'Open library';
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
-      await browseSwitchLibrary();
+      logOpenLibraryAccessPoint('critical-error-db-needs-migration');
     };
 
     const reloadBtn = document.createElement('button');
@@ -2269,7 +2273,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.textContent = 'Open library';
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
-      await browseSwitchLibrary();
+      logOpenLibraryAccessPoint('critical-error-library-not-found');
     };
 
     const retryBtn = document.createElement('button');
@@ -3772,6 +3776,34 @@ async function loadAndRenderPhotos(append = false, options = {}) {
 }
 
 /**
+ * Hydrate the grid for a library generation after switch (e.g. deferPhotoReload).
+ * Retries once if the first load was superseded (stale), which avoids an empty grid.
+ *
+ * If the inner load returns false but still applied data (e.g. stale check after
+ * populateDatePicker) or a second load aborted the first, we accept the result when
+ * generation matches and the session has a usable DB snapshot.
+ */
+async function loadAndRenderPhotosCommitted(generation) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ok = await loadAndRenderPhotos(false, {
+      throwOnError: true,
+      generation,
+    });
+    if (ok === true) {
+      return true;
+    }
+    if (!isCurrentLibraryGeneration(generation)) {
+      throw new Error('Library changed while loading photos.');
+    }
+  }
+  if (isCurrentLibraryGeneration(generation) && state.hasDatabase) {
+    enableAppBarButtons();
+    return true;
+  }
+  throw new Error('Photos failed to load. Try refreshing the page.');
+}
+
+/**
  * Setup lazy loading for thumbnails (only load when visible)
  */
 let thumbnailObserver = null;
@@ -3846,7 +3878,7 @@ function renderFirstRunEmptyState() {
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
-        <button class="btn" onclick="browseSwitchLibrary()" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
+        <button class="btn" onclick="logOpenLibraryAccessPoint('first-run-empty-state')" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
           <span>Open library</span>
         </button>
@@ -4856,7 +4888,7 @@ async function loadUtilitiesMenu() {
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
-        browseSwitchLibrary();
+        logOpenLibraryAccessPoint('utilities-menu-open-library');
       });
     }
 
@@ -6713,6 +6745,8 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
   libraryRecoveryState.hasSwitchedLibrary = false;
   setLibraryRecoveryShellHidden(true);
   let failureStage = 'recover_database';
+  /** Set after a successful switch; used for all post-switch hydrations. */
+  let hydrationGeneration = null;
   const recoveryJourneyAbort = new AbortController();
 
   await showLibraryRecoveryDockCard({
@@ -6749,6 +6783,7 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
       throwOnError: true,
       signal: recoveryJourneyAbort.signal,
     });
+    hydrationGeneration = state.libraryGeneration;
     libraryRecoveryState.hasSwitchedLibrary = true;
     failureStage = 'scan';
 
@@ -6761,7 +6796,7 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
     );
 
     if (!recoverMediaInfo.media_count) {
-      await loadAndRenderPhotos(false, { throwOnError: true });
+      await loadAndRenderPhotosCommitted(hydrationGeneration);
       finishLibraryRecoveryJourney();
       return true;
     }
@@ -6789,7 +6824,7 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
     });
 
     if (recoverMediaChoice !== 'add_media') {
-      await loadAndRenderPhotos(false, { throwOnError: true });
+      await loadAndRenderPhotosCommitted(hydrationGeneration);
       finishLibraryRecoveryJourney();
       return true;
     }
@@ -6798,27 +6833,23 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
     libraryRecoveryState.rebuildTotal = mediaCount;
     libraryRecoveryState.rebuildAdded = 0;
     let rebuildDismissed = false;
-    const dismissRebuild = () => {
+    const dismissRebuild = async () => {
       if (rebuildDismissed) {
         return;
       }
       rebuildDismissed = true;
       rebuildAbort.abort();
-      finishLibraryRecoveryJourney();
-    };
-    const continueToLibrary = async () => {
       try {
-        await loadAndRenderPhotos(false, { throwOnError: true });
-        finishLibraryRecoveryJourney();
+        await loadAndRenderPhotosCommitted(hydrationGeneration);
       } catch (error) {
-        console.error('❌ Failed to show recovered library:', error);
-        showToast(`Error: ${error.message}`);
+        console.warn('Hydrate after rebuild cancel:', error);
       }
+      finishLibraryRecoveryJourney();
     };
 
     await showLibraryRecoveryDockCard({
       title: 'Rebuilding library',
-      body: `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database.`,
+      body: `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database. Stay on this screen until it finishes.`,
       stats: [
         { label: 'Added', value: 0 },
         { label: 'Total', value: mediaCount },
@@ -6832,11 +6863,6 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
           primary: false,
           onClick: dismissRebuild,
         },
-        {
-          text: 'Continue',
-          primary: true,
-          onClick: continueToLibrary,
-        },
       ],
     });
 
@@ -6845,26 +6871,48 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
         signal: rebuildAbort.signal,
         onProgress: updateLibraryRecoveryMakePerfectProgress,
       });
-      await loadAndRenderPhotos(false, { throwOnError: true });
+      // Replace rebuild UI (with Cancel) so users cannot race hydrate by clicking Cancel.
+      await showLibraryRecoveryDockCard({
+        title: 'Opening library',
+        body: 'Loading your photos into the app.',
+        statusText: 'Almost done',
+        statusSpinner: true,
+        showCloseButton: false,
+        actions: [],
+      });
+      await loadAndRenderPhotosCommitted(hydrationGeneration);
       finishLibraryRecoveryJourney();
       showToast('Library ready');
       return true;
     } catch (error) {
       if (error.name === 'AbortError') {
         if (!rebuildDismissed) {
+          try {
+            await loadAndRenderPhotosCommitted(hydrationGeneration);
+          } catch (hydrateErr) {
+            console.warn('Hydrate after rebuild abort:', hydrateErr);
+          }
           finishLibraryRecoveryJourney();
         }
         return true;
       }
       console.error('❌ Recover media failed:', error);
       const failureCopy = getRecoveryFailureCopy('add_media', true);
-      await promptLibraryRecoveryDock({
+      const postFailureChoice = await promptLibraryRecoveryDock({
         ...failureCopy,
         actions: [
           { text: 'Close', value: 'close', primary: false },
           { text: 'See my library', value: 'see_library', primary: true },
         ],
       });
+      if (postFailureChoice === 'see_library') {
+        try {
+          await loadAndRenderPhotosCommitted(hydrationGeneration);
+        } catch (hydrateErr) {
+          console.error('❌ Failed to show library after recovery error:', hydrateErr);
+          showToast(`Error: ${hydrateErr.message}`);
+        }
+      }
       finishLibraryRecoveryJourney();
       return true;
     }
@@ -6885,10 +6933,18 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
           { text: 'See my library', value: 'see_library', primary: true },
         ]
       : [{ text: 'Close', value: 'close', primary: true }];
-    await promptLibraryRecoveryDock({
+    const recoveryFailureChoice = await promptLibraryRecoveryDock({
       ...failureCopy,
       actions,
     });
+    if (recoveryFailureChoice === 'see_library' && hydrationGeneration !== null) {
+      try {
+        await loadAndRenderPhotosCommitted(hydrationGeneration);
+      } catch (hydrateErr) {
+        console.error('❌ Failed to show library after recovery error:', hydrateErr);
+        showToast(`Error: ${hydrateErr.message}`);
+      }
+    }
     finishLibraryRecoveryJourney();
     return hasSwitchedLibrary;
   }
