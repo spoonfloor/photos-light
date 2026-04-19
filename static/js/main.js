@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v358';
+const MAIN_JS_VERSION = 'v365';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -39,19 +39,32 @@ const libraryRecoveryState = {
 const debugFileCountState = {
   runId: 0,
   scanRoot: null,
-  summary: null,
+  signalCounts: null,
   logEntries: [],
   scorecard: null,
+  runtime: null,
   entryState: null,
 };
 
-const DEBUG_SCORECARD_TASK_DEFS = [
+const CLEANER_SIGNAL_DEFS = [
   { key: 'misfiled_media', label: 'MOVE/RENAME', detailKey: 'misfiled_media' },
   { key: 'unsupported_files', label: 'UNSUPPORTED', detailKey: 'unsupported_files' },
   { key: 'duplicates', label: 'DUPLICATES', detailKey: 'duplicates' },
   { key: 'metadata_cleanup', label: 'METADATA', detailKey: 'metadata_cleanup' },
+  { key: 'folder_cleanup', label: 'Cleanup', detailKey: 'folder_cleanup' },
   { key: 'database_repairs', label: 'DB REPAIRS', detailKey: 'database_repairs' },
 ];
+
+const CLEANER_SIGNAL_KEYS = CLEANER_SIGNAL_DEFS.map((signalDef) => signalDef.key);
+
+const DEFAULT_CLEANER_SCORECARD_VIEW = CLEANER_SIGNAL_DEFS.map((signalDef) => ({
+  key: signalDef.key,
+  label: signalDef.label,
+  signals: [signalDef.key],
+}));
+
+/** Pause between debug log lines so the scoreboard animation and console output are observable. */
+const DEBUG_FILE_COUNT_LOG_STEP_MS = 200;
 
 let currentPhotoLoad = null;
 let currentPhotoLoadAbortController = null;
@@ -1638,6 +1651,154 @@ function createScorecardController({ statsEl, statusEl } = {}) {
   };
 }
 
+function normalizeCleanerSignalCounts(summary = {}) {
+  const counts = {};
+  let total = 0;
+  CLEANER_SIGNAL_KEYS.forEach((key) => {
+    const value = Math.max(0, Number(summary?.[key] || 0));
+    counts[key] = value;
+    total += value;
+  });
+  counts.operation_count = total;
+  return counts;
+}
+
+function normalizeCleanerScorecardView(view = null) {
+  const rawBuckets = Array.isArray(view)
+    ? view
+    : Array.isArray(view?.buckets)
+      ? view.buckets
+      : DEFAULT_CLEANER_SCORECARD_VIEW;
+
+  return rawBuckets
+    .map((bucket, index) => {
+      const signals = Array.isArray(bucket?.signals)
+        ? bucket.signals.filter((signal) => CLEANER_SIGNAL_KEYS.includes(signal))
+        : [];
+      if (!signals.length) {
+        return null;
+      }
+      return {
+        key: bucket?.key || `cleaner_bucket_${index + 1}`,
+        label: bucket?.label || bucket?.key || `Bucket ${index + 1}`,
+        signals: [...new Set(signals)],
+      };
+    })
+    .filter(Boolean);
+}
+
+function reduceCleanerSignalsToBuckets(summary = {}, view = null) {
+  const signalCounts = normalizeCleanerSignalCounts(summary);
+  const buckets = normalizeCleanerScorecardView(view);
+  return buckets.map((bucket) => ({
+    key: bucket.key,
+    label: bucket.label,
+    value: bucket.signals.reduce(
+      (sum, signalKey) => sum + Number(signalCounts?.[signalKey] || 0),
+      0,
+    ),
+  }));
+}
+
+function applyCleanerSignalDeltas(summary = {}, deltas = {}) {
+  const next = normalizeCleanerSignalCounts(summary);
+  CLEANER_SIGNAL_KEYS.forEach((key) => {
+    const delta = Math.max(0, Number(deltas?.[key] || 0));
+    next[key] = Math.max(0, next[key] - delta);
+  });
+  next.operation_count = CLEANER_SIGNAL_KEYS.reduce(
+    (sum, key) => sum + Number(next[key] || 0),
+    0,
+  );
+  return next;
+}
+
+function createCleanerScorecardRuntime({
+  scorecard,
+  signalCounts = {},
+  view = null,
+} = {}) {
+  let currentSignals = normalizeCleanerSignalCounts(signalCounts);
+  let currentView = normalizeCleanerScorecardView(view);
+
+  const render = async ({ animate = false, duration = 200 } = {}) => {
+    const metrics = reduceCleanerSignalsToBuckets(currentSignals, currentView);
+    if (!scorecard) {
+      return metrics;
+    }
+    if (!animate) {
+      scorecard.setMetrics(metrics);
+      return metrics;
+    }
+    await Promise.all(
+      metrics.map((metric) =>
+        scorecard.animateMetricTo(metric.key, metric.value, {
+          duration,
+          metric,
+        }),
+      ),
+    );
+    return metrics;
+  };
+
+  return {
+    getSignalCounts() {
+      return { ...currentSignals };
+    },
+
+    getView() {
+      return currentView.map((bucket) => ({
+        ...bucket,
+        signals: [...bucket.signals],
+      }));
+    },
+
+    async setSignalCounts(nextSignals = {}, options = {}) {
+      currentSignals = normalizeCleanerSignalCounts(nextSignals);
+      return render(options);
+    },
+
+    async applySignalDeltas(deltas = {}, options = {}) {
+      currentSignals = applyCleanerSignalDeltas(currentSignals, deltas);
+      return render(options);
+    },
+
+    async setView(nextView = null, options = {}) {
+      currentView = normalizeCleanerScorecardView(nextView);
+      return render(options);
+    },
+
+    async applyStreamEvent(event = {}, options = {}) {
+      if (event?.type === 'signal_plan') {
+        return this.setSignalCounts(event.summary || {}, options);
+      }
+      if (event?.type === 'signal_delta') {
+        return this.applySignalDeltas(event.deltas || {}, options);
+      }
+      return null;
+    },
+
+    async render(options = {}) {
+      return render(options);
+    },
+  };
+}
+
+if (typeof window !== 'undefined') {
+  window.CleanerScorecardHelper = Object.freeze({
+    SIGNAL_DEFS: CLEANER_SIGNAL_DEFS.map((signalDef) => ({ ...signalDef })),
+    DEFAULT_VIEW: DEFAULT_CLEANER_SCORECARD_VIEW.map((bucket) => ({
+      ...bucket,
+      signals: [...bucket.signals],
+    })),
+    normalizeSignalCounts: normalizeCleanerSignalCounts,
+    normalizeView: normalizeCleanerScorecardView,
+    reduceToBuckets: reduceCleanerSignalsToBuckets,
+    applySignalDeltas: applyCleanerSignalDeltas,
+    createRuntime: createCleanerScorecardRuntime,
+  });
+}
+
 function setLibraryRecoveryActions(actions = [], resolveAction = null) {
   const actionsEl = document.getElementById('libraryRecoveryActions');
   if (!actionsEl) return;
@@ -2105,6 +2266,7 @@ function getDebugFileCountOverlayElements() {
     titleEl: document.getElementById('debugFileCountTitle'),
     statusEl: document.getElementById('debugFileCountStatusText'),
     statsEl: document.getElementById('debugFileCountStats'),
+    canonicalLineEl: document.getElementById('debugFileCountCanonicalLine'),
     closeBtn: document.getElementById('debugFileCountCloseBtn'),
     cancelBtn: document.getElementById('debugFileCountCancelBtn'),
     proceedBtn: document.getElementById('debugFileCountProceedBtn'),
@@ -2168,8 +2330,9 @@ function restoreDebugFileCountEntryState() {
 function closeDebugFileCountOverlay() {
   debugFileCountState.runId += 1;
   debugFileCountState.scanRoot = null;
-  debugFileCountState.summary = null;
+  debugFileCountState.signalCounts = null;
   debugFileCountState.logEntries = [];
+  debugFileCountState.runtime = null;
   resetDebugFileCountScorecard();
 
   const { overlay, titleEl, closeBtn, cancelBtn, proceedBtn } =
@@ -2193,23 +2356,84 @@ function closeDebugFileCountOverlay() {
   if (overlay) {
     overlay.style.display = 'none';
   }
+  const { canonicalLineEl } = getDebugFileCountOverlayElements();
+  if (canonicalLineEl) {
+    canonicalLineEl.textContent = '';
+    canonicalLineEl.style.display = 'none';
+  }
+}
+
+function setDebugFileCountCanonicalLine({
+  summary = {},
+  serverOperationCount,
+  rawIssueCount,
+  usedIssuesFallback = false,
+} = {}) {
+  const { canonicalLineEl } = getDebugFileCountOverlayElements();
+  if (!canonicalLineEl) {
+    return;
+  }
+  const n = Number(summary?.operation_count ?? 0);
+  const lines = [
+    `Canonical cleaner operations: ${Number.isFinite(n) ? n.toLocaleString() : '0'}`,
+  ];
+  if (
+    Number.isFinite(serverOperationCount) &&
+    Number(serverOperationCount) !== n
+  ) {
+    lines.push(
+      `(API operation_count ${Number(serverOperationCount).toLocaleString()} ≠ sum of detail rows)`,
+    );
+  }
+  if (rawIssueCount !== undefined && rawIssueCount !== null) {
+    const m = Number(rawIssueCount);
+    lines.push(
+      `Raw audit issue_count: ${Number.isFinite(m) ? m.toLocaleString() : `${rawIssueCount}`}`,
+    );
+  }
+  if (usedIssuesFallback) {
+    lines.push('Warning: operations.details missing; used top-level details (issue buckets).');
+  }
+  canonicalLineEl.textContent = lines.join('\n');
+  canonicalLineEl.style.display = 'block';
+  canonicalLineEl.style.whiteSpace = 'pre-line';
 }
 
 function buildDebugScorecardMetrics(summary = {}) {
-  return DEBUG_SCORECARD_TASK_DEFS.map((taskDef) => ({
-    key: taskDef.key,
-    label: taskDef.label,
-    value: Number(summary?.[taskDef.key] || 0),
-  }));
+  return reduceCleanerSignalsToBuckets(summary, DEFAULT_CLEANER_SCORECARD_VIEW);
+}
+
+/** Single source of truth: counts come from detail list lengths (must match log line totals). */
+function buildDebugFileCountSummaryFromDetails(details = {}) {
+  const summary = {};
+  CLEANER_SIGNAL_DEFS.forEach((taskDef) => {
+    const items = Array.isArray(details[taskDef.detailKey])
+      ? details[taskDef.detailKey]
+      : [];
+    summary[taskDef.key] = items.length;
+  });
+  return normalizeCleanerSignalCounts(summary);
 }
 
 function buildDebugScorecardLogEntries(details = {}) {
   const entries = [];
-  DEBUG_SCORECARD_TASK_DEFS.forEach((taskDef) => {
+  CLEANER_SIGNAL_DEFS.forEach((taskDef) => {
     const items = Array.isArray(details?.[taskDef.detailKey])
       ? details[taskDef.detailKey]
       : [];
-    items.forEach((item) => {
+    items
+      .slice()
+      .sort((left, right) => {
+        const leftPath = `${left?.path || ''}`.toLowerCase();
+        const rightPath = `${right?.path || ''}`.toLowerCase();
+        if (leftPath !== rightPath) {
+          return leftPath.localeCompare(rightPath);
+        }
+        const leftMessage = `${left?.message || ''}`.toLowerCase();
+        const rightMessage = `${right?.message || ''}`.toLowerCase();
+        return leftMessage.localeCompare(rightMessage);
+      })
+      .forEach((item) => {
       entries.push({
         metricKey: taskDef.key,
         label: taskDef.label,
@@ -2217,14 +2441,16 @@ function buildDebugScorecardLogEntries(details = {}) {
         kind: item?.kind || '',
         message: item?.message || '',
       });
-    });
+      });
   });
   return entries;
 }
 
 function renderDebugFileCountReview({
-  summary = {},
   details = {},
+  serverOperationCount,
+  rawIssueCount,
+  usedIssuesFallback = false,
 }) {
   const {
     overlay,
@@ -2245,16 +2471,28 @@ function renderDebugFileCountReview({
     statusEl,
     statsEl,
   });
+  debugFileCountState.runtime = createCleanerScorecardRuntime({
+    scorecard: debugFileCountState.scorecard,
+    view: DEFAULT_CLEANER_SCORECARD_VIEW,
+  });
 
-  debugFileCountState.summary = { ...summary };
+  const signalCounts = buildDebugFileCountSummaryFromDetails(details);
+  debugFileCountState.signalCounts = { ...signalCounts };
   debugFileCountState.logEntries = buildDebugScorecardLogEntries(details);
 
   if (titleEl) {
     titleEl.textContent = 'Debug file count';
   }
 
+  setDebugFileCountCanonicalLine({
+    summary: signalCounts,
+    serverOperationCount,
+    rawIssueCount,
+    usedIssuesFallback,
+  });
+
   debugFileCountState.scorecard.setStatus('Ready to log every pending task.');
-  debugFileCountState.scorecard.setMetrics(buildDebugScorecardMetrics(summary));
+  void debugFileCountState.runtime?.setSignalCounts(signalCounts);
 
   if (closeBtn) {
     closeBtn.disabled = false;
@@ -2282,23 +2520,20 @@ async function runDebugFileCountLogging() {
     proceedBtn,
   } = getDebugFileCountOverlayElements();
   const logEntries = [...debugFileCountState.logEntries];
-  const metricsLeft = Object.fromEntries(
-    buildDebugScorecardMetrics(debugFileCountState.summary).map((metric) => [
-      metric.key,
-      Number(metric.value || 0),
-    ]),
-  );
   const totalCount = logEntries.length;
   const runId = ++debugFileCountState.runId;
 
-  if (!debugFileCountState.scorecard || !proceedBtn) {
+  if (!debugFileCountState.scorecard || !debugFileCountState.runtime || !proceedBtn) {
     return false;
   }
 
-  debugFileCountState.scorecard.setStatus('Logging task paths', { spinner: true });
-  debugFileCountState.scorecard.setMetrics(
-    buildDebugScorecardMetrics(debugFileCountState.summary),
+  debugFileCountState.scorecard.setStatus(
+    totalCount
+      ? `Logging task paths (0 / ${totalCount})`
+      : 'Logging task paths',
+    { spinner: true },
   );
+  await debugFileCountState.runtime.setSignalCounts(debugFileCountState.signalCounts || {});
 
   if (closeBtn) {
     closeBtn.disabled = true;
@@ -2317,17 +2552,21 @@ async function runDebugFileCountLogging() {
 
       const entry = logEntries[index];
       const line = entry.path || entry.message || '(missing path)';
+      debugFileCountState.scorecard.setStatus(
+        `Logging task paths (${index + 1} / ${totalCount})`,
+        { spinner: true },
+      );
       console.log(`[${entry.label}] ${line}`);
 
-      if (entry.metricKey && Object.hasOwn(metricsLeft, entry.metricKey)) {
-        metricsLeft[entry.metricKey] = Math.max(0, metricsLeft[entry.metricKey] - 1);
-        debugFileCountState.scorecard.updateMetric(entry.metricKey, {
-          value: metricsLeft[entry.metricKey],
+      if (entry.metricKey && CLEANER_SIGNAL_KEYS.includes(entry.metricKey)) {
+        await debugFileCountState.runtime.applySignalDeltas(
+          { [entry.metricKey]: 1 },
+          { animate: true, duration: DEBUG_FILE_COUNT_LOG_STEP_MS },
+        );
+      } else {
+        await new Promise((resolve) => {
+          setTimeout(resolve, DEBUG_FILE_COUNT_LOG_STEP_MS);
         });
-      }
-
-      if ((index + 1) % 25 === 0) {
-        await new Promise((resolve) => requestAnimationFrame(resolve));
       }
     }
 
@@ -2387,6 +2626,10 @@ async function startDebugFileCountFlow() {
       statusEl,
       statsEl,
     });
+    debugFileCountState.runtime = createCleanerScorecardRuntime({
+      scorecard: debugFileCountState.scorecard,
+      view: DEFAULT_CLEANER_SCORECARD_VIEW,
+    });
 
     if (titleEl) {
       titleEl.textContent = 'Debug file count';
@@ -2410,7 +2653,7 @@ async function startDebugFileCountFlow() {
     debugFileCountState.scanRoot = selectedPath;
 
     debugFileCountState.scorecard.setStatus('Scanning cleaner tasks', { spinner: true });
-    debugFileCountState.scorecard.setMetrics([]);
+    await debugFileCountState.runtime.setSignalCounts({});
     overlay.style.display = 'flex';
 
     const response = await fetch('/api/debug/scan-clean-library', {
@@ -2424,9 +2667,16 @@ async function startDebugFileCountFlow() {
       throw new Error(result.error || 'Failed to scan cleaner tasks');
     }
 
+    const usedIssuesFallback =
+      !result.operations?.details && Boolean(result.details);
+    const operationDetails =
+      result.operations?.details || result.details || {};
+
     renderDebugFileCountReview({
-      summary: result.summary || {},
-      details: result.details || {},
+      details: operationDetails,
+      serverOperationCount: result.operations?.summary?.operation_count,
+      rawIssueCount: result.summary?.issue_count,
+      usedIssuesFallback,
     });
     return true;
   } catch (error) {

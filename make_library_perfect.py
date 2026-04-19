@@ -79,10 +79,20 @@ PIL_VERIFY_EXTENSIONS = {
 }
 LOSSLESS_ROTATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif"}
 
+CLEAN_LIBRARY_SIGNAL_KEYS = (
+    "misfiled_media",
+    "unsupported_files",
+    "duplicates",
+    "metadata_cleanup",
+    "folder_cleanup",
+    "database_repairs",
+)
+
 
 @dataclass
 class MediaRecord:
     original_filename: str
+    source_rel_path: str
     full_path: str
     rel_path: str
     ext: str
@@ -95,6 +105,7 @@ class MediaRecord:
     height: Optional[int]
     rating: Optional[int]
     metadata_cleaned: bool
+    has_metadata_cleanup_signal: bool
     birth_time: float
     modified_time: float
 
@@ -439,6 +450,277 @@ def summarize_clean_library_issues(issues: List[Dict[str, str]]) -> Dict[str, An
     return {"summary": summary, "details": details}
 
 
+def _sort_detail_items(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    return sorted(
+        items,
+        key=lambda item: (
+            item.get("path", "").lower(),
+            item.get("kind", "").lower(),
+            item.get("message", "").lower(),
+        ),
+    )
+
+
+def _expected_rel_path_from_issue(issue: Dict[str, str]) -> Optional[str]:
+    if issue.get("kind") != "misnamed_or_misfiled":
+        return None
+    detail = issue.get("detail") or ""
+    expected = detail.removeprefix("expected ").strip()
+    return expected or None
+
+
+def _metadata_cleanup_detail(path: str, issues: List[Dict[str, str]]) -> Dict[str, str]:
+    parts: List[str] = []
+    for issue in sorted(issues, key=lambda item: item["kind"]):
+        if issue["kind"] == "rating_zero":
+            parts.append("strip rating=0 metadata")
+        elif issue["kind"] == "unbaked_rotation":
+            orientation = (issue.get("detail") or "").strip()
+            parts.append(
+                f"bake rotation ({orientation})" if orientation else "bake rotation"
+            )
+        else:
+            parts.append(_detail_message_for_issue(issue))
+
+    if not parts:
+        message = f"{path} needs metadata cleanup"
+    elif len(parts) == 1:
+        message = f"{path} needs metadata cleanup: {parts[0]}"
+    else:
+        message = f"{path} needs metadata cleanup: {'; '.join(parts)}"
+
+    return {"kind": "metadata_cleanup", "path": path, "message": message}
+
+
+def _folder_cleanup_detail(path: str) -> Dict[str, str]:
+    return {
+        "kind": "folder_cleanup",
+        "path": path,
+        "message": f"{path} will be removed after file cleanup",
+    }
+
+
+def _build_directory_snapshot(
+    library_path: str,
+) -> Tuple[set[str], Dict[str, set[str]], Dict[str, set[str]]]:
+    known_dirs: set[str] = set()
+    child_dirs: Dict[str, set[str]] = {".": set()}
+    file_entries: Dict[str, set[str]] = {".": set()}
+
+    for root, dirs, files in os.walk(library_path, topdown=True):
+        rel_root = os.path.relpath(root, library_path)
+        if rel_root != "." and in_infrastructure(rel_root):
+            dirs[:] = []
+            continue
+
+        child_dirs.setdefault(rel_root, set())
+        file_entries.setdefault(rel_root, set())
+        if rel_root != ".":
+            known_dirs.add(rel_root)
+
+        filtered_dirs: List[str] = []
+        for dirname in dirs:
+            child_rel = os.path.relpath(os.path.join(root, dirname), library_path)
+            if in_infrastructure(child_rel):
+                continue
+            filtered_dirs.append(dirname)
+            child_dirs[rel_root].add(dirname)
+            child_dirs.setdefault(child_rel, set())
+            file_entries.setdefault(child_rel, set())
+            known_dirs.add(child_rel)
+        dirs[:] = filtered_dirs
+
+        for filename in files:
+            if filename in IGNORED_LIBRARY_FILES:
+                continue
+            file_entries[rel_root].add(filename)
+
+    return known_dirs, child_dirs, file_entries
+
+
+def _ensure_simulated_dir(
+    rel_dir: str,
+    known_dirs: set[str],
+    child_dirs: Dict[str, set[str]],
+    file_entries: Dict[str, set[str]],
+) -> None:
+    if not rel_dir or rel_dir == ".":
+        child_dirs.setdefault(".", set())
+        file_entries.setdefault(".", set())
+        return
+
+    missing: List[str] = []
+    current = rel_dir
+    while current and current != "." and current not in child_dirs:
+        missing.append(current)
+        current = os.path.dirname(current) or "."
+
+    while missing:
+        dir_rel = missing.pop()
+        parent_rel = os.path.dirname(dir_rel) or "."
+        child_dirs.setdefault(parent_rel, set()).add(os.path.basename(dir_rel))
+        child_dirs.setdefault(dir_rel, set())
+        file_entries.setdefault(dir_rel, set())
+        known_dirs.add(dir_rel)
+
+
+def _predict_folder_cleanup_paths(
+    library_path: str,
+    move_targets: Dict[str, str],
+    trashed_paths: set[str],
+) -> List[str]:
+    known_dirs, child_dirs, file_entries = _build_directory_snapshot(library_path)
+
+    for rel_path in sorted(trashed_paths):
+        parent_rel = os.path.dirname(rel_path) or "."
+        file_entries.setdefault(parent_rel, set()).discard(os.path.basename(rel_path))
+
+    for source_rel, target_rel in sorted(move_targets.items()):
+        source_parent = os.path.dirname(source_rel) or "."
+        target_parent = os.path.dirname(target_rel) or "."
+        source_name = os.path.basename(source_rel)
+        target_name = os.path.basename(target_rel)
+
+        file_entries.setdefault(source_parent, set()).discard(source_name)
+        _ensure_simulated_dir(target_parent, known_dirs, child_dirs, file_entries)
+        file_entries.setdefault(target_parent, set()).add(target_name)
+
+    removed_dirs: List[str] = []
+    for rel_dir in sorted(
+        known_dirs,
+        key=lambda path: (-len(path_parts(path)), path.lower()),
+    ):
+        if file_entries.get(rel_dir) or child_dirs.get(rel_dir):
+            continue
+        removed_dirs.append(rel_dir)
+        parent_rel = os.path.dirname(rel_dir) or "."
+        child_dirs.setdefault(parent_rel, set()).discard(os.path.basename(rel_dir))
+
+    return removed_dirs
+
+
+def summarize_clean_library_operations(
+    library_path: str,
+    issues: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    duplicate_paths = {issue["path"] for issue in issues if issue["kind"] == "duplicate_media"}
+    unsupported_paths = {
+        issue["path"]
+        for issue in issues
+        if issue["kind"] in {"corrupted_media", "unsupported_or_nonmedia"}
+    }
+    trashed_paths = duplicate_paths | unsupported_paths
+
+    # Align with summarize_clean_library_issues: misfiled_media includes structural
+    # issues (folders / root layout), with per-path collapsing rules.
+    misfiled_by_path: Dict[str, Dict[str, str]] = {}
+    misnamed_issues_by_path: Dict[str, Dict[str, str]] = {}
+    metadata_issues_by_path: Dict[str, List[Dict[str, str]]] = {}
+    database_repairs: List[Dict[str, str]] = []
+
+    for issue in issues:
+        kind = issue["kind"]
+        path = issue["path"]
+
+        if kind in {
+            "misnamed_or_misfiled",
+            "empty_folder",
+            "noncanonical_folder",
+            "noncanonical_root_folder",
+            "noncanonical_root_file",
+        }:
+            if path in trashed_paths:
+                continue
+            candidate = _detail_item(issue)
+            existing = misfiled_by_path.get(path)
+            if existing is None or kind == "misnamed_or_misfiled":
+                misfiled_by_path[path] = candidate
+            if kind == "misnamed_or_misfiled":
+                misnamed_issues_by_path[path] = issue
+            continue
+
+        if kind in {"unbaked_rotation", "rating_zero"}:
+            if path in trashed_paths:
+                continue
+            metadata_issues_by_path.setdefault(path, []).append(issue)
+            continue
+
+        if kind in {
+            "ghost_db_reference",
+            "mole_missing_from_db",
+            "db_hash_mismatch",
+            "missing_library_metadata_dir",
+            "missing_library_db",
+            "invalid_library_db",
+            "unexpected_library_metadata_dir",
+            "unexpected_library_metadata_file",
+        }:
+            if path in trashed_paths:
+                continue
+            database_repairs.append(_detail_item(issue))
+
+    move_details = _sort_detail_items(list(misfiled_by_path.values()))
+    duplicate_details = _sort_detail_items(
+        [_detail_item(issue) for issue in issues if issue["kind"] == "duplicate_media"]
+    )
+    unsupported_details = _sort_detail_items(
+        [
+            _detail_item(issue)
+            for issue in issues
+            if issue["kind"] in {"corrupted_media", "unsupported_or_nonmedia"}
+        ]
+    )
+    metadata_details = _sort_detail_items(
+        [
+            _metadata_cleanup_detail(path, path_issues)
+            for path, path_issues in sorted(metadata_issues_by_path.items())
+        ]
+    )
+
+    move_targets = {
+        path: expected_rel
+        for path, issue in misnamed_issues_by_path.items()
+        if (expected_rel := _expected_rel_path_from_issue(issue))
+    }
+    folder_cleanup_details = _sort_detail_items(
+        [
+            _folder_cleanup_detail(path)
+            for path in _predict_folder_cleanup_paths(
+                library_path,
+                move_targets=move_targets,
+                trashed_paths=trashed_paths,
+            )
+        ]
+    )
+    database_repairs = _sort_detail_items(database_repairs)
+
+    details = {
+        "misfiled_media": move_details,
+        "unsupported_files": unsupported_details,
+        "duplicates": duplicate_details,
+        "metadata_cleanup": metadata_details,
+        "folder_cleanup": folder_cleanup_details,
+        "database_repairs": database_repairs,
+    }
+    summary = {
+        "misfiled_media": len(details["misfiled_media"]),
+        "unsupported_files": len(details["unsupported_files"]),
+        "duplicates": len(details["duplicates"]),
+        "metadata_cleanup": len(details["metadata_cleanup"]),
+        "folder_cleanup": len(details["folder_cleanup"]),
+        "database_repairs": len(details["database_repairs"]),
+        "operation_count": (
+            len(details["misfiled_media"])
+            + len(details["unsupported_files"])
+            + len(details["duplicates"])
+            + len(details["metadata_cleanup"])
+            + len(details["folder_cleanup"])
+            + len(details["database_repairs"])
+        ),
+    }
+    return {"summary": summary, "details": details}
+
+
 class LibraryCleaner:
     def __init__(self, library_path: str, db_path: Optional[str] = None):
         self.library_path = os.path.abspath(library_path)
@@ -454,11 +736,84 @@ class LibraryCleaner:
             "folders_removed": 0,
             "db_rows_rebuilt": 0,
         }
+        self._remaining_operation_paths: Dict[str, set[str]] = {
+            key: set() for key in CLEAN_LIBRARY_SIGNAL_KEYS
+        }
         self._progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 
     def _emit(self, payload: Dict[str, Any]) -> None:
         if self._progress_callback:
             self._progress_callback(dict(payload))
+
+    def _build_operation_plan(self) -> Dict[str, Any]:
+        saved_db_conn = self.db_conn
+        saved_hash_cache = self.hash_cache
+        temp_db_conn: Optional[sqlite3.Connection] = None
+        try:
+            if os.path.exists(self.db_path) and db_is_valid(self.db_path):
+                temp_db_conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+                temp_db_conn.row_factory = sqlite3.Row
+            self.db_conn = temp_db_conn
+            self.hash_cache = _ReadOnlyHashCache()
+            issues = self.final_audit()
+            return summarize_clean_library_operations(self.library_path, issues)
+        finally:
+            self.hash_cache = saved_hash_cache
+            if temp_db_conn is not None:
+                temp_db_conn.close()
+            self.db_conn = saved_db_conn
+
+    def _remaining_signal_summary(self) -> Dict[str, int]:
+        summary = {
+            key: len(self._remaining_operation_paths.get(key) or ())
+            for key in CLEAN_LIBRARY_SIGNAL_KEYS
+        }
+        summary["operation_count"] = sum(summary.values())
+        return summary
+
+    def _seed_operation_plan(self, operations: Dict[str, Any]) -> None:
+        details = operations.get("details") or {}
+        self._remaining_operation_paths = {
+            key: {
+                item.get("path", "")
+                for item in (details.get(key) or [])
+                if item.get("path")
+            }
+            for key in CLEAN_LIBRARY_SIGNAL_KEYS
+        }
+        self._emit(
+            {
+                "type": "signal_plan",
+                "summary": operations.get("summary") or self._remaining_signal_summary(),
+                "details": details,
+            }
+        )
+
+    def _resolve_signal_paths(
+        self,
+        signal_paths: Dict[str, Iterable[str]],
+        *,
+        action: Optional[str] = None,
+    ) -> None:
+        deltas: Dict[str, int] = {}
+        for signal, paths in signal_paths.items():
+            remaining_paths = self._remaining_operation_paths.get(signal)
+            if not remaining_paths:
+                continue
+            for path in paths:
+                if path and path in remaining_paths:
+                    remaining_paths.remove(path)
+                    deltas[signal] = deltas.get(signal, 0) + 1
+        if not deltas:
+            return
+        payload: Dict[str, Any] = {
+            "type": "signal_delta",
+            "deltas": deltas,
+            "remaining": self._remaining_signal_summary(),
+        }
+        if action:
+            payload["action"] = action
+        self._emit(payload)
 
     def log(self, action: str, **payload: Any) -> None:
         if not self.manifest:
@@ -481,6 +836,8 @@ class LibraryCleaner:
     ) -> Dict[str, Any]:
         self._progress_callback = progress_callback
         try:
+            if self._progress_callback:
+                self._seed_operation_plan(self._build_operation_plan())
             self._emit({"type": "phase", "phase": "setup", "status": "starting"})
             self.setup()
             self._emit({"type": "phase", "phase": "setup", "status": "complete"})
@@ -591,6 +948,10 @@ class LibraryCleaner:
             self.hash_cache = _ReadOnlyHashCache()
             issues = self.final_audit()
             payload = summarize_clean_library_issues(issues)
+            payload["operations"] = summarize_clean_library_operations(
+                self.library_path,
+                issues,
+            )
             payload["status"] = "DIRTY" if issues else "CLEAN"
             return payload
         finally:
@@ -600,6 +961,12 @@ class LibraryCleaner:
                 self.db_conn = None
 
     def setup(self) -> None:
+        metadata_dir_path = os.path.join(self.library_path, LIBRARY_METADATA_DIR)
+        canonical_db = canonical_db_path(self.library_path)
+        metadata_dir_missing = not os.path.isdir(metadata_dir_path)
+        canonical_db_missing = not os.path.exists(canonical_db)
+        canonical_db_invalid = os.path.exists(canonical_db) and not db_is_valid(canonical_db)
+
         for folder in [LIBRARY_METADATA_DIR, ".db_backups", ".logs", ".thumbnails", ".trash"]:
             os.makedirs(os.path.join(self.library_path, folder), exist_ok=True)
 
@@ -631,6 +998,18 @@ class LibraryCleaner:
                 "metadata_artifacts_quarantined",
                 paths=[os.path.relpath(path, self.library_path) for path in quarantined_metadata],
             )
+
+        repaired_paths = {
+            os.path.relpath(path, self.library_path) for path in quarantined_metadata
+        }
+        if metadata_dir_missing:
+            repaired_paths.add(LIBRARY_METADATA_DIR)
+        if canonical_db_missing or canonical_db_invalid:
+            repaired_paths.add(os.path.relpath(canonical_db, self.library_path))
+        self._resolve_signal_paths(
+            {"database_repairs": repaired_paths},
+            action="setup",
+        )
 
         self.db_conn = sqlite3.connect(self.db_path)
         self.db_conn.row_factory = sqlite3.Row
@@ -707,19 +1086,28 @@ class LibraryCleaner:
 
         if not is_supported_media_extension(ext):
             self.move_to_trash(full_path, "non_media")
+            self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_unsupported")
             return None
 
         valid, _ = verify_media_file(full_path)
         if not valid:
             self.move_to_trash(full_path, "corrupted")
+            self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
             return None
 
         stat_result = os.stat(full_path)
         file_type = media_kind_for_extension(ext) or "photo"
         metadata_cleaned = False
+        has_metadata_cleanup_signal = False
 
         if file_type == "photo":
             assert self.hash_cache is not None
+            original_orientation = get_orientation_flag(full_path)
+            original_rating = extract_exif_rating(full_path)
+            has_metadata_cleanup_signal = (
+                original_orientation not in (None, 1)
+                and can_bake_losslessly(full_path)
+            ) or original_rating == 0
             try:
                 canonical_photo = canonicalize_photo_file(
                     full_path,
@@ -752,6 +1140,7 @@ class LibraryCleaner:
             valid, _ = verify_media_file(full_path)
             if not valid:
                 self.move_to_trash(full_path, "corrupted")
+                self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
                 return None
 
             content_hash = canonical_photo.content_hash
@@ -767,6 +1156,10 @@ class LibraryCleaner:
             metadata_cleaned = canonical_photo.metadata_changed
         else:
             orientation = get_orientation_flag(full_path)
+            has_metadata_cleanup_signal = (
+                orientation not in (None, 1)
+                and ext in LOSSLESS_ROTATION_EXTENSIONS
+            )
             if orientation not in (None, 1) and ext in LOSSLESS_ROTATION_EXTENSIONS:
                 baked, message, baked_orientation = bake_orientation(full_path)
                 if baked:
@@ -777,6 +1170,7 @@ class LibraryCleaner:
 
             rating = extract_exif_rating(full_path)
             if rating == 0:
+                has_metadata_cleanup_signal = True
                 if not strip_exif_rating(full_path):
                     raise CleanLibraryError(f"Failed to strip rating=0 from {rel_path}")
                 metadata_cleaned = True
@@ -785,12 +1179,14 @@ class LibraryCleaner:
             valid, _ = verify_media_file(full_path)
             if not valid:
                 self.move_to_trash(full_path, "corrupted")
+                self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
                 return None
 
             assert self.hash_cache is not None
             content_hash, _ = self.hash_cache.get_hash(full_path)
             if not content_hash:
                 self.move_to_trash(full_path, "corrupted")
+                self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
                 return None
             duplicate_key = content_hash
 
@@ -803,6 +1199,7 @@ class LibraryCleaner:
 
         return MediaRecord(
             original_filename=original_filename,
+            source_rel_path=rel_path,
             full_path=full_path,
             rel_path=rel_path,
             ext=ext,
@@ -815,6 +1212,7 @@ class LibraryCleaner:
             height=height,
             rating=rating if rating != 0 else None,
             metadata_cleaned=metadata_cleaned,
+            has_metadata_cleanup_signal=has_metadata_cleanup_signal,
             birth_time=get_birth_time(stat_result),
             modified_time=float(stat_result.st_mtime),
         )
@@ -889,15 +1287,32 @@ class LibraryCleaner:
             ordered = sorted(group, key=self.duplicate_sort_key)
             winner = ordered[0]
             survivors.append(winner)
+            loser_count = max(0, len(ordered) - 1)
+            duplicate_group_paths = {record.source_rel_path for record in ordered}
+            planned_duplicate_paths = sorted(
+                duplicate_group_paths & self._remaining_operation_paths.get("duplicates", set())
+            )
 
             for loser in ordered[1:]:
                 self.move_to_trash(loser.full_path, "duplicates")
                 self.stats["duplicates_trashed"] += 1
+                self._resolve_signal_paths(
+                    {
+                        "misfiled_media": [loser.source_rel_path],
+                        "database_repairs": [loser.source_rel_path],
+                    },
+                    action="trash_duplicate",
+                )
                 self.log(
                     "duplicate_trashed",
                     winner=winner.rel_path,
                     loser=loser.rel_path,
                     duplicate_key=duplicate_key,
+                )
+            if loser_count:
+                self._resolve_signal_paths(
+                    {"duplicates": planned_duplicate_paths[:loser_count]},
+                    action="trash_duplicate",
                 )
 
         return survivors
@@ -924,6 +1339,7 @@ class LibraryCleaner:
                 raise CleanLibraryError(f"Canonical path collision for {target_rel}")
 
             target_full = os.path.join(self.library_path, target_rel)
+            source_rel_path = record.rel_path
             if os.path.abspath(record.full_path) != os.path.abspath(target_full):
                 os.makedirs(os.path.dirname(target_full), exist_ok=True)
                 if os.path.exists(target_full):
@@ -935,6 +1351,13 @@ class LibraryCleaner:
                 self.log("media_moved", source=record.rel_path, destination=target_rel)
                 record.full_path = target_full
                 record.rel_path = target_rel
+
+            resolved_paths: Dict[str, List[str]] = {}
+            if source_rel_path != target_rel:
+                resolved_paths["misfiled_media"] = [source_rel_path]
+            if record.has_metadata_cleanup_signal:
+                resolved_paths.setdefault("metadata_cleanup", []).append(record.source_rel_path)
+            self._resolve_signal_paths(resolved_paths, action="canonicalize")
 
             occupied.add(target_rel)
             canonicalized.append(record)
@@ -953,10 +1376,36 @@ class LibraryCleaner:
                 os.rmdir(root)
                 self.stats["folders_removed"] += 1
                 self.log("folder_removed", path=rel_root)
+                self._resolve_signal_paths(
+                    {
+                        "misfiled_media": [rel_root],
+                        "folder_cleanup": [rel_root],
+                    },
+                    action="remove_folder",
+                )
 
     def rebuild_photos_table(self, records: List[MediaRecord]) -> None:
         assert self.db_conn is not None
         cursor = self.db_conn.cursor()
+        existing_rows = cursor.execute(
+            "SELECT current_path, content_hash FROM photos"
+        ).fetchall()
+        existing_hash_by_path = {row["current_path"]: row["content_hash"] for row in existing_rows}
+        record_hash_by_source_path = {
+            record.source_rel_path: record.content_hash for record in records
+        }
+        repaired_db_paths = set()
+        for current_path, content_hash in existing_hash_by_path.items():
+            planned_hash = record_hash_by_source_path.get(current_path)
+            if planned_hash is None or planned_hash != content_hash:
+                repaired_db_paths.add(current_path)
+        for source_rel_path in record_hash_by_source_path:
+            if source_rel_path not in existing_hash_by_path:
+                repaired_db_paths.add(source_rel_path)
+        self._resolve_signal_paths(
+            {"database_repairs": repaired_db_paths},
+            action="rebuild_db",
+        )
         cursor.execute("DELETE FROM photos")
 
         sorted_rows = sorted(records, key=lambda item: (item.date_taken, item.rel_path.lower()))

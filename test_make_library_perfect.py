@@ -2,6 +2,7 @@ import hashlib
 import os
 import sqlite3
 import unittest
+from collections import defaultdict
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -28,11 +29,13 @@ from library_cleanliness import (
     root_entry_allowed,
 )
 from make_library_perfect import (
+    CLEAN_LIBRARY_SIGNAL_KEYS,
     DBNormalizationEngine,
     LibraryCleaner,
     MediaRecord,
     run_db_normalization_engine,
     scan_library_cleanliness,
+    summarize_clean_library_operations,
     summarize_clean_library_issues,
 )
 from photo_canonicalization import UNKNOWN_PHOTO_DATE_TAKEN, canonicalize_photo_date
@@ -130,6 +133,7 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
         cleaner = LibraryCleaner("/tmp/test-library")
         known = MediaRecord(
             original_filename="known.png",
+            source_rel_path="2026/2026-01-27/known.png",
             full_path="/tmp/test-library/known.png",
             rel_path="2026/2026-01-27/known.png",
             ext=".png",
@@ -142,11 +146,13 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
             height=1,
             rating=None,
             metadata_cleaned=False,
+            has_metadata_cleanup_signal=False,
             birth_time=2.0,
             modified_time=2.0,
         )
         unknown = MediaRecord(
             original_filename="unknown.png",
+            source_rel_path="1900/1900-01-01/unknown.png",
             full_path="/tmp/test-library/unknown.png",
             rel_path="1900/1900-01-01/unknown.png",
             ext=".png",
@@ -159,6 +165,7 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
             height=1,
             rating=None,
             metadata_cleaned=False,
+            has_metadata_cleanup_signal=False,
             birth_time=1.0,
             modified_time=1.0,
         )
@@ -184,6 +191,7 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
             records = [
                 MediaRecord(
                     original_filename="keep.png",
+                    source_rel_path="2026/2026-01-27/keep.png",
                     full_path=keep_path,
                     rel_path="2026/2026-01-27/keep.png",
                     ext=".png",
@@ -196,11 +204,13 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
                     height=1,
                     rating=None,
                     metadata_cleaned=False,
+                    has_metadata_cleanup_signal=False,
                     birth_time=2.0,
                     modified_time=2.0,
                 ),
                 MediaRecord(
                     original_filename="lose.png",
+                    source_rel_path="1900/1900-01-01/lose.png",
                     full_path=lose_path,
                     rel_path="1900/1900-01-01/lose.png",
                     ext=".png",
@@ -213,6 +223,7 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
                     height=1,
                     rating=None,
                     metadata_cleaned=False,
+                    has_metadata_cleanup_signal=False,
                     birth_time=1.0,
                     modified_time=1.0,
                 ),
@@ -314,6 +325,86 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
             ],
         )
 
+    def test_clean_library_operation_summary_counts_real_cleaner_work(self):
+        with TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "move-me"), exist_ok=True)
+            with open(os.path.join(tmpdir, "move-me", "photo.jpg"), "wb") as handle:
+                handle.write(b"move")
+
+            os.makedirs(os.path.join(tmpdir, "trash-me"), exist_ok=True)
+            with open(os.path.join(tmpdir, "trash-me", "notes.txt"), "w", encoding="utf-8") as handle:
+                handle.write("note")
+
+            os.makedirs(os.path.join(tmpdir, "duplicates"), exist_ok=True)
+            with open(os.path.join(tmpdir, "duplicates", "dup.jpg"), "wb") as handle:
+                handle.write(b"dup")
+
+            os.makedirs(os.path.join(tmpdir, "meta"), exist_ok=True)
+            with open(os.path.join(tmpdir, "meta", "meta.jpg"), "wb") as handle:
+                handle.write(b"meta")
+
+            os.makedirs(os.path.join(tmpdir, "already-empty", "inner"), exist_ok=True)
+
+            payload = summarize_clean_library_operations(
+                tmpdir,
+                [
+                    {
+                        "kind": "misnamed_or_misfiled",
+                        "path": "move-me/photo.jpg",
+                        "detail": "expected 2026/2026-04-12/img_20260412_deadbee.jpg",
+                    },
+                    {
+                        "kind": "unsupported_or_nonmedia",
+                        "path": "trash-me/notes.txt",
+                        "detail": "",
+                    },
+                    {
+                        "kind": "duplicate_media",
+                        "path": "duplicates/dup.jpg",
+                        "detail": "same hash as 2026/2026-04-12/img_20260412_deadbee.jpg",
+                    },
+                    {"kind": "unbaked_rotation", "path": "meta/meta.jpg", "detail": "8"},
+                    {"kind": "rating_zero", "path": "meta/meta.jpg", "detail": ""},
+                    {"kind": "ghost_db_reference", "path": "ghost.png", "detail": ""},
+                ],
+            )
+
+            self.assertEqual(
+                payload["summary"],
+                {
+                    "misfiled_media": 1,
+                    "unsupported_files": 1,
+                    "duplicates": 1,
+                    "metadata_cleanup": 1,
+                    "folder_cleanup": 5,
+                    "database_repairs": 1,
+                    "operation_count": 10,
+                },
+            )
+            self.assertEqual(
+                payload["details"]["metadata_cleanup"],
+                [
+                    {
+                        "kind": "metadata_cleanup",
+                        "path": "meta/meta.jpg",
+                        "message": (
+                            "meta/meta.jpg needs metadata cleanup: strip rating=0 metadata; "
+                            "bake rotation (8)"
+                        ),
+                    }
+                ],
+            )
+            self.assertEqual(
+                [item["path"] for item in payload["details"]["folder_cleanup"]],
+                [
+                    "already-empty",
+                    "already-empty/inner",
+                    "duplicates",
+                    "move-me",
+                    "trash-me",
+                ],
+            )
+
 
 class CleanerFullHashRegressionTest(unittest.TestCase):
     def _create_library_db(self, library_path):
@@ -396,6 +487,7 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "DIRTY")
             self.assertEqual(result["summary"]["database_repairs"], 1)
+            self.assertEqual(result["operations"]["summary"]["database_repairs"], 1)
             self.assertEqual(
                 result["details"]["database_repairs"],
                 [
@@ -481,6 +573,8 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             self.assertEqual(result["summary"]["duplicates"], 1)
             self.assertEqual(result["summary"]["misfiled_media"], 0)
             self.assertEqual(result["summary"]["database_repairs"], 0)
+            self.assertEqual(result["operations"]["summary"]["duplicates"], 1)
+            self.assertEqual(result["operations"]["summary"]["operation_count"], 1)
             self.assertEqual(
                 result["details"]["duplicates"],
                 [
@@ -779,6 +873,154 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(len(rows[0]["content_hash"]), 64)
             self.assertTrue(os.path.exists(os.path.join(tmpdir, rows[0]["current_path"])))
+
+    def test_engine_emits_signal_plan_and_truthful_signal_burndown(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            date_taken = "2026:01:27 12:00:00"
+            date_obj = datetime(2026, 1, 27, 12, 0, 0)
+
+            os.makedirs(os.path.join(tmpdir, "move-me"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "trash-me"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "duplicates"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "meta"), exist_ok=True)
+
+            for path, payload in (
+                (os.path.join(tmpdir, "move-me", "photo.jpg"), b"move"),
+                (os.path.join(tmpdir, "duplicates", "keep.jpg"), b"keep"),
+                (os.path.join(tmpdir, "duplicates", "dup.jpg"), b"dup"),
+                (os.path.join(tmpdir, "meta", "meta.jpg"), b"meta"),
+            ):
+                with open(path, "wb") as handle:
+                    handle.write(payload)
+            with open(
+                os.path.join(tmpdir, "trash-me", "notes.txt"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("note")
+
+            conn.execute(
+                """
+                INSERT INTO photos (
+                    original_filename,
+                    current_path,
+                    date_taken,
+                    content_hash,
+                    file_size,
+                    file_type,
+                    width,
+                    height
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "ghost.jpg",
+                    "2026/2026-01-27/img_20260127_deadbeef.jpg",
+                    date_taken,
+                    "deadbeef" * 8,
+                    999,
+                    "photo",
+                    1,
+                    1,
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            content_hashes = {
+                b"move": "a1" * 32,
+                b"keep": "b2" * 32,
+                b"dup": "b2" * 32,
+                b"meta": "c3" * 32,
+            }
+
+            def canonicalize_side_effect(file_path, **_kwargs):
+                with open(file_path, "rb") as handle:
+                    payload = handle.read()
+                if payload not in content_hashes:
+                    raise AssertionError(f"Unexpected payload for {file_path}")
+                metadata_file = payload == b"meta"
+                return type(
+                    "CanonicalPhoto",
+                    (),
+                    {
+                        "content_hash": content_hashes[payload],
+                        "date_taken": date_taken,
+                        "date_obj": date_obj,
+                        "width": 1,
+                        "height": 1,
+                        "rating": None,
+                        "metadata_changed": metadata_file,
+                        "orientation_baked": metadata_file,
+                        "rating_stripped": metadata_file,
+                    },
+                )()
+
+            def extract_rating_side_effect(file_path):
+                return 0 if os.path.basename(file_path) == "meta.jpg" else None
+
+            def orientation_side_effect(file_path):
+                return 8 if os.path.basename(file_path) == "meta.jpg" else 1
+
+            events = []
+            with patch("make_library_perfect.verify_media_file", return_value=(True, "mock")), patch(
+                "make_library_perfect.extract_exif_date", return_value=date_taken
+            ), patch(
+                "make_library_perfect.extract_exif_rating",
+                side_effect=extract_rating_side_effect,
+            ), patch(
+                "make_library_perfect.get_orientation_flag",
+                side_effect=orientation_side_effect,
+            ), patch(
+                "make_library_perfect.can_bake_losslessly",
+                return_value=True,
+            ), patch(
+                "make_library_perfect.read_dimensions",
+                return_value=(1, 1),
+            ), patch(
+                "make_library_perfect.canonicalize_photo_file",
+                side_effect=canonicalize_side_effect,
+            ):
+                result = run_db_normalization_engine(
+                    tmpdir,
+                    db_path=db_path,
+                    progress_callback=events.append,
+                )
+
+            self.assertEqual(result["status"], "SUCCESS")
+
+            plan_event = next(event for event in events if event.get("type") == "signal_plan")
+            self.assertEqual(
+                set(plan_event["summary"].keys()),
+                set(CLEAN_LIBRARY_SIGNAL_KEYS) | {"operation_count"},
+            )
+
+            burned_down = defaultdict(int)
+            signal_events = [
+                event for event in events if event.get("type") == "signal_delta"
+            ]
+            self.assertTrue(signal_events)
+            for event in signal_events:
+                for key, value in (event.get("deltas") or {}).items():
+                    burned_down[key] += int(value)
+
+            self.assertEqual(
+                {key: burned_down.get(key, 0) for key in CLEAN_LIBRARY_SIGNAL_KEYS},
+                {key: plan_event["summary"][key] for key in CLEAN_LIBRARY_SIGNAL_KEYS},
+            )
+            self.assertEqual(
+                signal_events[-1]["remaining"],
+                {
+                    "misfiled_media": 0,
+                    "unsupported_files": 0,
+                    "duplicates": 0,
+                    "metadata_cleanup": 0,
+                    "folder_cleanup": 0,
+                    "database_repairs": 0,
+                    "operation_count": 0,
+                },
+            )
 
 
 if __name__ == "__main__":

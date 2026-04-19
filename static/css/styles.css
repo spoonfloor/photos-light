@@ -1121,6 +1121,23 @@ input[type="radio"] {
   padding-bottom: 4px;
 }
 
+/* Debug file count / cleaner scoreboard: six metric columns must fit (no clipping). */
+#debugFileCountOverlay .import-card {
+  width: min(760px, calc(100vw - 40px));
+  max-width: calc(100vw - 40px);
+}
+
+#debugFileCountOverlay .import-stats {
+  flex-wrap: wrap;
+  row-gap: 14px;
+  column-gap: 20px;
+}
+
+#debugFileCountOverlay .import-stat {
+  flex: 0 1 auto;
+  min-width: 5.75rem;
+}
+
 .import-header {
   display: flex;
   align-items: center;
