@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v356';
+const MAIN_JS_VERSION = 'v358';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -38,12 +38,20 @@ const libraryRecoveryState = {
 
 const debugFileCountState = {
   runId: 0,
-  folderPath: null,
-  files: [],
-  fileBuckets: [],
+  scanRoot: null,
+  summary: null,
+  logEntries: [],
   scorecard: null,
   entryState: null,
 };
+
+const DEBUG_SCORECARD_TASK_DEFS = [
+  { key: 'misfiled_media', label: 'MOVE/RENAME', detailKey: 'misfiled_media' },
+  { key: 'unsupported_files', label: 'UNSUPPORTED', detailKey: 'unsupported_files' },
+  { key: 'duplicates', label: 'DUPLICATES', detailKey: 'duplicates' },
+  { key: 'metadata_cleanup', label: 'METADATA', detailKey: 'metadata_cleanup' },
+  { key: 'database_repairs', label: 'DB REPAIRS', detailKey: 'database_repairs' },
+];
 
 let currentPhotoLoad = null;
 let currentPhotoLoadAbortController = null;
@@ -2159,9 +2167,9 @@ function restoreDebugFileCountEntryState() {
 
 function closeDebugFileCountOverlay() {
   debugFileCountState.runId += 1;
-  debugFileCountState.folderPath = null;
-  debugFileCountState.files = [];
-  debugFileCountState.fileBuckets = [];
+  debugFileCountState.scanRoot = null;
+  debugFileCountState.summary = null;
+  debugFileCountState.logEntries = [];
   resetDebugFileCountScorecard();
 
   const { overlay, titleEl, closeBtn, cancelBtn, proceedBtn } =
@@ -2187,13 +2195,36 @@ function closeDebugFileCountOverlay() {
   }
 }
 
+function buildDebugScorecardMetrics(summary = {}) {
+  return DEBUG_SCORECARD_TASK_DEFS.map((taskDef) => ({
+    key: taskDef.key,
+    label: taskDef.label,
+    value: Number(summary?.[taskDef.key] || 0),
+  }));
+}
+
+function buildDebugScorecardLogEntries(details = {}) {
+  const entries = [];
+  DEBUG_SCORECARD_TASK_DEFS.forEach((taskDef) => {
+    const items = Array.isArray(details?.[taskDef.detailKey])
+      ? details[taskDef.detailKey]
+      : [];
+    items.forEach((item) => {
+      entries.push({
+        metricKey: taskDef.key,
+        label: taskDef.label,
+        path: item?.path || '',
+        kind: item?.kind || '',
+        message: item?.message || '',
+      });
+    });
+  });
+  return entries;
+}
+
 function renderDebugFileCountReview({
-  folderPath,
-  files,
-  fileBuckets = [],
-  uniqueMediaCount = 0,
-  duplicateMediaCount = 0,
-  otherFileCount = 0,
+  summary = {},
+  details = {},
 }) {
   const {
     overlay,
@@ -2215,34 +2246,15 @@ function renderDebugFileCountReview({
     statsEl,
   });
 
-  debugFileCountState.folderPath = folderPath;
-  debugFileCountState.files = Array.isArray(files) ? [...files] : [];
-  debugFileCountState.fileBuckets = Array.isArray(fileBuckets)
-    ? [...fileBuckets]
-    : [];
+  debugFileCountState.summary = { ...summary };
+  debugFileCountState.logEntries = buildDebugScorecardLogEntries(details);
 
   if (titleEl) {
     titleEl.textContent = 'Debug file count';
   }
 
-  debugFileCountState.scorecard.setStatus('Ready to log every file name.');
-  debugFileCountState.scorecard.setMetrics([
-    {
-      key: 'unique_media',
-      label: 'UNIQUE MEDIA',
-      value: uniqueMediaCount,
-    },
-    {
-      key: 'duplicate_media',
-      label: 'DUPLICATES',
-      value: duplicateMediaCount,
-    },
-    {
-      key: 'other_files',
-      label: 'OTHER FILES',
-      value: otherFileCount,
-    },
-  ]);
+  debugFileCountState.scorecard.setStatus('Ready to log every pending task.');
+  debugFileCountState.scorecard.setMetrics(buildDebugScorecardMetrics(summary));
 
   if (closeBtn) {
     closeBtn.disabled = false;
@@ -2269,46 +2281,24 @@ async function runDebugFileCountLogging() {
     cancelBtn,
     proceedBtn,
   } = getDebugFileCountOverlayElements();
-  const files = [...debugFileCountState.files];
-  const buckets = [...debugFileCountState.fileBuckets];
-  const totalCount = files.length;
+  const logEntries = [...debugFileCountState.logEntries];
+  const metricsLeft = Object.fromEntries(
+    buildDebugScorecardMetrics(debugFileCountState.summary).map((metric) => [
+      metric.key,
+      Number(metric.value || 0),
+    ]),
+  );
+  const totalCount = logEntries.length;
   const runId = ++debugFileCountState.runId;
 
   if (!debugFileCountState.scorecard || !proceedBtn) {
     return false;
   }
 
-  let uniqueLeft = buckets.filter((b) => b === 'unique_media').length;
-  let duplicateLeft = buckets.filter((b) => b === 'duplicate_media').length;
-  let otherLeft = buckets.filter((b) => b === 'other_files').length;
-
-  if (
-    buckets.length !== files.length &&
-    files.length > 0
-  ) {
-    uniqueLeft = 0;
-    duplicateLeft = 0;
-    otherLeft = files.length;
-  }
-
-  debugFileCountState.scorecard.setStatus('Logging file names', { spinner: true });
-  debugFileCountState.scorecard.setMetrics([
-    {
-      key: 'unique_media',
-      label: 'UNIQUE MEDIA',
-      value: uniqueLeft,
-    },
-    {
-      key: 'duplicate_media',
-      label: 'DUPLICATES',
-      value: duplicateLeft,
-    },
-    {
-      key: 'other_files',
-      label: 'OTHER FILES',
-      value: otherLeft,
-    },
-  ]);
+  debugFileCountState.scorecard.setStatus('Logging task paths', { spinner: true });
+  debugFileCountState.scorecard.setMetrics(
+    buildDebugScorecardMetrics(debugFileCountState.summary),
+  );
 
   if (closeBtn) {
     closeBtn.disabled = true;
@@ -2320,29 +2310,19 @@ async function runDebugFileCountLogging() {
   proceedBtn.textContent = 'Working...';
 
   try {
-    for (let index = 0; index < files.length; index += 1) {
+    for (let index = 0; index < logEntries.length; index += 1) {
       if (runId !== debugFileCountState.runId) {
         return false;
       }
 
-      const fileName = files[index].split('/').pop() || files[index];
-      console.log(fileName);
+      const entry = logEntries[index];
+      const line = entry.path || entry.message || '(missing path)';
+      console.log(`[${entry.label}] ${line}`);
 
-      const bucket = buckets[index];
-      if (bucket === 'unique_media') {
-        uniqueLeft = Math.max(0, uniqueLeft - 1);
-        debugFileCountState.scorecard.updateMetric('unique_media', {
-          value: uniqueLeft,
-        });
-      } else if (bucket === 'duplicate_media') {
-        duplicateLeft = Math.max(0, duplicateLeft - 1);
-        debugFileCountState.scorecard.updateMetric('duplicate_media', {
-          value: duplicateLeft,
-        });
-      } else {
-        otherLeft = Math.max(0, otherLeft - 1);
-        debugFileCountState.scorecard.updateMetric('other_files', {
-          value: otherLeft,
+      if (entry.metricKey && Object.hasOwn(metricsLeft, entry.metricKey)) {
+        metricsLeft[entry.metricKey] = Math.max(0, metricsLeft[entry.metricKey] - 1);
+        debugFileCountState.scorecard.updateMetric(entry.metricKey, {
+          value: metricsLeft[entry.metricKey],
         });
       }
 
@@ -2355,7 +2335,7 @@ async function runDebugFileCountLogging() {
 
     const action = await showDialog(
       'Success',
-      `Logged ${totalCount.toLocaleString()} file name${totalCount === 1 ? '' : 's'}.`,
+      `Logged ${totalCount.toLocaleString()} task path${totalCount === 1 ? '' : 's'}.`,
       [{ text: 'Go to library', value: 'go_to_library', primary: true }],
     );
 
@@ -2378,8 +2358,8 @@ async function startDebugFileCountFlow() {
 
     const selectedPath = await FolderPicker.show({
       intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
-      title: 'Debug file count',
-      subtitle: 'Choose a folder to count recursively.',
+      title: 'Debug scoreboard',
+      subtitle: 'Choose a folder to scan with the cleaner rulebook.',
     });
 
     if (!selectedPath) {
@@ -2427,11 +2407,13 @@ async function startDebugFileCountFlow() {
       proceedBtn.onclick = null;
     }
 
-    debugFileCountState.scorecard.setStatus('Analyzing files', { spinner: true });
+    debugFileCountState.scanRoot = selectedPath;
+
+    debugFileCountState.scorecard.setStatus('Scanning cleaner tasks', { spinner: true });
     debugFileCountState.scorecard.setMetrics([]);
     overlay.style.display = 'flex';
 
-    const response = await fetch('/api/debug/analyze-file-count', {
+    const response = await fetch('/api/debug/scan-clean-library', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: selectedPath }),
@@ -2439,16 +2421,12 @@ async function startDebugFileCountFlow() {
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || 'Failed to analyze files');
+      throw new Error(result.error || 'Failed to scan cleaner tasks');
     }
 
     renderDebugFileCountReview({
-      folderPath: selectedPath,
-      files: result.files || [],
-      fileBuckets: result.file_buckets || [],
-      uniqueMediaCount: result.unique_media_count || 0,
-      duplicateMediaCount: result.duplicate_media_count || 0,
-      otherFileCount: result.other_file_count || 0,
+      summary: result.summary || {},
+      details: result.details || {},
     });
     return true;
   } catch (error) {

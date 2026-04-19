@@ -2653,6 +2653,46 @@ def analyze_debug_file_count():
         print(f"\n❌ Debug file count analysis failed: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/debug/scan-clean-library', methods=['POST'])
+@handle_db_corruption
+def debug_scan_clean_library():
+    """
+    Read-only clean-library scan for an arbitrary directory (dev sandbox).
+
+    Uses the same scan_library_cleanliness rulebook as /api/library/make-perfect/scan,
+    with library_path set to the picked folder so DB sidecars under that tree are used
+    when present.
+    """
+    try:
+        data = request.json or {}
+        selected_path = data.get('path')
+
+        if not selected_path:
+            return jsonify({'error': 'No path provided'}), 400
+
+        if not os.path.exists(selected_path):
+            return jsonify({'error': 'Path not found'}), 400
+
+        if not os.path.isdir(selected_path):
+            return jsonify({'error': 'Path must be a directory'}), 400
+
+        if not os.access(selected_path, os.R_OK | os.X_OK):
+            return jsonify({'error': 'Path is not accessible'}), 503
+
+        from make_library_perfect import scan_library_cleanliness
+
+        abs_path = os.path.abspath(selected_path)
+        print(f"\n🧪 DEBUG clean-library scan: {abs_path}\n")
+
+        result = scan_library_cleanliness(abs_path, db_path=None)
+        return jsonify(result)
+    except Exception as e:
+        error_logger.error(f"Debug clean-library scan failed: {e}")
+        print(f"\n❌ Debug clean-library scan failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/photos/import-from-paths', methods=['POST'])
 def import_from_paths():
     """

@@ -345,10 +345,13 @@ def _compute_audit_media_identity(
     full_path: str,
     file_type: str,
     stat_result: os.stat_result,
-    current_hash: str,
+    current_hash: Optional[str] = None,
 ) -> AuditMediaIdentity:
     if file_type == "photo":
         return _compute_photo_audit_identity(full_path)
+
+    if not current_hash:
+        raise RuntimeError(f"Missing audit hash for {full_path}")
 
     date_taken, date_obj = parse_metadata_datetime(
         extract_exif_date(full_path),
@@ -1113,20 +1116,33 @@ class LibraryCleaner:
                     issues.append(format_issue("corrupted_media", rel_path))
                     continue
 
-                assert self.hash_cache is not None
-                current_hash, _ = self.hash_cache.get_hash(full_path)
-                if not current_hash:
-                    issues.append(format_issue("corrupted_media", rel_path))
-                    continue
-
                 stat_result = os.stat(full_path)
                 file_type = media_kind_for_extension(ext) or "photo"
-                identity = _compute_audit_media_identity(
-                    full_path=full_path,
-                    file_type=file_type,
-                    stat_result=stat_result,
-                    current_hash=current_hash,
-                )
+
+                # Photos already compute their canonical hash during staged audit
+                # canonicalization, so a pre-hash of the original path is redundant.
+                if file_type == "photo":
+                    try:
+                        identity = _compute_audit_media_identity(
+                            full_path=full_path,
+                            file_type=file_type,
+                            stat_result=stat_result,
+                        )
+                    except RuntimeError:
+                        issues.append(format_issue("corrupted_media", rel_path))
+                        continue
+                else:
+                    assert self.hash_cache is not None
+                    current_hash, _ = self.hash_cache.get_hash(full_path)
+                    if not current_hash:
+                        issues.append(format_issue("corrupted_media", rel_path))
+                        continue
+                    identity = _compute_audit_media_identity(
+                        full_path=full_path,
+                        file_type=file_type,
+                        stat_result=stat_result,
+                        current_hash=current_hash,
+                    )
                 canonical_hash = identity.canonical_hash
                 path_to_canonical_hash[rel_path] = canonical_hash
 

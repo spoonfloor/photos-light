@@ -554,6 +554,29 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                 ],
             )
 
+    def test_scan_skips_read_only_hash_cache_for_photo_audits(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+
+            photo_path = os.path.join(tmpdir, "keep.png")
+            pixels = Image.new("RGB", (4, 4), (12, 34, 56))
+            pixels.save(photo_path, format="PNG", compress_level=0)
+
+            with patch(
+                "make_library_perfect._ReadOnlyHashCache.get_hash",
+                side_effect=AssertionError("photo audits should not pre-hash via read-only cache"),
+            ), patch("make_library_perfect.extract_exif_date", return_value=None), patch(
+                "make_library_perfect.extract_exif_rating", return_value=None
+            ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
+                "make_library_perfect.write_photo_date_metadata", return_value=None
+            ):
+                result = scan_library_cleanliness(tmpdir, db_path=db_path)
+
+            self.assertEqual(result["status"], "DIRTY")
+            self.assertEqual(result["summary"]["duplicates"], 0)
+            self.assertEqual(result["summary"]["database_repairs"], 1)
+
     def test_engine_rebuilds_db_from_disk_with_full_hashes(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)

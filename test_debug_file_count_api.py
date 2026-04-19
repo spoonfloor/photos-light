@@ -117,6 +117,35 @@ class DebugFileCountApiTest(unittest.TestCase):
         self.assertEqual(payload["files"], [fake_png_path])
         self.assertEqual(payload["file_buckets"], ["other_files"])
 
+    def test_debug_scan_clean_library_returns_engine_payload(self):
+        fake_payload = {
+            "summary": {"issue_count": 0},
+            "details": {},
+            "status": "CLEAN",
+        }
+        with patch(
+            "make_library_perfect.scan_library_cleanliness",
+            return_value=fake_payload,
+        ) as mock_scan:
+            response = self.client.post(
+                "/api/debug/scan-clean-library",
+                json={"path": self.scan_path},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "CLEAN")
+        mock_scan.assert_called_once()
+        args, kwargs = mock_scan.call_args
+        self.assertTrue(os.path.isabs(args[0]))
+        self.assertEqual(kwargs.get("db_path"), None)
+
+    def test_debug_scan_clean_library_requires_directory(self):
+        response = self.client.post(
+            "/api/debug/scan-clean-library",
+            json={},
+        )
+        self.assertEqual(response.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
