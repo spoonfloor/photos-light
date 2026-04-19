@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v365';
+const MAIN_JS_VERSION = 'v366';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -853,72 +853,6 @@ function updateLibraryRecoveryMakePerfectProgress(ev) {
       { label: 'Total', value: total },
     ]);
   }
-}
-
-function createLibraryRecoveryStatsCountdown(initialStats = []) {
-  const countdownStats = initialStats.map((stat) => ({
-    label: stat.label,
-    value: Math.max(0, Number(stat.value) || 0),
-  }));
-  const totalSteps = countdownStats.reduce((sum, stat) => sum + stat.value, 0);
-  const stepDelayMs = Math.max(
-    10,
-    Math.min(90, Math.floor(3000 / Math.max(totalSteps, 1)) || 10),
-  );
-  let nextIndex = 0;
-  let timerId = null;
-  let resolved = false;
-  let resolvePromise = null;
-
-  const finish = () => {
-    if (timerId !== null) {
-      window.clearInterval(timerId);
-      timerId = null;
-    }
-    if (!resolved) {
-      resolved = true;
-      resolvePromise?.();
-    }
-  };
-
-  setLibraryRecoveryStats(countdownStats);
-
-  const promise = new Promise((resolve) => {
-    resolvePromise = resolve;
-
-    if (!totalSteps) {
-      finish();
-      return;
-    }
-
-    timerId = window.setInterval(() => {
-      let decremented = false;
-
-      for (let offset = 0; offset < countdownStats.length; offset += 1) {
-        const statIndex = (nextIndex + offset) % countdownStats.length;
-        if (countdownStats[statIndex].value > 0) {
-          countdownStats[statIndex].value -= 1;
-          nextIndex = (statIndex + 1) % countdownStats.length;
-          decremented = true;
-          break;
-        }
-      }
-
-      setLibraryRecoveryStats(countdownStats);
-
-      if (
-        !decremented ||
-        countdownStats.every((stat) => Number(stat.value || 0) === 0)
-      ) {
-        finish();
-      }
-    }, stepDelayMs);
-  });
-
-  return {
-    promise,
-    cancel: finish,
-  };
 }
 
 /**
@@ -8000,7 +7934,6 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
   const folderName = selectedPath.split('/').filter(Boolean).pop() || 'library';
   let dockFlowActive = false;
   let switchedGeneration = null;
-  let rebuildCountdown = null;
   const finishDockFlow = () => {
     if (!dockFlowActive) {
       return;
@@ -8090,8 +8023,6 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
     }
 
     const mediaCount = Number(recoverMediaInfo.media_count || 0);
-    let shouldUseRebuildingCountdown = false;
-
     if (mediaCount > 0) {
       const mediaCountLabel = mediaCount.toLocaleString();
       const mediaFileLabel = mediaCount === 1 ? 'media file' : 'media files';
@@ -8132,10 +8063,6 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         return true;
       }
 
-      const rebuildingStats = scanCompleteStats.map((stat) => ({
-        label: stat.label,
-        value: Number(stat.value || 0),
-      }));
       const rebuildingActions = (rebuildingCopy.actions || []).map((action) => ({
         ...action,
         onClick: () => {
@@ -8148,7 +8075,8 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
           mediaCountLabel,
           mediaFileLabel,
         }),
-        stats: rebuildingStats,
+        statusText: 'Repairing your library',
+        statusSpinner: true,
         showCloseButton: rebuildingCopy.showCloseButton,
         onClose: () => {
           showToast('Error: This path is not available yet');
@@ -8161,20 +8089,7 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         showToast(`Error: ${rebuildingCopy.title}`);
         return false;
       }
-      rebuildCountdown = createLibraryRecoveryStatsCountdown(rebuildingStats);
-      shouldUseRebuildingCountdown = true;
-    } else {
-      finishDockFlow();
-      await showLibraryTransitionOverlay({
-        title: 'Cleaning library',
-        message:
-          'Normalizing your library. Please keep this window open until it finishes.',
-      });
       await requestMakeLibraryPerfect();
-    }
-
-    if (shouldUseRebuildingCountdown && rebuildCountdown) {
-      await Promise.all([requestMakeLibraryPerfect(), rebuildCountdown.promise]);
       await showLibraryRecoveryDockCard({
         title: openingCopy.title,
         body: openingCopy.body,
@@ -8183,6 +8098,14 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         showCloseButton: openingCopy.showCloseButton,
         actions: openingCopy.actions,
       });
+    } else {
+      finishDockFlow();
+      await showLibraryTransitionOverlay({
+        title: 'Cleaning library',
+        message:
+          'Normalizing your library. Please keep this window open until it finishes.',
+      });
+      await requestMakeLibraryPerfect();
     }
 
     finishDockFlow();
@@ -8211,7 +8134,6 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
     showToast(`Error: ${error.message}`);
     return false;
   } finally {
-    rebuildCountdown?.cancel();
     finishDockFlow();
     hideLibraryTransitionOverlay();
   }
