@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v366';
+const MAIN_JS_VERSION = 'v368';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -62,6 +62,42 @@ const DEFAULT_CLEANER_SCORECARD_VIEW = CLEANER_SIGNAL_DEFS.map((signalDef) => ({
   label: signalDef.label,
   signals: [signalDef.key],
 }));
+
+/**
+ * Open-folder / recovery dock: four buckets, order fixed.
+ * "Media files" = supported unique media work: misfiled_media minus duplicates (not double-counted).
+ */
+function reduceOpenFolderRecoveryBuckets(signalCounts = {}) {
+  const c = normalizeCleanerSignalCounts(signalCounts);
+  const mediaFiles = Math.max(0, c.misfiled_media - c.duplicates);
+  const cleanup =
+    c.metadata_cleanup + c.folder_cleanup + c.database_repairs;
+  return [
+    {
+      key: 'open_folder_media_files',
+      label: 'Media files',
+      value: mediaFiles,
+    },
+    {
+      key: 'open_folder_duplicates',
+      label: 'Duplicates',
+      value: c.duplicates,
+    },
+    {
+      key: 'open_folder_unsupported',
+      label: 'Unsupported',
+      value: c.unsupported_files,
+    },
+    { key: 'open_folder_cleanup', label: 'Cleanup', value: cleanup },
+  ];
+}
+
+function getOpenFolderRecoveryPendingTotal(signalCounts = {}) {
+  return reduceOpenFolderRecoveryBuckets(signalCounts).reduce(
+    (sum, row) => sum + Number(row.value || 0),
+    0,
+  );
+}
 
 /** Pause between debug log lines so the scoreboard animation and console output are observable. */
 const DEBUG_FILE_COUNT_LOG_STEP_MS = 200;
@@ -853,6 +889,39 @@ function updateLibraryRecoveryMakePerfectProgress(ev) {
       { label: 'Total', value: total },
     ]);
   }
+}
+
+function createOpenFolderRecoveryStreamProgressHandler({ scorecard, runtime }) {
+  return async (ev) => {
+    if (ev.type === 'signal_plan' || ev.type === 'signal_delta') {
+      await runtime.applyStreamEvent(ev, {
+        animate: ev.type === 'signal_delta',
+        duration: 200,
+      });
+      return;
+    }
+    if (ev.type === 'phase' && ev.status === 'starting') {
+      const label =
+        LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL[ev.phase] || ev.phase;
+      scorecard.setStatus(`${label}…`, { spinner: false });
+      return;
+    }
+    if (
+      ev.type === 'phase' &&
+      ev.status === 'complete' &&
+      ev.phase === 'audit'
+    ) {
+      scorecard.setStatus('Library verified', { spinner: false });
+      return;
+    }
+    if (ev.type === 'progress') {
+      const phaseLabel =
+        LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL[ev.phase] ||
+        ev.phase ||
+        'Working';
+      scorecard.setStatus(`${phaseLabel}…`, { spinner: false });
+    }
+  };
 }
 
 /**
@@ -1651,12 +1720,16 @@ function createCleanerScorecardRuntime({
   scorecard,
   signalCounts = {},
   view = null,
+  bucketReducer = null,
 } = {}) {
   let currentSignals = normalizeCleanerSignalCounts(signalCounts);
   let currentView = normalizeCleanerScorecardView(view);
 
   const render = async ({ animate = false, duration = 200 } = {}) => {
-    const metrics = reduceCleanerSignalsToBuckets(currentSignals, currentView);
+    const metrics =
+      typeof bucketReducer === 'function'
+        ? bucketReducer(currentSignals)
+        : reduceCleanerSignalsToBuckets(currentSignals, currentView);
     if (!scorecard) {
       return metrics;
     }
@@ -1698,6 +1771,9 @@ function createCleanerScorecardRuntime({
     },
 
     async setView(nextView = null, options = {}) {
+      if (typeof bucketReducer === 'function') {
+        return render(options);
+      }
       currentView = normalizeCleanerScorecardView(nextView);
       return render(options);
     },
@@ -1707,6 +1783,9 @@ function createCleanerScorecardRuntime({
         return this.setSignalCounts(event.summary || {}, options);
       }
       if (event?.type === 'signal_delta') {
+        if (event?.remaining) {
+          return this.setSignalCounts(event.remaining || {}, options);
+        }
         return this.applySignalDeltas(event.deltas || {}, options);
       }
       return null;
@@ -1725,6 +1804,8 @@ if (typeof window !== 'undefined') {
       ...bucket,
       signals: [...bucket.signals],
     })),
+    reduceOpenFolderRecoveryBuckets,
+    getOpenFolderRecoveryPendingTotal,
     normalizeSignalCounts: normalizeCleanerSignalCounts,
     normalizeView: normalizeCleanerScorecardView,
     reduceToBuckets: reduceCleanerSignalsToBuckets,
@@ -1802,7 +1883,11 @@ async function showLibraryRecoveryDockCard(options = {}) {
     }
   }
 
-  setLibraryRecoveryStats(options.stats || []);
+  if (options.omitStats) {
+    setLibraryRecoveryStats([]);
+  } else {
+    setLibraryRecoveryStats(options.stats || []);
+  }
   setLibraryRecoveryActions(options.actions || []);
 
   const actionsEl = document.getElementById('libraryRecoveryActions');
@@ -7551,30 +7636,27 @@ async function scanRecoverMediaAfterOpen(fallback = {}, streamOptions = {}) {
         throw new Error(data.error || 'Failed to scan recovered library');
       }
 
-      const summary = data.summary || {};
-      const details = data.details || {};
-      const scannedAddableCount = Number(summary.database_repairs);
-      const duplicateCount = Number(summary.duplicates);
-      const incompatibleCount = Number(summary.unsupported_files);
+      const op = data.operations || {};
+      const rawSummary = op.summary || data.summary || {};
+      const details = op.details || data.details || {};
+      const signal_summary = normalizeCleanerSignalCounts(rawSummary);
+      const buckets = reduceOpenFolderRecoveryBuckets(signal_summary);
+      const mediaFiles = buckets[0]?.value ?? 0;
+      const pending_total = getOpenFolderRecoveryPendingTotal(signal_summary);
       return {
-        // `database_repairs` is the number of files the recovery flow can add.
-        media_count: Number.isFinite(scannedAddableCount)
-          ? Math.max(scannedAddableCount, 0)
-          : Array.isArray(details.database_repairs)
-            ? details.database_repairs.length
-            : Number(fallback.media_count) || 0,
-        duplicate_count: Number.isFinite(duplicateCount)
-          ? Math.max(duplicateCount, 0)
-          : Array.isArray(details.duplicates)
-            ? details.duplicates.length
-            : 0,
-        incompatible_count: Number.isFinite(incompatibleCount)
-          ? Math.max(incompatibleCount, 0)
-          : Array.isArray(details.unsupported_files)
-            ? details.unsupported_files.length
-            : 0,
+        signal_summary,
+        pending_total,
+        /** Unique supported media files (misfiled − duplicates), for body copy */
+        media_files: mediaFiles,
+        duplicate_count: signal_summary.duplicates,
+        incompatible_count: signal_summary.unsupported_files,
+        cleanup_count:
+          signal_summary.metadata_cleanup +
+          signal_summary.folder_cleanup +
+          signal_summary.database_repairs,
         estimated_time: fallback.media_eta || 'less than a minute',
         scan_succeeded: true,
+        details,
       };
     } catch (error) {
       if (error.name === 'AbortError') {
@@ -7589,9 +7671,12 @@ async function scanRecoverMediaAfterOpen(fallback = {}, streamOptions = {}) {
 
   console.warn('⚠️ Failed to scan recovered media:', lastError);
   return {
-    media_count: fallback.media_count || 0,
+    signal_summary: null,
+    pending_total: 0,
+    media_files: 0,
     duplicate_count: 0,
     incompatible_count: 0,
+    cleanup_count: 0,
     estimated_time: fallback.media_eta || 'less than a minute',
     scan_succeeded: false,
     scan_error: lastError?.message || 'Failed to scan recovered library',
@@ -7652,27 +7737,34 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
       { signal: recoveryJourneyAbort.signal },
     );
 
-    if (!recoverMediaInfo.media_count) {
+    if (!recoverMediaInfo.pending_total) {
       await loadAndRenderPhotosCommitted(hydrationGeneration);
       finishLibraryRecoveryJourney();
       return true;
     }
 
-    const mediaCount = Number(recoverMediaInfo.media_count || 0);
+    const mediaCount = Number(recoverMediaInfo.media_files || 0);
     const mediaCountLabel = mediaCount.toLocaleString();
     const mediaFileLabel = mediaCount === 1 ? 'media file' : 'media files';
     const addClosingPhrase =
       mediaCount === 1 ? 'Add the file' : 'Add the files';
-    const duplicateCount = Number(recoverMediaInfo.duplicate_count ?? 0);
-    const incompatibleCount = Number(recoverMediaInfo.incompatible_count ?? 0);
+    const pendingLabel = Number(recoverMediaInfo.pending_total || 0).toLocaleString();
+    const etaLabel = formatDurationEstimateForItShouldTake(
+      recoverMediaInfo.estimated_time,
+    );
+    const scanCompleteBody =
+      mediaCount > 0
+        ? `This folder has ${mediaCountLabel} ${mediaFileLabel} that could be added to your library. It should take ${etaLabel}. ${addClosingPhrase} or go directly to your library.`
+        : `This folder has ${pendingLabel} pending library tasks. It should take ${etaLabel}. Continue with cleanup or go directly to your library.`;
+    const scanCompleteStats = recoverMediaInfo.signal_summary
+      ? reduceOpenFolderRecoveryBuckets(recoverMediaInfo.signal_summary).map(
+          (b) => ({ label: b.label, value: b.value }),
+        )
+      : [];
     const recoverMediaChoice = await promptLibraryRecoveryDock({
       title: 'Scan complete',
-      body: `This folder has ${mediaCountLabel} ${mediaFileLabel} that could be added to your library. It should take ${formatDurationEstimateForItShouldTake(recoverMediaInfo.estimated_time)}. ${addClosingPhrase} or go directly to your library.`,
-      stats: [
-        { label: 'Media files', value: mediaCount },
-        { label: 'Duplicates', value: duplicateCount },
-        { label: 'Incompatible', value: incompatibleCount },
-      ],
+      body: scanCompleteBody,
+      stats: scanCompleteStats,
       actions: [
         { text: 'Cancel', value: 'cancel', primary: false },
         { text: 'See my library', value: 'see_library', primary: false },
@@ -7687,8 +7779,6 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
     }
 
     const rebuildAbort = new AbortController();
-    libraryRecoveryState.rebuildTotal = mediaCount;
-    libraryRecoveryState.rebuildAdded = 0;
     let rebuildDismissed = false;
     const dismissRebuild = async () => {
       if (rebuildDismissed) {
@@ -7706,11 +7796,11 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
 
     await showLibraryRecoveryDockCard({
       title: 'Rebuilding library',
-      body: `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database. Stay on this screen until it finishes.`,
-      stats: [
-        { label: 'Added', value: 0 },
-        { label: 'Total', value: mediaCount },
-      ],
+      body:
+        mediaCount > 0
+          ? `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database. Stay on this screen until it finishes.`
+          : `Repairing your library (${pendingLabel} pending tasks). Stay on this screen until it finishes.`,
+      omitStats: true,
       showCloseButton: true,
       onClose: dismissRebuild,
       actionsJustify: 'flex-end',
@@ -7723,11 +7813,26 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
       ],
     });
 
+    const statsEl = document.getElementById('libraryRecoveryStats');
+    const statusEl = document.getElementById('libraryRecoveryStatus');
+    const scorecard = createScorecardController({ statsEl, statusEl });
+    const runtime = createCleanerScorecardRuntime({
+      scorecard,
+      signalCounts: recoverMediaInfo.signal_summary,
+      bucketReducer: reduceOpenFolderRecoveryBuckets,
+    });
+    await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
+    scorecard.setStatus('Preparing library…', { spinner: false });
+
     try {
       await streamMakeLibraryPerfect({
         signal: rebuildAbort.signal,
-        onProgress: updateLibraryRecoveryMakePerfectProgress,
+        onProgress: createOpenFolderRecoveryStreamProgressHandler({
+          scorecard,
+          runtime,
+        }),
       });
+      scorecard.destroy();
       // Replace rebuild UI (with Cancel) so users cannot race hydrate by clicking Cancel.
       await showLibraryRecoveryDockCard({
         title: 'Opening library',
@@ -7742,6 +7847,7 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
       showToast('Library ready');
       return true;
     } catch (error) {
+      scorecard.destroy();
       if (error.name === 'AbortError') {
         if (!rebuildDismissed) {
           try {
@@ -7899,9 +8005,10 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       return `This folder has ${mediaCountLabel} ${mediaFileLabel} that could be added to your library. It should take ${etaLabel}. ${addClosingPhrase} or go directly to your library.`;
     },
     stats: [
-      { label: 'Media files', key: 'media_count' },
+      { label: 'Media files', key: 'media_files' },
       { label: 'Duplicates', key: 'duplicate_count' },
-      { label: 'Incompatible', key: 'incompatible_count' },
+      { label: 'Unsupported', key: 'incompatible_count' },
+      { label: 'Cleanup', key: 'cleanup_count' },
     ],
     actions: [
       { text: 'Cancel', value: 'cancel', primary: false },
@@ -7934,6 +8041,8 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
   const folderName = selectedPath.split('/').filter(Boolean).pop() || 'library';
   let dockFlowActive = false;
   let switchedGeneration = null;
+  /** Set when user cancels the post-scan rebuild; avoids double hydrate on AbortError. */
+  let openFolderRebuildCancelled = false;
   const finishDockFlow = () => {
     if (!dockFlowActive) {
       return;
@@ -8022,26 +8131,36 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       return true;
     }
 
-    const mediaCount = Number(recoverMediaInfo.media_count || 0);
-    if (mediaCount > 0) {
+    const mediaCount = Number(recoverMediaInfo.media_files || 0);
+    if ((recoverMediaInfo.pending_total || 0) > 0) {
       const mediaCountLabel = mediaCount.toLocaleString();
       const mediaFileLabel = mediaCount === 1 ? 'media file' : 'media files';
       const addClosingPhrase =
         mediaCount === 1 ? 'Add the file' : 'Add the files';
-      const scanCompleteStats = (scanCompleteCopy.stats || []).map((stat) => ({
-        label: stat.label,
-        value: Number(recoverMediaInfo[stat.key] ?? 0),
-      }));
+      const pendingLabel = Number(recoverMediaInfo.pending_total || 0).toLocaleString();
+      const etaLabel = formatDurationEstimateForItShouldTake(
+        recoverMediaInfo.estimated_time,
+      );
+      const scanCompleteBody =
+        mediaCount > 0
+          ? scanCompleteCopy.buildBody({
+              mediaCountLabel,
+              mediaFileLabel,
+              etaLabel,
+              addClosingPhrase,
+            })
+          : `This folder has ${pendingLabel} pending library tasks. It should take ${etaLabel}. Continue with cleanup or go directly to your library.`;
+      const scanCompleteStats = recoverMediaInfo.signal_summary
+        ? reduceOpenFolderRecoveryBuckets(recoverMediaInfo.signal_summary).map(
+            (b) => ({ label: b.label, value: b.value }),
+          )
+        : (scanCompleteCopy.stats || []).map((stat) => ({
+            label: stat.label,
+            value: Number(recoverMediaInfo[stat.key] ?? 0),
+          }));
       const scanCompleteChoice = await promptLibraryRecoveryDock({
         title: scanCompleteCopy.title,
-        body: scanCompleteCopy.buildBody({
-          mediaCountLabel,
-          mediaFileLabel,
-          etaLabel: formatDurationEstimateForItShouldTake(
-            recoverMediaInfo.estimated_time,
-          ),
-          addClosingPhrase,
-        }),
+        body: scanCompleteBody,
         stats: scanCompleteStats,
         actions: scanCompleteCopy.actions,
       });
@@ -8053,34 +8172,50 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
           }
         } catch (hydrateErr) {
           console.error(
-            '❌ Failed to show library after unsupported scan-complete choice:',
+            '❌ Failed to show library after scan-complete choice:',
             hydrateErr,
           );
           showToast(`Error: ${hydrateErr.message}`);
         }
         finishDockFlow();
-        showToast('Error: This path is not available yet');
         return true;
       }
 
+      const rebuildAbort = new AbortController();
+      const dismissUnifiedRebuild = async () => {
+        if (openFolderRebuildCancelled) {
+          return;
+        }
+        openFolderRebuildCancelled = true;
+        rebuildAbort.abort();
+        try {
+          if (switchedGeneration !== null) {
+            await loadAndRenderPhotosCommitted(switchedGeneration);
+          }
+        } catch (hydrateErr) {
+          console.warn('Hydrate after rebuild cancel:', hydrateErr);
+        }
+        finishDockFlow();
+      };
+
       const rebuildingActions = (rebuildingCopy.actions || []).map((action) => ({
         ...action,
-        onClick: () => {
-          showToast('Error: This path is not available yet');
-        },
+        onClick:
+          action.value === 'cancel' ? dismissUnifiedRebuild : action.onClick,
       }));
+      const rebuildingBody =
+        mediaCount > 0
+          ? rebuildingCopy.buildBody({
+              mediaCountLabel,
+              mediaFileLabel,
+            })
+          : `Repairing your library (${pendingLabel} pending tasks). Stay on this screen until it finishes.`;
       const rebuildingShown = await showLibraryRecoveryDockCard({
         title: rebuildingCopy.title,
-        body: rebuildingCopy.buildBody({
-          mediaCountLabel,
-          mediaFileLabel,
-        }),
-        statusText: 'Repairing your library',
-        statusSpinner: true,
+        body: rebuildingBody,
+        omitStats: true,
         showCloseButton: rebuildingCopy.showCloseButton,
-        onClose: () => {
-          showToast('Error: This path is not available yet');
-        },
+        onClose: dismissUnifiedRebuild,
         actionsJustify: rebuildingCopy.actionsJustify,
         actions: rebuildingActions,
       });
@@ -8089,7 +8224,30 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         showToast(`Error: ${rebuildingCopy.title}`);
         return false;
       }
-      await requestMakeLibraryPerfect();
+
+      const statsEl = document.getElementById('libraryRecoveryStats');
+      const statusEl = document.getElementById('libraryRecoveryStatus');
+      const scorecard = createScorecardController({ statsEl, statusEl });
+      const runtime = createCleanerScorecardRuntime({
+        scorecard,
+        signalCounts: recoverMediaInfo.signal_summary,
+        bucketReducer: reduceOpenFolderRecoveryBuckets,
+      });
+      await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
+      scorecard.setStatus('Preparing library…', { spinner: false });
+
+      try {
+        await streamMakeLibraryPerfect({
+          signal: rebuildAbort.signal,
+          onProgress: createOpenFolderRecoveryStreamProgressHandler({
+            scorecard,
+            runtime,
+          }),
+        });
+      } finally {
+        scorecard.destroy();
+      }
+
       await showLibraryRecoveryDockCard({
         title: openingCopy.title,
         body: openingCopy.body,
@@ -8119,6 +8277,9 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
   } catch (error) {
     finishDockFlow();
     if (error.name === 'AbortError') {
+      if (openFolderRebuildCancelled) {
+        return true;
+      }
       if (switchedGeneration !== null) {
         try {
           await loadAndRenderPhotosCommitted(switchedGeneration);

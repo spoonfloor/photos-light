@@ -60,9 +60,10 @@
           return `This folder has ${mediaCountLabel} ${mediaFileLabel} that could be added to your library. It should take ${etaLabel}. ${addClosingPhrase} or go directly to your library.`;
         },
         stats: [
-          { label: 'Media files', key: 'media_count' },
+          { label: 'Media files', key: 'media_files' },
           { label: 'Duplicates', key: 'duplicate_count' },
-          { label: 'Incompatible', key: 'incompatible_count' },
+          { label: 'Unsupported', key: 'incompatible_count' },
+          { label: 'Cleanup', key: 'cleanup_count' },
         ],
         actions: [
           { text: 'Cancel', value: 'cancel', primary: false },
