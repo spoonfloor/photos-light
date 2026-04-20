@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v377';
+const MAIN_JS_VERSION = 'v378';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -929,11 +929,10 @@ function updateLibraryRecoveryMakePerfectProgress(ev) {
 
 function createOpenFolderRecoveryStreamProgressHandler({ scorecard, runtime }) {
   return async (ev) => {
+    if (runtime && typeof runtime.applyStreamEvent === 'function') {
+      await runtime.applyStreamEvent(ev);
+    }
     if (ev.type === 'signal_plan' || ev.type === 'signal_delta') {
-      await runtime.applyStreamEvent(ev, {
-        animate: ev.type === 'signal_delta',
-        duration: 200,
-      });
       return;
     }
     if (ev.type === 'phase' && ev.status === 'starting') {
@@ -1498,8 +1497,15 @@ async function ensureLibraryRecoveryDock() {
   return document.getElementById('libraryRecoveryDock');
 }
 
+function setLibraryRecoveryPreviewVisible(visible) {
+  document.body.classList.toggle('library-recovery-preview-visible', !!visible);
+}
+
 function setLibraryRecoveryShellHidden(hidden) {
   libraryRecoveryState.shellHidden = hidden;
+  if (hidden) {
+    setLibraryRecoveryPreviewVisible(false);
+  }
   document.body.classList.toggle('library-recovery-active', hidden);
 }
 
@@ -1520,6 +1526,7 @@ function hideLibraryRecoveryDock() {
 
 function finishLibraryRecoveryJourney() {
   hideLibraryRecoveryDock();
+  setLibraryRecoveryPreviewVisible(false);
   setLibraryRecoveryShellHidden(false);
   setOpenLibraryModalHandoffShellHidden(false);
   libraryRecoveryState.hasSwitchedLibrary = false;
@@ -1769,6 +1776,351 @@ function createScorecardController({ statsEl, statusEl } = {}) {
         statsEl.style.display = 'none';
         statsEl.innerHTML = '';
       }
+    },
+  };
+}
+
+const OPEN_FOLDER_RECOVERY_STEP_MS = 50;
+const OPEN_FOLDER_RECOVERY_METRIC_ORDER = [
+  'open_folder_media_files',
+  'open_folder_duplicates',
+  'open_folder_unsupported',
+];
+const OPEN_FOLDER_RECOVERY_METRIC_LABELS = Object.freeze({
+  open_folder_media_files: 'Media files',
+  open_folder_duplicates: 'Duplicates',
+  open_folder_unsupported: 'Unsupported',
+});
+
+function setLibraryRecoveryBodyText(text = '') {
+  const bodyEl = document.getElementById('libraryRecoveryBody');
+  if (bodyEl) {
+    bodyEl.textContent = text;
+  }
+}
+
+function buildOpenFolderRecoveryCompletionActions({
+  onCancel,
+  onContinue,
+  continueDisabled = true,
+} = {}) {
+  return [
+    {
+      text: 'Cancel',
+      value: 'cancel',
+      primary: false,
+      onClick: onCancel,
+    },
+    {
+      text: 'Continue',
+      value: 'continue',
+      primary: true,
+      disabled: continueDisabled,
+      onClick: onContinue,
+    },
+  ];
+}
+
+function waitForLibraryRecoveryAction(actions = []) {
+  return new Promise((resolve) => {
+    setLibraryRecoveryActions(actions, resolve);
+  });
+}
+
+async function finishOpenFolderRecoverySuccess({
+  runtime,
+  scorecard,
+  loadLibrary,
+} = {}) {
+  await runtime.markComplete();
+  scorecard.setStatus('Loading photos', { spinner: true });
+  if (typeof loadLibrary === 'function') {
+    await loadLibrary();
+  }
+  setLibraryRecoveryPreviewVisible(true);
+  setLibraryRecoveryBodyText(
+    'Cleaning complete. Review your library, then continue.',
+  );
+  scorecard.setStatus('Library ready', { spinner: false });
+  await runtime.waitForIdle();
+  return waitForLibraryRecoveryAction(
+    buildOpenFolderRecoveryCompletionActions({
+      continueDisabled: false,
+    }),
+  );
+}
+
+function createOpenFolderRecoveryRuntime({
+  scorecard,
+  signalCounts = {},
+  supportedMediaCount = 0,
+} = {}) {
+  let currentSignals = normalizeCleanerSignalCounts(signalCounts);
+  const initialWinnerCount = Math.max(
+    0,
+    Number(supportedMediaCount || 0) - Number(currentSignals?.duplicates || 0),
+  );
+  const phaseState = {
+    canonicalize: {
+      started: false,
+      processed: 0,
+      total: Math.max(0, initialWinnerCount),
+      complete: false,
+    },
+    rebuild_db: {
+      started: false,
+      processed: 0,
+      total: Math.max(0, initialWinnerCount),
+      complete: false,
+    },
+  };
+  const displayState = new Map();
+  let tickIntervalId = null;
+  let destroyed = false;
+  let idleResolvers = [];
+
+  const resolveIdleIfSettled = () => {
+    if (tickIntervalId) {
+      return;
+    }
+    const pending = idleResolvers;
+    idleResolvers = [];
+    pending.forEach((resolve) => resolve());
+  };
+
+  const phaseFraction = (phaseKey) => {
+    const phase = phaseState[phaseKey];
+    if (!phase) {
+      return 0;
+    }
+    if (phase.complete) {
+      return 1;
+    }
+    const total = Math.max(0, Number(phase.total || 0));
+    if (total <= 0) {
+      return 0;
+    }
+    return Math.max(
+      0,
+      Math.min(1, Number(phase.processed || 0) / total),
+    );
+  };
+
+  const winnerProgressFraction = () => {
+    const rebuildStarted =
+      phaseState.rebuild_db.started || phaseState.rebuild_db.complete;
+    const canonicalizeStarted =
+      phaseState.canonicalize.started || phaseState.canonicalize.complete;
+    if (rebuildStarted) {
+      return 0.5 + phaseFraction('rebuild_db') * 0.5;
+    }
+    if (canonicalizeStarted) {
+      return phaseFraction('canonicalize') * 0.5;
+    }
+    return 0;
+  };
+
+  const buildTargetMetrics = () => {
+    const winners = Math.max(
+      0,
+      Math.round(initialWinnerCount * (1 - winnerProgressFraction())),
+    );
+    return [
+      {
+        key: 'open_folder_media_files',
+        label: OPEN_FOLDER_RECOVERY_METRIC_LABELS.open_folder_media_files,
+        value: winners,
+      },
+      {
+        key: 'open_folder_duplicates',
+        label: OPEN_FOLDER_RECOVERY_METRIC_LABELS.open_folder_duplicates,
+        value: Math.max(0, Math.round(Number(currentSignals?.duplicates || 0))),
+      },
+      {
+        key: 'open_folder_unsupported',
+        label: OPEN_FOLDER_RECOVERY_METRIC_LABELS.open_folder_unsupported,
+        value: Math.max(
+          0,
+          Math.round(Number(currentSignals?.unsupported_files || 0)),
+        ),
+      },
+    ];
+  };
+
+  const renderDisplay = () => {
+    if (destroyed || !scorecard) {
+      return;
+    }
+    const metrics = OPEN_FOLDER_RECOVERY_METRIC_ORDER.map((key) => {
+      const metric =
+        displayState.get(key) || {
+          label: OPEN_FOLDER_RECOVERY_METRIC_LABELS[key] || key,
+          display: 0,
+          target: 0,
+        };
+      return {
+        key,
+        label: metric.label,
+        value: metric.display,
+      };
+    });
+    scorecard.setMetrics(metrics);
+  };
+
+  const stopTicker = () => {
+    if (tickIntervalId !== null) {
+      window.clearInterval(tickIntervalId);
+      tickIntervalId = null;
+    }
+  };
+
+  const startTickerIfNeeded = () => {
+    if (destroyed || tickIntervalId !== null) {
+      return;
+    }
+    const hasPending = Array.from(displayState.values()).some(
+      (metric) => metric.display > metric.target,
+    );
+    if (!hasPending) {
+      resolveIdleIfSettled();
+      return;
+    }
+    tickIntervalId = window.setInterval(() => {
+      if (destroyed) {
+        stopTicker();
+        return;
+      }
+      let changed = false;
+      OPEN_FOLDER_RECOVERY_METRIC_ORDER.forEach((key) => {
+        const metric = displayState.get(key);
+        if (!metric || metric.display <= metric.target) {
+          return;
+        }
+        metric.display = Math.max(metric.target, metric.display - 1);
+        changed = true;
+      });
+      if (changed) {
+        renderDisplay();
+      }
+      const stillPending = Array.from(displayState.values()).some(
+        (metric) => metric.display > metric.target,
+      );
+      if (!stillPending) {
+        stopTicker();
+        resolveIdleIfSettled();
+      }
+    }, OPEN_FOLDER_RECOVERY_STEP_MS);
+  };
+
+  const syncTargets = ({ initialize = false } = {}) => {
+    const metrics = buildTargetMetrics();
+    metrics.forEach((metric) => {
+      const numericValue = Math.max(0, Math.round(Number(metric.value || 0)));
+      if (initialize || !displayState.has(metric.key)) {
+        displayState.set(metric.key, {
+          label: metric.label,
+          display: numericValue,
+          target: numericValue,
+        });
+        return;
+      }
+      const current = displayState.get(metric.key);
+      current.label = metric.label;
+      current.target = Math.min(current.target, current.display, numericValue);
+    });
+    renderDisplay();
+    startTickerIfNeeded();
+    resolveIdleIfSettled();
+    return metrics;
+  };
+
+  const applyPhaseEvent = (event = {}) => {
+    if (event.type === 'phase') {
+      if (event.phase === 'canonicalize' || event.phase === 'rebuild_db') {
+        const phase = phaseState[event.phase];
+        phase.started = true;
+        if (event.total !== undefined) {
+          phase.total = Math.max(0, Number(event.total || 0));
+        }
+        if (event.status === 'complete') {
+          phase.complete = true;
+          phase.processed = phase.total;
+        }
+        return true;
+      }
+      return false;
+    }
+    if (event.type === 'progress') {
+      if (event.phase !== 'canonicalize' && event.phase !== 'rebuild_db') {
+        return false;
+      }
+      const phase = phaseState[event.phase];
+      phase.started = true;
+      if (event.total !== undefined) {
+        phase.total = Math.max(0, Number(event.total || 0));
+      }
+      phase.processed = Math.max(
+        0,
+        Math.min(Number(phase.total || 0), Number(event.processed || 0)),
+      );
+      return true;
+    }
+    return false;
+  };
+
+  syncTargets({ initialize: true });
+
+  return {
+    async setSignalCounts(nextSignals = {}) {
+      currentSignals = normalizeCleanerSignalCounts(nextSignals);
+      return syncTargets();
+    },
+
+    async applyStreamEvent(event = {}) {
+      if (event?.type === 'signal_plan') {
+        currentSignals = normalizeCleanerSignalCounts(event.summary || {});
+        return syncTargets();
+      }
+      if (event?.type === 'signal_delta') {
+        currentSignals = normalizeCleanerSignalCounts(
+          event.remaining ||
+            applyCleanerSignalDeltas(currentSignals, event.deltas || {}),
+        );
+        return syncTargets();
+      }
+      if (applyPhaseEvent(event)) {
+        return syncTargets();
+      }
+      return buildTargetMetrics();
+    },
+
+    async markComplete() {
+      phaseState.canonicalize.started = true;
+      phaseState.canonicalize.complete = true;
+      phaseState.canonicalize.processed = phaseState.canonicalize.total;
+      phaseState.rebuild_db.started = true;
+      phaseState.rebuild_db.complete = true;
+      phaseState.rebuild_db.processed = phaseState.rebuild_db.total;
+      currentSignals = normalizeCleanerSignalCounts({});
+      return syncTargets();
+    },
+
+    waitForIdle() {
+      const pending = Array.from(displayState.values()).some(
+        (metric) => metric.display > metric.target,
+      );
+      if (!pending && tickIntervalId === null) {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        idleResolvers.push(resolve);
+      });
+    },
+
+    destroy() {
+      destroyed = true;
+      stopTicker();
+      resolveIdleIfSettled();
     },
   };
 }
@@ -7924,28 +8276,21 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
           ? `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database. Stay on this screen until it finishes.`
           : `Repairing your library (${pendingLabel} pending tasks). Stay on this screen until it finishes.`,
       omitStats: true,
-      showCloseButton: true,
-      onClose: dismissRebuild,
+      showCloseButton: false,
       actionsJustify: 'flex-end',
-      actions: [
-        {
-          text: 'Cancel',
-          primary: false,
-          onClick: dismissRebuild,
-        },
-      ],
+      actions: buildOpenFolderRecoveryCompletionActions({
+        onCancel: dismissRebuild,
+        continueDisabled: true,
+      }),
     });
 
     const statsEl = document.getElementById('libraryRecoveryStats');
     const statusEl = document.getElementById('libraryRecoveryStatus');
     const scorecard = createScorecardController({ statsEl, statusEl });
-    const runtime = createCleanerScorecardRuntime({
+    const runtime = createOpenFolderRecoveryRuntime({
       scorecard,
       signalCounts: recoverMediaInfo.signal_summary,
-      bucketReducer: createOpenFolderRecoveryBucketReducer(
-        recoverMediaInfo.supported_media_files,
-        recoverMediaInfo.signal_summary?.duplicates ?? 0,
-      ),
+      supportedMediaCount: recoverMediaInfo.supported_media_files,
     });
     await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
     scorecard.setStatus('Preparing library', { spinner: false });
@@ -7958,21 +8303,22 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
           runtime,
         }),
       });
-      scorecard.destroy();
-      // Replace rebuild UI (with Cancel) so users cannot race hydrate by clicking Cancel.
-      await showLibraryRecoveryDockCard({
-        title: 'Opening library',
-        body: 'Loading your photos into the app.',
-        statusText: 'Almost done',
-        statusSpinner: true,
-        showCloseButton: false,
-        actions: [],
+      const completionChoice = await finishOpenFolderRecoverySuccess({
+        runtime,
+        scorecard,
+        loadLibrary: async () => {
+          await loadAndRenderPhotosCommitted(hydrationGeneration);
+        },
       });
-      await loadAndRenderPhotosCommitted(hydrationGeneration);
+      runtime.destroy();
+      scorecard.destroy();
       finishLibraryRecoveryJourney();
-      showToast('Library ready');
+      if (completionChoice === 'continue') {
+        showToast('Library ready');
+      }
       return true;
     } catch (error) {
+      runtime.destroy();
       scorecard.destroy();
       if (error.name === 'AbortError') {
         if (!rebuildDismissed) {
@@ -8147,8 +8493,11 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       return `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database. Stay on this screen until it finishes.`;
     },
     actionsJustify: 'flex-end',
-    actions: [{ text: 'Cancel', value: 'cancel', primary: false }],
-    showCloseButton: true,
+    actions: [
+      { text: 'Cancel', value: 'cancel', primary: false },
+      { text: 'Continue', value: 'continue', primary: true, disabled: true },
+    ],
+    showCloseButton: false,
   };
   const generalPurposeFolderWarningCopy =
     window.LibraryRecoveryUI?.dialogs?.generalPurposeFolderWarning || {
@@ -8315,11 +8664,6 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         finishDockFlow();
       };
 
-      const rebuildingActions = (rebuildingCopy.actions || []).map((action) => ({
-        ...action,
-        onClick:
-          action.value === 'cancel' ? dismissUnifiedRebuild : action.onClick,
-      }));
       const rebuildingBody =
         mediaCount > 0
           ? rebuildingCopy.buildBody({
@@ -8331,10 +8675,12 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         title: rebuildingCopy.title,
         body: rebuildingBody,
         omitStats: true,
-        showCloseButton: rebuildingCopy.showCloseButton,
-        onClose: dismissUnifiedRebuild,
+        showCloseButton: false,
         actionsJustify: rebuildingCopy.actionsJustify,
-        actions: rebuildingActions,
+        actions: buildOpenFolderRecoveryCompletionActions({
+          onCancel: dismissUnifiedRebuild,
+          continueDisabled: true,
+        }),
       });
       if (!rebuildingShown) {
         finishDockFlow();
@@ -8345,13 +8691,10 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       const statsEl = document.getElementById('libraryRecoveryStats');
       const statusEl = document.getElementById('libraryRecoveryStatus');
       const scorecard = createScorecardController({ statsEl, statusEl });
-      const runtime = createCleanerScorecardRuntime({
+      const runtime = createOpenFolderRecoveryRuntime({
         scorecard,
         signalCounts: recoverMediaInfo.signal_summary,
-        bucketReducer: createOpenFolderRecoveryBucketReducer(
-          recoverMediaInfo.supported_media_files,
-          recoverMediaInfo.signal_summary?.duplicates ?? 0,
-        ),
+        supportedMediaCount: recoverMediaInfo.supported_media_files,
       });
       await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
       scorecard.setStatus('Preparing library', { spinner: true });
@@ -8380,18 +8723,28 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
           scorecard.setStatus('Finishing cleanup', { spinner: true });
           await requestMakeLibraryPerfect({ signal: rebuildAbort.signal });
         }
-        scorecard.setStatus('Loading photos', { spinner: true });
-        if (switchedGeneration !== null) {
-          await loadAndRenderPhotosCommitted(switchedGeneration);
-        } else {
-          await loadAndRenderPhotos(false, { throwOnError: true });
+        const completionChoice = await finishOpenFolderRecoverySuccess({
+          runtime,
+          scorecard,
+          loadLibrary: async () => {
+            if (switchedGeneration !== null) {
+              await loadAndRenderPhotosCommitted(switchedGeneration);
+            } else {
+              await loadAndRenderPhotos(false, { throwOnError: true });
+            }
+          },
+        });
+        runtime.destroy();
+        scorecard.destroy();
+        finishDockFlow();
+        if (completionChoice === 'continue') {
+          showToast(`Opened ${folderName}`);
         }
+        return true;
       } finally {
+        runtime.destroy();
         scorecard.destroy();
       }
-      finishDockFlow();
-      showToast(`Opened ${folderName}`);
-      return true;
     } else {
       finishDockFlow();
       await showLibraryTransitionOverlay({

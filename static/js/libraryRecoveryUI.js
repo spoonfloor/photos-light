@@ -82,8 +82,9 @@
         actionsJustify: 'flex-end',
         actions: [
           { text: 'Cancel', value: 'cancel', primary: false },
+          { text: 'Continue', value: 'continue', primary: true, disabled: true },
         ],
-        showCloseButton: true,
+        showCloseButton: false,
       },
       openingLibrary: {
         title: 'Opening library',
