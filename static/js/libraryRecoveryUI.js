@@ -63,7 +63,6 @@
           { label: 'Media files', key: 'media_files' },
           { label: 'Duplicates', key: 'duplicate_count' },
           { label: 'Unsupported', key: 'incompatible_count' },
-          { label: 'Cleanup', key: 'cleanup_count' },
         ],
         actions: [
           { text: 'Cancel', value: 'cancel', primary: false },

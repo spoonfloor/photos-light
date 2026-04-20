@@ -947,11 +947,13 @@ class LibraryCleaner:
                 self.db_conn.row_factory = sqlite3.Row
             self.hash_cache = _ReadOnlyHashCache()
             issues = self.final_audit()
+            supported_media_files = self._count_supported_media_leaf_files()
             payload = summarize_clean_library_issues(issues)
             payload["operations"] = summarize_clean_library_operations(
                 self.library_path,
                 issues,
             )
+            payload["supported_media_files"] = supported_media_files
             payload["status"] = "DIRTY" if issues else "CLEAN"
             return payload
         finally:

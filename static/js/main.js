@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v368';
+const MAIN_JS_VERSION = 'v377';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -64,14 +64,27 @@ const DEFAULT_CLEANER_SCORECARD_VIEW = CLEANER_SIGNAL_DEFS.map((signalDef) => ({
 }));
 
 /**
- * Open-folder / recovery dock: four buckets, order fixed.
- * "Media files" = supported unique media work: misfiled_media minus duplicates (not double-counted).
+ * Open-folder / recovery dock: three buckets (no cleanup column).
+ * Media files = winners: M − duplicate_losers (M = supported_media_files from scan).
+ * Duplicates = loser count; Unsupported = unsupported_files signal.
+ *
+ * During streaming, pass preflightWinnerCount = M − initialDuplicates so column 1
+ * stays fixed; M is from pre-scan while duplicate signal burns down — otherwise
+ * M − duplicates_remaining incorrectly rises as losers are trashed.
  */
-function reduceOpenFolderRecoveryBuckets(signalCounts = {}) {
+function reduceOpenFolderRecoveryBuckets(signalCounts = {}, options = {}) {
   const c = normalizeCleanerSignalCounts(signalCounts);
-  const mediaFiles = Math.max(0, c.misfiled_media - c.duplicates);
-  const cleanup =
-    c.metadata_cleanup + c.folder_cleanup + c.database_repairs;
+  const duplicates = c.duplicates;
+  const mRaw = options.supportedMediaCount;
+  const m =
+    mRaw === undefined || mRaw === null ? null : Math.max(0, Number(mRaw));
+  const pwc = options.preflightWinnerCount;
+  const mediaFiles =
+    pwc !== null && pwc !== undefined && Number.isFinite(Number(pwc))
+      ? Math.max(0, Number(pwc))
+      : m !== null && Number.isFinite(m)
+        ? Math.max(0, m - duplicates)
+        : Math.max(0, c.misfiled_media - duplicates);
   return [
     {
       key: 'open_folder_media_files',
@@ -81,22 +94,46 @@ function reduceOpenFolderRecoveryBuckets(signalCounts = {}) {
     {
       key: 'open_folder_duplicates',
       label: 'Duplicates',
-      value: c.duplicates,
+      value: duplicates,
     },
     {
       key: 'open_folder_unsupported',
       label: 'Unsupported',
       value: c.unsupported_files,
     },
-    { key: 'open_folder_cleanup', label: 'Cleanup', value: cleanup },
   ];
 }
 
+function createOpenFolderRecoveryBucketReducer(
+  supportedMediaCount,
+  initialDuplicateCount,
+) {
+  const m =
+    supportedMediaCount === undefined || supportedMediaCount === null
+      ? null
+      : Math.max(0, Number(supportedMediaCount));
+  const d0 =
+    initialDuplicateCount === undefined || initialDuplicateCount === null
+      ? null
+      : Math.max(0, Number(initialDuplicateCount));
+  let preflightWinnerCount = null;
+  if (
+    m !== null &&
+    Number.isFinite(m) &&
+    d0 !== null &&
+    Number.isFinite(d0)
+  ) {
+    preflightWinnerCount = Math.max(0, m - d0);
+  }
+  return (signalCounts) =>
+    reduceOpenFolderRecoveryBuckets(signalCounts, {
+      supportedMediaCount,
+      preflightWinnerCount,
+    });
+}
+
 function getOpenFolderRecoveryPendingTotal(signalCounts = {}) {
-  return reduceOpenFolderRecoveryBuckets(signalCounts).reduce(
-    (sum, row) => sum + Number(row.value || 0),
-    0,
-  );
+  return Number(normalizeCleanerSignalCounts(signalCounts).operation_count || 0);
 }
 
 /** Pause between debug log lines so the scoreboard animation and console output are observable. */
@@ -841,12 +878,12 @@ function updateLibraryRecoveryMakePerfectProgress(ev) {
   if (ev.type === 'phase' && statusEl && ev.status === 'starting') {
     const label =
       LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL[ev.phase] || ev.phase;
-    statusEl.style.display = 'flex';
     if (ev.phase === 'audit') {
       setLibraryRecoveryStats([]);
-      statusEl.innerHTML = `${label}…<span class="import-spinner"></span>`;
+      setRecoveryDockSpinnerStatus(statusEl, label);
     } else {
-      statusEl.textContent = `${label}…`;
+      statusEl.style.display = 'flex';
+      statusEl.textContent = label;
       setLibraryRecoveryStats([
         { label: 'Added', value: libraryRecoveryState.rebuildAdded || 0 },
         { label: 'Total', value: total },
@@ -860,8 +897,7 @@ function updateLibraryRecoveryMakePerfectProgress(ev) {
     ev.status === 'complete' &&
     ev.phase === 'audit'
   ) {
-    statusEl.style.display = 'flex';
-    statusEl.textContent = 'Library verified';
+    setRecoveryDockSpinnerStatus(statusEl, 'Library verified');
     return;
   }
   if (ev.type === 'progress') {
@@ -870,13 +906,13 @@ function updateLibraryRecoveryMakePerfectProgress(ev) {
       ev.phase ||
       'Working';
     if (statusEl) {
-      statusEl.style.display = 'flex';
       if (ev.phase === 'audit') {
         setLibraryRecoveryStats([]);
-        statusEl.innerHTML = `${phaseLabel}…<span class="import-spinner"></span>`;
+        setRecoveryDockSpinnerStatus(statusEl, phaseLabel);
         return;
       }
-      statusEl.textContent = `${phaseLabel}…`;
+      statusEl.style.display = 'flex';
+      statusEl.textContent = phaseLabel;
     }
     if (ev.phase === 'canonicalize' || ev.phase === 'rebuild_db') {
       libraryRecoveryState.rebuildAdded = Math.max(
@@ -903,7 +939,7 @@ function createOpenFolderRecoveryStreamProgressHandler({ scorecard, runtime }) {
     if (ev.type === 'phase' && ev.status === 'starting') {
       const label =
         LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL[ev.phase] || ev.phase;
-      scorecard.setStatus(`${label}…`, { spinner: false });
+      scorecard.setStatus(label, { spinner: true });
       return;
     }
     if (
@@ -911,7 +947,7 @@ function createOpenFolderRecoveryStreamProgressHandler({ scorecard, runtime }) {
       ev.status === 'complete' &&
       ev.phase === 'audit'
     ) {
-      scorecard.setStatus('Library verified', { spinner: false });
+      scorecard.setStatus('Library verified', { spinner: true });
       return;
     }
     if (ev.type === 'progress') {
@@ -919,7 +955,7 @@ function createOpenFolderRecoveryStreamProgressHandler({ scorecard, runtime }) {
         LIBRARY_RECOVERY_MAKE_PERFECT_PHASE_LABEL[ev.phase] ||
         ev.phase ||
         'Working';
-      scorecard.setStatus(`${phaseLabel}…`, { spinner: false });
+      scorecard.setStatus(phaseLabel, { spinner: true });
     }
   };
 }
@@ -928,14 +964,47 @@ function createOpenFolderRecoveryStreamProgressHandler({ scorecard, runtime }) {
  * Same engine as POST /api/library/make-perfect, with SSE progress events.
  */
 async function streamMakeLibraryPerfect(options = {}) {
-  const { signal, onProgress } = options;
-  const response = await fetch('/api/library/make-perfect/stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    signal,
-  });
+  const { signal: callerSignal, onProgress } = options;
+
+  // Internal controller lets us forcibly tear down the underlying HTTP
+  // connection once we've consumed the `complete`/`error` event. Cancelling the
+  // reader alone is not enough to release the socket in some browsers, which
+  // stalls the next same-origin fetch (e.g. /api/photos) behind the still-open
+  // SSE connection.
+  const internalAbort = new AbortController();
+  let callerAbortListener = null;
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      internalAbort.abort();
+    } else {
+      callerAbortListener = () => internalAbort.abort();
+      callerSignal.addEventListener('abort', callerAbortListener, {
+        once: true,
+      });
+    }
+  }
+
+  const cleanupCallerSignal = () => {
+    if (callerSignal && callerAbortListener) {
+      callerSignal.removeEventListener('abort', callerAbortListener);
+      callerAbortListener = null;
+    }
+  };
+
+  let response;
+  try {
+    response = await fetch('/api/library/make-perfect/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: internalAbort.signal,
+    });
+  } catch (err) {
+    cleanupCallerSignal();
+    if (callerSignal?.aborted || err?.name === 'AbortError') {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    throw err;
+  }
 
   const contentType = response.headers.get('content-type') || '';
 
@@ -952,10 +1021,14 @@ async function streamMakeLibraryPerfect(options = {}) {
           `Server returned ${response.status} ${response.statusText}`,
       };
     }
+    internalAbort.abort();
+    cleanupCallerSignal();
     throw new Error(data.error || `Operation failed: ${response.statusText}`);
   }
 
   if (!response.body) {
+    internalAbort.abort();
+    cleanupCallerSignal();
     throw new Error('No response body');
   }
 
@@ -963,17 +1036,24 @@ async function streamMakeLibraryPerfect(options = {}) {
   const decoder = new TextDecoder();
   let buffer = '';
 
-  let onAbort;
-  if (signal) {
-    onAbort = () => {
-      reader.cancel().catch(() => {});
-    };
-    if (signal.aborted) {
-      onAbort();
-    } else {
-      signal.addEventListener('abort', onAbort, { once: true });
+  // Forcibly release the underlying HTTP/1.1 socket so any follow-up fetch
+  // (e.g. /api/photos, /api/years) isn't queued behind this connection.
+  const teardown = async () => {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
     }
-  }
+    try {
+      internalAbort.abort();
+    } catch {
+      /* ignore */
+    }
+    cleanupCallerSignal();
+    // Yield once so the browser can finish releasing the socket before the
+    // caller starts its next request.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
 
   function consumeDataLine(line) {
     if (!line.startsWith('data: ')) return null;
@@ -1003,10 +1083,9 @@ async function streamMakeLibraryPerfect(options = {}) {
         ({ done, value } = await reader.read());
       } catch (readErr) {
         if (
-          signal &&
-          (signal.aborted ||
-            readErr.name === 'AbortError' ||
-            readErr?.name === 'AbortError')
+          callerSignal?.aborted ||
+          internalAbort.signal.aborted ||
+          readErr?.name === 'AbortError'
         ) {
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
@@ -1023,6 +1102,7 @@ async function streamMakeLibraryPerfect(options = {}) {
         for (const line of chunk.split('\n')) {
           const fin = consumeDataLine(line);
           if (fin) {
+            await teardown();
             return fin.result;
           }
         }
@@ -1032,6 +1112,7 @@ async function streamMakeLibraryPerfect(options = {}) {
         for (const line of buffer.split('\n')) {
           const fin = consumeDataLine(line);
           if (fin) {
+            await teardown();
             return fin.result;
           }
         }
@@ -1039,9 +1120,12 @@ async function streamMakeLibraryPerfect(options = {}) {
       }
     }
   } finally {
-    if (signal && onAbort) {
-      signal.removeEventListener('abort', onAbort);
+    try {
+      internalAbort.abort();
+    } catch {
+      /* ignore */
     }
+    cleanupCallerSignal();
     try {
       reader.releaseLock();
     } catch {
@@ -1474,14 +1558,44 @@ function setLibraryRecoveryStats(stats = []) {
   renderScorecardStats(document.getElementById('libraryRecoveryStats'), stats);
 }
 
+const SCORECARD_STATUS_TEXT_CLASS = 'scorecard-status-text';
+const SCORECARD_STATUS_SPINNER_CLASS = 'scorecard-status-spinner';
+
+function stripRecoveryStatusEllipsis(text) {
+  return String(text ?? '')
+    .replace(/…\s*$/, '')
+    .replace(/\.{3}\s*$/, '')
+    .trimEnd();
+}
+
+/**
+ * One persistent `.import-spinner` next to the label so the braille animation
+ * does not restart on every status text change.
+ */
+function setRecoveryDockSpinnerStatus(statusEl, text) {
+  if (!statusEl) {
+    return;
+  }
+  const labelText = stripRecoveryStatusEllipsis(text);
+  let labelEl = statusEl.querySelector(`.${SCORECARD_STATUS_TEXT_CLASS}`);
+  const spinnerEl = statusEl.querySelector(
+    `.import-spinner.${SCORECARD_STATUS_SPINNER_CLASS}`,
+  );
+  if (!labelEl || !spinnerEl) {
+    statusEl.innerHTML = `<span class="${SCORECARD_STATUS_TEXT_CLASS}"></span><span class="import-spinner ${SCORECARD_STATUS_SPINNER_CLASS}" aria-hidden="true"></span>`;
+    labelEl = statusEl.querySelector(`.${SCORECARD_STATUS_TEXT_CLASS}`);
+  }
+  if (labelEl) {
+    labelEl.textContent = labelText;
+  }
+  statusEl.style.display = 'flex';
+}
+
 function createScorecardController({ statsEl, statusEl } = {}) {
   const metrics = new Map();
   let metricOrder = [];
   const animationFrames = new Map();
   let destroyed = false;
-
-  const getStatusHtml = (text, { spinner = false } = {}) =>
-    `${text}${spinner ? '<span class="import-spinner"></span>' : ''}`;
 
   const render = () => {
     if (destroyed || !statsEl) {
@@ -1540,7 +1654,12 @@ function createScorecardController({ statsEl, statusEl } = {}) {
         statusEl.textContent = '';
         return;
       }
-      statusEl.innerHTML = getStatusHtml(text, options);
+      const useSpinner = !!options.spinner;
+      if (useSpinner) {
+        setRecoveryDockSpinnerStatus(statusEl, text);
+        return;
+      }
+      statusEl.textContent = text;
       statusEl.style.display = 'flex';
     },
 
@@ -1805,6 +1924,7 @@ if (typeof window !== 'undefined') {
       signals: [...bucket.signals],
     })),
     reduceOpenFolderRecoveryBuckets,
+    createOpenFolderRecoveryBucketReducer,
     getOpenFolderRecoveryPendingTotal,
     normalizeSignalCounts: normalizeCleanerSignalCounts,
     normalizeView: normalizeCleanerScorecardView,
@@ -4562,7 +4682,6 @@ async function loadAndRenderPhotos(append = false, options = {}) {
 
   const loadPromise = (async () => {
     try {
-      // Fetch ALL photos (no limit) - just id, date, month, file_type
       const response = await fetch(`/api/photos?sort=${sortOrder}`, {
         signal: abortController.signal,
       });
@@ -4597,16 +4716,12 @@ async function loadAndRenderPhotos(append = false, options = {}) {
         state.lastClickedIndex = null;
       }
 
-      // Render entire grid structure immediately (placeholders)
       renderPhotoGrid(state.photos, false);
 
-      // Setup lazy loading for thumbnails
       setupThumbnailLazyLoading();
 
-      // Update utility menu availability after loading photos
       updateUtilityMenuAvailability();
 
-      // Update date picker to reflect current photo years (show/hide as needed)
       await populateDatePicker();
 
       const isStaleAfterPicker =
@@ -7640,13 +7755,20 @@ async function scanRecoverMediaAfterOpen(fallback = {}, streamOptions = {}) {
       const rawSummary = op.summary || data.summary || {};
       const details = op.details || data.details || {};
       const signal_summary = normalizeCleanerSignalCounts(rawSummary);
-      const buckets = reduceOpenFolderRecoveryBuckets(signal_summary);
+      const supported_media_files = Math.max(
+        0,
+        Number(data.supported_media_files ?? fallback.media_count ?? 0),
+      );
+      const buckets = reduceOpenFolderRecoveryBuckets(signal_summary, {
+        supportedMediaCount: supported_media_files,
+      });
       const mediaFiles = buckets[0]?.value ?? 0;
       const pending_total = getOpenFolderRecoveryPendingTotal(signal_summary);
       return {
         signal_summary,
+        supported_media_files,
         pending_total,
-        /** Unique supported media files (misfiled − duplicates), for body copy */
+        /** Winners (M − duplicates), for body copy */
         media_files: mediaFiles,
         duplicate_count: signal_summary.duplicates,
         incompatible_count: signal_summary.unsupported_files,
@@ -7672,6 +7794,7 @@ async function scanRecoverMediaAfterOpen(fallback = {}, streamOptions = {}) {
   console.warn('⚠️ Failed to scan recovered media:', lastError);
   return {
     signal_summary: null,
+    supported_media_files: 0,
     pending_total: 0,
     media_files: 0,
     duplicate_count: 0,
@@ -7757,9 +7880,9 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
         ? `This folder has ${mediaCountLabel} ${mediaFileLabel} that could be added to your library. It should take ${etaLabel}. ${addClosingPhrase} or go directly to your library.`
         : `This folder has ${pendingLabel} pending library tasks. It should take ${etaLabel}. Continue with cleanup or go directly to your library.`;
     const scanCompleteStats = recoverMediaInfo.signal_summary
-      ? reduceOpenFolderRecoveryBuckets(recoverMediaInfo.signal_summary).map(
-          (b) => ({ label: b.label, value: b.value }),
-        )
+      ? reduceOpenFolderRecoveryBuckets(recoverMediaInfo.signal_summary, {
+          supportedMediaCount: recoverMediaInfo.supported_media_files,
+        }).map((b) => ({ label: b.label, value: b.value }))
       : [];
     const recoverMediaChoice = await promptLibraryRecoveryDock({
       title: 'Scan complete',
@@ -7819,10 +7942,13 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
     const runtime = createCleanerScorecardRuntime({
       scorecard,
       signalCounts: recoverMediaInfo.signal_summary,
-      bucketReducer: reduceOpenFolderRecoveryBuckets,
+      bucketReducer: createOpenFolderRecoveryBucketReducer(
+        recoverMediaInfo.supported_media_files,
+        recoverMediaInfo.signal_summary?.duplicates ?? 0,
+      ),
     });
     await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
-    scorecard.setStatus('Preparing library…', { spinner: false });
+    scorecard.setStatus('Preparing library', { spinner: false });
 
     try {
       await streamMakeLibraryPerfect({
@@ -8008,7 +8134,6 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       { label: 'Media files', key: 'media_files' },
       { label: 'Duplicates', key: 'duplicate_count' },
       { label: 'Unsupported', key: 'incompatible_count' },
-      { label: 'Cleanup', key: 'cleanup_count' },
     ],
     actions: [
       { text: 'Cancel', value: 'cancel', primary: false },
@@ -8024,14 +8149,6 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
     actionsJustify: 'flex-end',
     actions: [{ text: 'Cancel', value: 'cancel', primary: false }],
     showCloseButton: true,
-  };
-  const openingCopy = window.LibraryRecoveryUI?.dock?.openingLibrary || {
-    title: 'Opening library',
-    body: 'Loading your photos into the app.',
-    statusText: 'Almost done',
-    statusSpinner: true,
-    showCloseButton: false,
-    actions: [],
   };
   const generalPurposeFolderWarningCopy =
     window.LibraryRecoveryUI?.dialogs?.generalPurposeFolderWarning || {
@@ -8151,9 +8268,9 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
             })
           : `This folder has ${pendingLabel} pending library tasks. It should take ${etaLabel}. Continue with cleanup or go directly to your library.`;
       const scanCompleteStats = recoverMediaInfo.signal_summary
-        ? reduceOpenFolderRecoveryBuckets(recoverMediaInfo.signal_summary).map(
-            (b) => ({ label: b.label, value: b.value }),
-          )
+        ? reduceOpenFolderRecoveryBuckets(recoverMediaInfo.signal_summary, {
+            supportedMediaCount: recoverMediaInfo.supported_media_files,
+          }).map((b) => ({ label: b.label, value: b.value }))
         : (scanCompleteCopy.stats || []).map((stat) => ({
             label: stat.label,
             value: Number(recoverMediaInfo[stat.key] ?? 0),
@@ -8231,31 +8348,50 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       const runtime = createCleanerScorecardRuntime({
         scorecard,
         signalCounts: recoverMediaInfo.signal_summary,
-        bucketReducer: reduceOpenFolderRecoveryBuckets,
+        bucketReducer: createOpenFolderRecoveryBucketReducer(
+          recoverMediaInfo.supported_media_files,
+          recoverMediaInfo.signal_summary?.duplicates ?? 0,
+        ),
       });
       await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
-      scorecard.setStatus('Preparing library…', { spinner: false });
+      scorecard.setStatus('Preparing library', { spinner: true });
 
       try {
-        await streamMakeLibraryPerfect({
-          signal: rebuildAbort.signal,
-          onProgress: createOpenFolderRecoveryStreamProgressHandler({
-            scorecard,
-            runtime,
-          }),
-        });
+        try {
+          await streamMakeLibraryPerfect({
+            signal: rebuildAbort.signal,
+            onProgress: createOpenFolderRecoveryStreamProgressHandler({
+              scorecard,
+              runtime,
+            }),
+          });
+        } catch (streamErr) {
+          if (
+            streamErr?.name === 'AbortError' ||
+            rebuildAbort.signal.aborted ||
+            openFolderRebuildCancelled
+          ) {
+            throw streamErr;
+          }
+          console.warn(
+            'Streaming cleanup failed; falling back to blocking cleanup:',
+            streamErr,
+          );
+          scorecard.setStatus('Finishing cleanup', { spinner: true });
+          await requestMakeLibraryPerfect({ signal: rebuildAbort.signal });
+        }
+        scorecard.setStatus('Loading photos', { spinner: true });
+        if (switchedGeneration !== null) {
+          await loadAndRenderPhotosCommitted(switchedGeneration);
+        } else {
+          await loadAndRenderPhotos(false, { throwOnError: true });
+        }
       } finally {
         scorecard.destroy();
       }
-
-      await showLibraryRecoveryDockCard({
-        title: openingCopy.title,
-        body: openingCopy.body,
-        statusText: openingCopy.statusText,
-        statusSpinner: openingCopy.statusSpinner,
-        showCloseButton: openingCopy.showCloseButton,
-        actions: openingCopy.actions,
-      });
+      finishDockFlow();
+      showToast(`Opened ${folderName}`);
+      return true;
     } else {
       finishDockFlow();
       await showLibraryTransitionOverlay({

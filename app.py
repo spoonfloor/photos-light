@@ -5556,7 +5556,11 @@ def api_make_library_perfect_stream():
         mimetype='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
+            # Force the browser to close this TCP socket when the SSE stream
+            # ends instead of keeping it alive for reuse. Keeping it alive
+            # caused subsequent same-origin fetches (e.g. /api/photos) to stall
+            # forever in the browser's network queue after the stream completed.
+            'Connection': 'close',
             'X-Accel-Buffering': 'no',
         },
     )

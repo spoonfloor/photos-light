@@ -570,6 +570,7 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                 result = scan_library_cleanliness(tmpdir, db_path=db_path)
 
             self.assertEqual(result["status"], "DIRTY")
+            self.assertEqual(result["supported_media_files"], 2)
             self.assertEqual(result["summary"]["duplicates"], 1)
             self.assertEqual(result["summary"]["misfiled_media"], 0)
             self.assertEqual(result["summary"]["database_repairs"], 0)
