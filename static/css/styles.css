@@ -1293,6 +1293,15 @@ input[type="radio"] {
   font-size: 13px;
 }
 
+.library-recovery-cleaner-debug {
+  margin-top: 8px;
+  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+
 .library-recovery-error {
   margin-top: 16px;
   padding: 12px;

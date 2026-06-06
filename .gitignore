@@ -35,6 +35,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Benchmark output
+tools/results/
+
 # Project-specific directories
 design/
 reference/

@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v378';
+const MAIN_JS_VERSION = 'v381';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -219,7 +219,7 @@ function loadAppBar() {
   const mount = document.getElementById('appBarMount');
 
   // Check session cache first (with version check)
-  const APP_BAR_VERSION = '49'; // Increment this when appBar changes
+  const APP_BAR_VERSION = '50'; // Increment this when appBar changes
   try {
     const cachedVersion = sessionStorage.getItem('photoViewer_appBarVersion');
     const cached = sessionStorage.getItem('photoViewer_appBarShell');
@@ -955,6 +955,9 @@ function createOpenFolderRecoveryStreamProgressHandler({ scorecard, runtime }) {
         ev.phase ||
         'Working';
       scorecard.setStatus(phaseLabel, { spinner: true });
+      if (typeof scorecard.setSurvivorFilingProgressDebug === 'function') {
+        scorecard.setSurvivorFilingProgressDebug(ev);
+      }
     }
   };
 }
@@ -1477,7 +1480,7 @@ async function loadLibraryRecoveryDock() {
   }
 
   try {
-    const response = await fetch('fragments/libraryRecoveryDock.html?v=3');
+    const response = await fetch('fragments/libraryRecoveryDock.html?v=4');
     if (!response.ok) {
       throw new Error(
         `Failed to load library recovery dock (${response.status})`,
@@ -1565,6 +1568,35 @@ function setLibraryRecoveryStats(stats = []) {
   renderScorecardStats(document.getElementById('libraryRecoveryStats'), stats);
 }
 
+function setLibraryRecoveryWinnersLine({
+  winnersFiled = 0,
+  winnersToFile = null,
+} = {}) {
+  const winnersEl = document.getElementById('libraryRecoveryCleanerDebug');
+  if (!winnersEl) {
+    return;
+  }
+  const filed = Number(winnersFiled);
+  const total = Number(winnersToFile);
+  if (!Number.isFinite(total) || total < 0) {
+    winnersEl.style.display = 'none';
+    winnersEl.textContent = '';
+    return;
+  }
+  const safeFiled = Number.isFinite(filed) ? Math.max(0, Math.min(filed, total)) : 0;
+  winnersEl.textContent = `winners (${safeFiled}/${total})`;
+  winnersEl.style.display = 'block';
+}
+
+function clearLibraryRecoveryWinnersLine() {
+  const winnersEl = document.getElementById('libraryRecoveryCleanerDebug');
+  if (!winnersEl) {
+    return;
+  }
+  winnersEl.style.display = 'none';
+  winnersEl.textContent = '';
+}
+
 const SCORECARD_STATUS_TEXT_CLASS = 'scorecard-status-text';
 const SCORECARD_STATUS_SPINNER_CLASS = 'scorecard-status-spinner';
 
@@ -1598,11 +1630,27 @@ function setRecoveryDockSpinnerStatus(statusEl, text) {
   statusEl.style.display = 'flex';
 }
 
-function createScorecardController({ statsEl, statusEl } = {}) {
+// SURVIVOR_FILING_PROGRESS_DEBUG
+// User-facing line: `winners (winnersFiled/winnersToFile)`.
+// Derived only from cleaner stream `progress` where `phase` is `canonicalize` or
+// `rebuild_db` (survivor filing + DB insert). See make_library_perfect.py:
+// move_to_canonical_locations, rebuild_photos_table.
+// `winnersToFile` = first qualifying `total` (stable). `winnersFiled` = high-water
+// of min(processed, winnersToFile) so rebuild_db's restarted processed counter
+// does not dip the display after canonicalize. Raw event numbers, no smoothing.
+const SURVIVOR_FILING_PROGRESS_PHASES = Object.freeze([
+  'canonicalize',
+  'rebuild_db',
+]);
+
+function createScorecardController({ statsEl, statusEl, debugEl } = {}) {
   const metrics = new Map();
   let metricOrder = [];
   const animationFrames = new Map();
   let destroyed = false;
+  let winnersToFile = null;
+  let winnersFiledHighWater = 0;
+  let winnersTotalLocked = false;
 
   const render = () => {
     if (destroyed || !statsEl) {
@@ -1652,6 +1700,56 @@ function createScorecardController({ statsEl, statusEl } = {}) {
   };
 
   return {
+    setWinnersProgress({ winnersFiled = 0, winnersToFile: nextWinnersToFile = null } = {}) {
+      if (!debugEl || destroyed) {
+        return;
+      }
+      const total = Number(nextWinnersToFile);
+      if (!Number.isFinite(total) || total < 0) {
+        clearLibraryRecoveryWinnersLine();
+        return;
+      }
+      winnersToFile = total;
+      winnersFiledHighWater = Math.max(
+        0,
+        Math.min(Number(winnersFiled || 0), winnersToFile),
+      );
+      setLibraryRecoveryWinnersLine({
+        winnersFiled: winnersFiledHighWater,
+        winnersToFile,
+      });
+    },
+
+    /**
+     * SURVIVOR_FILING_PROGRESS_DEBUG — see block comment on SURVIVOR_FILING_PROGRESS_PHASES.
+     */
+    setSurvivorFilingProgressDebug(ev = {}) {
+      if (!debugEl || destroyed) {
+        return;
+      }
+      if (ev.type !== 'progress') {
+        return;
+      }
+      if (!SURVIVOR_FILING_PROGRESS_PHASES.includes(ev.phase)) {
+        return;
+      }
+      const cap = Number(ev.total);
+      const processed = Number(ev.processed);
+      if (!Number.isFinite(cap) || cap < 1 || !Number.isFinite(processed)) {
+        return;
+      }
+      if (!winnersTotalLocked || winnersToFile === null || winnersToFile !== cap) {
+        winnersToFile = cap;
+        winnersTotalLocked = true;
+      }
+      const clamped = Math.min(processed, winnersToFile);
+      winnersFiledHighWater = Math.max(winnersFiledHighWater, clamped);
+      setLibraryRecoveryWinnersLine({
+        winnersFiled: winnersFiledHighWater,
+        winnersToFile,
+      });
+    },
+
     setStatus(text = '', options = {}) {
       if (!statusEl || destroyed) {
         return;
@@ -1776,6 +1874,13 @@ function createScorecardController({ statsEl, statusEl } = {}) {
         statsEl.style.display = 'none';
         statsEl.innerHTML = '';
       }
+      if (debugEl) {
+        debugEl.style.display = 'none';
+        debugEl.textContent = '';
+      }
+      winnersToFile = null;
+      winnersFiledHighWater = 0;
+      winnersTotalLocked = false;
     },
   };
 }
@@ -2353,6 +2458,15 @@ async function showLibraryRecoveryDockCard(options = {}) {
       errorEl.style.display = 'none';
       errorEl.textContent = '';
     }
+  }
+
+  if (options.showWinnersLine) {
+    setLibraryRecoveryWinnersLine({
+      winnersFiled: options.winnersFiled,
+      winnersToFile: options.winnersToFile,
+    });
+  } else {
+    clearLibraryRecoveryWinnersLine();
   }
 
   if (options.omitStats) {
@@ -8236,10 +8350,14 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
           supportedMediaCount: recoverMediaInfo.supported_media_files,
         }).map((b) => ({ label: b.label, value: b.value }))
       : [];
+    const preflightWinnersToFile = Math.max(0, mediaCount);
     const recoverMediaChoice = await promptLibraryRecoveryDock({
       title: 'Scan complete',
       body: scanCompleteBody,
       stats: scanCompleteStats,
+      showWinnersLine: true,
+      winnersFiled: 0,
+      winnersToFile: preflightWinnersToFile,
       actions: [
         { text: 'Cancel', value: 'cancel', primary: false },
         { text: 'See my library', value: 'see_library', primary: false },
@@ -8276,6 +8394,9 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
           ? `Repairing your library and adding ${mediaCountLabel} ${mediaFileLabel} to your database. Stay on this screen until it finishes.`
           : `Repairing your library (${pendingLabel} pending tasks). Stay on this screen until it finishes.`,
       omitStats: true,
+      showWinnersLine: true,
+      winnersFiled: 0,
+      winnersToFile: preflightWinnersToFile,
       showCloseButton: false,
       actionsJustify: 'flex-end',
       actions: buildOpenFolderRecoveryCompletionActions({
@@ -8286,13 +8407,18 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
 
     const statsEl = document.getElementById('libraryRecoveryStats');
     const statusEl = document.getElementById('libraryRecoveryStatus');
-    const scorecard = createScorecardController({ statsEl, statusEl });
+    const debugEl = document.getElementById('libraryRecoveryCleanerDebug');
+    const scorecard = createScorecardController({ statsEl, statusEl, debugEl });
     const runtime = createOpenFolderRecoveryRuntime({
       scorecard,
       signalCounts: recoverMediaInfo.signal_summary,
       supportedMediaCount: recoverMediaInfo.supported_media_files,
     });
     await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
+    scorecard.setWinnersProgress({
+      winnersFiled: 0,
+      winnersToFile: preflightWinnersToFile,
+    });
     scorecard.setStatus('Preparing library', { spinner: false });
 
     try {
@@ -8624,10 +8750,14 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
             label: stat.label,
             value: Number(recoverMediaInfo[stat.key] ?? 0),
           }));
+      const preflightWinnersToFile = Math.max(0, mediaCount);
       const scanCompleteChoice = await promptLibraryRecoveryDock({
         title: scanCompleteCopy.title,
         body: scanCompleteBody,
         stats: scanCompleteStats,
+        showWinnersLine: true,
+        winnersFiled: 0,
+        winnersToFile: preflightWinnersToFile,
         actions: scanCompleteCopy.actions,
       });
 
@@ -8675,6 +8805,9 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         title: rebuildingCopy.title,
         body: rebuildingBody,
         omitStats: true,
+        showWinnersLine: true,
+        winnersFiled: 0,
+        winnersToFile: preflightWinnersToFile,
         showCloseButton: false,
         actionsJustify: rebuildingCopy.actionsJustify,
         actions: buildOpenFolderRecoveryCompletionActions({
@@ -8690,13 +8823,18 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
 
       const statsEl = document.getElementById('libraryRecoveryStats');
       const statusEl = document.getElementById('libraryRecoveryStatus');
-      const scorecard = createScorecardController({ statsEl, statusEl });
+      const debugEl = document.getElementById('libraryRecoveryCleanerDebug');
+      const scorecard = createScorecardController({ statsEl, statusEl, debugEl });
       const runtime = createOpenFolderRecoveryRuntime({
         scorecard,
         signalCounts: recoverMediaInfo.signal_summary,
         supportedMediaCount: recoverMediaInfo.supported_media_files,
       });
       await runtime.setSignalCounts(recoverMediaInfo.signal_summary);
+      scorecard.setWinnersProgress({
+        winnersFiled: 0,
+        winnersToFile: preflightWinnersToFile,
+      });
       scorecard.setStatus('Preparing library', { spinner: true });
 
       try {

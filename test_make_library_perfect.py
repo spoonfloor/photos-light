@@ -672,6 +672,41 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             self.assertEqual(result["summary"]["duplicates"], 0)
             self.assertEqual(result["summary"]["database_repairs"], 1)
 
+    def test_scan_emits_audit_progress_when_callback_provided(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+
+            photo_path = os.path.join(tmpdir, "2026", "2026-04-12")
+            os.makedirs(photo_path, exist_ok=True)
+            rel_path = os.path.join("2026", "2026-04-12", "img_20260412_abc1234d.jpg")
+            with open(os.path.join(tmpdir, rel_path), "wb") as handle:
+                handle.write(b"photo")
+
+            events = []
+
+            with patch("clean_library_fast_audit.verify_media_file", return_value=(True, "mock")), patch(
+                "clean_library_fast_audit.compute_hash_legacy",
+                return_value=("a" * 64, False),
+            ), patch("clean_library_fast_audit.extract_exif_rating", return_value=None), patch(
+                "clean_library_fast_audit.get_orientation_flag", return_value=1
+            ):
+                result = scan_library_cleanliness(
+                    tmpdir,
+                    db_path=db_path,
+                    progress_callback=events.append,
+                )
+
+            self.assertIn(result["status"], {"DIRTY", "CLEAN"})
+            phase_events = [event for event in events if event.get("type") == "phase"]
+            self.assertEqual(phase_events[0]["phase"], "audit")
+            self.assertEqual(phase_events[0]["status"], "starting")
+            self.assertEqual(phase_events[-1]["phase"], "audit")
+            self.assertEqual(phase_events[-1]["status"], "complete")
+            progress_events = [event for event in events if event.get("type") == "progress"]
+            self.assertTrue(progress_events)
+            self.assertEqual(progress_events[-1]["phase"], "audit")
+
     def test_engine_rebuilds_db_from_disk_with_full_hashes(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
