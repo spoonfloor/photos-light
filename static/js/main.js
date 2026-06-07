@@ -4933,22 +4933,23 @@ async function openLightbox(photoIndex) {
  * Preload adjacent images for smooth navigation
  */
 function preloadAdjacentImages(currentIndex) {
-  const prevIndex = currentIndex - 1;
-  const nextIndex = currentIndex + 1;
+  const preloadPhoto = (libraryIndex) => {
+    if (libraryIndex < 0 || libraryIndex >= state.photos.length) {
+      return;
+    }
+    const photo = state.photos[libraryIndex];
+    const img = new Image();
+    img.src = getPhotoFileUrl(photo.id);
+  };
 
-  // Preload previous image
-  if (prevIndex >= 0 && prevIndex < state.photos.length) {
-    const prevPhoto = state.photos[prevIndex];
-    const prevImg = new Image();
-    prevImg.src = getPhotoFileUrl(prevPhoto.id);
+  if (hasActivePhotoFilters()) {
+    preloadPhoto(getAdjacentLightboxLibraryIndex(-1));
+    preloadPhoto(getAdjacentLightboxLibraryIndex(1));
+    return;
   }
 
-  // Preload next image
-  if (nextIndex >= 0 && nextIndex < state.photos.length) {
-    const nextPhoto = state.photos[nextIndex];
-    const nextImg = new Image();
-    nextImg.src = getPhotoFileUrl(nextPhoto.id);
-  }
+  preloadPhoto(currentIndex - 1);
+  preloadPhoto(currentIndex + 1);
 }
 
 /**
@@ -5045,6 +5046,29 @@ function updateLightboxArrowStates() {
   if (!prevBtn || !nextBtn) return;
 
   const currentIndex = state.lightboxPhotoIndex;
+  if (currentIndex === null) {
+    return;
+  }
+
+  if (hasActivePhotoFilters()) {
+    const currentPhotoId = state.photos[currentIndex]?.id;
+    const navPhotoIds = getLightboxNavPhotoIds();
+    const navIndex = navPhotoIds.indexOf(currentPhotoId);
+
+    if (navIndex <= 0) {
+      prevBtn.classList.add('inactive');
+    } else {
+      prevBtn.classList.remove('inactive');
+    }
+
+    if (navIndex === -1 || navIndex >= navPhotoIds.length - 1) {
+      nextBtn.classList.add('inactive');
+    } else {
+      nextBtn.classList.remove('inactive');
+    }
+    return;
+  }
+
   const totalPhotos = state.photos.length;
 
   // Dim left arrow if at first photo
@@ -5068,11 +5092,17 @@ function updateLightboxArrowStates() {
 function navigateLightbox(direction) {
   if (state.lightboxPhotoIndex === null) return;
 
-  const newIndex = state.lightboxPhotoIndex + direction;
-
-  // Bounds check
-  if (newIndex < 0 || newIndex >= state.photos.length) {
-    return;
+  let newIndex;
+  if (hasActivePhotoFilters()) {
+    newIndex = getAdjacentLightboxLibraryIndex(direction);
+    if (newIndex === null) {
+      return;
+    }
+  } else {
+    newIndex = state.lightboxPhotoIndex + direction;
+    if (newIndex < 0 || newIndex >= state.photos.length) {
+      return;
+    }
   }
 
   openLightbox(newIndex);
@@ -5331,6 +5361,38 @@ function getFilteredPhotos(photos = state.photos) {
   });
 }
 
+function getPhotoLibraryIndex(photoId) {
+  return state.photos.findIndex((photo) => photo.id === photoId);
+}
+
+function getLightboxNavPhotoIds() {
+  return getFilteredPhotos(state.photos).map((photo) => photo.id);
+}
+
+function getAdjacentLightboxLibraryIndex(direction) {
+  if (state.lightboxPhotoIndex === null) {
+    return null;
+  }
+
+  const currentPhotoId = state.photos[state.lightboxPhotoIndex]?.id;
+  if (!currentPhotoId) {
+    return null;
+  }
+
+  const navPhotoIds = getLightboxNavPhotoIds();
+  const navIndex = navPhotoIds.indexOf(currentPhotoId);
+  if (navIndex === -1) {
+    return null;
+  }
+
+  const nextNavIndex = navIndex + direction;
+  if (nextNavIndex < 0 || nextNavIndex >= navPhotoIds.length) {
+    return null;
+  }
+
+  return getPhotoLibraryIndex(navPhotoIds[nextNavIndex]);
+}
+
 function updateFilterChipUI() {
   const chips = document.querySelectorAll('.filter-chip[data-filter]');
   chips.forEach((chip) => {
@@ -5526,15 +5588,16 @@ function renderPhotoGrid(photos, append = false) {
 
   // Group photos by month
   const photosByMonth = {};
-  photos.forEach((photo, idx) => {
+  photos.forEach((photo) => {
     const monthKey = photo.month || 'undated';
     if (!photosByMonth[monthKey]) {
       photosByMonth[monthKey] = [];
     }
-    // Use globalIndex if provided, otherwise use idx
-    const globalIndex =
-      photo.globalIndex !== undefined ? photo.globalIndex : idx;
-    photosByMonth[monthKey].push({ ...photo, globalIndex });
+    const libraryIndex = getPhotoLibraryIndex(photo.id);
+    photosByMonth[monthKey].push({
+      ...photo,
+      globalIndex: libraryIndex === -1 ? 0 : libraryIndex,
+    });
   });
 
   // Render each month section
@@ -5598,25 +5661,18 @@ function renderPhotoGrid(photos, append = false) {
       `;
 
       photosByMonth[month].forEach((photo) => {
-        const globalIndex =
-          photo.globalIndex !== undefined
-            ? photo.globalIndex
-            : photosByMonth[month].indexOf(photo);
-
-        // Build star badge HTML if photo is starred
         const starBadgeHTML =
           photo.rating === 5
             ? '<div class="star-badge"><span class="material-symbols-outlined">star</span></div>'
             : '';
 
-        // Build video badge HTML if photo is a video
         const videoBadgeHTML =
           photo.file_type === 'video'
             ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
             : '';
 
         html += `
-          <div class="photo-card" data-id="${photo.id}" data-index="${globalIndex}">
+          <div class="photo-card" data-id="${photo.id}" data-index="${photo.globalIndex}">
             <img data-photo-id="${photo.id}" alt="" class="photo-thumb">
             ${starBadgeHTML}
             ${videoBadgeHTML}
@@ -5693,7 +5749,11 @@ function wirePhotoCards() {
       }
 
       // Otherwise, open lightbox
-      openLightbox(index);
+      const photoId = parseInt(card.dataset.id, 10);
+      const libraryIndex = getPhotoLibraryIndex(photoId);
+      if (libraryIndex >= 0) {
+        openLightbox(libraryIndex);
+      }
     });
   });
 }
