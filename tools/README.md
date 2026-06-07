@@ -12,12 +12,12 @@ scan cost, full-run phase timing, and 60k extrapolation.
 From the repo root:
 
 ```bash
-# Non-destructive: preflight scan only (final_audit — same as Clean library overlay)
+# Non-destructive: zero-preflight check (instant SKIPPED — product default)
 python3 tools/benchmark_clean_library.py scan \
   --library /Volumes/public/clean-lib-speed-test \
   --label nas-wifi
 
-# Full suite: scan → clean → re-scan → warm re-scan (mutates library)
+# Full suite: preflight_skip → run_full → verify_clean → verify_clean_warm (mutates library)
 python3 tools/benchmark_clean_library.py suite \
   --library /Volumes/public/clean-lib-speed-test \
   --label nas-wifi \
@@ -41,20 +41,20 @@ Reports are written to `tools/results/*.json`.
 
 | Step | Engine | Product equivalent |
 |------|--------|-------------------|
-| `scan` / `scan_dirty` | `scan_library_cleanliness()` → `final_audit()` | Clean library overlay “Scanning library” |
-| `run_full` | `run_db_normalization_engine()` | Clean library → Continue |
-| `scan_clean` | Preflight after a successful clean | “Already clean” yardstick (60k extrapolation) |
-| `scan_clean_warm` | Immediate repeat | OS / SMB cache effect |
+| `preflight_skip` | `scan_library_cleanliness()` (no verify) | Clean library overlay (instant, no gate) |
+| `run_full` | `run_db_normalization_engine()` | Clean library stream run |
+| `verify_clean` | `verify_library_cleanliness()` | Post-run yardstick (`?verify=1`) |
+| `verify_clean_warm` | Immediate repeat | OS / SMB cache effect |
 
-**Important:** preflight `scan` and full-run `scan` **phase** are different operations.
+See `tech-docs/CLEAN_LIBRARY_V2_HANDOFF.md` for full context.
 
 ## Reading results
 
 - **sec/file** — wall time ÷ supported media files
 - **60k est** — linear extrapolation to 60,000 files (directional, not exact)
-- **phases** (full run) — `setup`, `scan`, `dedupe`, `canonicalize`, `folders`, `rebuild_db`, `audit`
+- **phases** (full run) — `setup`, `scan`, `dedupe`, `canonicalize`, `folders`, `rebuild_db`
 
-If `scan_clean` is slow with `issue_count: 0`, the audit path re-touches every file even when nothing is dirty.
+If `verify_clean` is slow with `issue_count: 0`, verify re-hashes every file even when nothing is dirty.
 
 ## Commands
 

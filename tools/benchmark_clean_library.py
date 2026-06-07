@@ -226,7 +226,7 @@ def print_step_result(step: Dict[str, Any]) -> None:
     name = step.get("step", "?")
     elapsed = step.get("elapsed_sec")
     time_str = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "—"
-    if step.get("kind") in {"preflight_skip", "preflight_scan", "verify_scan"}:
+    if step.get("kind") in {"preflight_skip", "preflight_inventory", "preflight_scan", "verify_scan"}:
         print(
             f"<<< {name} done: {time_str}, status={step.get('status')}, "
             f"issues={step.get('issue_count')}, 60k≈{step.get('extrapolate_60k_hours')}h",
@@ -242,24 +242,34 @@ def print_step_result(step: Dict[str, Any]) -> None:
             print(f"    error: {step['error']}", flush=True)
 
 
-def timed_preflight_skip(library_path: str, label: str) -> Dict[str, Any]:
+def timed_preflight_inventory(library_path: str, label: str) -> Dict[str, Any]:
     started = time.perf_counter()
     result = scan_library_cleanliness(library_path)
     elapsed = round(time.perf_counter() - started, 3)
     probe = probe_library(library_path)
     media_files = int(result.get("supported_media_files") or probe["media_files"] or 0)
+    inventory = result.get("inventory") or {}
     return {
         "step": label,
-        "kind": "preflight_skip",
+        "kind": "preflight_inventory",
         "elapsed_sec": elapsed,
         "status": result.get("status"),
         "issue_count": (result.get("summary") or {}).get("issue_count"),
         "supported_media_files": media_files,
         "sec_per_media_file": sec_per_media(elapsed, media_files),
         "extrapolate_60k_hours": None,
+        "estimated_display": result.get("estimated_display") or inventory.get("estimated_display"),
+        "photo_count": (result.get("summary") or {}).get("photo_count"),
+        "video_count": (result.get("summary") or {}).get("video_count"),
         "summary": result.get("summary"),
+        "inventory": inventory,
         "probe": probe,
     }
+
+
+def timed_preflight_skip(library_path: str, label: str) -> Dict[str, Any]:
+    """Backward-compatible alias for timed_preflight_inventory."""
+    return timed_preflight_inventory(library_path, label)
 
 
 def timed_verify_scan(library_path: str, label: str) -> Dict[str, Any]:
@@ -335,8 +345,8 @@ def run_suite(library_path: str, label: str, skip_run: bool, warn_locks: bool) -
 
     steps: List[Dict[str, Any]] = []
 
-    print("\n>>> STEP preflight_skip (zero preflight)", flush=True)
-    steps.append(timed_preflight_skip(library_path, "preflight_skip"))
+    print("\n>>> STEP preflight_inventory (cheap inventory)", flush=True)
+    steps.append(timed_preflight_inventory(library_path, "preflight_inventory"))
     print_step_result(steps[-1])
 
     if not skip_run:
@@ -395,7 +405,7 @@ def print_summary(report: Dict[str, Any]) -> None:
     for step in report["steps"]:
         elapsed = step.get("elapsed_sec")
         time_str = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "—"
-        if step["kind"] in {"preflight_skip", "preflight_scan", "verify_scan"}:
+        if step["kind"] in {"preflight_skip", "preflight_inventory", "preflight_scan", "verify_scan"}:
             status = str(step.get("status") or "—")
             issues = step.get("issue_count")
             issues_str = str(issues) if issues is not None else "—"
@@ -413,7 +423,7 @@ def print_summary(report: Dict[str, Any]) -> None:
                 print(f"  phases: {', '.join(phase_parts)}")
 
     print("\nNotes:")
-    print("  • preflight_skip = product default (no pre-run audit)")
+    print("  • preflight_inventory = product default (cheap inventory + duration)")
     print("  • verify_* = post-run yardstick via verify_library_cleanliness()")
     print("  • run_full phases: setup → scan → dedupe → canonicalize → folders → rebuild_db")
     print("  • verify_clean_warm shows OS/SMB cache effect; use verify_clean for cold extrapolation")
@@ -459,13 +469,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     suite_parser = sub.add_parser(
         "suite",
-        help="preflight_skip → run_full → verify_clean → verify_clean_warm",
+        help="preflight_inventory → run_full → verify_clean → verify_clean_warm",
     )
     _add_common_args(suite_parser)
     suite_parser.add_argument(
         "--skip-run",
         action="store_true",
-        help="Only run preflight_skip (non-destructive)",
+        help="Only run preflight_inventory (non-destructive)",
     )
     suite_parser.add_argument(
         "--destructive",
@@ -490,7 +500,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "library_path": library_path,
             "extrapolate_target_files": EXTRAPOLATE_FILES,
             "library_locks": library_lock_holders(library_path),
-            "steps": [timed_preflight_skip(library_path, "preflight_skip")],
+            "steps": [timed_preflight_inventory(library_path, "preflight_inventory")],
         }
     elif args.command == "run":
         if not args.destructive:

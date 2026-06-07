@@ -1003,11 +1003,17 @@ async function streamMakeLibraryPerfect(options = {}) {
     }
   };
 
+  const streamBody = {};
+  if (options.resume === true || options.resume === false) {
+    streamBody.resume = options.resume;
+  }
+
   let response;
   try {
     response = await fetch('/api/library/make-perfect/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(streamBody),
       signal: internalAbort.signal,
     });
   } catch (err) {
@@ -6740,7 +6746,48 @@ const CLEAN_LIBRARY_PHASE_LABELS = {
   canonicalize: 'Organizing media…',
   folders: 'Cleaning folders…',
   rebuild_db: 'Rebuilding database…',
+  audit: 'Verifying library…',
 };
+
+const CLEAN_LIBRARY_ETA_MIN_SAMPLES = 25;
+const CLEAN_LIBRARY_SCAN_TAIL_RATIO = 1.05;
+
+let cleanLibraryRunEtaState = null;
+
+function resetCleanLibraryRunEtaState() {
+  cleanLibraryRunEtaState = {
+    startedAtMs: Date.now(),
+    lastPhase: null,
+  };
+}
+
+function formatAboutDurationFromSeconds(totalSeconds) {
+  const seconds = Math.max(0, Number(totalSeconds) || 0);
+  if (seconds < 45) return 'less than a minute';
+  if (seconds < 90) return 'about 1 minute';
+  const minutes = seconds / 60;
+  if (minutes < 60) {
+    const rounded = Math.max(1, Math.round(minutes));
+    return `about ${rounded} minute${rounded === 1 ? '' : 's'}`;
+  }
+  const hours = seconds / 3600;
+  const rounded = Math.max(1, Math.round(hours));
+  return `about ${rounded} hour${rounded === 1 ? '' : 's'}`;
+}
+
+function estimateCleanRunRemainingSeconds(processed, total, elapsedSec, phase) {
+  const done = Math.max(0, Number(processed) || 0);
+  const cap = Math.max(1, Number(total) || 1);
+  if (done < CLEAN_LIBRARY_ETA_MIN_SAMPLES || elapsedSec <= 0) {
+    return null;
+  }
+  const rate = elapsedSec / done;
+  let remaining = Math.max(0, cap - done) * rate;
+  if (phase === 'scan') {
+    remaining *= CLEAN_LIBRARY_SCAN_TAIL_RATIO;
+  }
+  return remaining;
+}
 
 function applyCleanerStreamToUpdateIndex(event = {}) {
   if (event.type === 'stats') {
@@ -6769,15 +6816,139 @@ function applyCleanerStreamToUpdateIndex(event = {}) {
 }
 
 function updateIndexStatusForCleanerPhase(event = {}) {
-  if (event.type !== 'phase') return;
-  const phase = event.phase;
-  if (event.status === 'starting' && CLEAN_LIBRARY_PHASE_LABELS[phase]) {
-    updateUpdateIndexUI(CLEAN_LIBRARY_PHASE_LABELS[phase], true);
+  if (event.type === 'resume') {
+    const doneCount = event.resumed_from?.scan_completed_count ?? 0;
+    const phase = event.resumed_from?.phase || 'scan';
+    updateUpdateIndexUI(
+      `Resuming clean (${doneCount.toLocaleString()} files already processed, phase ${phase})…`,
+      true,
+    );
+    return;
   }
+
+  if (event.type === 'phase') {
+    const phase = event.phase;
+    if (event.status === 'starting' && CLEAN_LIBRARY_PHASE_LABELS[phase]) {
+      if (cleanLibraryRunEtaState) {
+        cleanLibraryRunEtaState.lastPhase = phase;
+      }
+      updateUpdateIndexUI(CLEAN_LIBRARY_PHASE_LABELS[phase], true);
+    }
+    return;
+  }
+
+  if (event.type !== 'progress' || !cleanLibraryRunEtaState) {
+    return;
+  }
+
+  const phase = event.phase;
+  const label = CLEAN_LIBRARY_PHASE_LABELS[phase] || phase || 'Cleaning';
+  const processed = Number(event.processed);
+  const total = Number(event.total);
+  if (!Number.isFinite(processed) || !Number.isFinite(total) || total < 1) {
+    return;
+  }
+
+  const elapsedSec = (Date.now() - cleanLibraryRunEtaState.startedAtMs) / 1000;
+  const remainingSec = estimateCleanRunRemainingSeconds(
+    processed,
+    total,
+    elapsedSec,
+    phase,
+  );
+
+  if (remainingSec === null) {
+    updateUpdateIndexUI(`${label} — estimating…`, true);
+    return;
+  }
+
+  updateUpdateIndexUI(
+    `${label} — ${formatAboutDurationFromSeconds(remainingSec)} left`,
+    true,
+  );
+}
+
+function showUpdateIndexPreflightStats(scanResult = null) {
+  const preflightEl = document.getElementById('updateIndexPreflightStats');
+  const runStatsEl = document.getElementById('updateIndexStats');
+  const photoEl = document.getElementById('updateIndexPhotoCount');
+  const videoEl = document.getElementById('updateIndexVideoCount');
+
+  if (runStatsEl) runStatsEl.style.display = 'none';
+  if (!scanResult) {
+    if (preflightEl) preflightEl.style.display = 'none';
+    return;
+  }
+
+  const photos =
+    scanResult.summary?.photo_count ?? scanResult.inventory?.photo_count ?? 0;
+  const videos =
+    scanResult.summary?.video_count ?? scanResult.inventory?.video_count ?? 0;
+  if (photoEl) photoEl.textContent = Number(photos).toLocaleString();
+  if (videoEl) videoEl.textContent = Number(videos).toLocaleString();
+  if (preflightEl) preflightEl.style.display = 'flex';
+}
+
+async function runUpdateIndexPreflightScan() {
+  updateUpdateIndexUI('Scanning library…', true);
+  showUpdateIndexButtons('cancel');
+  showUpdateIndexPreflightStats(null);
+  hideUpdateIndexStats();
+
+  const response = await fetch('/api/library/make-perfect/scan');
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Scan failed (${response.status})`);
+  }
+  return response.json();
+}
+
+function renderUpdateIndexPreflightResult(scanResult) {
+  updateIndexState.preflight = scanResult;
+
+  if (scanResult.status === 'INVENTORY' || scanResult.status === 'RESUME') {
+    showUpdateIndexPreflightStats(scanResult);
+    const photos =
+      scanResult.summary?.photo_count ?? scanResult.inventory?.photo_count ?? 0;
+    const videos =
+      scanResult.summary?.video_count ?? scanResult.inventory?.video_count ?? 0;
+    const timeLabel =
+      scanResult.status === 'RESUME'
+        ? scanResult.estimated_remaining_display
+        : scanResult.estimated_display;
+    const prefix = scanResult.status === 'RESUME' ? 'Resume — ' : '';
+    updateUpdateIndexUI(
+      `${prefix}${Number(photos).toLocaleString()} photos and ${Number(videos).toLocaleString()} videos — ${timeLabel}`,
+      false,
+    );
+    showUpdateIndexButtons('cancel', 'proceed');
+    return;
+  }
+
+  if (scanResult.status === 'DIRTY' || scanResult.status === 'CLEAN') {
+    const summary = scanResult.summary || {};
+    updateIndexState.misfiledMedia = summary.misfiled_media || 0;
+    updateIndexState.duplicates = summary.duplicates || 0;
+    updateIndexState.unsupportedFiles = summary.unsupported_files || 0;
+    updateIndexState.metadataCleanup = summary.metadata_cleanup || 0;
+    updateIndexState.databaseRepairs = summary.database_repairs || 0;
+    showUpdateIndexStats();
+    const issueCount = summary.issue_count ?? summary.operation_count ?? 0;
+    updateUpdateIndexUI(
+      scanResult.status === 'CLEAN'
+        ? 'Library looks clean. Continue anyway?'
+        : `Found ${Number(issueCount).toLocaleString()} issues. Continue to clean?`,
+      false,
+    );
+    showUpdateIndexButtons('cancel', 'proceed');
+    return;
+  }
+
+  throw new Error(scanResult.error || 'Unexpected preflight scan response');
 }
 
 /**
- * Clean library overlay — zero preflight; scoreboard updates during the run.
+ * Clean library overlay — cheap inventory preflight, then Continue to run.
  */
 async function openUpdateIndexOverlay() {
   const existingOverlay = document.getElementById('updateIndexOverlay');
@@ -6798,12 +6969,38 @@ async function openUpdateIndexOverlay() {
     databaseRepairs: 0,
     details: null,
     resultStats: null,
+    preflight: null,
+    isRunning: false,
   };
 
   const detailsSection = document.getElementById('updateIndexDetailsSection');
   if (detailsSection) detailsSection.style.display = 'none';
 
   overlay.style.display = 'flex';
+
+  try {
+    const scanResult = await runUpdateIndexPreflightScan();
+    renderUpdateIndexPreflightResult(scanResult);
+  } catch (error) {
+    console.error('❌ Clean library preflight failed:', error);
+    updateUpdateIndexUI('Failed to scan library', false);
+    showToast(`Scan failed: ${error.message}`, 'error');
+    showUpdateIndexButtons('cancel');
+  }
+}
+
+async function executeUpdateIndex() {
+  const overlay = document.getElementById('updateIndexOverlay');
+  if (!overlay || overlay.style.display !== 'flex') {
+    return;
+  }
+  if (updateIndexState?.isRunning) {
+    return;
+  }
+
+  updateIndexState.isRunning = true;
+  resetCleanLibraryRunEtaState();
+  showUpdateIndexPreflightStats(null);
   showUpdateIndexStats();
   updateUpdateIndexUI('Cleaning library…', true);
   showUpdateIndexButtons('cancel-disabled');
@@ -6827,12 +7024,12 @@ async function openUpdateIndexOverlay() {
     updateUpdateIndexUI('Failed to clean library', false);
     showToast('Failed to clean library', null);
     showUpdateIndexButtons('cancel');
+  } finally {
+    if (updateIndexState) {
+      updateIndexState.isRunning = false;
+    }
+    cleanLibraryRunEtaState = null;
   }
-}
-
-/** @deprecated Proceed button; clean starts immediately in openUpdateIndexOverlay */
-async function executeUpdateIndex() {
-  await openUpdateIndexOverlay();
 }
 
 /**

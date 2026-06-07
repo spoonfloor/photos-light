@@ -31,9 +31,11 @@ from library_cleanliness import (
 from make_library_perfect import (
     CLEAN_LIBRARY_ENGINE_VERSION,
     CLEAN_LIBRARY_SIGNAL_KEYS,
+    CleanLibraryError,
     DBNormalizationEngine,
     LibraryCleaner,
     MediaRecord,
+    find_resumable_clean_library_checkpoint,
     run_db_normalization_engine,
     scan_library_cleanliness,
     summarize_clean_library_operations,
@@ -685,13 +687,22 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             self.assertEqual(result["summary"]["duplicates"], 0)
             self.assertEqual(result["summary"]["database_repairs"], 1)
 
-    def test_scan_skips_preflight_by_default(self):
+    def test_scan_inventory_preflight_by_default(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
             conn.close()
+            photo_path = os.path.join(tmpdir, "sample.jpg")
+            with open(photo_path, "wb") as handle:
+                handle.write(b"photo")
             result = scan_library_cleanliness(tmpdir, db_path=db_path)
-            self.assertEqual(result["status"], "SKIPPED")
-            self.assertEqual((result.get("summary") or {}).get("issue_count"), 0)
+            if CLEAN_LIBRARY_ENGINE_VERSION == "v2":
+                self.assertEqual(result["status"], "INVENTORY")
+                self.assertTrue(result.get("preflight"))
+                self.assertEqual(result["summary"]["photo_count"], 1)
+                self.assertEqual(result["summary"]["video_count"], 0)
+                self.assertIn("estimated_display", result)
+            else:
+                self.assertIn(result["status"], {"DIRTY", "CLEAN"})
 
     def test_scan_emits_audit_progress_when_callback_provided(self):
         with TemporaryDirectory() as tmpdir:
@@ -1079,6 +1090,165 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                     "operation_count": 0,
                 },
             )
+
+
+class CleanLibraryBlockingVerifyTest(unittest.TestCase):
+    def _create_library_db(self, library_path):
+        db_path = canonical_db_path(library_path)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        create_database_schema(conn.cursor())
+        conn.commit()
+        return db_path, conn
+
+    @staticmethod
+    def _audit_file_hash(path):
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "blocking verify is v2 only")
+    def test_run_emits_audit_phase_before_success(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            date_taken = "2026:01:27 12:00:00"
+            rel_path = "batch/photo.png"
+            full_path = os.path.join(tmpdir, rel_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "wb") as handle:
+                handle.write(b"payload")
+
+            events = []
+            with patch("make_library_clean_v2.verify_media_file", return_value=(True, "mock")), patch(
+                "make_library_clean_v2.extract_exif_date", return_value=date_taken
+            ), patch("make_library_clean_v2.extract_exif_rating", return_value=None), patch(
+                "make_library_clean_v2.get_orientation_flag", return_value=1
+            ), patch("make_library_clean_v2.read_dimensions", return_value=(1, 1)), patch(
+                "clean_library_fast_audit.verify_media_file", return_value=(True, "mock")
+            ), patch("clean_library_fast_audit.extract_exif_rating", return_value=None), patch(
+                "clean_library_fast_audit.get_orientation_flag", return_value=1
+            ), patch(
+                "clean_library_fast_audit.compute_hash_legacy",
+                side_effect=self._audit_file_hash,
+            ):
+                result = run_db_normalization_engine(
+                    tmpdir,
+                    db_path=db_path,
+                    progress_callback=events.append,
+                    resume=False,
+                )
+
+            self.assertEqual(result["status"], "SUCCESS")
+            audit_phases = [
+                event
+                for event in events
+                if event.get("type") == "phase" and event.get("phase") == "audit"
+            ]
+            self.assertEqual(len(audit_phases), 2)
+            self.assertEqual(audit_phases[0]["status"], "starting")
+            self.assertEqual(audit_phases[-1]["status"], "complete")
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "blocking verify is v2 only")
+    def test_run_fails_when_final_audit_finds_issues(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            date_taken = "2026:01:27 12:00:00"
+            rel_path = "batch/photo.png"
+            full_path = os.path.join(tmpdir, rel_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "wb") as handle:
+                handle.write(b"payload")
+
+            fake_issues = [{"kind": "misnamed_or_misfiled", "path": "batch/photo.png"}]
+            with patch("make_library_clean_v2.verify_media_file", return_value=(True, "mock")), patch(
+                "make_library_clean_v2.extract_exif_date", return_value=date_taken
+            ), patch("make_library_clean_v2.extract_exif_rating", return_value=None), patch(
+                "make_library_clean_v2.get_orientation_flag", return_value=1
+            ), patch("make_library_clean_v2.read_dimensions", return_value=(1, 1)), patch.object(
+                LibraryCleaner, "final_audit", return_value=fake_issues
+            ):
+                with self.assertRaises(CleanLibraryError):
+                    run_db_normalization_engine(tmpdir, db_path=db_path, resume=False)
+
+            checkpoint = find_resumable_clean_library_checkpoint(tmpdir)
+            self.assertIsNotNone(checkpoint)
+            self.assertEqual(checkpoint.get("phase"), "audit")
+
+
+class CleanLibraryResumeTest(unittest.TestCase):
+    def _create_library_db(self, library_path):
+        db_path = canonical_db_path(library_path)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        create_database_schema(conn.cursor())
+        conn.commit()
+        return db_path, conn
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "resume is implemented in v2 only")
+    def test_resume_after_interrupted_scan(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            date_taken = "2026:01:27 12:00:00"
+
+            for idx in range(3):
+                rel_path = f"batch/photo_{idx}.png"
+                full_path = os.path.join(tmpdir, rel_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as handle:
+                    handle.write(f"payload-{idx}".encode())
+
+            original_normalize = LibraryCleaner.normalize_media_file
+            state = {"new_calls": 0, "should_fail": False}
+
+            def normalize_side_effect(self, full_path):
+                source_rel = os.path.relpath(full_path, self.library_path)
+                if source_rel in self._scan_completed_sources:
+                    return original_normalize(self, full_path)
+                state["new_calls"] += 1
+                if state["should_fail"] and state["new_calls"] >= 2:
+                    raise OSError("NAS disconnected")
+                return original_normalize(self, full_path)
+
+            patchers = [
+                patch("make_library_clean_v2.verify_media_file", return_value=(True, "mock")),
+                patch("make_library_clean_v2.extract_exif_date", return_value=date_taken),
+                patch("make_library_clean_v2.extract_exif_rating", return_value=None),
+                patch("make_library_clean_v2.get_orientation_flag", return_value=1),
+                patch("make_library_clean_v2.read_dimensions", return_value=(1, 1)),
+                patch("clean_library_fast_audit.verify_media_file", return_value=(True, "mock")),
+                patch("clean_library_fast_audit.extract_exif_rating", return_value=None),
+                patch("clean_library_fast_audit.get_orientation_flag", return_value=1),
+                patch(
+                    "clean_library_fast_audit.compute_hash_legacy",
+                    side_effect=CleanLibraryBlockingVerifyTest._audit_file_hash,
+                ),
+                patch.object(LibraryCleaner, "normalize_media_file", normalize_side_effect),
+            ]
+            for item in patchers:
+                item.start()
+            try:
+                state["should_fail"] = True
+                with self.assertRaises(OSError):
+                    run_db_normalization_engine(tmpdir, db_path=db_path, resume=False)
+                state["should_fail"] = False
+
+                checkpoint = find_resumable_clean_library_checkpoint(tmpdir)
+                self.assertIsNotNone(checkpoint)
+                self.assertEqual(checkpoint.get("scan_completed_count"), 1)
+
+                state["new_calls"] = 0
+                result = run_db_normalization_engine(tmpdir, db_path=db_path)
+                self.assertEqual(result["status"], "SUCCESS")
+                self.assertTrue(result.get("resumed"))
+                self.assertEqual(state["new_calls"], 2)
+                self.assertIsNone(find_resumable_clean_library_checkpoint(tmpdir))
+            finally:
+                for item in patchers:
+                    item.stop()
 
 
 if __name__ == "__main__":

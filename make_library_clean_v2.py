@@ -1,7 +1,8 @@
 """
 Clean library operation (v2).
 
-Zero preflight by default; optional verify audit. Hash-only dupes (no pixel dedupe).
+Cheap inventory preflight by default; optional verify audit (?verify=1). Hash-only dupes.
+Blocking final audit at end of every run — SUCCESS only when yardstick is CLEAN.
 Full clean repairs in place; duplicate media === identical file hash only.
 
 Set PHOTOS_CLEAN_LIBRARY_ENGINE=legacy to use make_library_perfect_legacy instead.
@@ -64,6 +65,11 @@ from clean_library_fast_audit import (
     count_supported_media_leaf_files as fast_count_supported_media_leaf_files,
     run_fast_library_audit,
 )
+from clean_library_inventory import (
+    estimate_remaining_duration_seconds,
+    format_about_duration,
+    inventory_media_library,
+)
 from photo_canonicalization import (
     UNKNOWN_PHOTO_DATE_TAKEN,
     canonicalize_photo_date,
@@ -95,6 +101,26 @@ CLEAN_LIBRARY_SIGNAL_KEYS = (
     "database_repairs",
 )
 
+CHECKPOINT_VERSION = 1
+CHECKPOINT_WRITE_INTERVAL = 25
+CHECKPOINT_PHASE_ORDER = {
+    "setup": 0,
+    "scan": 1,
+    "scan_complete": 2,
+    "dedupe": 3,
+    "dedupe_complete": 4,
+    "canonicalize": 5,
+    "canonicalize_complete": 6,
+    "folders": 7,
+    "folders_complete": 8,
+    "rebuild_db": 9,
+    "rebuild_db_complete": 10,
+    "audit": 11,
+    "audit_complete": 12,
+    "complete": 13,
+    "abandoned": 14,
+}
+
 
 @dataclass
 class MediaRecord:
@@ -119,6 +145,140 @@ class MediaRecord:
 
 class CleanLibraryError(RuntimeError):
     """Operation failed and the library may still be dirty."""
+
+
+def _serialize_media_record(record: MediaRecord) -> Dict[str, Any]:
+    return {
+        "original_filename": record.original_filename,
+        "source_rel_path": record.source_rel_path,
+        "full_path": record.full_path,
+        "rel_path": record.rel_path,
+        "ext": record.ext,
+        "file_type": record.file_type,
+        "content_hash": record.content_hash,
+        "duplicate_key": record.duplicate_key,
+        "date_taken": record.date_taken,
+        "date_obj": record.date_obj.isoformat(),
+        "width": record.width,
+        "height": record.height,
+        "rating": record.rating,
+        "metadata_cleaned": record.metadata_cleaned,
+        "has_metadata_cleanup_signal": record.has_metadata_cleanup_signal,
+        "birth_time": record.birth_time,
+        "modified_time": record.modified_time,
+    }
+
+
+def _deserialize_media_record(payload: Dict[str, Any]) -> MediaRecord:
+    return MediaRecord(
+        original_filename=str(payload["original_filename"]),
+        source_rel_path=str(payload["source_rel_path"]),
+        full_path=str(payload["full_path"]),
+        rel_path=str(payload["rel_path"]),
+        ext=str(payload["ext"]),
+        file_type=str(payload["file_type"]),
+        content_hash=str(payload["content_hash"]),
+        duplicate_key=str(payload["duplicate_key"]),
+        date_taken=str(payload["date_taken"]),
+        date_obj=datetime.fromisoformat(str(payload["date_obj"])),
+        width=payload.get("width"),
+        height=payload.get("height"),
+        rating=payload.get("rating"),
+        metadata_cleaned=bool(payload.get("metadata_cleaned")),
+        has_metadata_cleanup_signal=bool(payload.get("has_metadata_cleanup_signal")),
+        birth_time=float(payload["birth_time"]),
+        modified_time=float(payload["modified_time"]),
+    )
+
+
+def _checkpoint_paths_from_manifest(manifest_path: str) -> Dict[str, str]:
+    base = manifest_path[: -len(".jsonl")] if manifest_path.endswith(".jsonl") else manifest_path
+    return {
+        "checkpoint": f"{base}.checkpoint.json",
+        "records": f"{base}.records.jsonl",
+        "scan_completed": f"{base}.scan_completed.txt",
+    }
+
+
+def _load_scan_completed_sources(path: str) -> set[str]:
+    completed: set[str] = set()
+    if not os.path.exists(path):
+        return completed
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            rel_path = line.strip()
+            if rel_path:
+                completed.add(rel_path)
+    return completed
+
+
+def _load_records_jsonl(path: str) -> List[MediaRecord]:
+    records: List[MediaRecord] = []
+    if not os.path.exists(path):
+        return records
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            records.append(_deserialize_media_record(json.loads(line)))
+    return records
+
+
+def _write_records_jsonl(path: str, records: Iterable[MediaRecord]) -> None:
+    temp_path = f"{path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(_serialize_media_record(record)) + "\n")
+    os.replace(temp_path, path)
+
+
+def find_resumable_clean_library_checkpoint(library_path: str) -> Optional[Dict[str, Any]]:
+    logs_dir = os.path.join(os.path.abspath(library_path), ".logs")
+    if not os.path.isdir(logs_dir):
+        return None
+
+    candidates: List[Tuple[str, str, Dict[str, Any]]] = []
+    for name in os.listdir(logs_dir):
+        if not name.endswith(".checkpoint.json"):
+            continue
+        checkpoint_path = os.path.join(logs_dir, name)
+        try:
+            with open(checkpoint_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            continue
+        status = str(payload.get("status") or "")
+        if status in {"complete", "abandoned"}:
+            continue
+        if payload.get("engine") != CLEAN_LIBRARY_ENGINE_VERSION:
+            continue
+        if os.path.abspath(str(payload.get("library_path") or "")) != os.path.abspath(library_path):
+            continue
+        candidates.append((str(payload.get("updated_at") or ""), checkpoint_path, payload))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    _updated_at, checkpoint_path, payload = candidates[0]
+    payload["_checkpoint_path"] = checkpoint_path
+    return payload
+
+
+def abandon_clean_library_checkpoint(checkpoint_path: str) -> None:
+    try:
+        with open(checkpoint_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return
+    payload["status"] = "abandoned"
+    payload["phase"] = "abandoned"
+    payload["updated_at"] = datetime.now().isoformat()
+    temp_path = f"{checkpoint_path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temp_path, checkpoint_path)
 
 
 def _compute_photo_duplicate_key(full_path: str, fallback_hash: Optional[str] = None) -> str:
@@ -732,6 +892,17 @@ class LibraryCleaner:
             key: set() for key in CLEAN_LIBRARY_SIGNAL_KEYS
         }
         self._progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._resume_checkpoint: Optional[Dict[str, Any]] = None
+        self._checkpoint_path: Optional[str] = None
+        self._manifest_path: Optional[str] = None
+        self._records_jsonl_path: Optional[str] = None
+        self._scan_completed_path: Optional[str] = None
+        self._current_phase = "setup"
+        self._scan_completed_sources: set[str] = set()
+        self._canonicalize_index = 0
+        self._checkpoint_dirty = False
+        self._files_since_checkpoint = 0
+        self._checkpoint_records_snapshot: Optional[List[MediaRecord]] = None
 
     def _emit(self, payload: Dict[str, Any]) -> None:
         if self._progress_callback:
@@ -822,6 +993,84 @@ class LibraryCleaner:
         )
         self.manifest.flush()
 
+    def _phase_rank(self, phase: str) -> int:
+        return CHECKPOINT_PHASE_ORDER.get(phase, -1)
+
+    def _phase_is_before(self, phase: str, target: str) -> bool:
+        return self._phase_rank(phase) < self._phase_rank(target)
+
+    def _bind_run_artifact_paths(self, manifest_path: str) -> None:
+        self._manifest_path = manifest_path
+        artifact_paths = _checkpoint_paths_from_manifest(manifest_path)
+        self._checkpoint_path = artifact_paths["checkpoint"]
+        self._records_jsonl_path = artifact_paths["records"]
+        self._scan_completed_path = artifact_paths["scan_completed"]
+
+    def _append_scan_record(self, record: MediaRecord) -> None:
+        if not self._records_jsonl_path:
+            return
+        with open(self._records_jsonl_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_serialize_media_record(record)) + "\n")
+
+    def _mark_scan_source_complete(self, source_rel_path: str) -> None:
+        self._scan_completed_sources.add(source_rel_path)
+        if not self._scan_completed_path:
+            return
+        with open(self._scan_completed_path, "a", encoding="utf-8") as handle:
+            handle.write(source_rel_path + "\n")
+
+    def _write_checkpoint(
+        self,
+        *,
+        phase: Optional[str] = None,
+        status: str = "in_progress",
+        force: bool = False,
+        records: Optional[List[MediaRecord]] = None,
+    ) -> None:
+        if not self._checkpoint_path:
+            return
+        if phase is not None:
+            self._current_phase = phase
+        if records is not None:
+            self._checkpoint_records_snapshot = list(records)
+        if not force and self._files_since_checkpoint < CHECKPOINT_WRITE_INTERVAL:
+            self._checkpoint_dirty = True
+            return
+
+        if self._checkpoint_records_snapshot is not None and self._records_jsonl_path:
+            _write_records_jsonl(self._records_jsonl_path, self._checkpoint_records_snapshot)
+
+        payload: Dict[str, Any] = {
+            "version": CHECKPOINT_VERSION,
+            "engine": CLEAN_LIBRARY_ENGINE_VERSION,
+            "status": status,
+            "phase": self._current_phase,
+            "library_path": self.library_path,
+            "db_path": self.db_path,
+            "manifest_path": self._manifest_path,
+            "records_path": self._records_jsonl_path,
+            "scan_completed_path": self._scan_completed_path,
+            "stats": dict(self.stats),
+            "scan_completed_count": len(self._scan_completed_sources),
+            "canonicalize_index": self._canonicalize_index,
+            "updated_at": datetime.now().isoformat(),
+        }
+        if self._resume_checkpoint and self._resume_checkpoint.get("started_at"):
+            payload["started_at"] = self._resume_checkpoint["started_at"]
+        else:
+            payload["started_at"] = payload["updated_at"]
+
+        temp_path = f"{self._checkpoint_path}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(temp_path, self._checkpoint_path)
+        self._files_since_checkpoint = 0
+        self._checkpoint_dirty = False
+
+    def _flush_checkpoint(self, *, records: Optional[List[MediaRecord]] = None) -> None:
+        self._write_checkpoint(force=True, records=records)
+
     def _emit_stats_feedback(self) -> None:
         if not self._progress_callback:
             return
@@ -849,9 +1098,24 @@ class LibraryCleaner:
     def run(
         self,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        *,
+        resume: Optional[bool] = None,
     ) -> Dict[str, Any]:
         self._progress_callback = progress_callback
+        resumed_from: Optional[Dict[str, Any]] = None
         try:
+            if resume is False:
+                existing = find_resumable_clean_library_checkpoint(self.library_path)
+                if existing:
+                    abandon_clean_library_checkpoint(existing["_checkpoint_path"])
+                self._resume_checkpoint = None
+            elif resume is True:
+                self._resume_checkpoint = find_resumable_clean_library_checkpoint(self.library_path)
+                if not self._resume_checkpoint:
+                    raise CleanLibraryError("No resumable clean library operation found")
+            else:
+                self._resume_checkpoint = find_resumable_clean_library_checkpoint(self.library_path)
+
             if self._progress_callback:
                 self._remaining_operation_paths = {
                     key: set() for key in CLEAN_LIBRARY_SIGNAL_KEYS
@@ -872,80 +1136,168 @@ class LibraryCleaner:
                         "details": {key: [] for key in CLEAN_LIBRARY_SIGNAL_KEYS},
                     }
                 )
+
+            if self._resume_checkpoint:
+                resumed_from = {
+                    "phase": self._resume_checkpoint.get("phase"),
+                    "scan_completed_count": self._resume_checkpoint.get("scan_completed_count", 0),
+                    "canonicalize_index": self._resume_checkpoint.get("canonicalize_index", 0),
+                    "manifest_path": self._resume_checkpoint.get("manifest_path"),
+                }
+                self._emit({"type": "resume", "resumed_from": resumed_from})
+
             self._emit({"type": "phase", "phase": "setup", "status": "starting"})
             self.setup()
             self._emit({"type": "phase", "phase": "setup", "status": "complete"})
 
-            candidate_total = self._count_walk_files()
-            self._emit(
-                {
-                    "type": "phase",
-                    "phase": "scan",
-                    "status": "starting",
-                    "total_candidates": candidate_total,
-                }
-            )
-            records = self.scan_and_normalize(candidate_total)
-            self._emit(
-                {
-                    "type": "phase",
-                    "phase": "scan",
-                    "status": "complete",
-                    "records": len(records),
-                }
-            )
-            self._emit_stats_feedback()
+            resume_phase = str(self._resume_checkpoint.get("phase") or "setup") if self._resume_checkpoint else "setup"
+            records = _load_records_jsonl(self._records_jsonl_path or "")
 
-            self._emit({"type": "phase", "phase": "dedupe", "status": "starting"})
-            deduped = self.trash_duplicates(records)
-            self._emit(
-                {
-                    "type": "phase",
-                    "phase": "dedupe",
-                    "status": "complete",
-                    "remaining": len(deduped),
-                }
-            )
-            self._emit_stats_feedback()
+            if self._phase_is_before(resume_phase, "scan_complete"):
+                candidate_total = self._count_walk_files()
+                self._current_phase = "scan"
+                self._flush_checkpoint()
+                self._emit(
+                    {
+                        "type": "phase",
+                        "phase": "scan",
+                        "status": "starting",
+                        "total_candidates": candidate_total,
+                        "resumed_files": len(self._scan_completed_sources),
+                    }
+                )
+                records = self.scan_and_normalize(
+                    candidate_total,
+                    initial_records=records,
+                    skip_sources=set(self._scan_completed_sources),
+                )
+                self._current_phase = "scan_complete"
+                self._flush_checkpoint(records=records)
+                self._emit(
+                    {
+                        "type": "phase",
+                        "phase": "scan",
+                        "status": "complete",
+                        "records": len(records),
+                    }
+                )
+                self._emit_stats_feedback()
 
-            self._emit(
-                {
-                    "type": "phase",
-                    "phase": "canonicalize",
-                    "status": "starting",
-                    "total": len(deduped),
-                }
-            )
-            canonicalized = self.move_to_canonical_locations(deduped)
-            self._emit({"type": "phase", "phase": "canonicalize", "status": "complete"})
-            self._emit_stats_feedback()
+            if self._phase_is_before(resume_phase, "dedupe_complete"):
+                self._current_phase = "dedupe"
+                self._flush_checkpoint(records=records)
+                self._emit({"type": "phase", "phase": "dedupe", "status": "starting"})
+                deduped = self.trash_duplicates(records)
+                records = deduped
+                self._current_phase = "dedupe_complete"
+                self._flush_checkpoint(records=records)
+                self._emit(
+                    {
+                        "type": "phase",
+                        "phase": "dedupe",
+                        "status": "complete",
+                        "remaining": len(deduped),
+                    }
+                )
+                self._emit_stats_feedback()
+            else:
+                deduped = records
 
-            self.stats["metadata_fixed"] = sum(1 for record in canonicalized if record.metadata_cleaned)
-            self._emit({"type": "phase", "phase": "folders", "status": "starting"})
-            self.remove_empty_noncanonical_folders()
-            self._emit({"type": "phase", "phase": "folders", "status": "complete"})
-            self._emit_stats_feedback()
+            if self._phase_is_before(resume_phase, "canonicalize_complete"):
+                self._current_phase = "canonicalize"
+                self._flush_checkpoint(records=deduped)
+                self._emit(
+                    {
+                        "type": "phase",
+                        "phase": "canonicalize",
+                        "status": "starting",
+                        "total": len(deduped),
+                        "resumed_index": self._canonicalize_index,
+                    }
+                )
+                canonicalized = self.move_to_canonical_locations(
+                    deduped,
+                    start_index=self._canonicalize_index,
+                )
+                records = canonicalized
+                self._current_phase = "canonicalize_complete"
+                self._flush_checkpoint(records=records)
+                self._emit({"type": "phase", "phase": "canonicalize", "status": "complete"})
+                self._emit_stats_feedback()
+            else:
+                canonicalized = records
 
-            self._emit(
-                {
-                    "type": "phase",
-                    "phase": "rebuild_db",
-                    "status": "starting",
-                    "total": len(canonicalized),
-                }
-            )
-            self.rebuild_photos_table(canonicalized)
-            self._emit({"type": "phase", "phase": "rebuild_db", "status": "complete"})
-            self._emit_stats_feedback()
+            if self._phase_is_before(resume_phase, "folders_complete"):
+                self.stats["metadata_fixed"] = sum(
+                    1 for record in canonicalized if record.metadata_cleaned
+                )
+                self._current_phase = "folders"
+                self._flush_checkpoint(records=canonicalized)
+                self._emit({"type": "phase", "phase": "folders", "status": "starting"})
+                self.remove_empty_noncanonical_folders()
+                self._current_phase = "folders_complete"
+                self._flush_checkpoint(records=canonicalized)
+                self._emit({"type": "phase", "phase": "folders", "status": "complete"})
+                self._emit_stats_feedback()
 
-            self.log("operation_complete", stats=self.stats)
-            return {"status": "SUCCESS", "stats": self.stats}
+            if self._phase_is_before(resume_phase, "rebuild_db_complete"):
+                self._current_phase = "rebuild_db"
+                self._flush_checkpoint(records=canonicalized)
+                self._emit(
+                    {
+                        "type": "phase",
+                        "phase": "rebuild_db",
+                        "status": "starting",
+                        "total": len(canonicalized),
+                    }
+                )
+                self.rebuild_photos_table(canonicalized)
+                self._current_phase = "rebuild_db_complete"
+                self._flush_checkpoint(records=canonicalized)
+                self._emit({"type": "phase", "phase": "rebuild_db", "status": "complete"})
+                self._emit_stats_feedback()
+
+            if self._phase_is_before(resume_phase, "audit_complete"):
+                self._current_phase = "audit"
+                self._flush_checkpoint(records=canonicalized)
+                issues = self.final_audit(audit_progress_total=len(canonicalized))
+                if issues:
+                    preview = issues[:10]
+                    self.log("final_audit_failed", issue_count=len(issues), issues=preview)
+                    self._emit(
+                        {
+                            "type": "phase",
+                            "phase": "audit",
+                            "status": "failed",
+                            "issue_count": len(issues),
+                        }
+                    )
+                    raise CleanLibraryError(
+                        f"Final audit failed with {len(issues)} issue(s): "
+                        + "; ".join(f"{item['kind']}:{item['path']}" for item in preview)
+                    )
+                self._current_phase = "audit_complete"
+                self._flush_checkpoint(records=canonicalized)
+
+            self._current_phase = "complete"
+            self._write_checkpoint(phase="complete", status="complete", force=True, records=canonicalized)
+            self.log("operation_complete", stats=self.stats, resumed_from=resumed_from)
+            result: Dict[str, Any] = {"status": "SUCCESS", "stats": self.stats}
+            if resumed_from:
+                result["resumed"] = True
+                result["resumed_from"] = resumed_from
+            return result
         except Exception as exc:
+            try:
+                self._flush_checkpoint()
+            except Exception:
+                pass
             self.log(
                 "operation_failed",
                 error=str(exc),
                 traceback=traceback.format_exc(),
                 stats=self.stats,
+                phase=self._current_phase,
             )
             raise
         finally:
@@ -968,20 +1320,14 @@ class LibraryCleaner:
     ) -> Dict[str, Any]:
         self._progress_callback = progress_callback
         try:
-            supported_media_files = fast_count_supported_media_leaf_files(self.library_path)
             if not verify:
-                empty_details = {
-                    "misfiled_media": [],
-                    "duplicates": [],
-                    "unsupported_files": [],
-                    "metadata_cleanup": [],
-                    "database_repairs": [],
-                }
-                return {
-                    "status": "SKIPPED",
-                    "preflight": False,
+                inventory = inventory_media_library(self.library_path)
+                checkpoint = find_resumable_clean_library_checkpoint(self.library_path)
+                payload: Dict[str, Any] = {
+                    "preflight": True,
                     "engine": CLEAN_LIBRARY_ENGINE_VERSION,
-                    "supported_media_files": supported_media_files,
+                    "supported_media_files": inventory["media_count"],
+                    "inventory": inventory,
                     "summary": {
                         "misfiled_media": 0,
                         "duplicates": 0,
@@ -989,22 +1335,48 @@ class LibraryCleaner:
                         "metadata_cleanup": 0,
                         "database_repairs": 0,
                         "issue_count": 0,
+                        "photo_count": inventory["photo_count"],
+                        "video_count": inventory["video_count"],
                     },
-                    "details": empty_details,
-                    "operations": {
-                        "summary": {
-                            "misfiled_media": 0,
-                            "unsupported_files": 0,
-                            "duplicates": 0,
-                            "metadata_cleanup": 0,
-                            "folder_cleanup": 0,
-                            "database_repairs": 0,
-                            "operation_count": 0,
-                        },
-                        "details": {**empty_details, "folder_cleanup": []},
+                    "details": {
+                        "misfiled_media": [],
+                        "duplicates": [],
+                        "unsupported_files": [],
+                        "metadata_cleanup": [],
+                        "database_repairs": [],
                     },
-                    "message": "Preflight disabled; run clean for live progress.",
                 }
+                if checkpoint:
+                    remaining_sec = estimate_remaining_duration_seconds(
+                        inventory,
+                        phase=str(checkpoint.get("phase") or "scan"),
+                        scan_completed_count=int(checkpoint.get("scan_completed_count") or 0),
+                        canonicalize_index=int(checkpoint.get("canonicalize_index") or 0),
+                    )
+                    _rem_sec, remaining_display = format_about_duration(remaining_sec)
+                    payload["status"] = "RESUME"
+                    payload["resumable"] = True
+                    payload["resume"] = {
+                        "phase": checkpoint.get("phase"),
+                        "scan_completed_count": checkpoint.get("scan_completed_count", 0),
+                        "canonicalize_index": checkpoint.get("canonicalize_index", 0),
+                        "manifest_path": checkpoint.get("manifest_path"),
+                    }
+                    payload["estimated_remaining_seconds"] = round(remaining_sec, 1)
+                    payload["estimated_remaining_display"] = remaining_display
+                    payload["message"] = (
+                        f"Resumable clean in progress. About {remaining_display} remaining."
+                    )
+                else:
+                    payload["status"] = "INVENTORY"
+                    payload["resumable"] = False
+                    payload["estimated_seconds"] = inventory["estimated_seconds"]
+                    payload["estimated_display"] = inventory["estimated_display"]
+                    payload["message"] = (
+                        f"{inventory['photo_count']:,} photos and {inventory['video_count']:,} "
+                        f"videos — {inventory['estimated_display']}."
+                    )
+                return payload
 
             if os.path.exists(self.db_path) and db_is_valid(self.db_path):
                 self.db_conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
@@ -1014,6 +1386,7 @@ class LibraryCleaner:
                 db_path=self.db_path,
                 progress_callback=progress_callback,
             )
+            supported_media_files = self._count_supported_media_leaf_files()
             payload = summarize_clean_library_issues(issues)
             payload["operations"] = summarize_clean_library_operations(
                 self.library_path,
@@ -1069,22 +1442,54 @@ class LibraryCleaner:
             reason="make_perfect",
         )
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if os.path.exists(self.db_path):
-            backup_path = os.path.join(
-                self.library_path,
-                ".db_backups",
-                f"photo_library_{timestamp}.db",
+        resuming = self._resume_checkpoint is not None
+        if resuming:
+            manifest_path = str(self._resume_checkpoint.get("manifest_path") or "")
+            if not manifest_path:
+                raise CleanLibraryError("Resumable checkpoint is missing manifest_path")
+            self._bind_run_artifact_paths(manifest_path)
+            self.stats = dict(self._resume_checkpoint.get("stats") or self.stats)
+            self._current_phase = str(self._resume_checkpoint.get("phase") or "setup")
+            self._canonicalize_index = int(self._resume_checkpoint.get("canonicalize_index") or 0)
+            scan_completed_path = str(
+                self._resume_checkpoint.get("scan_completed_path") or self._scan_completed_path or ""
             )
-            shutil.copy2(self.db_path, backup_path)
+            self._scan_completed_sources = _load_scan_completed_sources(scan_completed_path)
+            self.manifest = open(manifest_path, "a", encoding="utf-8")
+            self.log(
+                "operation_resumed",
+                library_path=self.library_path,
+                db_path=self.db_path,
+                phase=self._current_phase,
+                scan_completed_count=len(self._scan_completed_sources),
+                canonicalize_index=self._canonicalize_index,
+            )
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            if os.path.exists(self.db_path):
+                backup_path = os.path.join(
+                    self.library_path,
+                    ".db_backups",
+                    f"photo_library_{timestamp}.db",
+                )
+                shutil.copy2(self.db_path, backup_path)
 
-        manifest_path = os.path.join(
-            self.library_path,
-            ".logs",
-            f"clean_library_{timestamp}.jsonl",
-        )
-        self.manifest = open(manifest_path, "a", encoding="utf-8")
-        self.log("operation_started", library_path=self.library_path, db_path=self.db_path)
+            manifest_path = os.path.join(
+                self.library_path,
+                ".logs",
+                f"clean_library_{timestamp}.jsonl",
+            )
+            self._bind_run_artifact_paths(manifest_path)
+            for artifact_path in (
+                self._records_jsonl_path,
+                self._scan_completed_path,
+            ):
+                if artifact_path and not os.path.exists(artifact_path):
+                    with open(artifact_path, "a", encoding="utf-8"):
+                        pass
+            self.manifest = open(manifest_path, "a", encoding="utf-8")
+            self.log("operation_started", library_path=self.library_path, db_path=self.db_path)
+            self._write_checkpoint(phase="setup", force=True)
         if quarantined_metadata:
             self.log(
                 "metadata_artifacts_quarantined",
@@ -1318,18 +1723,33 @@ class LibraryCleaner:
                     n += 1
         return n
 
-    def scan_and_normalize(self, candidate_total: int) -> List[MediaRecord]:
-        records: List[MediaRecord] = []
-        processed = 0
+    def scan_and_normalize(
+        self,
+        candidate_total: int,
+        *,
+        initial_records: Optional[List[MediaRecord]] = None,
+        skip_sources: Optional[set[str]] = None,
+    ) -> List[MediaRecord]:
+        records: List[MediaRecord] = list(initial_records or [])
+        skip_sources = set(skip_sources or ())
+        processed = len(skip_sources)
 
         for root, _, files in self.active_walk():
             for filename in files:
                 if filename in IGNORED_LIBRARY_FILES:
                     continue
                 full_path = os.path.join(root, filename)
+                source_rel_path = os.path.relpath(full_path, self.library_path)
                 ext = os.path.splitext(filename)[1].lower()
                 if not is_supported_media_extension(ext):
+                    if source_rel_path in skip_sources:
+                        continue
                     self.normalize_media_file(full_path)
+                    self._mark_scan_source_complete(source_rel_path)
+                    self._files_since_checkpoint += 1
+                    self._write_checkpoint(phase="scan")
+                    continue
+                if source_rel_path in skip_sources:
                     continue
                 processed += 1
                 self._emit(
@@ -1341,8 +1761,12 @@ class LibraryCleaner:
                     }
                 )
                 record = self.normalize_media_file(full_path)
+                self._mark_scan_source_complete(source_rel_path)
                 if record is not None:
                     records.append(record)
+                    self._append_scan_record(record)
+                self._files_since_checkpoint += 1
+                self._write_checkpoint(phase="scan")
 
         self.log("scan_complete", media_count=len(records))
         return records
@@ -1358,8 +1782,9 @@ class LibraryCleaner:
         )
 
     def trash_duplicates(self, records: List[MediaRecord]) -> List[MediaRecord]:
+        live_records = [record for record in records if os.path.exists(record.full_path)]
         grouped: Dict[str, List[MediaRecord]] = {}
-        for record in records:
+        for record in live_records:
             grouped.setdefault(record.duplicate_key, []).append(record)
 
         survivors: List[MediaRecord] = []
@@ -1406,7 +1831,12 @@ class LibraryCleaner:
 
         return survivors
 
-    def move_to_canonical_locations(self, records: List[MediaRecord]) -> List[MediaRecord]:
+    def move_to_canonical_locations(
+        self,
+        records: List[MediaRecord],
+        *,
+        start_index: int = 0,
+    ) -> List[MediaRecord]:
         occupied: set[str] = set()
         canonicalized: List[MediaRecord] = []
         sorted_records = sorted(
@@ -1414,12 +1844,20 @@ class LibraryCleaner:
         )
         total = len(sorted_records)
 
-        for idx, record in enumerate(sorted_records, start=1):
+        if start_index > 0:
+            for record in sorted_records[:start_index]:
+                target_rel = canonical_relative_path(record.date_obj, record.content_hash, record.ext)
+                occupied.add(target_rel)
+                canonicalized.append(record)
+
+        for idx in range(start_index, len(sorted_records)):
+            record = sorted_records[idx]
+            display_idx = idx + 1
             self._emit(
                 {
                     "type": "progress",
                     "phase": "canonicalize",
-                    "processed": idx,
+                    "processed": display_idx,
                     "total": max(total, 1),
                 }
             )
@@ -1429,7 +1867,15 @@ class LibraryCleaner:
 
             target_full = os.path.join(self.library_path, target_rel)
             source_rel_path = record.rel_path
-            if os.path.abspath(record.full_path) != os.path.abspath(target_full):
+            if not os.path.exists(record.full_path):
+                if os.path.exists(target_full):
+                    record.full_path = target_full
+                    record.rel_path = target_rel
+                else:
+                    raise CleanLibraryError(
+                        f"Missing media file during canonicalize resume: {record.source_rel_path}"
+                    )
+            elif os.path.abspath(record.full_path) != os.path.abspath(target_full):
                 os.makedirs(os.path.dirname(target_full), exist_ok=True)
                 if os.path.exists(target_full):
                     raise CleanLibraryError(
@@ -1450,6 +1896,12 @@ class LibraryCleaner:
 
             occupied.add(target_rel)
             canonicalized.append(record)
+            self._canonicalize_index = display_idx
+            self._files_since_checkpoint += 1
+            self._write_checkpoint(
+                phase="canonicalize",
+                records=canonicalized + sorted_records[idx + 1 :],
+            )
 
         return canonicalized
 
@@ -1627,9 +2079,11 @@ def run_db_normalization_engine(
     library_path: str,
     db_path: Optional[str] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    *,
+    resume: Optional[bool] = None,
 ) -> Dict[str, Any]:
     engine = DBNormalizationEngine(library_path, db_path=db_path)
-    return engine.run(progress_callback=progress_callback)
+    return engine.run(progress_callback=progress_callback, resume=resume)
 
 
 def make_library_perfect(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:

@@ -5543,6 +5543,14 @@ def api_make_library_perfect_stream():
 
     from make_library_perfect import run_db_normalization_engine
 
+    payload = request.get_json(silent=True) or {}
+    resume_arg = payload.get("resume")
+    resume: bool | None
+    if resume_arg is None:
+        resume = None
+    else:
+        resume = bool(resume_arg)
+
     event_queue: queue.Queue = queue.Queue()
 
     def run_op():
@@ -5555,6 +5563,7 @@ def api_make_library_perfect_stream():
                 LIBRARY_PATH,
                 db_path=DB_PATH,
                 progress_callback=progress_callback,
+                resume=resume,
             )
             event_queue.put(('done', result))
         except Exception as e:
@@ -5599,7 +5608,8 @@ def api_make_library_perfect_stream():
 @app.route('/api/library/make-perfect/scan', methods=['GET'])
 def api_scan_make_library_perfect():
     """
-    Clean library scan. Default is zero preflight (SKIPPED). Pass ?verify=1 for yardstick audit.
+    Clean library preflight. Default is cheap inventory (photos/videos + duration).
+    Pass ?verify=1 for full yardstick audit (recovery / dev).
     """
     try:
         from make_library_perfect import scan_library_cleanliness

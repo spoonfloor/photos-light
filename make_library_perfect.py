@@ -1,7 +1,7 @@
 """
 Clean library — engine router.
 
-Default: v2 (zero preflight, hash-only dupes).
+Default: v2 (cheap inventory preflight, hash-only dupes).
 Fallback: set PHOTOS_CLEAN_LIBRARY_ENGINE=legacy
 
 Archived implementation: make_library_perfect_legacy.py
@@ -31,6 +31,12 @@ if _ENGINE in ("legacy", "v1", "old"):
         verify_library_cleanliness,
         verify_media_file,
     )
+
+    def find_resumable_clean_library_checkpoint(library_path):  # type: ignore[misc]
+        return None
+
+    def abandon_clean_library_checkpoint(checkpoint_path):  # type: ignore[misc]
+        return None
 else:
     from make_library_clean_v2 import (  # noqa: F401
         CLEAN_LIBRARY_ENGINE_VERSION,
@@ -41,6 +47,8 @@ else:
         MediaRecord,
         _compute_photo_audit_identity,
         _compute_photo_duplicate_key,
+        abandon_clean_library_checkpoint,
+        find_resumable_clean_library_checkpoint,
         make_library_perfect,
         run_db_normalization_engine,
         scan_library_cleanliness,
@@ -59,6 +67,8 @@ __all__ = [
     "MediaRecord",
     "_compute_photo_audit_identity",
     "_compute_photo_duplicate_key",
+    "abandon_clean_library_checkpoint",
+    "find_resumable_clean_library_checkpoint",
     "make_library_perfect",
     "run_db_normalization_engine",
     "scan_library_cleanliness",
