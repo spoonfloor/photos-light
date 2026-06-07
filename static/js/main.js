@@ -6769,6 +6769,18 @@ const CLEAN_LIBRARY_PHASE_STEP_INDEX = {
   audit: 6,
 };
 
+const CLEAN_LIBRARY_WORKING_STEP_MIN_MS = 50;
+
+// Phases where processed/total is a natural file count for the step line.
+const CLEAN_LIBRARY_STEP_PROGRESS_PHASES = new Set([
+  'scan',
+  'canonicalize',
+  'rebuild_db',
+  'audit',
+]);
+
+let cleanLibraryWorkingStepState = null;
+
 const cleanLibraryPreviewState = {
   active: false,
   runId: 0,
@@ -7456,10 +7468,192 @@ function storeCleanLibraryPreflightEstimate(scanResult) {
   }
 }
 
+function resetCleanLibraryWorkingStepState() {
+  if (cleanLibraryWorkingStepState?.pumpTimer) {
+    clearTimeout(cleanLibraryWorkingStepState.pumpTimer);
+  }
+  cleanLibraryWorkingStepState = {
+    stepNumber: null,
+    phase: null,
+    shownAtMs: 0,
+    progress: {},
+    queue: [],
+    pumpTimer: null,
+  };
+}
+
+function clearCleanLibraryWorkingStepState() {
+  if (cleanLibraryWorkingStepState?.pumpTimer) {
+    clearTimeout(cleanLibraryWorkingStepState.pumpTimer);
+  }
+  cleanLibraryWorkingStepState = null;
+}
+
+function updateCleanLibraryWorkingProgress(phase, processed, total) {
+  if (!CLEAN_LIBRARY_STEP_PROGRESS_PHASES.has(phase)) {
+    return;
+  }
+  const done = Number(processed);
+  const cap = Number(total);
+  if (!Number.isFinite(done) || !Number.isFinite(cap) || cap < 1) {
+    return;
+  }
+  if (!cleanLibraryWorkingStepState) {
+    return;
+  }
+  cleanLibraryWorkingStepState.progress[phase] = {
+    processed: Math.max(0, Math.min(done, cap)),
+    total: cap,
+  };
+}
+
+function formatCleanLibraryWorkingProgressSuffix(phase) {
+  if (!CLEAN_LIBRARY_STEP_PROGRESS_PHASES.has(phase)) {
+    return '';
+  }
+  const progress = cleanLibraryWorkingStepState?.progress?.[phase];
+  if (!progress) {
+    return '';
+  }
+  return ` (${progress.processed.toLocaleString()} of ${progress.total.toLocaleString()})`;
+}
+
+function buildCleanLibraryWorkingStepText(stepNumber, phase) {
+  const stepLabel = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1] || 'Working';
+  return `Step ${stepNumber} of 6: ${stepLabel}${formatCleanLibraryWorkingProgressSuffix(phase)}`;
+}
+
+function renderCleanLibraryWorkingStepDisplay() {
+  const state = cleanLibraryWorkingStepState;
+  if (!state || state.stepNumber === null) {
+    return;
+  }
+  const text = buildCleanLibraryWorkingStepText(state.stepNumber, state.phase);
+  const showProgressCount = formatCleanLibraryWorkingProgressSuffix(state.phase) !== '';
+  updateUpdateIndexUI(text, !showProgressCount);
+  syncCleanLibraryWorkingRemainingDisplay();
+}
+
+function enqueueCleanLibraryWorkingStep(stepNumber, phase) {
+  const state = cleanLibraryWorkingStepState;
+  if (!state) {
+    return;
+  }
+  const last = state.queue[state.queue.length - 1];
+  if (last && last.stepNumber === stepNumber && last.phase === phase) {
+    return;
+  }
+  state.queue.push({ stepNumber, phase });
+}
+
+function pumpCleanLibraryWorkingStepQueue() {
+  const state = cleanLibraryWorkingStepState;
+  if (!state || state.pumpTimer) {
+    return;
+  }
+
+  const tick = () => {
+    state.pumpTimer = null;
+    if (!state.queue.length) {
+      return;
+    }
+
+    const now = Date.now();
+    if (
+      state.stepNumber !== null &&
+      now - state.shownAtMs < CLEAN_LIBRARY_WORKING_STEP_MIN_MS
+    ) {
+      state.pumpTimer = setTimeout(
+        tick,
+        CLEAN_LIBRARY_WORKING_STEP_MIN_MS - (now - state.shownAtMs),
+      );
+      return;
+    }
+
+    const next = state.queue.shift();
+    state.stepNumber = next.stepNumber;
+    state.phase = next.phase;
+    state.shownAtMs = Date.now();
+    renderCleanLibraryWorkingStepDisplay();
+
+    if (state.queue.length > 0) {
+      state.pumpTimer = setTimeout(tick, CLEAN_LIBRARY_WORKING_STEP_MIN_MS);
+    }
+  };
+
+  tick();
+}
+
+function requestCleanLibraryWorkingStep(phase) {
+  const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[phase] || 1;
+  const state = cleanLibraryWorkingStepState;
+  if (!state) {
+    updateUpdateIndexUI(buildCleanLibraryWorkingStepText(stepNumber, phase), true);
+    syncCleanLibraryWorkingRemainingDisplay();
+    return;
+  }
+
+  if (state.stepNumber === stepNumber) {
+    state.phase = phase;
+    renderCleanLibraryWorkingStepDisplay();
+    return;
+  }
+
+  enqueueCleanLibraryWorkingStep(stepNumber, phase);
+  pumpCleanLibraryWorkingStepQueue();
+}
+
+function seedCleanLibraryWorkingProgressFromPhaseEvent(event = {}) {
+  if (event.type !== 'phase' || event.status !== 'starting' || !event.phase) {
+    return;
+  }
+  if (event.phase === 'scan' && event.total_candidates != null) {
+    updateCleanLibraryWorkingProgress(
+      'scan',
+      Number(event.resumed_files) || 0,
+      event.total_candidates,
+    );
+  } else if (event.phase === 'canonicalize' && event.total != null) {
+    updateCleanLibraryWorkingProgress(
+      'canonicalize',
+      Number(event.resumed_index) || 0,
+      event.total,
+    );
+  } else if (event.phase === 'rebuild_db' && event.total != null) {
+    updateCleanLibraryWorkingProgress('rebuild_db', 0, event.total);
+  } else if (event.phase === 'audit' && event.total != null) {
+    updateCleanLibraryWorkingProgress('audit', 0, event.total);
+  }
+}
+
+function handleCleanLibraryWorkingProgressEvent(event = {}) {
+  if (event.type !== 'progress' || !event.phase) {
+    return;
+  }
+  updateCleanLibraryWorkingProgress(event.phase, event.processed, event.total);
+
+  const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[event.phase] || 1;
+  const state = cleanLibraryWorkingStepState;
+  if (!state) {
+    return;
+  }
+
+  if (state.stepNumber === stepNumber) {
+    state.phase = event.phase;
+    renderCleanLibraryWorkingStepDisplay();
+    return;
+  }
+
+  if (state.stepNumber === null && !state.queue.length) {
+    requestCleanLibraryWorkingStep(event.phase);
+  }
+}
+
 function beginCleanLibraryWorkingUi() {
   updateIndexState.workingPhaseActive = true;
   updateIndexState.overlayPhase = 'working';
   updateIndexState.runStartedAtMs = Date.now();
+  resetCleanLibraryWorkingStepState();
   resetUpdateIndexOverlayTitle();
   showCleanLibraryWorkingBody();
   showUpdateIndexPreflightStats(null);
@@ -7467,20 +7661,14 @@ function beginCleanLibraryWorkingUi() {
   showCleanLibraryDetailsSection(true);
   resetCleanLibraryLogFeed();
   showUpdateIndexButtons('cancel');
-  updateCleanLibraryWorkingStep('setup');
+  requestCleanLibraryWorkingStep('setup');
 }
 
 function endCleanLibraryWorkingUi() {
   updateIndexState.workingPhaseActive = false;
+  clearCleanLibraryWorkingStepState();
   setCleanLibraryExplainerVisible(false);
   setCleanLibrarySecondaryStatus(null, false);
-}
-
-function updateCleanLibraryWorkingStep(phase) {
-  const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[phase] || 1;
-  const stepLabel = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1];
-  updateUpdateIndexUI(`Step ${stepNumber} of 6: ${stepLabel}`, true);
-  syncCleanLibraryWorkingRemainingDisplay();
 }
 
 function syncCleanLibraryWorkingRemainingDisplay() {
@@ -7647,21 +7835,27 @@ function updateIndexStatusForCleanerPhase(event = {}) {
   if (updateIndexState.workingPhaseActive) {
     if (event.type === 'resume') {
       const phase = event.resumed_from?.phase || 'scan';
-      updateCleanLibraryWorkingStep(phase);
+      requestCleanLibraryWorkingStep(phase);
       return;
     }
     if (event.type === 'phase' && event.status === 'starting' && event.phase) {
       if (cleanLibraryRunEtaState) {
         cleanLibraryRunEtaState.lastPhase = event.phase;
       }
-      updateCleanLibraryWorkingStep(event.phase);
+      seedCleanLibraryWorkingProgressFromPhaseEvent(event);
+      requestCleanLibraryWorkingStep(event.phase);
       return;
     }
     if (event.type === 'progress' && event.phase) {
       if (cleanLibraryRunEtaState) {
         cleanLibraryRunEtaState.lastPhase = event.phase;
       }
-      updateCleanLibraryWorkingStep(event.phase);
+      handleCleanLibraryWorkingProgressEvent(event);
+      const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[event.phase] || 1;
+      const state = cleanLibraryWorkingStepState;
+      if (state && state.stepNumber !== null && state.stepNumber !== stepNumber) {
+        requestCleanLibraryWorkingStep(event.phase);
+      }
     }
     return;
   }
@@ -7957,6 +8151,7 @@ async function executeUpdateIndex() {
       updateIndexState.workingPhaseActive = false;
     }
     cleanLibraryRunEtaState = null;
+    clearCleanLibraryWorkingStepState();
   }
 }
 

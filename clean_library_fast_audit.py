@@ -157,6 +157,7 @@ def run_fast_library_audit(
     *,
     include_metadata_checks: bool = True,
     include_hash_checks: bool = True,
+    audit_progress_total: Optional[int] = None,
 ) -> List[Dict[str, str]]:
     """
     Read-only fast audit. Returns issue dicts compatible with summarize_clean_library_issues.
@@ -165,7 +166,20 @@ def run_fast_library_audit(
     resolved_db = resolve_db_path(library_path, db_path)
     issues: List[Dict[str, str]] = []
 
-    _emit(progress_callback, {"type": "phase", "phase": "audit", "status": "starting"})
+    if audit_progress_total is not None:
+        audit_total = max(int(audit_progress_total), 1)
+    else:
+        audit_total = max(count_supported_media_leaf_files(library_path), 1)
+
+    _emit(
+        progress_callback,
+        {
+            "type": "phase",
+            "phase": "audit",
+            "status": "starting",
+            "total": audit_total,
+        },
+    )
 
     issues.extend(_path_structure_issues(library_path))
     issues.extend(_audit_library_metadata_dir(library_path))
@@ -183,7 +197,6 @@ def run_fast_library_audit(
 
     active_media_paths: Set[str] = set()
     hash_groups: Dict[str, List[Tuple[str, float]]] = {}
-    audit_total = 1
     audit_idx = 0
 
     for root, dirs, files in os.walk(library_path, topdown=True):
@@ -204,7 +217,6 @@ def run_fast_library_audit(
                 continue
 
             audit_idx += 1
-            audit_total = max(audit_total, audit_idx)
             _emit(
                 progress_callback,
                 {

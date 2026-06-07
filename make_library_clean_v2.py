@@ -2171,11 +2171,11 @@ class LibraryCleaner:
         return n
 
     def final_audit(self, audit_progress_total: Optional[int] = None) -> List[Dict[str, str]]:
-        _ = audit_progress_total
         return run_fast_library_audit(
             self.library_path,
             db_path=self.db_path,
             progress_callback=self._progress_callback,
+            audit_progress_total=audit_progress_total,
         )
 
 
