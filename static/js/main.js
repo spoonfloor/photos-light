@@ -1157,56 +1157,6 @@ async function streamMakeLibraryPerfect(options = {}) {
   throw new Error('Stream ended without complete event');
 }
 
-async function runMakeLibraryPerfectOperation(options = {}) {
-  const {
-    startMessage = 'Starting library cleanup...',
-    reloadingMessage = 'Library cleanup complete! Reloading photos...',
-    successMessage = '✅ Library is now perfectly organized',
-    failurePrefix = 'Operation failed',
-  } = options;
-
-  try {
-    showToast(startMessage, null);
-    await requestMakeLibraryPerfect();
-
-    showToast(reloadingMessage, null);
-    await loadAndRenderPhotos(false, { throwOnError: true });
-    showToast(successMessage, null);
-    return true;
-  } catch (error) {
-    console.error('❌ Make Library Perfect failed:', error);
-    showToast(`${failurePrefix}: ${error.message}`, null);
-    return false;
-  }
-}
-
-/**
- * Start "Make Library Perfect" operation (unified Clean + Rebuild)
- * Entry point from utilities menu "Clean library" option
- */
-async function startMakeLibraryPerfect() {
-  try {
-    // Show confirmation dialog
-    const confirmed = await showDialog(
-      'Clean library',
-      'This will:\n\n• Fix misnamed and misfiled media\n• Move duplicates, corrupted files, and non-library files to .trash\n• Add missing media to the database and remove ghost DB entries\n• Bake still-image rotation when it is lossless\n• Strip EXIF rating flags when rating = 0\n• Remove empty and non-canonical folders outside infrastructure\n\nItems already inside .trash are allowed and do not count against cleanliness.\n\nThis operation may take several hours for large libraries. The app must remain open until complete.\n\nContinue?',
-      [
-        { text: 'Cancel', value: false, primary: false },
-        { text: 'Start cleaning', value: true, primary: true },
-      ],
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
-    await runMakeLibraryPerfectOperation();
-  } catch (error) {
-    console.error('❌ Make Library Perfect failed:', error);
-    showToast(`Operation failed: ${error.message}`, 'error');
-  }
-}
-
 // =====================
 // REBUILD DATABASE
 // =====================
@@ -7400,6 +7350,28 @@ function handleUpdateIndexStartOverClick() {
   }
   if (updateIndexState.onInterruptedChoice) {
     updateIndexState.onInterruptedChoice('start-over');
+    return;
+  }
+  if (
+    updateIndexState.overlayPhase === 'eta' &&
+    updateIndexState.preflight?.status === 'RESUME'
+  ) {
+    void restartCleanLibraryPreflightFromStartOver();
+  }
+}
+
+async function restartCleanLibraryPreflightFromStartOver() {
+  try {
+    await abandonCleanLibraryCheckpoint();
+    updateIndexState.resumeIntent = false;
+    resetUpdateIndexOverlayTitle();
+    const scanResult = await runUpdateIndexPreflightScan();
+    renderUpdateIndexPreflightResult(scanResult);
+  } catch (error) {
+    console.error('❌ Clean library start over failed:', error);
+    updateUpdateIndexUI('Failed to scan library', false);
+    showToast(`Scan failed: ${error.message}`, 'error');
+    showUpdateIndexButtons('cancel');
   }
 }
 
@@ -7575,6 +7547,43 @@ async function abandonCleanLibraryCheckpoint() {
     throw new Error(data.error || `Abandon failed (${response.status})`);
   }
   return response.json();
+}
+
+async function loadCleanLibraryManifestTail(manifestPath, lines = 40) {
+  if (!manifestPath) {
+    return;
+  }
+  const url =
+    `/api/library/make-perfect/manifest-tail?path=${encodeURIComponent(manifestPath)}&lines=${lines}`;
+  const response = await fetch(url);
+  if (response.status === 404) {
+    return;
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Manifest tail failed (${response.status})`);
+  }
+  const data = await response.json();
+  for (const line of data.lines || []) {
+    if (line.trim()) {
+      appendCleanLibraryLogLine(line.trim());
+    }
+  }
+}
+
+async function prefetchCleanLibraryManifestTail() {
+  if (updateIndexState.resumeIntent !== true) {
+    return;
+  }
+  const manifestPath = updateIndexState.preflight?.resume?.manifest_path;
+  if (!manifestPath) {
+    return;
+  }
+  try {
+    await loadCleanLibraryManifestTail(manifestPath);
+  } catch (error) {
+    console.warn('Manifest tail load failed:', error);
+  }
 }
 
 function showCleanLibraryInterruptedGate() {
@@ -7791,7 +7800,11 @@ function renderUpdateIndexPreflightResult(scanResult) {
         ? scanResult.estimated_remaining_display
         : scanResult.estimated_display;
     updateUpdateIndexUI(`Time required: ${timeLabel}`, false);
-    showUpdateIndexButtons('cancel', 'proceed');
+    if (scanResult.status === 'RESUME') {
+      showUpdateIndexButtons('cancel', 'start-over', 'proceed');
+    } else {
+      showUpdateIndexButtons('cancel', 'proceed');
+    }
     return;
   }
 
@@ -7900,6 +7913,7 @@ async function executeUpdateIndex() {
   updateIndexState.abortController = new AbortController();
   resetCleanLibraryRunEtaState();
   beginCleanLibraryWorkingUi();
+  await prefetchCleanLibraryManifestTail();
 
   try {
     const result = await streamMakeLibraryPerfect({

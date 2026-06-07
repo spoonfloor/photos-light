@@ -5652,6 +5652,68 @@ def api_clean_library_checkpoint_probe():
         return jsonify({'error': str(e)}), 500
 
 
+def _resolve_library_log_file(path_param: str):
+    """Resolve a manifest path under the library .logs directory, or return an error."""
+    if not path_param:
+        return None, 'path query parameter is required'
+    if not LIBRARY_PATH:
+        return None, 'No library configured'
+
+    abs_library = os.path.abspath(LIBRARY_PATH)
+    logs_dir = os.path.abspath(os.path.join(abs_library, '.logs'))
+    if os.path.isabs(path_param):
+        abs_path = os.path.abspath(path_param)
+    else:
+        abs_path = os.path.abspath(os.path.join(abs_library, path_param))
+
+    if abs_path != logs_dir and not abs_path.startswith(logs_dir + os.sep):
+        return None, 'Invalid manifest path'
+    if not os.path.isfile(abs_path):
+        return None, 'Manifest not found'
+    return abs_path, None
+
+
+def _read_text_file_tail(path: str, max_lines: int = 40) -> list:
+    max_lines = max(1, max_lines)
+    chunk_size = 8192
+    with open(path, 'rb') as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        buffer = b''
+        while position > 0 and buffer.count(b'\n') <= max_lines:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            handle.seek(position)
+            buffer = handle.read(read_size) + buffer
+    text = buffer.decode('utf-8', errors='replace')
+    lines = text.splitlines()
+    return [line for line in lines[-max_lines:] if line.strip()]
+
+
+@app.route('/api/library/make-perfect/manifest-tail', methods=['GET'])
+def api_clean_library_manifest_tail():
+    """Return the last N lines from a clean-library manifest (.jsonl under .logs)."""
+    try:
+        path_param = request.args.get('path', '')
+        try:
+            max_lines = int(request.args.get('lines', 40))
+        except (TypeError, ValueError):
+            max_lines = 40
+        max_lines = min(200, max(1, max_lines))
+
+        abs_path, error = _resolve_library_log_file(path_param)
+        if error:
+            status = 404 if error == 'Manifest not found' else 400
+            return jsonify({'error': error}), status
+
+        lines = _read_text_file_tail(abs_path, max_lines=max_lines)
+        return jsonify({'lines': lines})
+    except Exception as e:
+        error_logger.error(f"Clean library manifest tail failed: {e}")
+        error_logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/library/make-perfect/checkpoint/abandon', methods=['POST'])
 def api_abandon_clean_library_checkpoint():
     """Abandon the current resumable clean-library checkpoint (start fresh)."""

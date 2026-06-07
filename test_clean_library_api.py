@@ -106,6 +106,35 @@ class CleanLibraryApiTest(unittest.TestCase):
         self.assertTrue(payload["resumable"])
         self.assertEqual(payload["resume"]["scan_completed_count"], 12)
 
+    def test_clean_library_manifest_tail_returns_last_lines(self):
+        logs_dir = os.path.join(self.library_path, ".logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        manifest_path = os.path.join(logs_dir, "clean_library_test.jsonl")
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            for index in range(5):
+                handle.write(f'{{"line": {index}}}\n')
+
+        response = self.client.get(
+            "/api/library/make-perfect/manifest-tail",
+            query_string={"path": manifest_path, "lines": 2},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["lines"], ['{"line": 3}', '{"line": 4}'])
+
+    def test_clean_library_manifest_tail_rejects_outside_logs(self):
+        outside_path = os.path.join(self.tmpdir.name, "outside.jsonl")
+        with open(outside_path, "w", encoding="utf-8") as handle:
+            handle.write('{"line": 0}\n')
+
+        response = self.client.get(
+            "/api/library/make-perfect/manifest-tail",
+            query_string={"path": outside_path},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid manifest path", response.get_json()["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
