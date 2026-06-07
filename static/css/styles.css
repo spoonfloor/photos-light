@@ -1,6 +1,7 @@
 :root {
   /* --- Typography --- */
-  --main-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --main-font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --body-font-size: 15.5px;
   --body-font-weight: 400;
   --main-font-weight: var(--body-font-weight);
@@ -13,14 +14,31 @@
   --text-secondary: #b3b3b3; /* Dimmer text */
   --placeholder-bg: #2a2a2a; /* Dark placeholder boxes */
   --placeholder-hover: #333333; /* Slightly lighter on hover */
-  
+
   /* --- Accent Colors --- */
   --accent-color: #6d49ff; /* Custom purple */
   --accent-hover: #5a3ad6; /* Darker purple for hover */
 
   /* --- Layout --- */
   --app-bar-height: 64px;
-  --page-top-gap: 48px;
+  --filter-chip-rail-height: 50px;
+  --app-chrome-height: var(--app-bar-height);
+  --page-top-gap: 24px;
+
+  /* --- Filter chip knobs --- */
+  --filter-chip-rail-bg: transparent;
+  --filter-chip-bg: rgba(30, 30, 30, 0.85);
+  --filter-chip-text: var(--text-secondary);
+  --filter-chip-bg-hover: rgba(255, 255, 255, 0.12);
+  --filter-chip-text-hover: var(--text-primary);
+  --filter-chip-bg-active: #e8e8e8;
+  --filter-chip-text-active: #121212;
+  --filter-chip-bg-active-hover: #ffffff;
+  --filter-chip-text-active-hover: #000000;
+  --filter-chip-font-size: 15px;
+  --filter-chip-font-weight: 300;
+  --filter-chip-height: 32px;
+  --filter-chip-padding-x: 16px;
   /* Utilities (⋮) dropdown knobs */
   --utilities-menu-padding-inline-end: 24px; /* inner: label → panel right */
   --utilities-menu-viewport-inset-end: 0px; /* outer: + nudges whole panel left (away from viewport right) */
@@ -55,7 +73,11 @@ body {
 
 /* Material Symbols default settings */
 .material-symbols-outlined {
-  font-variation-settings: 'FILL' 0, 'wght' 200, 'GRAD' 0, 'opsz' 24;
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 200,
+    'GRAD' 0,
+    'opsz' 24;
 }
 
 /* --- Buttons --- */
@@ -155,7 +177,7 @@ body {
 }
 
 /* --- Radio Buttons (Global) --- */
-input[type="radio"] {
+input[type='radio'] {
   width: 18px;
   height: 18px;
   accent-color: var(--accent-color);
@@ -164,22 +186,27 @@ input[type="radio"] {
 
 /* --- Page Layout --- */
 .page-main {
-  padding-top: calc(var(--app-bar-height) + var(--page-top-gap));
+  padding-top: calc(var(--app-chrome-height) + var(--page-top-gap));
+}
+
+body.filter-chip-rail-visible {
+  --app-chrome-height: calc(
+    var(--app-bar-height) + var(--filter-chip-rail-height)
+  );
 }
 
 /* Prevent white flash before app-bar injects */
-#appBarMount {
-  height: 0;
-}
-
-#appBarMount:empty {
+#appChromeMount {
   position: fixed;
   top: 0;
   left: 0;
   width: 100vw;
+  z-index: var(--z-app-chrome);
+}
+
+#appBarMount:empty {
   height: var(--app-bar-height);
   background: var(--app-bar-bg);
-  z-index: var(--z-app-chrome);
 }
 
 .page-wrapper {
@@ -191,13 +218,10 @@ input[type="radio"] {
 
 /* --- App Bar --- */
 .app-bar-wrapper {
-  position: fixed;
+  position: relative;
   background: var(--app-bar-bg);
-  width: 100vw;
+  width: 100%;
   height: var(--app-bar-height);
-  top: 0;
-  left: 0;
-  z-index: var(--z-app-chrome);
   color: var(--text-primary);
   padding: 0 20px;
   display: flex;
@@ -257,9 +281,6 @@ input[type="radio"] {
   outline: none;
   border-color: var(--accent-color);
 }
-  min-width: 0;
-  gap: var(--app-bar-gap);
-}
 
 .app-bar-wrapper .title {
   font-size: var(--app-bar-title-size);
@@ -284,6 +305,60 @@ input[type="radio"] {
   gap: var(--app-bar-gap);
   justify-self: end;
   white-space: nowrap;
+}
+
+/* --- Filter chip rail --- */
+.filter-chip-rail {
+  background: var(--filter-chip-rail-bg);
+  height: var(--filter-chip-rail-height);
+}
+
+.filter-chip-rail-scroll {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0px 20px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.filter-chip-rail-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.filter-chip {
+  flex: 0 0 auto;
+  height: var(--filter-chip-height);
+  padding: 0 var(--filter-chip-padding-x);
+  border-radius: 9999px;
+  border: none;
+  background: var(--filter-chip-bg);
+  color: var(--filter-chip-text);
+  font-family: inherit;
+  font-size: var(--filter-chip-font-size);
+  font-weight: var(--filter-chip-font-weight);
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.filter-chip:hover {
+  background: var(--filter-chip-bg-hover);
+  color: var(--filter-chip-text-hover);
+}
+
+.filter-chip[aria-pressed='true'] {
+  background: var(--filter-chip-bg-active);
+  color: var(--filter-chip-text-active);
+}
+
+.filter-chip[aria-pressed='true']:hover {
+  background: var(--filter-chip-bg-active-hover);
+  color: var(--filter-chip-text-active-hover);
 }
 
 .app-bar-icon-button {
@@ -431,7 +506,11 @@ input[type="radio"] {
 .photo-card .star-badge .material-symbols-outlined {
   font-size: 20px;
   color: white;
-  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  font-variation-settings:
+    'FILL' 1,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 20;
   filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
 }
 
@@ -446,7 +525,11 @@ input[type="radio"] {
 .photo-card .video-badge .material-symbols-outlined {
   font-size: 20px;
   color: white;
-  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+  font-variation-settings:
+    'FILL' 1,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 20;
   filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
 }
 
@@ -550,7 +633,11 @@ input[type="radio"] {
 
 /* Filled star state */
 #lightboxStarBtn .material-symbols-outlined.filled {
-  font-variation-settings: 'FILL' 1, 'wght' 200, 'GRAD' 0, 'opsz' 24;
+  font-variation-settings:
+    'FILL' 1,
+    'wght' 200,
+    'GRAD' 0,
+    'opsz' 24;
 }
 
 .lightbox-content {
@@ -569,7 +656,9 @@ input[type="radio"] {
 
 /* Force images/videos to respect reduced height when info panel is open */
 .lightbox-overlay.info-open .lightbox-content img:not(.lightbox-media-element),
-.lightbox-overlay.info-open .lightbox-content video:not(.lightbox-media-element) {
+.lightbox-overlay.info-open
+  .lightbox-content
+  video:not(.lightbox-media-element) {
   max-height: calc(100vh - 100px) !important;
   height: auto !important;
 }
@@ -614,7 +703,6 @@ input[type="radio"] {
   z-index: 15001;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5);
 }
-
 
 .info-close-btn {
   position: absolute;
@@ -789,7 +877,7 @@ input[type="radio"] {
   align-items: flex-start;
 }
 
-.date-editor-radio input[type="radio"] {
+.date-editor-radio input[type='radio'] {
   margin-top: 4px;
   margin-right: 12px;
 }
@@ -893,7 +981,7 @@ input[type="radio"] {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  
+
   /* Add custom chevron with proper spacing */
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23e8e8e8'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -1105,7 +1193,9 @@ input[type="radio"] {
 #nameLibraryOverlay .create-library-card {
   display: flex;
   flex-direction: column;
-  transition: width 0.2s ease, height 0.2s ease;
+  transition:
+    width 0.2s ease,
+    height 0.2s ease;
 }
 
 #nameLibraryOverlay.expanded .create-library-card {
@@ -1181,7 +1271,9 @@ input[type="radio"] {
   color: var(--text-primary);
 }
 
-#nameLibraryOverlay .library-location-compact:hover .library-location-compact-icon {
+#nameLibraryOverlay
+  .library-location-compact:hover
+  .library-location-compact-icon {
   color: var(--text-primary);
 }
 
@@ -1336,7 +1428,7 @@ input[type="radio"] {
 }
 
 /* Add margin only when stats are visible */
-.import-stats:not([style*="display: none"]) {
+.import-stats:not([style*='display: none']) {
   margin-top: 16px;
 }
 
@@ -1354,17 +1446,39 @@ input[type="radio"] {
 }
 
 @keyframes braille-spin {
-  0% { content: '⠋'; }
-  10% { content: '⠙'; }
-  20% { content: '⠹'; }
-  30% { content: '⠸'; }
-  40% { content: '⠼'; }
-  50% { content: '⠴'; }
-  60% { content: '⠦'; }
-  70% { content: '⠧'; }
-  80% { content: '⠇'; }
-  90% { content: '⠏'; }
-  100% { content: '⠋'; }
+  0% {
+    content: '⠋';
+  }
+  10% {
+    content: '⠙';
+  }
+  20% {
+    content: '⠹';
+  }
+  30% {
+    content: '⠸';
+  }
+  40% {
+    content: '⠼';
+  }
+  50% {
+    content: '⠴';
+  }
+  60% {
+    content: '⠦';
+  }
+  70% {
+    content: '⠧';
+  }
+  80% {
+    content: '⠇';
+  }
+  90% {
+    content: '⠏';
+  }
+  100% {
+    content: '⠋';
+  }
 }
 
 .import-spinner::after {
@@ -1454,13 +1568,14 @@ body.library-recovery-active::before {
   pointer-events: none;
 }
 
-body.library-recovery-active:not(.library-recovery-preview-visible) #appBarMount,
+body.library-recovery-active:not(.library-recovery-preview-visible)
+  #appChromeMount,
 body.library-recovery-active:not(.library-recovery-preview-visible) .page-main {
   visibility: hidden;
   pointer-events: none;
 }
 
-body.library-recovery-active.library-recovery-preview-visible #appBarMount,
+body.library-recovery-active.library-recovery-preview-visible #appChromeMount,
 body.library-recovery-active.library-recovery-preview-visible .page-main {
   visibility: visible;
   opacity: 0.45;
@@ -1468,7 +1583,7 @@ body.library-recovery-active.library-recovery-preview-visible .page-main {
 }
 
 /* Picker closed → next modal (recover DB / warning): hide main so no flash during /api/library/check */
-body.open-library-modal-handoff #appBarMount,
+body.open-library-modal-handoff #appChromeMount,
 body.open-library-modal-handoff .page-main {
   visibility: hidden;
   pointer-events: none;
@@ -1901,9 +2016,9 @@ body.library-recovery-active .library-recovery-dock {
 
 /* Photo picker placeholders (empty state) - matches folder picker pattern */
 .photo-picker-placeholder {
-  height: 46px;              /* Match folder-placeholder exactly */
-  margin-bottom: 8px;        /* Same as folder-item and photo-picker-item */
-  background: #252525;       /* Same as folder-placeholder (solid, not rgba) */
+  height: 46px; /* Match folder-placeholder exactly */
+  margin-bottom: 8px; /* Same as folder-item and photo-picker-item */
+  background: #252525; /* Same as folder-placeholder (solid, not rgba) */
   border: 1px solid #2a2a2a; /* Same as folder-placeholder */
   border-radius: 6px;
 }
@@ -1915,7 +2030,7 @@ body.library-recovery-active .library-recovery-dock {
 /* Prevent scrolling on empty state placeholders */
 .photo-picker-placeholder-container {
   overflow: clip;
-  padding: 0;                /* No padding - uses list padding */
+  padding: 0; /* No padding - uses list padding */
 }
 
 /* Disable scroll on photo-picker-list when showing placeholders */
@@ -2269,7 +2384,6 @@ body.library-recovery-active .library-recovery-dock {
 .photo-picker-list::-webkit-scrollbar-thumb:hover {
   background: #444;
 }
-
 
 /* ========================================================================== */
 /* IMPORT REJECTION STYLING                                                  */

@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v381';
+const MAIN_JS_VERSION = 'v389';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -8,6 +8,10 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 const state = {
   currentSortOrder: 'newest', // 'newest' or 'oldest'
+  activeFilters: {
+    starred: false,
+    video: false,
+  },
   selectedPhotos: new Set(),
   photos: [],
   loading: false,
@@ -16,7 +20,8 @@ const state = {
   lastClickedIndex: null, // For shift-select
   lightboxOpen: false,
   lightboxPhotoIndex: null, // Index of currently viewed photo in lightbox
-  lightboxUITimeout: null, // Timeout for hiding UI
+  lightboxUITimeout: null, // Timeout for hiding UI after pointer leaves overlay
+  lightboxUIHovered: false, // True while pointer is over the lightbox overlay
   deleteInProgress: false,
   hasMore: true, // For infinite scroll
   currentOffset: 0, // Current pagination offset
@@ -150,7 +155,11 @@ const ROTATABLE_IMAGE_EXTENSIONS = new Set([
   '.png',
   '.tif',
   '.tiff',
+  '.heic',
+  '.heif',
 ]);
+
+const HEIC_IMAGE_EXTENSIONS = new Set(['.heic', '.heif']);
 
 // ============================================================================
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
@@ -2915,7 +2924,7 @@ function restoreDebugFileCountEntryState() {
   });
   state.lastClickedIndex = entryState.lastClickedIndex ?? null;
 
-  renderPhotoGrid(state.photos, false);
+  renderPhotoGrid(getFilteredPhotos(state.photos), false);
   if (state.photos.length > 0) {
     setupThumbnailLazyLoading();
   }
@@ -2927,6 +2936,8 @@ function restoreDebugFileCountEntryState() {
         ? entryState.datePickerVisibility || 'visible'
         : 'hidden';
   }
+
+  updateFilterChipRailVisibility();
 
   enableAppBarButtons();
   updateUtilityMenuAvailability();
@@ -4117,6 +4128,23 @@ function getRotateDisabledReason(photo) {
   return null;
 }
 
+function getRotateTooltip(photo) {
+  const reason = getRotateDisabledReason(photo);
+  if (reason) return reason;
+
+  const ext = getPhotoExtension(photo);
+  const hasPending = getRotationStillNeeded(photo.id) !== 0;
+  if (HEIC_IMAGE_EXTENSIONS.has(ext)) {
+    return hasPending
+      ? 'Back saves as TIFF · Esc cancels'
+      : 'Rotate left (Back saves as TIFF · Esc cancels)';
+  }
+
+  return hasPending
+    ? 'Back saves rotation · Esc cancels'
+    : 'Rotate left (Back saves · Esc cancels)';
+}
+
 function updateLightboxRotateButtonState(
   photo = state.photos[state.lightboxPhotoIndex],
 ) {
@@ -4128,7 +4156,7 @@ function updateLightboxRotateButtonState(
 
   rotateBtn.setAttribute('aria-disabled', isUnavailable ? 'true' : 'false');
   rotateBtn.disabled = state.lightboxClosing;
-  rotateBtn.title = reason || 'Rotate left';
+  rotateBtn.title = getRotateTooltip(photo);
 }
 
 function refreshGridPhotoThumbnail(photoId) {
@@ -4182,86 +4210,13 @@ async function handleDuplicateRemovedRotation(photoId, message) {
   showToast(message || 'Photo became a duplicate and was moved to trash');
 }
 
-async function processImmediateRotationSession(photoId) {
-  const session = getLightboxRotationSession(photoId);
-  if (!session || session.mode === 'staged' || session.requestInFlight) return;
-
-  const rotationStillNeeded = getRotationStillNeeded(photoId);
-  if (rotationStillNeeded === 0) {
-    cleanupLightboxRotationSession(photoId);
-    return;
-  }
-
-  session.requestInFlight = true;
-  const requestDegrees = rotationStillNeeded;
-  const rotateStartedAt = performance.now();
-
-  try {
-    const response = await fetch(`/api/photo/${photoId}/rotate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        degrees_ccw: requestDegrees,
-        commit_lossy: false,
-      }),
-    });
-
-    const result = await response.json();
-    const rotateElapsedMs = performance.now() - rotateStartedAt;
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to rotate photo');
-    }
-
-    if (result.duplicate_removed) {
-      session.requestInFlight = false;
-      await handleDuplicateRemovedRotation(photoId, result.message);
-      return;
-    }
-
-    if (result.staged) {
-      session.mode = 'staged';
-      session.requestInFlight = false;
-      return;
-    }
-
-    if (!result.committed || !result.photo) {
-      throw new Error('Unexpected rotate response');
-    }
-
-    applyCommittedPhotoUpdate(result.photo, {
-      deferThumbnailRefresh: Boolean(result.reconcile_pending),
-    });
-    session.persistedRotation = normalizeRotationDegrees(
-      session.persistedRotation + requestDegrees,
-    );
-    session.requestInFlight = false;
-    const stillNeededAfterCommit = getRotationStillNeeded(photoId);
-    if (stillNeededAfterCommit === 0) {
-      reloadOpenLightboxMedia(photoId);
-    }
-
-    if (stillNeededAfterCommit !== 0) {
-      processImmediateRotationSession(photoId);
-    } else {
-      cleanupLightboxRotationSession(photoId);
-    }
-  } catch (error) {
-    session.requestInFlight = false;
-    session.displayRotation = session.persistedRotation;
-    session.mode = null;
-    applyCurrentLightboxPreviewRotation();
-    cleanupLightboxRotationSession(photoId);
-    console.error('❌ Error rotating photo:', error);
-    showToast('Failed to rotate photo', null);
-  }
+function discardPendingLightboxRotations() {
+  state.lightboxRotationSessions = {};
 }
 
 async function commitPendingLightboxRotations() {
   const pendingEntries = Object.entries(state.lightboxRotationSessions).filter(
-    ([photoId, session]) =>
-      session.mode === 'staged' &&
-      getRotationStillNeeded(Number(photoId)) !== 0,
+    ([photoId]) => getRotationStillNeeded(Number(photoId)) !== 0,
   );
 
   if (pendingEntries.length === 0) {
@@ -4322,14 +4277,10 @@ async function handleLightboxRotate() {
   session.displayRotation = normalizeRotationDegrees(
     session.displayRotation + 90,
   );
+  session.mode = 'staged';
   invalidatePendingLightboxReloads();
   applyCurrentLightboxPreviewRotation();
-
-  if (session.mode === 'staged') {
-    return;
-  }
-
-  processImmediateRotationSession(photo.id);
+  updateLightboxRotateButtonState();
 }
 
 /**
@@ -4346,7 +4297,7 @@ function wireLightbox() {
   const nextBtn = document.getElementById('lightboxNextBtn');
 
   if (backBtn) {
-    backBtn.addEventListener('click', closeLightbox);
+    backBtn.addEventListener('click', () => closeLightbox({ commitRotations: true }));
   }
 
   if (prevBtn) {
@@ -4462,6 +4413,10 @@ function wireLightbox() {
         } else {
           starIcon.classList.remove('filled');
         }
+
+        if (hasActivePhotoFilters()) {
+          applyPhotoFilters();
+        }
       } catch (error) {
         console.error('❌ Error toggling star:', error);
         // Revert optimistic UI change on error
@@ -4498,11 +4453,17 @@ function wireLightbox() {
     });
   }
 
-  // Auto-hide UI after 2 seconds of no mouse movement
+  // Auto-hide UI only after pointer leaves the overlay (not while hovering)
   if (overlay) {
-    overlay.addEventListener('mousemove', () => {
+    overlay.addEventListener('mouseenter', () => {
+      state.lightboxUIHovered = true;
       showLightboxUI();
-      resetLightboxUITimeout();
+      clearLightboxUIHideTimeout();
+    });
+
+    overlay.addEventListener('mouseleave', () => {
+      state.lightboxUIHovered = false;
+      scheduleLightboxUIHide();
     });
   }
 
@@ -4530,21 +4491,32 @@ function hideLightboxUI() {
   }
 }
 
-/**
- * Reset the auto-hide timeout
- */
-function resetLightboxUITimeout() {
-  // Clear existing timeout
+function clearLightboxUIHideTimeout() {
   if (state.lightboxUITimeout) {
     clearTimeout(state.lightboxUITimeout);
+    state.lightboxUITimeout = null;
   }
+}
 
-  // Set new timeout to hide UI after 2 seconds
+function scheduleLightboxUIHide() {
+  clearLightboxUIHideTimeout();
   state.lightboxUITimeout = setTimeout(() => {
-    if (state.lightboxOpen) {
+    if (state.lightboxOpen && !state.lightboxUIHovered) {
       hideLightboxUI();
     }
   }, 2000);
+}
+
+function syncLightboxUIHoverState() {
+  const overlay = document.getElementById('lightboxOverlay');
+  if (!overlay || !state.lightboxOpen) return;
+
+  state.lightboxUIHovered = overlay.matches(':hover');
+  showLightboxUI();
+  clearLightboxUIHideTimeout();
+  if (!state.lightboxUIHovered) {
+    scheduleLightboxUIHide();
+  }
 }
 
 /**
@@ -4559,9 +4531,9 @@ function handleLightboxKeyboard(e) {
       return;
     }
 
-    // Priority 2: Close lightbox if open
+    // Priority 2: Close lightbox without saving staged rotations
     if (state.lightboxOpen) {
-      closeLightbox();
+      closeLightbox({ commitRotations: false });
       return;
     }
 
@@ -4950,9 +4922,8 @@ async function openLightbox(photoIndex) {
   // Preload adjacent images for smooth navigation
   preloadAdjacentImages(photoIndex);
 
-  // Show UI initially, then start auto-hide timer
-  showLightboxUI();
-  resetLightboxUITimeout();
+  // Show UI; hide timer starts only after pointer leaves the overlay
+  syncLightboxUIHoverState();
 
   // Update arrow states based on position
   updateLightboxArrowStates();
@@ -4989,9 +4960,10 @@ function updateLightboxDimensions(placeholder, aspectRatio) {
 }
 
 /**
- * Close lightbox
+ * Close lightbox.
+ * commitRotations: true (back button) saves staged rotations; false (Esc) discards them.
  */
-async function closeLightbox() {
+async function closeLightbox({ commitRotations = true } = {}) {
   const overlay = document.getElementById('lightboxOverlay');
   if (!overlay) return;
   if (state.lightboxClosing) return;
@@ -4999,12 +4971,16 @@ async function closeLightbox() {
   state.lightboxClosing = true;
   updateLightboxRotateButtonState();
 
-  const saved = await commitPendingLightboxRotations();
-  if (!saved) {
-    state.lightboxClosing = false;
-    updateLightboxRotateButtonState();
+  if (commitRotations) {
+    const saved = await commitPendingLightboxRotations();
+    if (!saved) {
+      state.lightboxClosing = false;
+      updateLightboxRotateButtonState();
 
-    return;
+      return;
+    }
+  } else {
+    discardPendingLightboxRotations();
   }
 
   // Stop any playing videos
@@ -5033,11 +5009,9 @@ async function closeLightbox() {
   // Restore body scroll
   document.body.style.overflow = '';
 
-  // Clear UI timeout
-  if (state.lightboxUITimeout) {
-    clearTimeout(state.lightboxUITimeout);
-    state.lightboxUITimeout = null;
-  }
+  // Clear UI timeout and hover tracking
+  clearLightboxUIHideTimeout();
+  state.lightboxUIHovered = false;
 
   // Check if we need to navigate to a specific month
   if (state.navigateToMonth) {
@@ -5183,11 +5157,12 @@ async function loadAndRenderPhotos(append = false, options = {}) {
         state.lastClickedIndex = null;
       }
 
-      renderPhotoGrid(state.photos, false);
+      renderPhotoGrid(getFilteredPhotos(state.photos), false);
 
       setupThumbnailLazyLoading();
 
       updateUtilityMenuAvailability();
+      updateFilterChipRailVisibility();
 
       await populateDatePicker();
 
@@ -5332,6 +5307,105 @@ function setupThumbnailLazyLoading() {
 }
 
 // =====================
+// PHOTO FILTERS
+// =====================
+
+function hasActivePhotoFilters() {
+  return state.activeFilters.starred || state.activeFilters.video;
+}
+
+function getFilteredPhotos(photos = state.photos) {
+  const { starred, video } = state.activeFilters;
+  if (!starred && !video) {
+    return photos;
+  }
+
+  return photos.filter((photo) => {
+    if (starred && photo.rating !== 5) {
+      return false;
+    }
+    if (video && photo.file_type !== 'video') {
+      return false;
+    }
+    return true;
+  });
+}
+
+function updateFilterChipUI() {
+  const chips = document.querySelectorAll('.filter-chip[data-filter]');
+  chips.forEach((chip) => {
+    const filterKey = chip.dataset.filter;
+    const isActive = !!state.activeFilters[filterKey];
+    chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  });
+}
+
+function updateFilterChipRailVisibility() {
+  const rail = document.getElementById('filterChipRailMount');
+  const shouldShow = state.hasDatabase && state.photos.length > 0;
+  if (!rail) {
+    document.body.classList.toggle('filter-chip-rail-visible', shouldShow);
+    return;
+  }
+
+  if (shouldShow) {
+    rail.removeAttribute('hidden');
+  } else {
+    rail.setAttribute('hidden', '');
+  }
+  document.body.classList.toggle('filter-chip-rail-visible', shouldShow);
+}
+
+function applyPhotoFilters() {
+  const filteredPhotos = getFilteredPhotos(state.photos);
+  renderPhotoGrid(filteredPhotos, false);
+  if (filteredPhotos.length > 0) {
+    setupThumbnailLazyLoading();
+  }
+  updateFilterChipUI();
+  updateFilterChipRailVisibility();
+}
+
+function togglePhotoFilter(filterKey) {
+  if (!(filterKey in state.activeFilters)) {
+    return;
+  }
+
+  state.activeFilters[filterKey] = !state.activeFilters[filterKey];
+  state.lastClickedIndex = null;
+  applyPhotoFilters();
+}
+
+function clearPhotoFilters() {
+  state.activeFilters.starred = false;
+  state.activeFilters.video = false;
+  state.lastClickedIndex = null;
+  applyPhotoFilters();
+}
+
+function resetPhotoFilters() {
+  state.activeFilters.starred = false;
+  state.activeFilters.video = false;
+  updateFilterChipUI();
+}
+
+function wireFilterChipRail() {
+  const rail = document.getElementById('filterChipRailMount');
+  if (!rail) {
+    return;
+  }
+
+  rail.querySelectorAll('.filter-chip[data-filter]').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      togglePhotoFilter(chip.dataset.filter);
+    });
+  });
+
+  updateFilterChipUI();
+  updateFilterChipRailVisibility();
+}
+
+// =====================
 // RENDERING
 // =====================
 
@@ -5380,6 +5454,28 @@ function getEmptyLibraryHeading() {
 }
 
 /**
+ * Active filters returned no matches — offer to clear filters
+ */
+function renderFilterEmptyState() {
+  const container = document.getElementById('photoContainer');
+  if (!container) return;
+
+  container.innerHTML = `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
+      <div style="text-align: center;">
+        <div style="font-size: 18px; margin-bottom: 8px;">No results found</div>
+        <div style="font-size: 14px; color: var(--text-secondary);">No images match the current filters.</div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn btn-primary" onclick="clearPhotoFilters()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+          <span>Clear filters</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Library is open but contains no photos — add photos only
  */
 function renderEmptyLibraryState() {
@@ -5417,7 +5513,9 @@ function renderPhotoGrid(photos, append = false) {
 
   if (!photos || photos.length === 0) {
     if (!append) {
-      if (state.hasDatabase) {
+      if (state.photos.length > 0 && hasActivePhotoFilters()) {
+        renderFilterEmptyState();
+      } else if (state.hasDatabase) {
         renderEmptyLibraryState();
       } else {
         renderFirstRunEmptyState();
@@ -6575,11 +6673,53 @@ async function loadUpdateIndexOverlay() {
   }
 }
 
+const CLEAN_LIBRARY_PHASE_LABELS = {
+  setup: 'Preparing…',
+  scan: 'Scanning files…',
+  dedupe: 'Removing duplicates…',
+  canonicalize: 'Organizing media…',
+  folders: 'Cleaning folders…',
+  rebuild_db: 'Rebuilding database…',
+};
+
+function applyCleanerStreamToUpdateIndex(event = {}) {
+  if (event.type === 'stats') {
+    const summary = event.summary || {};
+    updateIndexState.misfiledMedia = summary.misfiled_media || 0;
+    updateIndexState.duplicates = summary.duplicates || 0;
+    updateIndexState.unsupportedFiles = summary.unsupported_files || 0;
+    updateIndexState.metadataCleanup = summary.metadata_cleanup || 0;
+    updateIndexState.databaseRepairs = summary.database_repairs || 0;
+    showUpdateIndexStats();
+    return;
+  }
+  if (event.type === 'signal_plan' && event.feedback_only) {
+    showUpdateIndexStats();
+    return;
+  }
+  if (event.type === 'signal_delta' && event.remaining) {
+    const remaining = event.remaining;
+    updateIndexState.misfiledMedia = remaining.misfiled_media || 0;
+    updateIndexState.duplicates = remaining.duplicates || 0;
+    updateIndexState.unsupportedFiles = remaining.unsupported_files || 0;
+    updateIndexState.metadataCleanup = remaining.metadata_cleanup || 0;
+    updateIndexState.databaseRepairs = remaining.database_repairs || 0;
+    showUpdateIndexStats();
+  }
+}
+
+function updateIndexStatusForCleanerPhase(event = {}) {
+  if (event.type !== 'phase') return;
+  const phase = event.phase;
+  if (event.status === 'starting' && CLEAN_LIBRARY_PHASE_LABELS[phase]) {
+    updateUpdateIndexUI(CLEAN_LIBRARY_PHASE_LABELS[phase], true);
+  }
+}
+
 /**
- * Phase 1: Open overlay and scan
+ * Clean library overlay — zero preflight; scoreboard updates during the run.
  */
 async function openUpdateIndexOverlay() {
-  // Check if already open
   const existingOverlay = document.getElementById('updateIndexOverlay');
   if (existingOverlay && existingOverlay.style.display === 'flex') {
     return;
@@ -6590,7 +6730,6 @@ async function openUpdateIndexOverlay() {
   const overlay = document.getElementById('updateIndexOverlay');
   if (!overlay) return;
 
-  // Reset state
   updateIndexState = {
     misfiledMedia: 0,
     duplicates: 0,
@@ -6601,78 +6740,27 @@ async function openUpdateIndexOverlay() {
     resultStats: null,
   };
 
-  // Reset UI to initial state
-  const statsEl = document.getElementById('updateIndexStats');
   const detailsSection = document.getElementById('updateIndexDetailsSection');
-  if (statsEl) statsEl.style.display = 'none';
   if (detailsSection) detailsSection.style.display = 'none';
 
-  // Show overlay
   overlay.style.display = 'flex';
-
-  // Phase 1: Scanning
-  updateUpdateIndexUI('Scanning library', true);
-  showUpdateIndexButtons('cancel');
-
-  try {
-    const response = await fetch('/api/library/make-perfect/scan');
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to scan clean library');
-    }
-
-    updateIndexState.misfiledMedia = data.summary?.misfiled_media || 0;
-    updateIndexState.duplicates = data.summary?.duplicates || 0;
-    updateIndexState.unsupportedFiles = data.summary?.unsupported_files || 0;
-    updateIndexState.metadataCleanup = data.summary?.metadata_cleanup || 0;
-    updateIndexState.databaseRepairs = data.summary?.database_repairs || 0;
-    updateIndexState.details = data.details || null;
-
-    const hasChanges = (data.summary?.issue_count || 0) > 0;
-    showUpdateIndexStats();
-    renderUpdateIndexDetails();
-
-    if (hasChanges) {
-      updateUpdateIndexUI('Scan complete. Ready to continue?', false);
-      showUpdateIndexButtons('cancel', 'proceed');
-    } else {
-      updateUpdateIndexUI(
-        'Library is already clean. No changes required.',
-        false,
-      );
-      showUpdateIndexButtons('done');
-    }
-  } catch (error) {
-    console.error('❌ Failed to scan clean library:', error);
-    updateUpdateIndexUI('Failed to scan', false);
-    showToast('Failed to scan clean library', null);
-  }
-}
-
-/**
- * Phase 3: Execute update (after user clicks Continue)
- */
-async function executeUpdateIndex() {
-  updateUpdateIndexUI('Cleaning library...', true);
+  showUpdateIndexStats();
+  updateUpdateIndexUI('Cleaning library…', true);
   showUpdateIndexButtons('cancel-disabled');
 
   try {
-    const response = await fetch('/api/library/make-perfect', {
-      method: 'POST',
+    const result = await streamMakeLibraryPerfect({
+      onProgress: (event) => {
+        applyCleanerStreamToUpdateIndex(event);
+        updateIndexStatusForCleanerPhase(event);
+      },
     });
-    const data = await response.json();
 
-    if (!response.ok) {
-      throw new Error(data.error || `Clean library failed: ${response.status}`);
-    }
-
-    updateIndexState.resultStats = data.stats || null;
+    updateIndexState.resultStats = result?.stats || null;
     updateUpdateIndexUI('Library cleaned', false);
     showUpdateIndexStats();
     renderUpdateIndexDetails();
     showUpdateIndexButtons('done');
-
-    // Reload grid
     await loadAndRenderPhotos(false);
   } catch (error) {
     console.error('❌ Failed to clean library:', error);
@@ -6680,6 +6768,11 @@ async function executeUpdateIndex() {
     showToast('Failed to clean library', null);
     showUpdateIndexButtons('cancel');
   }
+}
+
+/** @deprecated Proceed button; clean starts immediately in openUpdateIndexOverlay */
+async function executeUpdateIndex() {
+  await openUpdateIndexOverlay();
 }
 
 /**
@@ -8507,11 +8600,13 @@ function renderSafeLibraryFallback() {
   state.libraryPath = null;
   state.selectedPhotos.clear();
   state.lastClickedIndex = null;
+  resetPhotoFilters();
   const datePickerContainer = document.querySelector('.date-picker');
   if (datePickerContainer) {
     datePickerContainer.style.visibility = 'hidden';
   }
   renderFirstRunEmptyState();
+  updateFilterChipRailVisibility();
   enableAppBarButtons();
 }
 
@@ -8661,7 +8756,9 @@ async function scanRecoverMediaAfterOpen(fallback = {}, streamOptions = {}) {
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = await fetch('/api/library/make-perfect/scan', { signal });
+      const response = await fetch('/api/library/make-perfect/scan?verify=1', {
+        signal,
+      });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Failed to scan recovered library');
@@ -9688,6 +9785,7 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     switchedLibrary = true;
     const switchedGeneration = advanceLibraryGeneration();
     state.libraryPath = libraryPath;
+    resetPhotoFilters();
 
     // Close overlays
     closeSwitchLibraryOverlay();
@@ -10344,6 +10442,7 @@ async function init() {
 
   // Load UI fragments first (but don't populate with data yet)
   await loadAppBar();
+  wireFilterChipRail();
   await loadLightbox();
   await loadDateEditor();
   await loadDialog();

@@ -29,6 +29,7 @@ from library_cleanliness import (
     root_entry_allowed,
 )
 from make_library_perfect import (
+    CLEAN_LIBRARY_ENGINE_VERSION,
     CLEAN_LIBRARY_SIGNAL_KEYS,
     DBNormalizationEngine,
     LibraryCleaner,
@@ -483,7 +484,9 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             ), patch("make_library_perfect.extract_exif_rating", return_value=None), patch(
                 "make_library_perfect.get_orientation_flag", return_value=1
             ), patch("make_library_perfect.read_dimensions", return_value=(1, 1)):
-                result = scan_library_cleanliness(tmpdir, db_path=db_path)
+                result = scan_library_cleanliness(
+                    tmpdir, db_path=db_path, verify=True
+                )
 
             self.assertEqual(result["status"], "DIRTY")
             self.assertEqual(result["summary"]["database_repairs"], 1)
@@ -567,7 +570,9 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                 "make_library_perfect.canonicalize_photo_file",
                 side_effect=canonicalize_side_effect,
             ):
-                result = scan_library_cleanliness(tmpdir, db_path=db_path)
+                result = scan_library_cleanliness(
+                    tmpdir, db_path=db_path, verify=True
+                )
 
             self.assertEqual(result["status"], "DIRTY")
             self.assertEqual(result["supported_media_files"], 2)
@@ -588,6 +593,8 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             )
 
     def test_normalize_media_file_uses_pixel_duplicate_key_for_photos(self):
+        if CLEAN_LIBRARY_ENGINE_VERSION != "legacy":
+            self.skipTest("v2 uses hash-only duplicate detection")
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
             keep_path = os.path.join(tmpdir, "keep.png")
@@ -617,6 +624,8 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             conn.close()
 
     def test_scan_flags_pixel_duplicates_across_different_png_encodings(self):
+        if CLEAN_LIBRARY_ENGINE_VERSION != "legacy":
+            self.skipTest("v2 uses hash-only duplicate detection")
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
             conn.close()
@@ -633,7 +642,9 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
                 "make_library_perfect.write_photo_date_metadata", return_value=None
             ):
-                result = scan_library_cleanliness(tmpdir, db_path=db_path)
+                result = scan_library_cleanliness(
+                    tmpdir, db_path=db_path, verify=True
+                )
 
             self.assertEqual(result["status"], "DIRTY")
             self.assertEqual(result["summary"]["duplicates"], 1)
@@ -666,11 +677,21 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
                 "make_library_perfect.write_photo_date_metadata", return_value=None
             ):
-                result = scan_library_cleanliness(tmpdir, db_path=db_path)
+                result = scan_library_cleanliness(
+                    tmpdir, db_path=db_path, verify=True
+                )
 
             self.assertEqual(result["status"], "DIRTY")
             self.assertEqual(result["summary"]["duplicates"], 0)
             self.assertEqual(result["summary"]["database_repairs"], 1)
+
+    def test_scan_skips_preflight_by_default(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            result = scan_library_cleanliness(tmpdir, db_path=db_path)
+            self.assertEqual(result["status"], "SKIPPED")
+            self.assertEqual((result.get("summary") or {}).get("issue_count"), 0)
 
     def test_scan_emits_audit_progress_when_callback_provided(self):
         with TemporaryDirectory() as tmpdir:
@@ -695,6 +716,7 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                     tmpdir,
                     db_path=db_path,
                     progress_callback=events.append,
+                    verify=True,
                 )
 
             self.assertIn(result["status"], {"DIRTY", "CLEAN"})

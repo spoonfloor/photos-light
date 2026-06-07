@@ -18,11 +18,34 @@
     />
 
     <!-- CSS -->
-    <link rel="stylesheet" href="css/styles.css?v=20" />
+    <link rel="stylesheet" href="css/styles.css?v=24" />
   </head>
   <body>
-    <!-- App Bar Mount Point -->
-    <div id="appBarMount"></div>
+  <!-- App chrome: app bar + filter chips stacked below it -->
+    <div id="appChromeMount">
+      <div id="appBarMount"></div>
+
+      <div id="filterChipRailMount" class="filter-chip-rail" hidden>
+        <div class="filter-chip-rail-scroll">
+          <button
+            type="button"
+            class="filter-chip"
+            data-filter="starred"
+            aria-pressed="false"
+          >
+            starred
+          </button>
+          <button
+            type="button"
+            class="filter-chip"
+            data-filter="video"
+            aria-pressed="false"
+          >
+            video
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Main Content (will be grid later) -->
     <div class="page-main">
@@ -53,6 +76,6 @@
     <script src="js/folderPicker.js?v=11"></script>
     <script src="js/photoPicker.js?v=4"></script>
     <script src="js/libraryRecoveryUI.js?v=1"></script>
-    <script src="js/main.js?v=384"></script>
+    <script src="js/main.js?v=389"></script>
   </body>
 </html>

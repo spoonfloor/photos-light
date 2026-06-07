@@ -34,6 +34,7 @@ from make_library_perfect import (  # noqa: E402
     CLEAN_LIBRARY_ENGINE_VERSION,
     run_db_normalization_engine,
     scan_library_cleanliness,
+    verify_library_cleanliness,
 )
 
 EXTRAPOLATE_FILES = 60_000
@@ -44,7 +45,6 @@ RUN_PHASES = (
     "canonicalize",
     "folders",
     "rebuild_db",
-    "audit",
 )
 
 
@@ -226,7 +226,7 @@ def print_step_result(step: Dict[str, Any]) -> None:
     name = step.get("step", "?")
     elapsed = step.get("elapsed_sec")
     time_str = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "—"
-    if step.get("kind") == "preflight_scan":
+    if step.get("kind") in {"preflight_skip", "preflight_scan", "verify_scan"}:
         print(
             f"<<< {name} done: {time_str}, status={step.get('status')}, "
             f"issues={step.get('issue_count')}, 60k≈{step.get('extrapolate_60k_hours')}h",
@@ -242,17 +242,37 @@ def print_step_result(step: Dict[str, Any]) -> None:
             print(f"    error: {step['error']}", flush=True)
 
 
-def timed_scan(library_path: str, label: str) -> Dict[str, Any]:
+def timed_preflight_skip(library_path: str, label: str) -> Dict[str, Any]:
+    started = time.perf_counter()
+    result = scan_library_cleanliness(library_path)
+    elapsed = round(time.perf_counter() - started, 3)
+    probe = probe_library(library_path)
+    media_files = int(result.get("supported_media_files") or probe["media_files"] or 0)
+    return {
+        "step": label,
+        "kind": "preflight_skip",
+        "elapsed_sec": elapsed,
+        "status": result.get("status"),
+        "issue_count": (result.get("summary") or {}).get("issue_count"),
+        "supported_media_files": media_files,
+        "sec_per_media_file": sec_per_media(elapsed, media_files),
+        "extrapolate_60k_hours": None,
+        "summary": result.get("summary"),
+        "probe": probe,
+    }
+
+
+def timed_verify_scan(library_path: str, label: str) -> Dict[str, Any]:
     timer = PhaseTimer(label=label)
     started = time.perf_counter()
-    result = scan_library_cleanliness(library_path, progress_callback=timer.callback)
+    result = verify_library_cleanliness(library_path, progress_callback=timer.callback)
     elapsed = round(time.perf_counter() - started, 3)
     probe = probe_library(library_path)
     media_files = int(result.get("supported_media_files") or probe["media_files"] or 0)
     spp = sec_per_media(elapsed, media_files)
     return {
         "step": label,
-        "kind": "preflight_scan",
+        "kind": "verify_scan",
         "elapsed_sec": elapsed,
         "status": result.get("status"),
         "issue_count": (result.get("summary") or {}).get("issue_count"),
@@ -315,8 +335,8 @@ def run_suite(library_path: str, label: str, skip_run: bool, warn_locks: bool) -
 
     steps: List[Dict[str, Any]] = []
 
-    print("\n>>> STEP scan_dirty (preflight)", flush=True)
-    steps.append(timed_scan(library_path, "scan_dirty"))
+    print("\n>>> STEP preflight_skip (zero preflight)", flush=True)
+    steps.append(timed_preflight_skip(library_path, "preflight_skip"))
     print_step_result(steps[-1])
 
     if not skip_run:
@@ -324,12 +344,12 @@ def run_suite(library_path: str, label: str, skip_run: bool, warn_locks: bool) -
         steps.append(timed_run(library_path, "run_full"))
         print_step_result(steps[-1])
 
-        print("\n>>> STEP scan_clean (preflight after clean)", flush=True)
-        steps.append(timed_scan(library_path, "scan_clean"))
+        print("\n>>> STEP verify_clean (post-run yardstick)", flush=True)
+        steps.append(timed_verify_scan(library_path, "verify_clean"))
         print_step_result(steps[-1])
 
-        print("\n>>> STEP scan_clean_warm (repeat)", flush=True)
-        steps.append(timed_scan(library_path, "scan_clean_warm"))
+        print("\n>>> STEP verify_clean_warm (repeat)", flush=True)
+        steps.append(timed_verify_scan(library_path, "verify_clean_warm"))
         print_step_result(steps[-1])
 
     report = {
@@ -375,7 +395,7 @@ def print_summary(report: Dict[str, Any]) -> None:
     for step in report["steps"]:
         elapsed = step.get("elapsed_sec")
         time_str = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "—"
-        if step["kind"] == "preflight_scan":
+        if step["kind"] in {"preflight_skip", "preflight_scan", "verify_scan"}:
             status = str(step.get("status") or "—")
             issues = step.get("issue_count")
             issues_str = str(issues) if issues is not None else "—"
@@ -393,9 +413,10 @@ def print_summary(report: Dict[str, Any]) -> None:
                 print(f"  phases: {', '.join(phase_parts)}")
 
     print("\nNotes:")
-    print("  • preflight scan = final_audit() only (Clean library overlay scan)")
-    print("  • run_full phases: setup → scan → dedupe → canonicalize → folders → rebuild_db → audit")
-    print("  • scan_clean_warm shows OS/SMB cache effect; use scan_clean for cold extrapolation")
+    print("  • preflight_skip = product default (no pre-run audit)")
+    print("  • verify_* = post-run yardstick via verify_library_cleanliness()")
+    print("  • run_full phases: setup → scan → dedupe → canonicalize → folders → rebuild_db")
+    print("  • verify_clean_warm shows OS/SMB cache effect; use verify_clean for cold extrapolation")
     print()
 
 
@@ -425,7 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Benchmark Clean library performance.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    scan_parser = sub.add_parser("scan", help="Timed preflight scan only (final_audit)")
+    scan_parser = sub.add_parser("scan", help="Timed zero-preflight scan (instant SKIPPED)")
     _add_common_args(scan_parser)
 
     run_parser = sub.add_parser("run", help="Timed full clean with phase breakdown")
@@ -438,13 +459,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     suite_parser = sub.add_parser(
         "suite",
-        help="scan_dirty → run_full → scan_clean → scan_clean_warm",
+        help="preflight_skip → run_full → verify_clean → verify_clean_warm",
     )
     _add_common_args(suite_parser)
     suite_parser.add_argument(
         "--skip-run",
         action="store_true",
-        help="Only run preflight scan (non-destructive)",
+        help="Only run preflight_skip (non-destructive)",
     )
     suite_parser.add_argument(
         "--destructive",
@@ -469,7 +490,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "library_path": library_path,
             "extrapolate_target_files": EXTRAPOLATE_FILES,
             "library_locks": library_lock_holders(library_path),
-            "steps": [timed_scan(library_path, "scan")],
+            "steps": [timed_preflight_skip(library_path, "preflight_skip")],
         }
     elif args.command == "run":
         if not args.destructive:

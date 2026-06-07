@@ -1,7 +1,7 @@
 """
 Clean library operation (v2).
 
-Fast hash-based preflight audit (no dry-run canonicalization, no pixel dedupe).
+Zero preflight by default; optional verify audit. Hash-only dupes (no pixel dedupe).
 Full clean repairs in place; duplicate media === identical file hash only.
 
 Set PHOTOS_CLEAN_LIBRARY_ENGINE=legacy to use make_library_perfect_legacy instead.
@@ -822,6 +822,30 @@ class LibraryCleaner:
         )
         self.manifest.flush()
 
+    def _emit_stats_feedback(self) -> None:
+        if not self._progress_callback:
+            return
+        stats = dict(self.stats)
+        summary = {
+            "misfiled_media": int(stats.get("media_moved") or 0),
+            "duplicates": int(stats.get("duplicates_trashed") or 0),
+            "unsupported_files": int(stats.get("moved_to_trash") or 0),
+            "metadata_cleanup": int(stats.get("metadata_fixed") or 0),
+            "folder_cleanup": int(stats.get("folders_removed") or 0),
+            "database_repairs": 0,
+            "operation_count": sum(
+                int(stats.get(key) or 0)
+                for key in (
+                    "media_moved",
+                    "duplicates_trashed",
+                    "moved_to_trash",
+                    "metadata_fixed",
+                    "folders_removed",
+                )
+            ),
+        }
+        self._emit({"type": "stats", "stats": stats, "summary": summary})
+
     def run(
         self,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -829,7 +853,25 @@ class LibraryCleaner:
         self._progress_callback = progress_callback
         try:
             if self._progress_callback:
-                self._seed_operation_plan(self._build_operation_plan())
+                self._remaining_operation_paths = {
+                    key: set() for key in CLEAN_LIBRARY_SIGNAL_KEYS
+                }
+                self._emit(
+                    {
+                        "type": "signal_plan",
+                        "feedback_only": True,
+                        "summary": {
+                            "misfiled_media": 0,
+                            "unsupported_files": 0,
+                            "duplicates": 0,
+                            "metadata_cleanup": 0,
+                            "folder_cleanup": 0,
+                            "database_repairs": 0,
+                            "operation_count": 0,
+                        },
+                        "details": {key: [] for key in CLEAN_LIBRARY_SIGNAL_KEYS},
+                    }
+                )
             self._emit({"type": "phase", "phase": "setup", "status": "starting"})
             self.setup()
             self._emit({"type": "phase", "phase": "setup", "status": "complete"})
@@ -852,6 +894,7 @@ class LibraryCleaner:
                     "records": len(records),
                 }
             )
+            self._emit_stats_feedback()
 
             self._emit({"type": "phase", "phase": "dedupe", "status": "starting"})
             deduped = self.trash_duplicates(records)
@@ -863,6 +906,7 @@ class LibraryCleaner:
                     "remaining": len(deduped),
                 }
             )
+            self._emit_stats_feedback()
 
             self._emit(
                 {
@@ -874,11 +918,13 @@ class LibraryCleaner:
             )
             canonicalized = self.move_to_canonical_locations(deduped)
             self._emit({"type": "phase", "phase": "canonicalize", "status": "complete"})
+            self._emit_stats_feedback()
 
             self.stats["metadata_fixed"] = sum(1 for record in canonicalized if record.metadata_cleaned)
             self._emit({"type": "phase", "phase": "folders", "status": "starting"})
             self.remove_empty_noncanonical_folders()
             self._emit({"type": "phase", "phase": "folders", "status": "complete"})
+            self._emit_stats_feedback()
 
             self._emit(
                 {
@@ -890,25 +936,7 @@ class LibraryCleaner:
             )
             self.rebuild_photos_table(canonicalized)
             self._emit({"type": "phase", "phase": "rebuild_db", "status": "complete"})
-
-            self._emit({"type": "phase", "phase": "audit", "status": "starting"})
-            issues = self.final_audit(audit_progress_total=len(canonicalized))
-            if issues:
-                preview = issues[:10]
-                self.log("final_audit_failed", issue_count=len(issues), issues=preview)
-                self._emit(
-                    {
-                        "type": "phase",
-                        "phase": "audit",
-                        "status": "failed",
-                        "issue_count": len(issues),
-                    }
-                )
-                raise CleanLibraryError(
-                    f"Final audit failed with {len(issues)} issue(s): "
-                    + "; ".join(f"{item['kind']}:{item['path']}" for item in preview)
-                )
-            self._emit({"type": "phase", "phase": "audit", "status": "complete"})
+            self._emit_stats_feedback()
 
             self.log("operation_complete", stats=self.stats)
             return {"status": "SUCCESS", "stats": self.stats}
@@ -935,9 +963,49 @@ class LibraryCleaner:
     def scan(
         self,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        *,
+        verify: bool = False,
     ) -> Dict[str, Any]:
         self._progress_callback = progress_callback
         try:
+            supported_media_files = fast_count_supported_media_leaf_files(self.library_path)
+            if not verify:
+                empty_details = {
+                    "misfiled_media": [],
+                    "duplicates": [],
+                    "unsupported_files": [],
+                    "metadata_cleanup": [],
+                    "database_repairs": [],
+                }
+                return {
+                    "status": "SKIPPED",
+                    "preflight": False,
+                    "engine": CLEAN_LIBRARY_ENGINE_VERSION,
+                    "supported_media_files": supported_media_files,
+                    "summary": {
+                        "misfiled_media": 0,
+                        "duplicates": 0,
+                        "unsupported_files": 0,
+                        "metadata_cleanup": 0,
+                        "database_repairs": 0,
+                        "issue_count": 0,
+                    },
+                    "details": empty_details,
+                    "operations": {
+                        "summary": {
+                            "misfiled_media": 0,
+                            "unsupported_files": 0,
+                            "duplicates": 0,
+                            "metadata_cleanup": 0,
+                            "folder_cleanup": 0,
+                            "database_repairs": 0,
+                            "operation_count": 0,
+                        },
+                        "details": {**empty_details, "folder_cleanup": []},
+                    },
+                    "message": "Preflight disabled; run clean for live progress.",
+                }
+
             if os.path.exists(self.db_path) and db_is_valid(self.db_path):
                 self.db_conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
                 self.db_conn.row_factory = sqlite3.Row
@@ -946,7 +1014,6 @@ class LibraryCleaner:
                 db_path=self.db_path,
                 progress_callback=progress_callback,
             )
-            supported_media_files = fast_count_supported_media_leaf_files(self.library_path)
             payload = summarize_clean_library_issues(issues)
             payload["operations"] = summarize_clean_library_operations(
                 self.library_path,
@@ -954,6 +1021,8 @@ class LibraryCleaner:
             )
             payload["supported_media_files"] = supported_media_files
             payload["status"] = "DIRTY" if issues else "CLEAN"
+            payload["preflight"] = False
+            payload["verify"] = True
             payload["engine"] = CLEAN_LIBRARY_ENGINE_VERSION
             return payload
         finally:
@@ -1533,9 +1602,25 @@ def scan_library_cleanliness(
     library_path: str,
     db_path: Optional[str] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    *,
+    verify: bool = False,
 ) -> Dict[str, Any]:
     engine = DBNormalizationEngine(library_path, db_path=db_path)
-    return engine.scan(progress_callback=progress_callback)
+    return engine.scan(progress_callback=progress_callback, verify=verify)
+
+
+def verify_library_cleanliness(
+    library_path: str,
+    db_path: Optional[str] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    """Post-run yardstick audit (read-only). Not used as preflight."""
+    return scan_library_cleanliness(
+        library_path,
+        db_path=db_path,
+        progress_callback=progress_callback,
+        verify=True,
+    )
 
 
 def run_db_normalization_engine(

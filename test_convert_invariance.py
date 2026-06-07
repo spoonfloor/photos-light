@@ -332,6 +332,7 @@ class ConvertInvarianceContractTest(unittest.TestCase):
             result = scan_library_cleanliness(
                 library_path,
                 db_path=canonical_db_path(library_path),
+                verify=True,
             )
 
         self.assertEqual(result["status"], "CLEAN")

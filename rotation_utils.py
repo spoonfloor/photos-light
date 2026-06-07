@@ -11,8 +11,10 @@ from PIL import Image, ImageOps
 
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
 PIL_LOSSLESS_ROTATION_EXTENSIONS = {".png", ".tiff", ".tif"}
+HEIC_ROTATION_EXTENSIONS = {".heic", ".heif"}
+HEIC_ROTATION_OUTPUT_EXT = ".tiff"
 LOSSLESS_ROTATION_EXTENSIONS = JPEG_EXTENSIONS | PIL_LOSSLESS_ROTATION_EXTENSIONS
-ROTATION_SUPPORTED_EXTENSIONS = LOSSLESS_ROTATION_EXTENSIONS
+ROTATION_SUPPORTED_EXTENSIONS = LOSSLESS_ROTATION_EXTENSIONS | HEIC_ROTATION_EXTENSIONS
 JPEG_LOSSY_QUALITY = 95
 ORIENTATION_TAG = 0x0112
 
@@ -22,6 +24,7 @@ class RotationResult:
     success: bool
     lossless: bool
     message: str
+    output_path: Optional[str] = None
 
 
 def normalize_rotation_degrees(degrees_ccw: int) -> int:
@@ -167,6 +170,84 @@ def _rotate_jpeg_losslessly(file_path: str, degrees_ccw: int) -> RotationResult:
             os.remove(temp_output)
 
 
+def _copy_metadata_with_exiftool(source_path: str, dest_path: str) -> Tuple[bool, str]:
+    result = subprocess.run(
+        [
+            "exiftool",
+            "-TagsFromFile",
+            source_path,
+            "-all:all",
+            "-overwrite_original",
+            "-P",
+            dest_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return False, result.stderr.strip() or "Failed to copy metadata with exiftool"
+    return True, "Copied metadata with exiftool"
+
+
+def _rotate_heic_to_tiff(file_path: str, degrees_ccw: int) -> RotationResult:
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in HEIC_ROTATION_EXTENSIONS:
+        return RotationResult(False, False, "Not a HEIC file")
+
+    normalized = normalize_rotation_degrees(degrees_ccw)
+    if normalized == 0:
+        return RotationResult(True, True, "No rotation needed")
+
+    output_path = f"{os.path.splitext(file_path)[0]}{HEIC_ROTATION_OUTPUT_EXT}"
+    if os.path.exists(output_path):
+        return RotationResult(False, False, f"Output file already exists: {output_path}")
+
+    temp_output = f"{file_path}.rotating.tiff"
+    try:
+        print(
+            f"🛠️ Rotation helper: converting HEIC to rotated TIFF "
+            f"({normalized}° CCW) for {os.path.basename(file_path)}"
+        )
+        with Image.open(file_path) as image:
+            normalized_image = ImageOps.exif_transpose(image)
+            rotated = normalized_image.rotate(normalized, expand=True)
+            icc_profile = image.info.get("icc_profile") or normalized_image.info.get(
+                "icc_profile"
+            )
+            exif_bytes = _build_clean_exif_bytes(normalized_image)
+
+            save_kwargs: Dict[str, Any] = {"format": "TIFF"}
+            if icc_profile:
+                save_kwargs["icc_profile"] = icc_profile
+            if exif_bytes:
+                save_kwargs["exif"] = exif_bytes
+            rotated.save(temp_output, **save_kwargs)
+
+        copied, copy_message = _copy_metadata_with_exiftool(file_path, temp_output)
+        if not copied:
+            print(f"   ⚠️ exiftool metadata copy failed: {copy_message}")
+
+        stripped, message = strip_orientation_tag(temp_output)
+        if not stripped:
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+            print(f"   ❌ Failed to strip orientation tag after HEIC conversion: {message}")
+            return RotationResult(False, False, message)
+
+        os.replace(temp_output, output_path)
+        print(f"   ✅ HEIC converted to TIFF at {os.path.basename(output_path)}")
+        return RotationResult(
+            True,
+            True,
+            "HEIC converted to rotated TIFF",
+            output_path=output_path,
+        )
+    finally:
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+
+
 def _build_clean_exif_bytes(image: Image.Image) -> Optional[bytes]:
     try:
         exif = image.getexif()
@@ -268,6 +349,12 @@ def rotate_file_in_place(
             jpeg_quality=jpeg_quality,
             save_as_jpeg=False,
         )
+
+    if ext in HEIC_ROTATION_EXTENSIONS:
+        if not allow_lossy_fallback:
+            print("   📝 HEIC rotation deferred until lightbox close")
+            return RotationResult(False, False, "HEIC rotation deferred until commit")
+        return _rotate_heic_to_tiff(file_path, normalized)
 
     if ext not in JPEG_EXTENSIONS:
         print(f"   ❌ Unsupported manual rotation format: {ext}")

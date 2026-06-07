@@ -1692,9 +1692,15 @@ def scan_library_cleanliness(
     library_path: str,
     db_path: Optional[str] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    *,
+    verify: bool = False,
 ) -> Dict[str, Any]:
+    _ = verify
     engine = DBNormalizationEngine(library_path, db_path=db_path)
     return engine.scan(progress_callback=progress_callback)
+
+
+verify_library_cleanliness = scan_library_cleanliness
 
 
 def run_db_normalization_engine(

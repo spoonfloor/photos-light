@@ -73,7 +73,9 @@ class CleanLibraryApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), scan_payload)
-        mock_scan.assert_called_once_with(self.library_path, db_path=self.db_path)
+        mock_scan.assert_called_once_with(
+            self.library_path, db_path=self.db_path, verify=False
+        )
 
 
 if __name__ == "__main__":

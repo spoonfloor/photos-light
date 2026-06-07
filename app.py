@@ -93,6 +93,7 @@ from photo_canonicalization import (
 )
 from make_library_perfect import _compute_photo_duplicate_key, verify_media_file
 from rotation_utils import (
+    HEIC_ROTATION_EXTENSIONS,
     JPEG_LOSSY_QUALITY,
     ROTATION_SUPPORTED_EXTENSIONS,
     bake_orientation as shared_bake_orientation,
@@ -1326,17 +1327,16 @@ def get_photo_file(photo_id):
             from io import BytesIO
             from flask import send_file
             
-            # Open and convert to JPEG
+            # Open and convert to JPEG for browser display
             with Image.open(full_path) as img:
-                # Convert to RGB if needed
+                img = ImageOps.exif_transpose(img)
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                
-                # Save as JPEG to memory
+
                 buffer = BytesIO()
                 img.save(buffer, format='JPEG', quality=95)
                 buffer.seek(0)
-                
+
                 return send_file(buffer, mimetype='image/jpeg')
         
         # For other formats, serve directly
@@ -1449,7 +1449,15 @@ def rotate_photo(photo_id):
 
         if not can_commit_losslessly and not commit_lossy:
             request_elapsed_ms = (time.perf_counter() - request_started_at) * 1000
-            print("   📝 Returning staged response to frontend (lossy fallback deferred)")
+            staged_reason = (
+                'heic_conversion_deferred'
+                if ext in HEIC_ROTATION_EXTENSIONS
+                else 'lossy_fallback_required'
+            )
+            print(
+                "   📝 Returning staged response to frontend "
+                f"({staged_reason})"
+            )
             print(f"   ⏱️ Rotate request handled in {request_elapsed_ms:.1f} ms")
             return jsonify(
                 {
@@ -1457,7 +1465,7 @@ def rotate_photo(photo_id):
                     'committed': False,
                     'staged': True,
                     'lossless': False,
-                    'reason': 'lossy_fallback_required',
+                    'reason': staged_reason,
                 }
             )
 
@@ -1474,17 +1482,27 @@ def rotate_photo(photo_id):
             print(f"   ❌ Rotation failed during commit: {rotation_result.message}")
             print(f"   ⏱️ Rotate attempt failed after {rotate_elapsed_ms:.1f} ms")
             return jsonify({'error': rotation_result.message}), status_code
-        print(
-            f"   💾 Rotation committed via "
-            f"{'lossless' if rotation_result.lossless else f'lossy JPEG @ {JPEG_LOSSY_QUALITY}'} path"
-        )
+        if ext in HEIC_ROTATION_EXTENSIONS:
+            commit_path = "HEIC to TIFF conversion"
+        elif rotation_result.lossless:
+            commit_path = "lossless"
+        else:
+            commit_path = f"lossy JPEG @ {JPEG_LOSSY_QUALITY}"
+        print(f"   💾 Rotation committed via {commit_path} path")
         print(f"   ⏱️ File rotation took {rotate_elapsed_ms:.1f} ms")
         old_hash = row['content_hash']
+        source_heic_rel_path = row['current_path'] if ext in HEIC_ROTATION_EXTENSIONS else None
+        rel_path_for_finalize = row['current_path']
+        if rotation_result.output_path:
+            rel_path_for_finalize = os.path.relpath(
+                rotation_result.output_path,
+                LIBRARY_PATH,
+            )
         finalize_result = finalize_mutated_media(
             conn=conn,
             photo_id=photo_id,
             library_path=LIBRARY_PATH,
-            current_rel_path=row['current_path'],
+            current_rel_path=rel_path_for_finalize,
             date_taken=row['date_taken'],
             old_hash=old_hash,
             build_canonical_path=build_canonical_photo_path,
@@ -1494,6 +1512,18 @@ def rotate_photo(photo_id):
             duplicate_policy='trash',
             duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
         )
+        if source_heic_rel_path:
+            source_heic_full_path = os.path.join(LIBRARY_PATH, source_heic_rel_path)
+            if os.path.exists(source_heic_full_path):
+                if (
+                    finalize_result.full_path
+                    and os.path.abspath(source_heic_full_path)
+                    != os.path.abspath(finalize_result.full_path)
+                ):
+                    os.remove(source_heic_full_path)
+                    print(
+                        f"   🗑️ Removed source HEIC after conversion: {source_heic_rel_path}"
+                    )
         conn.commit()
         conn.close()
         conn = None
@@ -2685,7 +2715,7 @@ def debug_scan_clean_library():
         abs_path = os.path.abspath(selected_path)
         print(f"\n🧪 DEBUG clean-library scan: {abs_path}\n")
 
-        result = scan_library_cleanliness(abs_path, db_path=None)
+        result = scan_library_cleanliness(abs_path, db_path=None, verify=True)
         return jsonify(result)
     except Exception as e:
         error_logger.error(f"Debug clean-library scan failed: {e}")
@@ -5569,10 +5599,12 @@ def api_make_library_perfect_stream():
 @app.route('/api/library/make-perfect/scan', methods=['GET'])
 def api_scan_make_library_perfect():
     """
-    Preflight scan for Clean library using the DB normalization engine's audit rulebook.
+    Clean library scan. Default is zero preflight (SKIPPED). Pass ?verify=1 for yardstick audit.
     """
     try:
         from make_library_perfect import scan_library_cleanliness
+
+        verify = str(request.args.get("verify", "")).lower() in {"1", "true", "yes"}
 
         if not LIBRARY_PATH:
             return jsonify({'error': 'No library configured'}), 400
@@ -5587,7 +5619,7 @@ def api_scan_make_library_perfect():
         print(f"🔎 CLEAN LIBRARY SCAN: {LIBRARY_PATH}")
         print(f"{'='*60}\n")
 
-        result = scan_library_cleanliness(LIBRARY_PATH, db_path=DB_PATH)
+        result = scan_library_cleanliness(LIBRARY_PATH, db_path=DB_PATH, verify=verify)
         return jsonify(result)
 
     except Exception as e:
