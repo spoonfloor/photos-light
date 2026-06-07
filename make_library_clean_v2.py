@@ -994,19 +994,15 @@ class LibraryCleaner:
         self._emit(payload)
 
     def log(self, action: str, **payload: Any) -> None:
-        if not self.manifest:
-            return
-        self.manifest.write(
-            json.dumps(
-                {
-                    "timestamp": datetime.now().isoformat(),
-                    "action": action,
-                    **payload,
-                }
-            )
-            + "\n"
-        )
-        self.manifest.flush()
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "action": action,
+            **payload,
+        }
+        if self.manifest:
+            self.manifest.write(json.dumps(entry) + "\n")
+            self.manifest.flush()
+        self._emit({"type": "log", "entry": entry})
 
     def _phase_rank(self, phase: str) -> int:
         return CHECKPOINT_PHASE_ORDER.get(phase, -1)

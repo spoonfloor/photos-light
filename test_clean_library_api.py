@@ -77,6 +77,35 @@ class CleanLibraryApiTest(unittest.TestCase):
             self.library_path, db_path=self.db_path, verify=False
         )
 
+    def test_clean_library_checkpoint_probe_none(self):
+        with patch(
+            "make_library_perfect.find_resumable_clean_library_checkpoint",
+            return_value=None,
+        ):
+            response = self.client.get("/api/library/make-perfect/checkpoint")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"status": "NONE", "resumable": False})
+
+    def test_clean_library_checkpoint_probe_resumable(self):
+        checkpoint = {
+            "phase": "scan",
+            "scan_completed_count": 12,
+            "canonicalize_index": 0,
+            "manifest_path": "/tmp/manifest.jsonl",
+            "_checkpoint_path": "/tmp/checkpoint.json",
+        }
+        with patch(
+            "make_library_perfect.find_resumable_clean_library_checkpoint",
+            return_value=checkpoint,
+        ):
+            response = self.client.get("/api/library/make-perfect/checkpoint")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["resumable"])
+        self.assertEqual(payload["resume"]["scan_completed_count"], 12)
+
 
 if __name__ == "__main__":
     unittest.main()

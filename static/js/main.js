@@ -6700,6 +6700,14 @@ let updateIndexState = {
   isRunning: false,
   abortController: null,
   cancelRequested: false,
+  resumeIntent: null,
+  overlayPhase: null,
+  workingPhaseActive: false,
+  logLines: [],
+  runStartedAtMs: null,
+  estimatedSeconds: 0,
+  estimatedDisplay: '',
+  onInterruptedChoice: null,
 };
 
 /**
@@ -6743,7 +6751,11 @@ async function loadUpdateIndexOverlay() {
           (!logFeed || logFeed.style.display === 'none') &&
           (!detailsList || detailsList.style.display === 'none');
 
-        if (logFeed && cleanLibraryPreviewState.active && cleanLibraryPreviewState.logLines.length) {
+        const showRunLogFeed =
+          (cleanLibraryPreviewState.active && cleanLibraryPreviewState.logLines.length) ||
+          (updateIndexState.workingPhaseActive && updateIndexState.logLines.length);
+
+        if (logFeed && showRunLogFeed) {
           logFeed.style.display = isHidden ? 'block' : 'none';
           if (detailsList) detailsList.style.display = 'none';
         } else if (detailsList) {
@@ -6796,6 +6808,16 @@ const CLEAN_LIBRARY_PREVIEW_WORKING_STEPS = [
   'Rebuilding database',
   'Final verification',
 ];
+
+const CLEAN_LIBRARY_PHASE_STEP_INDEX = {
+  setup: 1,
+  scan: 1,
+  dedupe: 2,
+  canonicalize: 3,
+  folders: 4,
+  rebuild_db: 5,
+  audit: 6,
+};
 
 const cleanLibraryPreviewState = {
   active: false,
@@ -6961,6 +6983,9 @@ function setCleanLibrarySecondaryStatus(text, visible = true) {
 
 function resetCleanLibraryLogFeed() {
   cleanLibraryPreviewState.logLines = [];
+  if (updateIndexState) {
+    updateIndexState.logLines = [];
+  }
   const logFeed = document.getElementById('updateIndexLogFeed');
   if (logFeed) {
     logFeed.textContent = '';
@@ -6991,14 +7016,21 @@ function appendCleanLibraryLogLine(line, { previewOnly = false } = {}) {
     if (cleanLibraryPreviewState.logLines.length > 80) {
       cleanLibraryPreviewState.logLines.shift();
     }
+  } else if (updateIndexState?.workingPhaseActive) {
+    if (!updateIndexState.logLines) {
+      updateIndexState.logLines = [];
+    }
+    updateIndexState.logLines.push(formatted);
+    if (updateIndexState.logLines.length > 80) {
+      updateIndexState.logLines.shift();
+    }
   }
   const logFeed = document.getElementById('updateIndexLogFeed');
   if (!logFeed) return;
-  logFeed.textContent = (
-    cleanLibraryPreviewState.active
-      ? cleanLibraryPreviewState.logLines
-      : [...(logFeed.textContent ? logFeed.textContent.split('\n') : []), formatted]
-  ).join('\n');
+  const lines = cleanLibraryPreviewState.active
+    ? cleanLibraryPreviewState.logLines
+    : updateIndexState.logLines || [];
+  logFeed.textContent = lines.join('\n');
   logFeed.scrollTop = logFeed.scrollHeight;
 }
 
@@ -7350,18 +7382,25 @@ function handleUpdateIndexProceedClick() {
     }
     return;
   }
+  if (updateIndexState.onInterruptedChoice) {
+    updateIndexState.onInterruptedChoice('continue');
+    return;
+  }
   void executeUpdateIndex();
 }
 
 function handleUpdateIndexStartOverClick() {
-  if (!cleanLibraryPreviewState.active) {
+  if (cleanLibraryPreviewState.active) {
+    if (cleanLibraryPreviewState.onInterruptedChoice) {
+      cleanLibraryPreviewState.onInterruptedChoice('start-over');
+      return;
+    }
+    void restartCleanLibraryPreviewFromStartOver();
     return;
   }
-  if (cleanLibraryPreviewState.onInterruptedChoice) {
-    cleanLibraryPreviewState.onInterruptedChoice('start-over');
-    return;
+  if (updateIndexState.onInterruptedChoice) {
+    updateIndexState.onInterruptedChoice('start-over');
   }
-  void restartCleanLibraryPreviewFromStartOver();
 }
 
 async function restartCleanLibraryPreviewFromStartOver() {
@@ -7429,7 +7468,147 @@ function estimateCleanRunRemainingSeconds(processed, total, elapsedSec, phase) {
   return remaining;
 }
 
+function storeCleanLibraryPreflightEstimate(scanResult) {
+  if (scanResult.status === 'RESUME') {
+    updateIndexState.estimatedSeconds =
+      Number(scanResult.estimated_remaining_seconds) || 0;
+    updateIndexState.estimatedDisplay = scanResult.estimated_remaining_display || '';
+  } else {
+    updateIndexState.estimatedSeconds =
+      Number(scanResult.estimated_seconds ?? scanResult.inventory?.estimated_seconds) ||
+      0;
+    updateIndexState.estimatedDisplay =
+      scanResult.estimated_display ||
+      scanResult.inventory?.estimated_display ||
+      '';
+  }
+}
+
+function beginCleanLibraryWorkingUi() {
+  updateIndexState.workingPhaseActive = true;
+  updateIndexState.overlayPhase = 'working';
+  updateIndexState.runStartedAtMs = Date.now();
+  resetUpdateIndexOverlayTitle();
+  showCleanLibraryWorkingBody();
+  showUpdateIndexPreflightStats(null);
+  hideUpdateIndexStats();
+  showCleanLibraryDetailsSection(true);
+  resetCleanLibraryLogFeed();
+  showUpdateIndexButtons('cancel');
+  updateCleanLibraryWorkingStep('setup');
+}
+
+function endCleanLibraryWorkingUi() {
+  updateIndexState.workingPhaseActive = false;
+  setCleanLibraryExplainerVisible(false);
+  setCleanLibrarySecondaryStatus(null, false);
+}
+
+function updateCleanLibraryWorkingStep(phase) {
+  const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[phase] || 1;
+  const stepLabel = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1];
+  updateUpdateIndexUI(`Step ${stepNumber} of 6: ${stepLabel}`, true);
+  syncCleanLibraryWorkingRemainingDisplay();
+}
+
+function syncCleanLibraryWorkingRemainingDisplay() {
+  const totalSec = Number(updateIndexState.estimatedSeconds) || 0;
+  if (!updateIndexState.runStartedAtMs || totalSec <= 0) {
+    setCleanLibrarySecondaryStatus('Total time remaining: estimating…');
+    return;
+  }
+  const elapsed = (Date.now() - updateIndexState.runStartedAtMs) / 1000;
+  setCleanLibrarySecondaryStatus(
+    `Total time remaining: ${formatAboutDurationFromSeconds(Math.max(5, totalSec - elapsed))}`,
+  );
+}
+
+function showCleanLibraryFinishedUi() {
+  endCleanLibraryWorkingUi();
+  updateIndexState.overlayPhase = 'finished';
+  const elapsedSec = updateIndexState.runStartedAtMs
+    ? (Date.now() - updateIndexState.runStartedAtMs) / 1000
+    : Number(updateIndexState.estimatedSeconds) || 0;
+  const totalDisplay =
+    updateIndexState.estimatedDisplay ||
+    formatAboutDurationFromSeconds(elapsedSec);
+  setCleanLibrarySecondaryStatus(`Total time: ${totalDisplay}`, true);
+  updateUpdateIndexUI(
+    'Library check complete. Your library is clean and organized.',
+    false,
+  );
+  showCleanLibraryDetailsSection(true);
+  showUpdateIndexButtons('done');
+}
+
+function resolveCleanLibraryStreamResume() {
+  if (updateIndexState.resumeIntent === false) {
+    return false;
+  }
+  if (updateIndexState.resumeIntent === true) {
+    return true;
+  }
+  return undefined;
+}
+
+async function probeCleanLibraryCheckpoint() {
+  const response = await fetch('/api/library/make-perfect/checkpoint');
+  if (response.status === 404) {
+    return { status: 'NONE', resumable: false };
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Checkpoint probe failed (${response.status})`);
+  }
+  return response.json();
+}
+
+async function abandonCleanLibraryCheckpoint() {
+  const response = await fetch('/api/library/make-perfect/checkpoint/abandon', {
+    method: 'POST',
+  });
+  if (response.status === 404) {
+    return { ok: true, abandoned: false };
+  }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Abandon failed (${response.status})`);
+  }
+  return response.json();
+}
+
+function showCleanLibraryInterruptedGate() {
+  updateIndexState.overlayPhase = 'interrupted';
+  showContinueLibraryCleanupTitle();
+  setCleanLibraryExplainerVisible(false);
+  setCleanLibrarySecondaryStatus(null, false);
+  showUpdateIndexPreflightStats(null);
+  hideUpdateIndexStats();
+  showCleanLibraryDetailsSection(false);
+  resetCleanLibraryLogFeed();
+  updateUpdateIndexUI(
+    'It looks like a previous library cleanup was not completed. You can continue it, start a new cleanup, or cancel.',
+    false,
+  );
+  showUpdateIndexButtons('cancel', 'start-over', 'proceed');
+  return new Promise((resolve) => {
+    updateIndexState.onInterruptedChoice = (choice) => {
+      updateIndexState.onInterruptedChoice = null;
+      resolve(choice);
+    };
+  });
+}
+
 function applyCleanerStreamToUpdateIndex(event = {}) {
+  if (event.type === 'log' && event.entry) {
+    if (updateIndexState.workingPhaseActive) {
+      appendCleanLibraryLogLine(JSON.stringify(event.entry));
+    }
+    return;
+  }
+  if (updateIndexState.workingPhaseActive) {
+    return;
+  }
   if (event.type === 'stats') {
     const summary = event.summary || {};
     updateIndexState.misfiledMedia = summary.misfiled_media || 0;
@@ -7456,6 +7635,28 @@ function applyCleanerStreamToUpdateIndex(event = {}) {
 }
 
 function updateIndexStatusForCleanerPhase(event = {}) {
+  if (updateIndexState.workingPhaseActive) {
+    if (event.type === 'resume') {
+      const phase = event.resumed_from?.phase || 'scan';
+      updateCleanLibraryWorkingStep(phase);
+      return;
+    }
+    if (event.type === 'phase' && event.status === 'starting' && event.phase) {
+      if (cleanLibraryRunEtaState) {
+        cleanLibraryRunEtaState.lastPhase = event.phase;
+      }
+      updateCleanLibraryWorkingStep(event.phase);
+      return;
+    }
+    if (event.type === 'progress' && event.phase) {
+      if (cleanLibraryRunEtaState) {
+        cleanLibraryRunEtaState.lastPhase = event.phase;
+      }
+      updateCleanLibraryWorkingStep(event.phase);
+    }
+    return;
+  }
+
   if (event.type === 'resume') {
     const doneCount = event.resumed_from?.scan_completed_count ?? 0;
     const phase = event.resumed_from?.phase || 'scan';
@@ -7541,6 +7742,7 @@ function showPreflightScoreboardZeros() {
 }
 
 async function runUpdateIndexPreflightScan() {
+  updateIndexState.overlayPhase = 'scanning';
   updateUpdateIndexUI('Scanning library…', true);
   showUpdateIndexButtons('cancel');
   showCleanLibraryPreflightExplainer();
@@ -7572,6 +7774,8 @@ async function runUpdateIndexPreflightScan() {
 
 function renderUpdateIndexPreflightResult(scanResult) {
   updateIndexState.preflight = scanResult;
+  storeCleanLibraryPreflightEstimate(scanResult);
+  updateIndexState.overlayPhase = 'eta';
 
   if (scanResult.status === 'INVENTORY' || scanResult.status === 'RESUME') {
     if (scanResult.status === 'RESUME') {
@@ -7586,10 +7790,7 @@ function renderUpdateIndexPreflightResult(scanResult) {
       scanResult.status === 'RESUME'
         ? scanResult.estimated_remaining_display
         : scanResult.estimated_display;
-    updateUpdateIndexUI(
-      `${Number(photos).toLocaleString()} photos and ${Number(videos).toLocaleString()} videos — ${timeLabel}`,
-      false,
-    );
+    updateUpdateIndexUI(`Time required: ${timeLabel}`, false);
     showUpdateIndexButtons('cancel', 'proceed');
     return;
   }
@@ -7642,6 +7843,14 @@ async function openUpdateIndexOverlay() {
     isRunning: false,
     abortController: null,
     cancelRequested: false,
+    resumeIntent: null,
+    overlayPhase: null,
+    workingPhaseActive: false,
+    logLines: [],
+    runStartedAtMs: null,
+    estimatedSeconds: 0,
+    estimatedDisplay: '',
+    onInterruptedChoice: null,
   };
 
   const detailsSection = document.getElementById('updateIndexDetailsSection');
@@ -7651,6 +7860,22 @@ async function openUpdateIndexOverlay() {
   resetUpdateIndexOverlayTitle();
 
   try {
+    const checkpoint = await probeCleanLibraryCheckpoint();
+    if (checkpoint?.resumable) {
+      const choice = await showCleanLibraryInterruptedGate();
+      if (choice === 'cancel') {
+        closeUpdateIndexOverlayImmediate();
+        return;
+      }
+      if (choice === 'start-over') {
+        await abandonCleanLibraryCheckpoint();
+        updateIndexState.resumeIntent = false;
+        resetUpdateIndexOverlayTitle();
+      } else {
+        updateIndexState.resumeIntent = true;
+      }
+    }
+
     const scanResult = await runUpdateIndexPreflightScan();
     renderUpdateIndexPreflightResult(scanResult);
   } catch (error) {
@@ -7673,16 +7898,13 @@ async function executeUpdateIndex() {
   updateIndexState.isRunning = true;
   updateIndexState.cancelRequested = false;
   updateIndexState.abortController = new AbortController();
-  resetUpdateIndexOverlayTitle();
   resetCleanLibraryRunEtaState();
-  showUpdateIndexPreflightStats(null);
-  showUpdateIndexStats();
-  updateUpdateIndexUI('Cleaning library…', true);
-  showUpdateIndexButtons('cancel');
+  beginCleanLibraryWorkingUi();
 
   try {
     const result = await streamMakeLibraryPerfect({
       signal: updateIndexState.abortController.signal,
+      resume: resolveCleanLibraryStreamResume(),
       onProgress: (event) => {
         if (cleanLibraryRunUiPaused) {
           return;
@@ -7699,10 +7921,8 @@ async function executeUpdateIndex() {
     }
 
     updateIndexState.resultStats = result?.stats || null;
-    updateUpdateIndexUI('Library cleaned', false);
-    showUpdateIndexStats();
     renderUpdateIndexDetails();
-    showUpdateIndexButtons('done');
+    showCleanLibraryFinishedUi();
     await loadAndRenderPhotos(false);
   } catch (error) {
     if (error?.name === 'AbortError' || updateIndexState?.cancelRequested) {
@@ -7711,6 +7931,7 @@ async function executeUpdateIndex() {
       return;
     }
     console.error('❌ Failed to clean library:', error);
+    endCleanLibraryWorkingUi();
     updateUpdateIndexUI('Failed to clean library', false);
     showToast('Failed to clean library', null);
     showUpdateIndexButtons('cancel');
@@ -7719,6 +7940,7 @@ async function executeUpdateIndex() {
       updateIndexState.isRunning = false;
       updateIndexState.abortController = null;
       updateIndexState.cancelRequested = false;
+      updateIndexState.workingPhaseActive = false;
     }
     cleanLibraryRunEtaState = null;
   }
@@ -8020,6 +8242,11 @@ async function handleUpdateIndexCancelClick() {
     }
     stopCleanLibraryPreview();
     closeUpdateIndexOverlayImmediate();
+    return;
+  }
+
+  if (updateIndexState?.onInterruptedChoice) {
+    updateIndexState.onInterruptedChoice('cancel');
     return;
   }
 

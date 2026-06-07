@@ -5618,6 +5618,62 @@ def api_make_library_perfect_stream():
     )
 
 
+@app.route('/api/library/make-perfect/checkpoint', methods=['GET'])
+def api_clean_library_checkpoint_probe():
+    """Cheap probe for a resumable clean-library run (no inventory walk)."""
+    try:
+        from make_library_perfect import find_resumable_clean_library_checkpoint
+
+        if not LIBRARY_PATH:
+            return jsonify({'error': 'No library configured'}), 400
+
+        if not os.path.isdir(LIBRARY_PATH):
+            return jsonify({'error': 'Configured library path is missing or invalid'}), 400
+
+        checkpoint = find_resumable_clean_library_checkpoint(LIBRARY_PATH)
+        if not checkpoint:
+            return jsonify({'status': 'NONE', 'resumable': False})
+
+        return jsonify(
+            {
+                'status': 'RESUMABLE',
+                'resumable': True,
+                'resume': {
+                    'phase': checkpoint.get('phase'),
+                    'scan_completed_count': checkpoint.get('scan_completed_count', 0),
+                    'canonicalize_index': checkpoint.get('canonicalize_index', 0),
+                    'manifest_path': checkpoint.get('manifest_path'),
+                },
+            }
+        )
+    except Exception as e:
+        error_logger.error(f"Clean library checkpoint probe failed: {e}")
+        error_logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/library/make-perfect/checkpoint/abandon', methods=['POST'])
+def api_abandon_clean_library_checkpoint():
+    """Abandon the current resumable clean-library checkpoint (start fresh)."""
+    try:
+        from make_library_perfect import (
+            abandon_clean_library_checkpoint,
+            find_resumable_clean_library_checkpoint,
+        )
+
+        if not LIBRARY_PATH:
+            return jsonify({'error': 'No library configured'}), 400
+
+        checkpoint = find_resumable_clean_library_checkpoint(LIBRARY_PATH)
+        if checkpoint:
+            abandon_clean_library_checkpoint(checkpoint['_checkpoint_path'])
+        return jsonify({'ok': True, 'abandoned': bool(checkpoint)})
+    except Exception as e:
+        error_logger.error(f"Clean library checkpoint abandon failed: {e}")
+        error_logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/library/make-perfect/scan', methods=['GET'])
 def api_scan_make_library_perfect():
     """
