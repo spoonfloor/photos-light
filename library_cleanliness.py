@@ -14,6 +14,9 @@ from typing import List, Literal, Optional, Tuple
 from library_layout import ROOT_INFRASTRUCTURE_DIRS
 
 IGNORED_LIBRARY_FILES = {".DS_Store"}
+# Zip / Finder artifacts — not library content; safe to delete during clean/setup.
+ZIP_ARTIFACT_DIR_NAMES = frozenset({"__MACOSX"})
+ZIP_ARTIFACT_FILE_PREFIXES = ("._",)
 INFRASTRUCTURE_DIRS = set(ROOT_INFRASTRUCTURE_DIRS)
 ALLOWED_ROOT_DIRS = INFRASTRUCTURE_DIRS
 
@@ -145,9 +148,19 @@ def path_parts(rel_path: str) -> List[str]:
     return rel_path.split(os.sep)
 
 
+def is_zip_artifact_name(name: str, is_dir: bool) -> bool:
+    if is_dir and name in ZIP_ARTIFACT_DIR_NAMES:
+        return True
+    if not is_dir and name.startswith(ZIP_ARTIFACT_FILE_PREFIXES):
+        return True
+    return False
+
+
 def root_entry_allowed(name: str, is_dir: bool) -> bool:
     if name in IGNORED_LIBRARY_FILES:
         return True
+    if is_zip_artifact_name(name, is_dir):
+        return False
     if is_dir:
         return name in ALLOWED_ROOT_DIRS or is_year_folder_name(name)
     return False

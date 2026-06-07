@@ -27,6 +27,33 @@ const FolderPicker = (() => {
   let selectionProbeRequestId = 0;
   let activeItemKey = null; // Keyboard-highlighted row in the visible list
 
+  const DEFAULT_ELEMENT_IDS = {
+    breadcrumb: 'folderPickerBreadcrumb',
+    folderList: 'folderPickerFolderList',
+    selectedPath: 'folderPickerSelectedPath',
+    chooseBtn: 'folderPickerChooseBtn',
+    overlay: 'folderPickerOverlay',
+  };
+  let activeElementIds = { ...DEFAULT_ELEMENT_IDS };
+  let savedElementIds = null;
+  let embeddedOnPathChange = null;
+  let embeddedKeyboardHandler = null;
+
+  function pickerEl(key) {
+    const id = activeElementIds[key];
+    if (!id) {
+      return null;
+    }
+    return document.getElementById(id);
+  }
+
+  function notifyEmbeddedPathChange() {
+    if (!embeddedOnPathChange) {
+      return;
+    }
+    embeddedOnPathChange(selectedPath === VIRTUAL_ROOT ? null : selectedPath);
+  }
+
   async function readErrorMessage(response, fallbackMessage) {
     try {
       const error = await response.json();
@@ -160,7 +187,10 @@ const FolderPicker = (() => {
   // ===========================================================================
 
   function updateBreadcrumb() {
-    const breadcrumb = document.getElementById('folderPickerBreadcrumb');
+    const breadcrumb = pickerEl('breadcrumb');
+    if (!breadcrumb) {
+      return;
+    }
 
     // At virtual root, show just icon + ellipsis with trailing slash
     if (currentPath === VIRTUAL_ROOT) {
@@ -228,7 +258,7 @@ const FolderPicker = (() => {
   }
 
   function getFolderPickerRows() {
-    const folderList = document.getElementById('folderPickerFolderList');
+    const folderList = pickerEl('folderList');
     return PickerUtils.getNavigableRows(folderList, '.folder-item[data-item-key]');
   }
 
@@ -300,7 +330,10 @@ const FolderPicker = (() => {
   }
 
   async function updateFolderList() {
-    const folderList = document.getElementById('folderPickerFolderList');
+    const folderList = pickerEl('folderList');
+    if (!folderList) {
+      return;
+    }
     const requestId = ++folderListRequestId;
     const pathForRequest = currentPath;
 
@@ -426,7 +459,7 @@ const FolderPicker = (() => {
               localStorage.setItem('picker.lastPath', currentPath);
               
               
-              const overlay = document.getElementById('folderPickerOverlay');
+              const overlay = pickerEl('overlay');
               if (overlay) {
                 overlay.style.display = 'none';
               }
@@ -473,7 +506,10 @@ const FolderPicker = (() => {
   }
 
   function updateSelectedPath() {
-    const pathDisplay = document.getElementById('folderPickerSelectedPath');
+    const pathDisplay = pickerEl('selectedPath');
+    if (!pathDisplay) {
+      return;
+    }
     // Show real path (not virtual root)
     if (selectedPath === VIRTUAL_ROOT) {
       pathDisplay.textContent = 'No path selected';
@@ -483,7 +519,7 @@ const FolderPicker = (() => {
   }
 
   function updateButtonText() {
-    const chooseBtn = document.getElementById('folderPickerChooseBtn');
+    const chooseBtn = pickerEl('chooseBtn');
     if (chooseBtn) {
       chooseBtn.textContent = getPrimaryActionLabel();
     }
@@ -546,6 +582,7 @@ const FolderPicker = (() => {
     await updateFolderList();
     await syncSelectedPathProbe();
     updateSelectedPath();
+    notifyEmbeddedPathChange();
   }
 
   async function navigateTo(path) {
@@ -557,6 +594,7 @@ const FolderPicker = (() => {
     await updateFolderList(); // This now updates currentHasDb and button text
     await syncSelectedPathProbe();
     updateSelectedPath();
+    notifyEmbeddedPathChange();
   }
 
   // ===========================================================================
@@ -616,10 +654,123 @@ const FolderPicker = (() => {
   // Public API
   // ===========================================================================
 
+  async function resolveInitialPath(options = {}) {
+    let initialPath = options.initialPath || VIRTUAL_ROOT;
+
+    if (!options.initialPath && currentPath !== VIRTUAL_ROOT) {
+      try {
+        await listDirectory(currentPath);
+        initialPath = currentPath;
+      } catch {
+        currentPath = VIRTUAL_ROOT;
+        initialPath = VIRTUAL_ROOT;
+      }
+    } else if (initialPath === VIRTUAL_ROOT) {
+      const savedPath = localStorage.getItem('picker.lastPath');
+      if (savedPath) {
+        try {
+          await listDirectory(savedPath);
+          initialPath = savedPath;
+        } catch {
+          // Fall through to Desktop default
+        }
+      }
+
+      if (initialPath === VIRTUAL_ROOT) {
+        initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
+      }
+    }
+
+    if (initialPath !== VIRTUAL_ROOT) {
+      try {
+        await listDirectory(initialPath);
+      } catch {
+        currentPath = VIRTUAL_ROOT;
+        initialPath = VIRTUAL_ROOT;
+        initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
+      }
+    }
+
+    return initialPath;
+  }
+
+  async function initEmbedded(options = {}) {
+    if (savedElementIds) {
+      unmountEmbedded();
+    }
+
+    savedElementIds = { ...activeElementIds };
+    activeElementIds = {
+      breadcrumb: options.breadcrumbId || 'createLibraryBreadcrumb',
+      folderList: options.folderListId || 'createLibraryFolderList',
+      selectedPath: options.selectedPathId || 'createLibrarySelectedPath',
+      chooseBtn: null,
+      overlay: null,
+    };
+
+    pickerIntent = options.intent || PICKER_INTENT.CHOOSE_LIBRARY_LOCATION;
+    embeddedOnPathChange =
+      typeof options.onPathChange === 'function' ? options.onPathChange : null;
+    resolveCallback = null;
+
+    topLevelLocations = await getLocations();
+    const initialPath = await resolveInitialPath(options);
+
+    currentPath = initialPath;
+    selectedPath = initialPath;
+    currentHasDb = false;
+    currentHasOpenableDb = false;
+    selectedHasOpenableDb = false;
+    activeItemKey = null;
+
+    updateBreadcrumb();
+    await updateFolderList();
+    await syncSelectedPathProbe();
+    updateSelectedPath();
+    notifyEmbeddedPathChange();
+
+    if (options.enableKeyboard) {
+      embeddedKeyboardHandler = (e) => {
+        void handleKeyboard(e);
+      };
+      document.addEventListener('keydown', embeddedKeyboardHandler);
+    }
+
+    return {
+      getSelectedPath: () => (selectedPath === VIRTUAL_ROOT ? null : selectedPath),
+    };
+  }
+
+  function unmountEmbedded() {
+    if (embeddedKeyboardHandler) {
+      document.removeEventListener('keydown', embeddedKeyboardHandler);
+      embeddedKeyboardHandler = null;
+    }
+    embeddedOnPathChange = null;
+
+    const folderList = pickerEl('folderList');
+    if (folderList && folderListClickHandler) {
+      folderList.removeEventListener('click', folderListClickHandler);
+      folderListClickHandler = null;
+    }
+
+    if (savedElementIds) {
+      activeElementIds = { ...savedElementIds };
+      savedElementIds = null;
+    } else {
+      activeElementIds = { ...DEFAULT_ELEMENT_IDS };
+    }
+  }
+
   async function show(options = {}) {
     return new Promise(async (resolve, reject) => {
       let wizardActions = false;
       try {
+        if (savedElementIds) {
+          unmountEmbedded();
+        }
+        activeElementIds = { ...DEFAULT_ELEMENT_IDS };
+
         wizardActions = !!options.wizardActions;
         pickerIntent = options.intent || PICKER_INTENT.GENERIC_FOLDER_SELECTION;
         // Load fragment if not already in DOM
@@ -647,47 +798,7 @@ const FolderPicker = (() => {
         // Load locations
         topLevelLocations = await getLocations();
 
-        // Determine initial path
-        let initialPath = options.initialPath || VIRTUAL_ROOT;
-
-        // If no initial path provided and currentPath is set from previous session, use it
-        if (!options.initialPath && currentPath !== VIRTUAL_ROOT) {
-          try {
-            await listDirectory(currentPath);
-            initialPath = currentPath;
-          } catch {
-            currentPath = VIRTUAL_ROOT;
-            initialPath = VIRTUAL_ROOT;
-          }
-        }
-        // Otherwise try to use last saved path from localStorage
-        else if (initialPath === VIRTUAL_ROOT) {
-          const savedPath = localStorage.getItem('picker.lastPath');
-          if (savedPath) {
-            try {
-              // Validate saved path exists and is accessible
-              await listDirectory(savedPath);
-              initialPath = savedPath;
-            } catch {
-              // Fall through to Desktop default
-            }
-          }
-
-          // If still at virtual root, use shared utility to get default path
-          if (initialPath === VIRTUAL_ROOT) {
-            initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
-          }
-        }
-
-        if (initialPath !== VIRTUAL_ROOT) {
-          try {
-            await listDirectory(initialPath);
-          } catch {
-            currentPath = VIRTUAL_ROOT;
-            initialPath = VIRTUAL_ROOT;
-            initialPath = await PickerUtils.getDefaultPath(topLevelLocations, listDirectory);
-          }
-        }
+        const initialPath = await resolveInitialPath(options);
 
         // Set initial path
         currentPath = initialPath;
@@ -834,6 +945,12 @@ const FolderPicker = (() => {
     INTENT: PICKER_INTENT,
     show,
     hide,
+    initEmbedded,
+    unmountEmbedded,
+    getDefaultParentPath: async () => {
+      const locations = await getLocations();
+      return PickerUtils.getDefaultPath(locations, listDirectory);
+    },
   };
 })();
 

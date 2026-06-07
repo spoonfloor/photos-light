@@ -44,10 +44,12 @@ from library_cleanliness import (
     is_supported_media_extension,
     is_day_folder_name,
     is_year_folder_name,
+    is_zip_artifact_name,
     media_kind_for_extension,
     parse_metadata_datetime,
     path_parts,
     root_entry_allowed,
+    ZIP_ARTIFACT_DIR_NAMES,
 )
 from library_layout import (
     LIBRARY_METADATA_DIR,
@@ -961,7 +963,27 @@ class LibraryCleaner:
                 self.db_conn.close()
                 self.db_conn = None
 
+    def purge_zip_artifacts(self) -> None:
+        for root, dirs, _files in os.walk(self.library_path, topdown=False):
+            for filename in os.listdir(root):
+                full_path = os.path.join(root, filename)
+                if os.path.isfile(full_path) and is_zip_artifact_name(filename, False):
+                    try:
+                        os.remove(full_path)
+                    except OSError:
+                        pass
+            for dirname in list(dirs):
+                if dirname not in ZIP_ARTIFACT_DIR_NAMES:
+                    continue
+                artifact_path = os.path.join(root, dirname)
+                shutil.rmtree(artifact_path, ignore_errors=True)
+                self.log(
+                    "zip_artifact_removed",
+                    path=os.path.relpath(artifact_path, self.library_path),
+                )
+
     def setup(self) -> None:
+        self.purge_zip_artifacts()
         metadata_dir_path = os.path.join(self.library_path, LIBRARY_METADATA_DIR)
         canonical_db = canonical_db_path(self.library_path)
         metadata_dir_missing = not os.path.isdir(metadata_dir_path)
@@ -1371,7 +1393,11 @@ class LibraryCleaner:
                 continue
             if os.path.isdir(root) and not visible_directory_entries(root):
                 remove_ignored_directory_files(root)
-                os.rmdir(root)
+                try:
+                    os.rmdir(root)
+                except OSError as exc:
+                    self.log("folder_remove_skipped", path=rel_root, error=str(exc))
+                    continue
                 self.stats["folders_removed"] += 1
                 self.log("folder_removed", path=rel_root)
                 self._resolve_signal_paths(

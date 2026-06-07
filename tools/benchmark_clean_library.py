@@ -52,11 +52,14 @@ RUN_PHASES = (
 class PhaseTimer:
     """Collect phase and progress timings from cleaner progress events."""
 
+    label: str = ""
     started_at: float = field(default_factory=time.perf_counter)
     phase_started: Dict[str, float] = field(default_factory=dict)
     phase_elapsed: Dict[str, float] = field(default_factory=dict)
     progress_samples: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     events: List[Dict[str, Any]] = field(default_factory=list)
+    _last_progress_print: float = 0.0
+    progress_print_interval_sec: float = 8.0
 
     def callback(self, event: Dict[str, Any]) -> None:
         now = time.perf_counter()
@@ -68,8 +71,17 @@ class PhaseTimer:
             status = event.get("status")
             if status == "starting":
                 self.phase_started[phase] = now
+                print(f"  [{self.label}] phase {phase} starting…", flush=True)
             elif status in {"complete", "failed"} and phase in self.phase_started:
                 self.phase_elapsed[phase] = round(now - self.phase_started[phase], 3)
+                extra = ""
+                if status == "complete" and event.get("issue_count") is not None:
+                    extra = f", issues={event['issue_count']}"
+                print(
+                    f"  [{self.label}] phase {phase} {status} "
+                    f"({self.phase_elapsed[phase]:.1f}s){extra}",
+                    flush=True,
+                )
 
         if event.get("type") == "progress":
             phase = str(event.get("phase") or "")
@@ -80,6 +92,19 @@ class PhaseTimer:
                     "total": event.get("total"),
                 }
             )
+            processed = event.get("processed")
+            total = event.get("total")
+            if (
+                processed is not None
+                and total is not None
+                and now - self._last_progress_print >= self.progress_print_interval_sec
+            ):
+                self._last_progress_print = now
+                print(
+                    f"  [{self.label}] {phase}: {processed}/{total} "
+                    f"({round(now - self.started_at, 0):.0f}s elapsed)",
+                    flush=True,
+                )
 
     def throughput(self, phase: str) -> Optional[float]:
         samples = self.progress_samples.get(phase) or []
@@ -197,8 +222,28 @@ def extrapolate_hours(sec_per_file: Optional[float], file_count: int = EXTRAPOLA
     return round((file_count * sec_per_file) / 3600, 2)
 
 
+def print_step_result(step: Dict[str, Any]) -> None:
+    name = step.get("step", "?")
+    elapsed = step.get("elapsed_sec")
+    time_str = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "—"
+    if step.get("kind") == "preflight_scan":
+        print(
+            f"<<< {name} done: {time_str}, status={step.get('status')}, "
+            f"issues={step.get('issue_count')}, 60k≈{step.get('extrapolate_60k_hours')}h",
+            flush=True,
+        )
+    else:
+        print(
+            f"<<< {name} done: {time_str}, ok={step.get('ok')}, "
+            f"status={step.get('result_status')}",
+            flush=True,
+        )
+        if step.get("error"):
+            print(f"    error: {step['error']}", flush=True)
+
+
 def timed_scan(library_path: str, label: str) -> Dict[str, Any]:
-    timer = PhaseTimer()
+    timer = PhaseTimer(label=label)
     started = time.perf_counter()
     result = scan_library_cleanliness(library_path, progress_callback=timer.callback)
     elapsed = round(time.perf_counter() - started, 3)
@@ -224,7 +269,7 @@ def timed_scan(library_path: str, label: str) -> Dict[str, Any]:
 
 
 def timed_run(library_path: str, label: str) -> Dict[str, Any]:
-    timer = PhaseTimer()
+    timer = PhaseTimer(label=label)
     started = time.perf_counter()
     try:
         result = run_db_normalization_engine(library_path, progress_callback=timer.callback)
@@ -269,11 +314,23 @@ def run_suite(library_path: str, label: str, skip_run: bool, warn_locks: bool) -
             print(f"  ... and {len(locks) - 5} more", file=sys.stderr)
 
     steps: List[Dict[str, Any]] = []
+
+    print("\n>>> STEP scan_dirty (preflight)", flush=True)
     steps.append(timed_scan(library_path, "scan_dirty"))
+    print_step_result(steps[-1])
+
     if not skip_run:
+        print("\n>>> STEP run_full (destructive clean)", flush=True)
         steps.append(timed_run(library_path, "run_full"))
+        print_step_result(steps[-1])
+
+        print("\n>>> STEP scan_clean (preflight after clean)", flush=True)
         steps.append(timed_scan(library_path, "scan_clean"))
+        print_step_result(steps[-1])
+
+        print("\n>>> STEP scan_clean_warm (repeat)", flush=True)
         steps.append(timed_scan(library_path, "scan_clean_warm"))
+        print_step_result(steps[-1])
 
     report = {
         "label": label,
