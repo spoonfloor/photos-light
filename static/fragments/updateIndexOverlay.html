@@ -15,9 +15,18 @@
 
     <!-- Progress Section -->
     <div class="import-progress-section">
-      <div class="import-status-text" id="updateIndexStatusText">
-        Scanning library<span class="import-spinner"></span>
-      </div>
+      <p class="import-explainer" id="updateIndexExplainer" style="display: none">
+        This will organize your library, remove duplicates and corrupted media, and
+        fix any database issues.
+      </p>
+
+      <div class="import-status-text" id="updateIndexStatusText"></div>
+
+      <div
+        class="import-secondary-status"
+        id="updateIndexSecondaryStatus"
+        style="display: none"
+      ></div>
 
       <div class="import-stats" id="updateIndexPreflightStats" style="display: none">
         <span class="import-stat">
@@ -65,6 +74,13 @@
         <span>Show details</span>
       </button>
 
+      <pre
+        class="clean-library-log-feed"
+        id="updateIndexLogFeed"
+        style="display: none"
+        aria-live="polite"
+      ></pre>
+
       <div
         class="import-details-list"
         id="updateIndexDetailsList"
@@ -78,6 +94,13 @@
     <div class="import-actions">
       <button class="btn btn-secondary" id="updateIndexCancelBtn">
         Cancel
+      </button>
+      <button
+        class="btn btn-secondary"
+        id="updateIndexStartOverBtn"
+        style="display: none"
+      >
+        Start over
       </button>
       <button
         class="btn btn-primary"

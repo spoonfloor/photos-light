@@ -1,5 +1,6 @@
 import hashlib
 import os
+import shutil
 import sqlite3
 import unittest
 from collections import defaultdict
@@ -1092,6 +1093,130 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             )
 
 
+class CleanLibrarySkipUnchangedTest(unittest.TestCase):
+    def _create_library_db(self, library_path):
+        db_path = canonical_db_path(library_path)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        create_database_schema(conn.cursor())
+        conn.commit()
+        return db_path, conn
+
+    def _seed_canonical_photo(self, library_path, db_path, *, payload=b"canonical-photo"):
+        date_taken = "2026:04:12 09:30:15"
+        content_hash = hashlib.sha256(payload).hexdigest()
+        date_obj = datetime.strptime(date_taken, "%Y:%m:%d %H:%M:%S")
+        rel_path = canonical_relative_path(date_obj, content_hash, ".jpg")
+        full_path = os.path.join(library_path, rel_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "wb") as handle:
+            handle.write(payload)
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename, current_path, date_taken, content_hash,
+                file_size, file_type, width, height, rating
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                os.path.basename(rel_path),
+                rel_path,
+                date_taken,
+                content_hash,
+                len(payload),
+                "photo",
+                640,
+                480,
+                None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return rel_path, full_path
+
+    @staticmethod
+    def _audit_file_hash(path):
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+
+    def _run_clean(self, tmpdir, db_path):
+        with patch("make_library_clean_v2.verify_media_file", return_value=(True, "mock")), patch(
+            "make_library_clean_v2.extract_exif_date", return_value="2026:04:12 09:30:15"
+        ), patch("make_library_clean_v2.extract_exif_rating", return_value=None), patch(
+            "make_library_clean_v2.get_orientation_flag", return_value=1
+        ), patch("make_library_clean_v2.read_dimensions", return_value=(640, 480)), patch(
+            "clean_library_fast_audit.verify_media_file", return_value=(True, "mock")
+        ), patch("clean_library_fast_audit.extract_exif_rating", return_value=None), patch(
+            "clean_library_fast_audit.get_orientation_flag", return_value=1
+        ), patch(
+            "clean_library_fast_audit.compute_hash_legacy",
+            side_effect=self._audit_file_hash,
+        ):
+            return run_db_normalization_engine(tmpdir, db_path=db_path, resume=False)
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "skip unchanged is v2 only")
+    def test_second_clean_skips_unchanged_without_rehashing(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            self._seed_canonical_photo(tmpdir, db_path)
+
+            def fail_hash(_self, _path):
+                raise AssertionError("hash_cache.get_hash should not run for unchanged files")
+
+            with patch.object(HashCache, "get_hash", fail_hash), patch(
+                "make_library_clean_v2.canonicalize_photo_file",
+                side_effect=AssertionError("canonicalize_photo_file should not run for unchanged files"),
+            ):
+                result = self._run_clean(tmpdir, db_path)
+
+            self.assertEqual(result["status"], "SUCCESS")
+            self.assertEqual(result["stats"]["scan_unchanged_skipped"], 1)
+            self.assertEqual(result["stats"]["media_moved"], 0)
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "skip unchanged is v2 only")
+    def test_does_not_skip_misfiled_media(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            rel_path, _full_path = self._seed_canonical_photo(tmpdir, db_path)
+            misfiled_path = os.path.join(tmpdir, "loose.jpg")
+            shutil.copy2(_full_path, misfiled_path)
+
+            result = self._run_clean(tmpdir, db_path)
+
+            self.assertEqual(result["status"], "SUCCESS")
+            self.assertEqual(result["stats"]["scan_unchanged_skipped"], 1)
+            self.assertGreaterEqual(result["stats"]["duplicates_trashed"], 1)
+            self.assertFalse(os.path.exists(misfiled_path))
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "skip unchanged is v2 only")
+    def test_does_not_skip_when_db_file_size_mismatch(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            _rel_path, full_path = self._seed_canonical_photo(tmpdir, db_path)
+            with open(full_path, "ab") as handle:
+                handle.write(b"changed")
+
+            hash_calls = {"count": 0}
+            original_get_hash = HashCache.get_hash
+
+            def counting_get_hash(self, path):
+                hash_calls["count"] += 1
+                return original_get_hash(self, path)
+
+            with patch.object(HashCache, "get_hash", counting_get_hash):
+                result = self._run_clean(tmpdir, db_path)
+
+            self.assertEqual(result["status"], "SUCCESS")
+            self.assertEqual(result["stats"]["scan_unchanged_skipped"], 0)
+            self.assertGreater(hash_calls["count"], 0)
+
+
 class CleanLibraryBlockingVerifyTest(unittest.TestCase):
     def _create_library_db(self, library_path):
         db_path = canonical_db_path(library_path)
@@ -1246,6 +1371,68 @@ class CleanLibraryResumeTest(unittest.TestCase):
                 self.assertTrue(result.get("resumed"))
                 self.assertEqual(state["new_calls"], 2)
                 self.assertIsNone(find_resumable_clean_library_checkpoint(tmpdir))
+            finally:
+                for item in patchers:
+                    item.stop()
+
+
+class CleanLibraryCancelTest(unittest.TestCase):
+    def _create_library_db(self, library_path):
+        db_path = canonical_db_path(library_path)
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        create_database_schema(conn.cursor())
+        conn.commit()
+        return db_path, conn
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "cancel is implemented in v2 only")
+    def test_cooperative_cancel_preserves_checkpoint(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            date_taken = "2026:01:27 12:00:00"
+
+            for idx in range(5):
+                rel_path = f"batch/photo_{idx}.png"
+                full_path = os.path.join(tmpdir, rel_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as handle:
+                    handle.write(f"payload-{idx}".encode())
+
+            cancel_state = {"count": 0}
+
+            def cancel_check():
+                cancel_state["count"] += 1
+                return cancel_state["count"] >= 4
+
+            patchers = [
+                patch("make_library_clean_v2.verify_media_file", return_value=(True, "mock")),
+                patch("make_library_clean_v2.extract_exif_date", return_value=date_taken),
+                patch("make_library_clean_v2.extract_exif_rating", return_value=None),
+                patch("make_library_clean_v2.get_orientation_flag", return_value=1),
+                patch("make_library_clean_v2.read_dimensions", return_value=(1, 1)),
+                patch("clean_library_fast_audit.verify_media_file", return_value=(True, "mock")),
+                patch("clean_library_fast_audit.extract_exif_rating", return_value=None),
+                patch("clean_library_fast_audit.get_orientation_flag", return_value=1),
+                patch(
+                    "clean_library_fast_audit.compute_hash_legacy",
+                    side_effect=CleanLibraryBlockingVerifyTest._audit_file_hash,
+                ),
+            ]
+            for item in patchers:
+                item.start()
+            try:
+                result = run_db_normalization_engine(
+                    tmpdir,
+                    db_path=db_path,
+                    resume=False,
+                    cancel_check=cancel_check,
+                )
+                self.assertEqual(result["status"], "CANCELLED")
+                checkpoint = find_resumable_clean_library_checkpoint(tmpdir)
+                self.assertIsNotNone(checkpoint)
+                self.assertNotIn(checkpoint.get("status"), {"complete", "abandoned"})
             finally:
                 for item in patchers:
                     item.stop()

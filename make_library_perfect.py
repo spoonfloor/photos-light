@@ -37,10 +37,14 @@ if _ENGINE in ("legacy", "v1", "old"):
 
     def abandon_clean_library_checkpoint(checkpoint_path):  # type: ignore[misc]
         return None
+
+    class CleanLibraryCancelled(Exception):
+        """Stop requested; checkpoint preserved for resume."""
 else:
     from make_library_clean_v2 import (  # noqa: F401
         CLEAN_LIBRARY_ENGINE_VERSION,
         CLEAN_LIBRARY_SIGNAL_KEYS,
+        CleanLibraryCancelled,
         CleanLibraryError,
         DBNormalizationEngine,
         LibraryCleaner,
@@ -61,6 +65,7 @@ else:
 __all__ = [
     "CLEAN_LIBRARY_ENGINE_VERSION",
     "CLEAN_LIBRARY_SIGNAL_KEYS",
+    "CleanLibraryCancelled",
     "CleanLibraryError",
     "DBNormalizationEngine",
     "LibraryCleaner",

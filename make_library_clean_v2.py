@@ -36,6 +36,7 @@ from rotation_utils import (
 )
 from library_cleanliness import (
     ALL_MEDIA_EXTENSIONS,
+    CANONICAL_DB_DATE_FORMAT,
     PHOTO_MEDIA_EXTENSIONS,
     VIDEO_MEDIA_EXTENSIONS,
     IGNORED_LIBRARY_FILES,
@@ -62,6 +63,7 @@ from library_layout import (
     resolve_db_path,
 )
 from clean_library_fast_audit import (
+    _basename_layout_issue,
     count_supported_media_leaf_files as fast_count_supported_media_leaf_files,
     run_fast_library_audit,
 )
@@ -145,6 +147,10 @@ class MediaRecord:
 
 class CleanLibraryError(RuntimeError):
     """Operation failed and the library may still be dirty."""
+
+
+class CleanLibraryCancelled(Exception):
+    """Stop requested; checkpoint preserved for resume."""
 
 
 def _serialize_media_record(record: MediaRecord) -> Dict[str, Any]:
@@ -887,6 +893,7 @@ class LibraryCleaner:
             "media_moved": 0,
             "folders_removed": 0,
             "db_rows_rebuilt": 0,
+            "scan_unchanged_skipped": 0,
         }
         self._remaining_operation_paths: Dict[str, set[str]] = {
             key: set() for key in CLEAN_LIBRARY_SIGNAL_KEYS
@@ -903,6 +910,14 @@ class LibraryCleaner:
         self._checkpoint_dirty = False
         self._files_since_checkpoint = 0
         self._checkpoint_records_snapshot: Optional[List[MediaRecord]] = None
+        self._cancel_check: Optional[Callable[[], bool]] = None
+
+    def _cancel_requested(self) -> bool:
+        return bool(self._cancel_check and self._cancel_check())
+
+    def _raise_if_cancelled(self) -> None:
+        if self._cancel_requested():
+            raise CleanLibraryCancelled()
 
     def _emit(self, payload: Dict[str, Any]) -> None:
         if self._progress_callback:
@@ -1100,8 +1115,10 @@ class LibraryCleaner:
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         *,
         resume: Optional[bool] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         self._progress_callback = progress_callback
+        self._cancel_check = cancel_check
         resumed_from: Optional[Dict[str, Any]] = None
         try:
             if resume is False:
@@ -1149,11 +1166,13 @@ class LibraryCleaner:
             self._emit({"type": "phase", "phase": "setup", "status": "starting"})
             self.setup()
             self._emit({"type": "phase", "phase": "setup", "status": "complete"})
+            self._raise_if_cancelled()
 
             resume_phase = str(self._resume_checkpoint.get("phase") or "setup") if self._resume_checkpoint else "setup"
             records = _load_records_jsonl(self._records_jsonl_path or "")
 
             if self._phase_is_before(resume_phase, "scan_complete"):
+                self._raise_if_cancelled()
                 candidate_total = self._count_walk_files()
                 self._current_phase = "scan"
                 self._flush_checkpoint()
@@ -1182,8 +1201,10 @@ class LibraryCleaner:
                     }
                 )
                 self._emit_stats_feedback()
+                self._raise_if_cancelled()
 
             if self._phase_is_before(resume_phase, "dedupe_complete"):
+                self._raise_if_cancelled()
                 self._current_phase = "dedupe"
                 self._flush_checkpoint(records=records)
                 self._emit({"type": "phase", "phase": "dedupe", "status": "starting"})
@@ -1200,10 +1221,12 @@ class LibraryCleaner:
                     }
                 )
                 self._emit_stats_feedback()
+                self._raise_if_cancelled()
             else:
                 deduped = records
 
             if self._phase_is_before(resume_phase, "canonicalize_complete"):
+                self._raise_if_cancelled()
                 self._current_phase = "canonicalize"
                 self._flush_checkpoint(records=deduped)
                 self._emit(
@@ -1224,10 +1247,12 @@ class LibraryCleaner:
                 self._flush_checkpoint(records=records)
                 self._emit({"type": "phase", "phase": "canonicalize", "status": "complete"})
                 self._emit_stats_feedback()
+                self._raise_if_cancelled()
             else:
                 canonicalized = records
 
             if self._phase_is_before(resume_phase, "folders_complete"):
+                self._raise_if_cancelled()
                 self.stats["metadata_fixed"] = sum(
                     1 for record in canonicalized if record.metadata_cleaned
                 )
@@ -1239,8 +1264,10 @@ class LibraryCleaner:
                 self._flush_checkpoint(records=canonicalized)
                 self._emit({"type": "phase", "phase": "folders", "status": "complete"})
                 self._emit_stats_feedback()
+                self._raise_if_cancelled()
 
             if self._phase_is_before(resume_phase, "rebuild_db_complete"):
+                self._raise_if_cancelled()
                 self._current_phase = "rebuild_db"
                 self._flush_checkpoint(records=canonicalized)
                 self._emit(
@@ -1256,8 +1283,10 @@ class LibraryCleaner:
                 self._flush_checkpoint(records=canonicalized)
                 self._emit({"type": "phase", "phase": "rebuild_db", "status": "complete"})
                 self._emit_stats_feedback()
+                self._raise_if_cancelled()
 
             if self._phase_is_before(resume_phase, "audit_complete"):
+                self._raise_if_cancelled()
                 self._current_phase = "audit"
                 self._flush_checkpoint(records=canonicalized)
                 issues = self.final_audit(audit_progress_total=len(canonicalized))
@@ -1287,6 +1316,21 @@ class LibraryCleaner:
                 result["resumed"] = True
                 result["resumed_from"] = resumed_from
             return result
+        except CleanLibraryCancelled:
+            try:
+                self._flush_checkpoint()
+            except Exception:
+                pass
+            self.log(
+                "operation_cancelled",
+                stats=self.stats,
+                phase=self._current_phase,
+            )
+            return {
+                "status": "CANCELLED",
+                "stats": dict(self.stats),
+                "phase": self._current_phase,
+            }
         except Exception as exc:
             try:
                 self._flush_checkpoint()
@@ -1302,6 +1346,7 @@ class LibraryCleaner:
             raise
         finally:
             self._progress_callback = None
+            self._cancel_check = None
             if self.hash_cache is not None:
                 try:
                     self.hash_cache.cleanup_stale_entries(self.library_path)
@@ -1576,7 +1621,94 @@ class LibraryCleaner:
         self.log("moved_to_trash", source=rel_path, destination=os.path.relpath(candidate, self.library_path), category=category)
         return candidate
 
+    def _parse_db_date_taken(self, date_taken: str) -> datetime:
+        if date_taken == UNKNOWN_PHOTO_DATE_TAKEN:
+            return datetime(1900, 1, 1, 0, 0, 0)
+        return datetime.strptime(date_taken, CANONICAL_DB_DATE_FORMAT)
+
+    def _needs_metadata_work(self, full_path: str, ext: str) -> bool:
+        orientation = get_orientation_flag(full_path)
+        if orientation not in (None, 1):
+            if ext in LOSSLESS_ROTATION_EXTENSIONS:
+                return True
+            if ext in PHOTO_EXTENSIONS and can_bake_losslessly(full_path):
+                return True
+        return extract_exif_rating(full_path) == 0
+
+    def _try_skip_unchanged_media_record(self, full_path: str) -> Optional[MediaRecord]:
+        rel_path = os.path.relpath(full_path, self.library_path)
+        ext = os.path.splitext(full_path)[1].lower()
+        if not is_supported_media_extension(ext):
+            return None
+        if _basename_layout_issue(rel_path) is not None:
+            return None
+        if self.db_conn is None:
+            return None
+
+        row = self.db_conn.execute(
+            """
+            SELECT original_filename, current_path, date_taken, content_hash,
+                   file_size, file_type, width, height, rating
+            FROM photos
+            WHERE current_path = ?
+            """,
+            (rel_path,),
+        ).fetchone()
+        if row is None:
+            return None
+
+        expected_type = media_kind_for_extension(ext)
+        if not expected_type or row["file_type"] != expected_type:
+            return None
+
+        try:
+            date_obj = self._parse_db_date_taken(str(row["date_taken"] or UNKNOWN_PHOTO_DATE_TAKEN))
+        except ValueError:
+            return None
+
+        content_hash = str(row["content_hash"] or "")
+        if len(content_hash) != 64:
+            return None
+        if canonical_relative_path(date_obj, content_hash, ext) != rel_path:
+            return None
+
+        stat_result = os.stat(full_path)
+        if int(row["file_size"]) != int(stat_result.st_size):
+            return None
+        if self._needs_metadata_work(full_path, ext):
+            return None
+
+        valid, _ = verify_media_file(full_path)
+        if not valid:
+            return None
+
+        rating = row["rating"]
+        self.stats["scan_unchanged_skipped"] += 1
+        return MediaRecord(
+            original_filename=str(row["original_filename"] or os.path.basename(full_path)),
+            source_rel_path=rel_path,
+            full_path=full_path,
+            rel_path=rel_path,
+            ext=ext,
+            file_type=str(row["file_type"]),
+            content_hash=content_hash,
+            duplicate_key=content_hash,
+            date_taken=str(row["date_taken"] or UNKNOWN_PHOTO_DATE_TAKEN),
+            date_obj=date_obj,
+            width=int(row["width"] or 0),
+            height=int(row["height"] or 0),
+            rating=None if rating in (None, 0) else int(rating),
+            metadata_cleaned=False,
+            has_metadata_cleanup_signal=False,
+            birth_time=get_birth_time(stat_result),
+            modified_time=float(stat_result.st_mtime),
+        )
+
     def normalize_media_file(self, full_path: str) -> Optional[MediaRecord]:
+        unchanged = self._try_skip_unchanged_media_record(full_path)
+        if unchanged is not None:
+            return unchanged
+
         rel_path = os.path.relpath(full_path, self.library_path)
         ext = os.path.splitext(full_path)[1].lower()
         original_filename = os.path.basename(full_path)
@@ -1736,6 +1868,7 @@ class LibraryCleaner:
 
         for root, _, files in self.active_walk():
             for filename in files:
+                self._raise_if_cancelled()
                 if filename in IGNORED_LIBRARY_FILES:
                     continue
                 full_path = os.path.join(root, filename)
@@ -1790,6 +1923,7 @@ class LibraryCleaner:
         survivors: List[MediaRecord] = []
         total_groups = len(grouped)
         for gi, (duplicate_key, group) in enumerate(grouped.items(), start=1):
+            self._raise_if_cancelled()
             self._emit(
                 {
                     "type": "progress",
@@ -1851,6 +1985,7 @@ class LibraryCleaner:
                 canonicalized.append(record)
 
         for idx in range(start_index, len(sorted_records)):
+            self._raise_if_cancelled()
             record = sorted_records[idx]
             display_idx = idx + 1
             self._emit(
@@ -1907,6 +2042,7 @@ class LibraryCleaner:
 
     def remove_empty_noncanonical_folders(self) -> None:
         for root, _, _ in os.walk(self.library_path, topdown=False):
+            self._raise_if_cancelled()
             rel_root = os.path.relpath(root, self.library_path)
             if rel_root == ".":
                 continue
@@ -1957,6 +2093,7 @@ class LibraryCleaner:
         total = len(sorted_rows)
 
         for idx, record in enumerate(sorted_rows, start=1):
+            self._raise_if_cancelled()
             self._emit(
                 {
                     "type": "progress",
@@ -2081,9 +2218,14 @@ def run_db_normalization_engine(
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     *,
     resume: Optional[bool] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     engine = DBNormalizationEngine(library_path, db_path=db_path)
-    return engine.run(progress_callback=progress_callback, resume=resume)
+    return engine.run(
+        progress_callback=progress_callback,
+        resume=resume,
+        cancel_check=cancel_check,
+    )
 
 
 def make_library_perfect(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:

@@ -5552,6 +5552,7 @@ def api_make_library_perfect_stream():
         resume = bool(resume_arg)
 
     event_queue: queue.Queue = queue.Queue()
+    cancel_event = threading.Event()
 
     def run_op():
         try:
@@ -5559,13 +5560,20 @@ def api_make_library_perfect_stream():
             def progress_callback(ev):
                 event_queue.put(('evt', ev))
 
+            def cancel_check():
+                return cancel_event.is_set()
+
             result = run_db_normalization_engine(
                 LIBRARY_PATH,
                 db_path=DB_PATH,
                 progress_callback=progress_callback,
                 resume=resume,
+                cancel_check=cancel_check,
             )
-            event_queue.put(('done', result))
+            if result.get("status") == "CANCELLED":
+                event_queue.put(('cancelled', result))
+            else:
+                event_queue.put(('done', result))
         except Exception as e:
             error_logger.error(f"Make Library Perfect stream failed: {e}")
             error_logger.error(traceback.format_exc())
@@ -5575,20 +5583,25 @@ def api_make_library_perfect_stream():
 
     @stream_with_context
     def generate():
-        while True:
-            try:
-                kind, payload = event_queue.get(timeout=600)
-            except queue.Empty:
-                yield f"data: {json.dumps({'type': 'error', 'error': 'Timed out waiting for progress'})}\n\n"
-                break
-            if kind == 'evt':
-                yield f"data: {json.dumps(payload)}\n\n"
-            elif kind == 'done':
-                yield f"data: {json.dumps({'type': 'complete', 'result': payload})}\n\n"
-                break
-            elif kind == 'err':
-                yield f"data: {json.dumps({'type': 'error', 'error': payload})}\n\n"
-                break
+        try:
+            while True:
+                try:
+                    kind, payload = event_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                if kind == 'evt':
+                    yield f"data: {json.dumps(payload)}\n\n"
+                elif kind == 'done':
+                    yield f"data: {json.dumps({'type': 'complete', 'result': payload})}\n\n"
+                    break
+                elif kind == 'cancelled':
+                    yield f"data: {json.dumps({'type': 'cancelled', 'result': payload})}\n\n"
+                    break
+                elif kind == 'err':
+                    yield f"data: {json.dumps({'type': 'error', 'error': payload})}\n\n"
+                    break
+        finally:
+            cancel_event.set()
 
     return Response(
         generate(),
