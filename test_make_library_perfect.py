@@ -1437,6 +1437,124 @@ class CleanLibraryCancelTest(unittest.TestCase):
                 for item in patchers:
                     item.stop()
 
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "cancel is implemented in v2 only")
+    def test_cancel_during_final_audit_preserves_checkpoint(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            date_taken = "2026:01:27 12:00:00"
+
+            for idx in range(5):
+                rel_path = f"batch/photo_{idx}.png"
+                full_path = os.path.join(tmpdir, rel_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as handle:
+                    handle.write(f"payload-{idx}".encode())
+
+            cancel_state = {"during_audit": False}
+
+            def progress(ev):
+                if ev.get("type") == "progress" and ev.get("phase") == "audit":
+                    cancel_state["during_audit"] = True
+
+            def cancel_check():
+                return cancel_state["during_audit"]
+
+            patchers = [
+                patch("make_library_clean_v2.verify_media_file", return_value=(True, "mock")),
+                patch("make_library_clean_v2.extract_exif_date", return_value=date_taken),
+                patch("make_library_clean_v2.extract_exif_rating", return_value=None),
+                patch("make_library_clean_v2.get_orientation_flag", return_value=1),
+                patch("make_library_clean_v2.read_dimensions", return_value=(1, 1)),
+                patch("clean_library_fast_audit.verify_media_file", return_value=(True, "mock")),
+                patch("clean_library_fast_audit.extract_exif_rating", return_value=None),
+                patch("clean_library_fast_audit.get_orientation_flag", return_value=1),
+                patch(
+                    "clean_library_fast_audit.compute_hash_legacy",
+                    side_effect=CleanLibraryBlockingVerifyTest._audit_file_hash,
+                ),
+            ]
+            for item in patchers:
+                item.start()
+            try:
+                result = run_db_normalization_engine(
+                    tmpdir,
+                    db_path=db_path,
+                    resume=False,
+                    progress_callback=progress,
+                    cancel_check=cancel_check,
+                )
+                self.assertEqual(result["status"], "CANCELLED")
+                self.assertEqual(result.get("phase"), "audit")
+                checkpoint = find_resumable_clean_library_checkpoint(tmpdir)
+                self.assertIsNotNone(checkpoint)
+                self.assertEqual(checkpoint.get("phase"), "audit")
+                self.assertNotIn(checkpoint.get("status"), {"complete", "abandoned"})
+            finally:
+                for item in patchers:
+                    item.stop()
+
+    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "cancel is implemented in v2 only")
+    def test_resume_after_cancel_during_final_audit(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            date_taken = "2026:01:27 12:00:00"
+
+            for idx in range(5):
+                rel_path = f"batch/photo_{idx}.png"
+                full_path = os.path.join(tmpdir, rel_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as handle:
+                    handle.write(f"payload-{idx}".encode())
+
+            cancel_state = {"during_audit": False}
+
+            def progress(ev):
+                if ev.get("type") == "progress" and ev.get("phase") == "audit":
+                    cancel_state["during_audit"] = True
+
+            def cancel_check():
+                return cancel_state["during_audit"]
+
+            patchers = [
+                patch("make_library_clean_v2.verify_media_file", return_value=(True, "mock")),
+                patch("make_library_clean_v2.extract_exif_date", return_value=date_taken),
+                patch("make_library_clean_v2.extract_exif_rating", return_value=None),
+                patch("make_library_clean_v2.get_orientation_flag", return_value=1),
+                patch("make_library_clean_v2.read_dimensions", return_value=(1, 1)),
+                patch("clean_library_fast_audit.verify_media_file", return_value=(True, "mock")),
+                patch("clean_library_fast_audit.extract_exif_rating", return_value=None),
+                patch("clean_library_fast_audit.get_orientation_flag", return_value=1),
+                patch(
+                    "clean_library_fast_audit.compute_hash_legacy",
+                    side_effect=CleanLibraryBlockingVerifyTest._audit_file_hash,
+                ),
+            ]
+            for item in patchers:
+                item.start()
+            try:
+                cancelled = run_db_normalization_engine(
+                    tmpdir,
+                    db_path=db_path,
+                    resume=False,
+                    progress_callback=progress,
+                    cancel_check=cancel_check,
+                )
+                self.assertEqual(cancelled["status"], "CANCELLED")
+
+                completed = run_db_normalization_engine(
+                    tmpdir,
+                    db_path=db_path,
+                    resume=True,
+                )
+                self.assertEqual(completed["status"], "SUCCESS")
+                self.assertTrue(completed.get("resumed"))
+                self.assertIsNone(find_resumable_clean_library_checkpoint(tmpdir))
+            finally:
+                for item in patchers:
+                    item.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

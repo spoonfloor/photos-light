@@ -6696,30 +6696,22 @@ async function loadUpdateIndexOverlay() {
       detailsToggle.addEventListener('click', () => {
         const detailsList = document.getElementById('updateIndexDetailsList');
         const logFeed = document.getElementById('updateIndexLogFeed');
-        const icon = detailsToggle.querySelector('.material-symbols-outlined');
-        const isHidden =
-          (!logFeed || logFeed.style.display === 'none') &&
-          (!detailsList || detailsList.style.display === 'none');
+        const activityMode = shouldUseCleanLibraryActivityFeedToggle();
 
-        const showRunLogFeed =
-          (cleanLibraryPreviewState.active && cleanLibraryPreviewState.logLines.length) ||
-          (updateIndexState.workingPhaseActive && updateIndexState.logLines.length);
-
-        if (logFeed && showRunLogFeed) {
-          logFeed.style.display = isHidden ? 'block' : 'none';
+        if (logFeed && activityMode) {
+          const isHidden = logFeed.style.display === 'none';
+          setCleanLibraryActivityFeedVisible(isHidden, { activityMode: true });
           if (detailsList) detailsList.style.display = 'none';
-        } else if (detailsList) {
+          return;
+        }
+
+        const isHidden =
+          !detailsList || detailsList.style.display === 'none';
+        if (detailsList) {
           detailsList.style.display = isHidden ? 'block' : 'none';
           if (logFeed) logFeed.style.display = 'none';
         }
-
-        if (icon) {
-          icon.textContent = isHidden ? 'expand_less' : 'expand_more';
-        }
-        const labelSpan = detailsToggle.querySelector('span:last-child');
-        if (labelSpan) {
-          labelSpan.textContent = isHidden ? 'Hide details' : 'Show details';
-        }
+        updateCleanLibraryDetailsToggleLabel(isHidden, { activityMode: false });
       });
     }
   } catch (error) {
@@ -6779,7 +6771,31 @@ const CLEAN_LIBRARY_STEP_PROGRESS_PHASES = new Set([
   'audit',
 ]);
 
+const CLEAN_LIBRARY_FEED_PROGRESS_VERBS = {
+  scan: 'Scanned',
+  canonicalize: 'Organized',
+  rebuild_db: 'Rebuilt',
+  audit: 'Verifying',
+};
+
+const CLEAN_LIBRARY_LOG_SKIP_ACTIONS = new Set([
+  'scan_unchanged_skip',
+  'operation_started',
+  'operation_complete',
+  'operation_cancelled',
+  'operation_failed',
+  'orientation_kept',
+  'folder_remove_skipped',
+  'date_metadata_canonicalized',
+  'metadata_artifacts_quarantined',
+  'db_migrated_to_hidden_folder',
+]);
+
 let cleanLibraryWorkingStepState = null;
+
+let cleanLibraryActivityFeedState = {
+  lastMilestoneByPhase: {},
+};
 
 const cleanLibraryPreviewState = {
   active: false,
@@ -6943,8 +6959,297 @@ function setCleanLibrarySecondaryStatus(text, visible = true) {
   secondaryEl.textContent = text;
 }
 
+function resetCleanLibraryActivityFeedState() {
+  cleanLibraryActivityFeedState = { lastMilestoneByPhase: {} };
+}
+
+function cleanLibraryProgressMilestoneInterval(total) {
+  const cap = Math.max(1, Number(total) || 1);
+  if (cap <= 20) return 1;
+  if (cap <= 100) return 10;
+  if (cap <= 1000) return 100;
+  if (cap <= 10000) return 500;
+  return 1000;
+}
+
+function formatCleanLibraryLogEntry(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+  const action = entry.action;
+  if (!action || CLEAN_LIBRARY_LOG_SKIP_ACTIONS.has(action)) {
+    return null;
+  }
+
+  switch (action) {
+    case 'media_moved':
+      if (entry.source && entry.destination) {
+        return `Moved ${entry.source} → ${entry.destination}`;
+      }
+      return null;
+    case 'duplicate_trashed':
+      if (entry.loser) {
+        return `Removed duplicate: ${entry.loser}`;
+      }
+      return null;
+    case 'moved_to_trash':
+      if (entry.source) {
+        return `Moved to trash: ${entry.source}`;
+      }
+      return null;
+    case 'orientation_baked':
+      if (entry.file) {
+        return `Baked rotation: ${entry.file}`;
+      }
+      return null;
+    case 'rating_stripped':
+      if (entry.file) {
+        return `Stripped rating flag: ${entry.file}`;
+      }
+      return null;
+    case 'folder_removed':
+      if (entry.path) {
+        return `Removed empty folder: ${entry.path}`;
+      }
+      return null;
+    case 'photos_table_rebuilt': {
+      const rows = Number(entry.row_count);
+      if (Number.isFinite(rows) && rows > 0) {
+        return `Database rebuilt (${rows.toLocaleString()} rows)`;
+      }
+      return 'Database rebuilt';
+    }
+    case 'scan_complete': {
+      const count = Number(entry.media_count);
+      if (Number.isFinite(count) && count > 0) {
+        return `Scan complete (${count.toLocaleString()} media files)`;
+      }
+      return 'Scan complete';
+    }
+    case 'final_audit_failed': {
+      const count = Number(entry.issue_count);
+      if (Number.isFinite(count)) {
+        return `Final verification found ${count.toLocaleString()} issue(s)`;
+      }
+      return 'Final verification found issues';
+    }
+    default:
+      return null;
+  }
+}
+
+function formatCleanLibraryManifestLine(line) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return formatCleanLibraryLogEntry(JSON.parse(trimmed));
+  } catch {
+    return null;
+  }
+}
+
+function updateCleanLibraryDetailsToggleLabel(expanded, { activityMode = false } = {}) {
+  const detailsToggle = document.getElementById('updateIndexDetailsToggle');
+  if (!detailsToggle) {
+    return;
+  }
+  const icon = detailsToggle.querySelector('.material-symbols-outlined');
+  if (icon) {
+    icon.textContent = expanded ? 'expand_less' : 'expand_more';
+  }
+  const labelSpan = detailsToggle.querySelector('span:last-child');
+  if (labelSpan) {
+    labelSpan.textContent = expanded
+      ? activityMode
+        ? 'Hide activity'
+        : 'Hide details'
+      : activityMode
+        ? 'Show activity'
+        : 'Show details';
+  }
+}
+
+function formatCleanLibraryFeedTimestamp(date) {
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function isCleanLibraryActivityFeedExpanded() {
+  const logFeed = document.getElementById('updateIndexLogFeed');
+  return Boolean(logFeed && logFeed.style.display !== 'none');
+}
+
+function shouldUseCleanLibraryActivityFeedToggle() {
+  if (cleanLibraryPreviewState.active && cleanLibraryPreviewState.logLines.length > 0) {
+    return true;
+  }
+  if (updateIndexState?.logLines?.length > 0) {
+    return true;
+  }
+  return Boolean(
+    updateIndexState?.workingPhaseActive ||
+      updateIndexState?.overlayPhase === 'working' ||
+      updateIndexState?.overlayPhase === 'finished',
+  );
+}
+
+function setCleanLibraryActivityFeedVisible(visible, { activityMode = false } = {}) {
+  const logFeed = document.getElementById('updateIndexLogFeed');
+  const detailsList = document.getElementById('updateIndexDetailsList');
+  if (logFeed) {
+    logFeed.style.display = visible ? 'block' : 'none';
+    if (visible) {
+      renderCleanLibraryActivityFeed();
+    }
+  }
+  if (visible && detailsList) {
+    detailsList.style.display = 'none';
+  }
+  updateCleanLibraryDetailsToggleLabel(visible, { activityMode });
+}
+
+function renderCleanLibraryActivityFeed() {
+  const logFeed = document.getElementById('updateIndexLogFeed');
+  if (!logFeed) {
+    return;
+  }
+  const lines = cleanLibraryPreviewState.active
+    ? cleanLibraryPreviewState.logLines
+    : updateIndexState?.logLines || [];
+  logFeed.textContent = lines.join('\n');
+  logFeed.scrollTop = logFeed.scrollHeight;
+}
+
+const CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES = 200;
+
+function trimCleanLibraryFeedLines(lines) {
+  if (lines.length <= CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES) {
+    return lines;
+  }
+  const overflow = lines.length - CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES;
+  const startLine = lines[0]?.startsWith('Started:') ? lines[0] : null;
+  if (startLine) {
+    return [startLine, ...lines.slice(1 + overflow)];
+  }
+  return lines.slice(overflow);
+}
+
+function prependCleanLibraryActivityLine(
+  line,
+  { previewOnly = false, allowInactive = false } = {},
+) {
+  const text = String(line || '').trim();
+  if (!text) {
+    return;
+  }
+
+  let target = null;
+  if (previewOnly && cleanLibraryPreviewState.active) {
+    target = cleanLibraryPreviewState.logLines;
+  } else if (
+    updateIndexState &&
+    (updateIndexState.workingPhaseActive || allowInactive)
+  ) {
+    if (!updateIndexState.logLines) {
+      updateIndexState.logLines = [];
+    }
+    target = updateIndexState.logLines;
+  }
+  if (!target) {
+    return;
+  }
+
+  target.unshift(text);
+  const trimmed = trimCleanLibraryFeedLines(target);
+  target.splice(0, target.length, ...trimmed);
+  renderCleanLibraryActivityFeed();
+}
+
+function appendCleanLibraryActivityLine(
+  line,
+  { previewOnly = false, allowInactive = false } = {},
+) {
+  const text = String(line || '').trim();
+  if (!text) {
+    return;
+  }
+
+  if (previewOnly && cleanLibraryPreviewState.active) {
+    cleanLibraryPreviewState.logLines.push(text);
+    const trimmed = trimCleanLibraryFeedLines(cleanLibraryPreviewState.logLines);
+    cleanLibraryPreviewState.logLines.splice(
+      0,
+      cleanLibraryPreviewState.logLines.length,
+      ...trimmed,
+    );
+  } else if (
+    updateIndexState &&
+    (updateIndexState.workingPhaseActive || allowInactive)
+  ) {
+    if (!updateIndexState.logLines) {
+      updateIndexState.logLines = [];
+    }
+    updateIndexState.logLines.push(text);
+    const trimmed = trimCleanLibraryFeedLines(updateIndexState.logLines);
+    updateIndexState.logLines.splice(0, updateIndexState.logLines.length, ...trimmed);
+  } else {
+    return;
+  }
+
+  renderCleanLibraryActivityFeed();
+}
+
+function maybeAppendCleanLibraryProgressMilestone(phase, processed, total) {
+  if (!CLEAN_LIBRARY_FEED_PROGRESS_VERBS[phase]) {
+    return;
+  }
+  const done = Number(processed);
+  const cap = Number(total);
+  if (!Number.isFinite(done) || !Number.isFinite(cap) || cap < 1) {
+    return;
+  }
+
+  const interval = cleanLibraryProgressMilestoneInterval(cap);
+  const lastMarker = cleanLibraryActivityFeedState.lastMilestoneByPhase[phase] ?? 0;
+  let marker = null;
+
+  if (done >= cap) {
+    marker = cap;
+  } else {
+    const bucket = Math.floor(done / interval) * interval;
+    if (bucket > 0 && bucket > lastMarker) {
+      marker = bucket;
+    }
+  }
+
+  if (marker === null || marker <= lastMarker) {
+    return;
+  }
+
+  cleanLibraryActivityFeedState.lastMilestoneByPhase[phase] = marker;
+  const verb = CLEAN_LIBRARY_FEED_PROGRESS_VERBS[phase];
+  appendCleanLibraryActivityLine(
+    `${verb} ${Math.min(marker, cap).toLocaleString()} of ${cap.toLocaleString()}`,
+  );
+}
+
+function appendCleanLibraryEngineLogEntry(entry, { previewOnly = false } = {}) {
+  const line = formatCleanLibraryLogEntry(entry);
+  if (line) {
+    appendCleanLibraryActivityLine(line, { previewOnly });
+  }
+}
+
 function resetCleanLibraryLogFeed() {
   cleanLibraryPreviewState.logLines = [];
+  resetCleanLibraryActivityFeedState();
   if (updateIndexState) {
     updateIndexState.logLines = [];
   }
@@ -6958,42 +7263,22 @@ function resetCleanLibraryLogFeed() {
     detailsList.style.display = 'none';
     detailsList.innerHTML = '';
   }
-  const detailsToggle = document.getElementById('updateIndexDetailsToggle');
-  if (detailsToggle) {
-    const icon = detailsToggle.querySelector('.material-symbols-outlined');
-    if (icon) icon.textContent = 'expand_more';
-    const labelSpan = detailsToggle.querySelector('span:last-child');
-    if (labelSpan) labelSpan.textContent = 'Show details';
-  }
+  updateCleanLibraryDetailsToggleLabel(false, { activityMode: false });
 }
 
 function appendCleanLibraryLogLine(line, { previewOnly = false } = {}) {
   if (previewOnly && !cleanLibraryPreviewState.active) {
     return;
   }
-  const timestamp = new Date().toISOString();
-  const formatted = `${timestamp} ${line}`;
-  if (cleanLibraryPreviewState.active) {
-    cleanLibraryPreviewState.logLines.push(formatted);
-    if (cleanLibraryPreviewState.logLines.length > 80) {
-      cleanLibraryPreviewState.logLines.shift();
-    }
-  } else if (updateIndexState?.workingPhaseActive) {
-    if (!updateIndexState.logLines) {
-      updateIndexState.logLines = [];
-    }
-    updateIndexState.logLines.push(formatted);
-    if (updateIndexState.logLines.length > 80) {
-      updateIndexState.logLines.shift();
-    }
+  const trimmed = String(line || '').trim();
+  if (!trimmed) {
+    return;
   }
-  const logFeed = document.getElementById('updateIndexLogFeed');
-  if (!logFeed) return;
-  const lines = cleanLibraryPreviewState.active
-    ? cleanLibraryPreviewState.logLines
-    : updateIndexState.logLines || [];
-  logFeed.textContent = lines.join('\n');
-  logFeed.scrollTop = logFeed.scrollHeight;
+  try {
+    appendCleanLibraryEngineLogEntry(JSON.parse(trimmed), { previewOnly });
+  } catch {
+    appendCleanLibraryActivityLine(trimmed, { previewOnly });
+  }
 }
 
 function showCleanLibraryDetailsSection(visible) {
@@ -7105,13 +7390,13 @@ function buildPreviewFakeLogLine() {
   const hash = Math.random().toString(16).slice(2, 10);
   const year = 2020 + Math.floor(Math.random() * 6);
   const templates = [
-    `{"action":"scan_unchanged_skip","path":"${year}/${year}-03-12/img_${hash}.jpg"}`,
-    `{"action":"media_moved","source":"batch/photo_${hash.slice(0, 4)}.jpg","destination":"${year}/${year}-03-12/img_${hash}.jpg"}`,
-    `{"action":"duplicate_trashed","winner":"${year}/${year}-03-12/img_${hash}.jpg","loser":"imports/dup_${hash.slice(0, 4)}.jpg"}`,
-    `{"action":"orientation_baked","file":"${year}/${year}-03-12/img_${hash}.jpg"}`,
-    `{"action":"folder_removed","path":"batch/old_folder"}`,
-    `{"action":"photos_table_rebuilt","row_count":${Math.floor(Math.random() * 9000) + 100}}`,
-    `{"action":"rating_stripped","file":"${year}/${year}-01-05/img_${hash}.jpg"}`,
+    `Scanned ${(Math.floor(Math.random() * 20) + 1) * 500} of 13,899`,
+    `Moved batch/photo_${hash.slice(0, 4)}.jpg → ${year}/${year}-03-12/img_${hash}.jpg`,
+    `Removed duplicate: imports/dup_${hash.slice(0, 4)}.jpg`,
+    `Baked rotation: ${year}/${year}-03-12/img_${hash}.jpg`,
+    `Removed empty folder: batch/old_folder`,
+    `Database rebuilt (${(Math.floor(Math.random() * 9000) + 100).toLocaleString()} rows)`,
+    `Verifying ${(Math.floor(Math.random() * 20) + 1) * 500} of 13,899`,
   ];
   return templates[Math.floor(Math.random() * templates.length)];
 }
@@ -7171,9 +7456,6 @@ async function showPreviewWorkingPhase(runId) {
   cleanLibraryPreviewState.phase = 'working';
   resetUpdateIndexOverlayTitle();
   resetCleanLibraryLogFeed();
-  appendCleanLibraryLogLine('{"action":"operation_started","library_path":"/preview/library"}', {
-    previewOnly: true,
-  });
   showCleanLibraryDetailsSection(true);
   showUpdateIndexPreflightStats(null);
   hideUpdateIndexStats();
@@ -7188,6 +7470,11 @@ async function showPreviewWorkingPhase(runId) {
     rejectCompletion: null,
   };
   cleanLibraryPreviewState.workingProgress = workingProgress;
+  cleanLibraryPreviewState.runStartedAtMs = workingProgress.startedAt;
+  prependCleanLibraryActivityLine(
+    `Started: ${formatCleanLibraryFeedTimestamp(new Date(workingProgress.startedAt))}`,
+    { previewOnly: true },
+  );
 
   let logTicker = null;
   let frameTicker = null;
@@ -7251,7 +7538,7 @@ async function showPreviewWorkingPhase(runId) {
   updateWorkingUi();
   logTicker = setInterval(() => {
     if (isCleanLibraryWorkingProgressPaused()) return;
-    appendCleanLibraryLogLine(buildPreviewFakeLogLine(), { previewOnly: true });
+    appendCleanLibraryActivityLine(buildPreviewFakeLogLine(), { previewOnly: true });
   }, 450);
   cleanLibraryPreviewState.timers.push(logTicker);
 
@@ -7276,22 +7563,35 @@ async function showPreviewWorkingPhase(runId) {
       cleanLibraryPreviewState.workingProgress = null;
     }
   }
-
-  appendCleanLibraryLogLine('{"action":"operation_complete","status":"SUCCESS"}', {
-    previewOnly: true,
-  });
 }
 
 function showPreviewFinishedScreen() {
+  const feedExpanded = isCleanLibraryActivityFeedExpanded();
+  const finishedAt = new Date();
+  const startedAtMs =
+    cleanLibraryPreviewState.runStartedAtMs ||
+    cleanLibraryPreviewState.workingProgress?.startedAt;
+  const elapsedSec = startedAtMs
+    ? (finishedAt.getTime() - startedAtMs) / 1000
+    : Number(cleanLibraryPreviewState.estimatedSeconds) || 0;
+  const totalDisplay = formatPreciseDurationFromSeconds(elapsedSec);
+
+  appendCleanLibraryFinishFeedLines(finishedAt, elapsedSec, { previewOnly: true });
+
   cleanLibraryPreviewState.phase = 'finished';
   setCleanLibraryExplainerVisible(false);
-  setCleanLibrarySecondaryStatus(`Total time: ${cleanLibraryPreviewState.estimatedDisplay}`, true);
+  setCleanLibrarySecondaryStatus(`Total time: ${totalDisplay}`, true);
   updateUpdateIndexUI(
     'Library check complete. Your library is clean and organized.',
-    false,
   );
   showCleanLibraryDetailsSection(true);
   showUpdateIndexButtons('done');
+
+  const detailsList = document.getElementById('updateIndexDetailsList');
+  if (detailsList) {
+    detailsList.style.display = 'none';
+  }
+  setCleanLibraryActivityFeedVisible(feedExpanded, { activityMode: true });
 }
 
 async function startCleanLibraryPreviewFlow() {
@@ -7438,6 +7738,42 @@ function formatAboutDurationFromSeconds(totalSeconds) {
   return `about ${rounded} hour${rounded === 1 ? '' : 's'}`;
 }
 
+function formatPreciseDurationFromSeconds(totalSeconds) {
+  const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  if (seconds < 60) {
+    return `${seconds} sec`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remSec = seconds % 60;
+  if (minutes < 60) {
+    if (remSec === 0) {
+      return `${minutes} min`;
+    }
+    return `${minutes} min ${remSec} sec`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  const parts = [`${hours} hr`];
+  if (remMin > 0) {
+    parts.push(`${remMin} min`);
+  }
+  if (remSec > 0) {
+    parts.push(`${remSec} sec`);
+  }
+  return parts.join(' ');
+}
+
+function appendCleanLibraryFinishFeedLines(finishedAt, elapsedSec, options = {}) {
+  appendCleanLibraryActivityLine(
+    `Finished: ${formatCleanLibraryFeedTimestamp(finishedAt)}`,
+    options,
+  );
+  appendCleanLibraryActivityLine(
+    `Total time: ${formatPreciseDurationFromSeconds(elapsedSec)}`,
+    options,
+  );
+}
+
 function estimateCleanRunRemainingSeconds(processed, total, elapsedSec, phase) {
   const done = Math.max(0, Number(processed) || 0);
   const cap = Math.max(1, Number(total) || 1);
@@ -7528,9 +7864,9 @@ function renderCleanLibraryWorkingStepDisplay() {
   if (!state || state.stepNumber === null) {
     return;
   }
-  const text = buildCleanLibraryWorkingStepText(state.stepNumber, state.phase);
-  const showProgressCount = formatCleanLibraryWorkingProgressSuffix(state.phase) !== '';
-  updateUpdateIndexUI(text, !showProgressCount);
+  updateUpdateIndexUI(
+    buildCleanLibraryWorkingStepText(state.stepNumber, state.phase),
+  );
   syncCleanLibraryWorkingRemainingDisplay();
 }
 
@@ -7588,7 +7924,7 @@ function requestCleanLibraryWorkingStep(phase) {
   const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[phase] || 1;
   const state = cleanLibraryWorkingStepState;
   if (!state) {
-    updateUpdateIndexUI(buildCleanLibraryWorkingStepText(stepNumber, phase), true);
+    updateUpdateIndexUI(buildCleanLibraryWorkingStepText(stepNumber, phase));
     syncCleanLibraryWorkingRemainingDisplay();
     return;
   }
@@ -7631,6 +7967,11 @@ function handleCleanLibraryWorkingProgressEvent(event = {}) {
     return;
   }
   updateCleanLibraryWorkingProgress(event.phase, event.processed, event.total);
+  maybeAppendCleanLibraryProgressMilestone(
+    event.phase,
+    event.processed,
+    event.total,
+  );
 
   const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[event.phase] || 1;
   const state = cleanLibraryWorkingStepState;
@@ -7660,6 +8001,10 @@ function beginCleanLibraryWorkingUi() {
   hideUpdateIndexStats();
   showCleanLibraryDetailsSection(true);
   resetCleanLibraryLogFeed();
+  prependCleanLibraryActivityLine(
+    `Started: ${formatCleanLibraryFeedTimestamp(new Date(updateIndexState.runStartedAtMs))}`,
+    { allowInactive: true },
+  );
   showUpdateIndexButtons('cancel');
   requestCleanLibraryWorkingStep('setup');
 }
@@ -7684,21 +8029,29 @@ function syncCleanLibraryWorkingRemainingDisplay() {
 }
 
 function showCleanLibraryFinishedUi() {
+  const feedExpanded = isCleanLibraryActivityFeedExpanded();
+  const finishedAt = new Date();
+  const elapsedSec = updateIndexState.runStartedAtMs
+    ? (finishedAt.getTime() - updateIndexState.runStartedAtMs) / 1000
+    : Number(updateIndexState.estimatedSeconds) || 0;
+  const totalDisplay = formatPreciseDurationFromSeconds(elapsedSec);
+
+  appendCleanLibraryFinishFeedLines(finishedAt, elapsedSec, { allowInactive: true });
+
   endCleanLibraryWorkingUi();
   updateIndexState.overlayPhase = 'finished';
-  const elapsedSec = updateIndexState.runStartedAtMs
-    ? (Date.now() - updateIndexState.runStartedAtMs) / 1000
-    : Number(updateIndexState.estimatedSeconds) || 0;
-  const totalDisplay =
-    updateIndexState.estimatedDisplay ||
-    formatAboutDurationFromSeconds(elapsedSec);
   setCleanLibrarySecondaryStatus(`Total time: ${totalDisplay}`, true);
   updateUpdateIndexUI(
     'Library check complete. Your library is clean and organized.',
-    false,
   );
   showCleanLibraryDetailsSection(true);
   showUpdateIndexButtons('done');
+
+  const detailsList = document.getElementById('updateIndexDetailsList');
+  if (detailsList) {
+    detailsList.style.display = 'none';
+  }
+  setCleanLibraryActivityFeedVisible(feedExpanded, { activityMode: true });
 }
 
 function resolveCleanLibraryStreamResume() {
@@ -7709,6 +8062,25 @@ function resolveCleanLibraryStreamResume() {
     return true;
   }
   return undefined;
+}
+
+async function reconcileCleanLibraryStreamResume() {
+  const intent = resolveCleanLibraryStreamResume();
+  if (intent !== true) {
+    return intent;
+  }
+  try {
+    const checkpoint = await probeCleanLibraryCheckpoint();
+    if (checkpoint?.resumable) {
+      return true;
+    }
+    updateIndexState.resumeIntent = false;
+    return false;
+  } catch (error) {
+    console.warn('Checkpoint probe failed before run:', error);
+    updateIndexState.resumeIntent = false;
+    return false;
+  }
 }
 
 async function probeCleanLibraryCheckpoint() {
@@ -7753,8 +8125,9 @@ async function loadCleanLibraryManifestTail(manifestPath, lines = 40) {
   }
   const data = await response.json();
   for (const line of data.lines || []) {
-    if (line.trim()) {
-      appendCleanLibraryLogLine(line.trim());
+    const formatted = formatCleanLibraryManifestLine(line);
+    if (formatted) {
+      appendCleanLibraryActivityLine(formatted);
     }
   }
 }
@@ -7799,7 +8172,7 @@ function showCleanLibraryInterruptedGate() {
 function applyCleanerStreamToUpdateIndex(event = {}) {
   if (event.type === 'log' && event.entry) {
     if (updateIndexState.workingPhaseActive) {
-      appendCleanLibraryLogLine(JSON.stringify(event.entry));
+      appendCleanLibraryEngineLogEntry(event.entry);
     }
     return;
   }
@@ -7982,7 +8355,11 @@ function renderUpdateIndexPreflightResult(scanResult) {
 
   if (scanResult.status === 'INVENTORY' || scanResult.status === 'RESUME') {
     if (scanResult.status === 'RESUME') {
+      updateIndexState.resumeIntent = true;
       showContinueLibraryCleanupTitle();
+    } else if (updateIndexState.resumeIntent === true) {
+      updateIndexState.resumeIntent = false;
+      resetUpdateIndexOverlayTitle();
     }
     showUpdateIndexPreflightStats(scanResult);
     const photos =
@@ -8110,9 +8487,10 @@ async function executeUpdateIndex() {
   await prefetchCleanLibraryManifestTail();
 
   try {
+    const resume = await reconcileCleanLibraryStreamResume();
     const result = await streamMakeLibraryPerfect({
       signal: updateIndexState.abortController.signal,
-      resume: resolveCleanLibraryStreamResume(),
+      resume,
       onProgress: (event) => {
         if (cleanLibraryRunUiPaused) {
           return;
@@ -8123,17 +8501,19 @@ async function executeUpdateIndex() {
     });
 
     if (result?.status === 'CANCELLED') {
+      updateIndexState.resumeIntent = null;
       showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
       closeUpdateIndexOverlayImmediate();
       return;
     }
 
+    updateIndexState.resumeIntent = null;
     updateIndexState.resultStats = result?.stats || null;
-    renderUpdateIndexDetails();
     showCleanLibraryFinishedUi();
     await loadAndRenderPhotos(false);
   } catch (error) {
     if (error?.name === 'AbortError' || updateIndexState?.cancelRequested) {
+      updateIndexState.resumeIntent = null;
       showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
       closeUpdateIndexOverlayImmediate();
       return;
@@ -8156,17 +8536,13 @@ async function executeUpdateIndex() {
 }
 
 /**
- * Update UI status text
+ * Update Clean library overlay status text (no spinner — use n/m counts instead).
  */
-function updateUpdateIndexUI(statusText, showSpinner = false) {
+function updateUpdateIndexUI(statusText) {
   const statusTextEl = document.getElementById('updateIndexStatusText');
 
   if (statusTextEl) {
-    if (showSpinner) {
-      setImportSpinnerStatus(statusTextEl, statusText);
-    } else {
-      statusTextEl.textContent = statusText;
-    }
+    statusTextEl.textContent = statusText;
   }
 }
 

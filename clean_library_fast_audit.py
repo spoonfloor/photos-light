@@ -48,6 +48,11 @@ CANONICAL_BASENAME_RE = re.compile(
 )
 
 ProgressCallback = Optional[Callable[[Dict[str, Any]], None]]
+CancelCheck = Optional[Callable[[], bool]]
+
+
+class FastAuditCancelled(Exception):
+    """Cooperative stop during final verification."""
 
 
 def _emit(callback: ProgressCallback, payload: Dict[str, Any]) -> None:
@@ -150,6 +155,11 @@ def _basename_layout_issue(rel_path: str) -> Optional[Dict[str, str]]:
     return None
 
 
+def _raise_if_cancelled(cancel_check: CancelCheck) -> None:
+    if cancel_check and cancel_check():
+        raise FastAuditCancelled()
+
+
 def run_fast_library_audit(
     library_path: str,
     db_path: Optional[str] = None,
@@ -158,6 +168,7 @@ def run_fast_library_audit(
     include_metadata_checks: bool = True,
     include_hash_checks: bool = True,
     audit_progress_total: Optional[int] = None,
+    cancel_check: CancelCheck = None,
 ) -> List[Dict[str, str]]:
     """
     Read-only fast audit. Returns issue dicts compatible with summarize_clean_library_issues.
@@ -181,8 +192,10 @@ def run_fast_library_audit(
         },
     )
 
+    _raise_if_cancelled(cancel_check)
     issues.extend(_path_structure_issues(library_path))
     issues.extend(_audit_library_metadata_dir(library_path))
+    _raise_if_cancelled(cancel_check)
 
     db_conn: Optional[sqlite3.Connection] = None
     db_rows: List[sqlite3.Row] = []
@@ -200,12 +213,14 @@ def run_fast_library_audit(
     audit_idx = 0
 
     for root, dirs, files in os.walk(library_path, topdown=True):
+        _raise_if_cancelled(cancel_check)
         rel_root = os.path.relpath(root, library_path)
         if rel_root != "." and in_infrastructure(rel_root):
             dirs[:] = []
             continue
 
         for filename in files:
+            _raise_if_cancelled(cancel_check)
             if filename in IGNORED_LIBRARY_FILES:
                 continue
             full_path = os.path.join(root, filename)
@@ -282,8 +297,10 @@ def run_fast_library_audit(
                         )
                     )
 
+    _raise_if_cancelled(cancel_check)
     if include_hash_checks:
         for file_hash, group in hash_groups.items():
+            _raise_if_cancelled(cancel_check)
             if len(group) < 2:
                 continue
             ordered = sorted(group, key=lambda item: (item[1], item[0].lower()))
@@ -298,11 +315,13 @@ def run_fast_library_audit(
                 )
             _ = file_hash
 
+    _raise_if_cancelled(cancel_check)
     db_paths = set(db_by_path.keys())
     for ghost_path in sorted(db_paths - active_media_paths):
         issues.append(format_issue("ghost_db_reference", ghost_path))
     for mole_path in sorted(active_media_paths - db_paths):
         issues.append(format_issue("mole_missing_from_db", mole_path))
+    _raise_if_cancelled(cancel_check)
 
     if db_conn is not None:
         db_conn.close()

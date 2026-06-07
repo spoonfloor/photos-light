@@ -1374,12 +1374,12 @@ body.filter-chip-rail-visible {
   display: none;
   margin: 8px 0 0;
   padding: 10px 12px;
-  max-height: 220px;
+  max-height: 110px;
   overflow-y: auto;
   overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.45;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--text-secondary);
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid rgba(255, 255, 255, 0.08);

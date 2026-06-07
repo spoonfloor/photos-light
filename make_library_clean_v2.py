@@ -63,6 +63,7 @@ from library_layout import (
     resolve_db_path,
 )
 from clean_library_fast_audit import (
+    FastAuditCancelled,
     _basename_layout_issue,
     count_supported_media_leaf_files as fast_count_supported_media_leaf_files,
     run_fast_library_audit,
@@ -1285,7 +1286,11 @@ class LibraryCleaner:
                 self._raise_if_cancelled()
                 self._current_phase = "audit"
                 self._flush_checkpoint(records=canonicalized)
-                issues = self.final_audit(audit_progress_total=len(canonicalized))
+                try:
+                    issues = self.final_audit(audit_progress_total=len(canonicalized))
+                except FastAuditCancelled:
+                    raise CleanLibraryCancelled()
+                self._raise_if_cancelled()
                 if issues:
                     preview = issues[:10]
                     self.log("final_audit_failed", issue_count=len(issues), issues=preview)
@@ -1303,7 +1308,9 @@ class LibraryCleaner:
                     )
                 self._current_phase = "audit_complete"
                 self._flush_checkpoint(records=canonicalized)
+                self._raise_if_cancelled()
 
+            self._raise_if_cancelled()
             self._current_phase = "complete"
             self._write_checkpoint(phase="complete", status="complete", force=True, records=canonicalized)
             self.log("operation_complete", stats=self.stats, resumed_from=resumed_from)
@@ -2171,11 +2178,13 @@ class LibraryCleaner:
         return n
 
     def final_audit(self, audit_progress_total: Optional[int] = None) -> List[Dict[str, str]]:
+        cancel_check = self._cancel_requested if self._cancel_check else None
         return run_fast_library_audit(
             self.library_path,
             db_path=self.db_path,
             progress_callback=self._progress_callback,
             audit_progress_total=audit_progress_total,
+            cancel_check=cancel_check,
         )
 
 

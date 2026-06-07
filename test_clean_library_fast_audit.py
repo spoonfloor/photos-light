@@ -4,7 +4,7 @@ import unittest
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from clean_library_fast_audit import run_fast_library_audit
+from clean_library_fast_audit import FastAuditCancelled, run_fast_library_audit
 from db_schema import create_database_schema
 from library_layout import canonical_db_path
 
@@ -162,6 +162,48 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
             self.assertEqual(len(progress_events), 5)
             self.assertTrue(all(event["total"] == 5 for event in progress_events))
             self.assertEqual(progress_events[-1]["processed"], 5)
+
+    def test_cancel_check_stops_audit_walk(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+
+            for index in range(3):
+                rel_path = os.path.join(
+                    "2026",
+                    "2026-04-12",
+                    f"img_20260412_{index:08x}.jpg",
+                )
+                full_path = os.path.join(tmpdir, rel_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "wb") as handle:
+                    handle.write(f"photo-{index}".encode())
+
+            cancel_after = {"count": 0}
+
+            def cancel_check():
+                cancel_after["count"] += 1
+                return cancel_after["count"] >= 2
+
+            with patch(
+                "clean_library_fast_audit.verify_media_file",
+                return_value=(True, "mock"),
+            ), patch(
+                "clean_library_fast_audit.compute_hash_legacy",
+                side_effect=lambda _path: (f"hash-{os.path.basename(_path)}", False),
+            ), patch(
+                "clean_library_fast_audit.extract_exif_rating",
+                return_value=None,
+            ), patch(
+                "clean_library_fast_audit.get_orientation_flag",
+                return_value=1,
+            ):
+                with self.assertRaises(FastAuditCancelled):
+                    run_fast_library_audit(
+                        tmpdir,
+                        db_path=db_path,
+                        cancel_check=cancel_check,
+                    )
 
 
 if __name__ == "__main__":
