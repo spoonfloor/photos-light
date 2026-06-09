@@ -89,9 +89,11 @@ from library_layout import (
 from media_finalization import finalize_mutated_media
 from normalization_convert import (
     ConvertDependencies,
+    finalize_convert_layout,
     iter_convert_events,
     rewrite_library_layout,
     scan_convert_library,
+    scan_convert_quarantine,
 )
 from normalization_ingest import IngestDependencies, iter_ingest_events
 from photo_canonicalization import (
@@ -4154,6 +4156,7 @@ def analyze_convert_to_library_folder(library_path, media_count):
         and scan['visible_folder_count'] > 0
         and scan['non_media_count'] > 0
     )
+    has_version_control_dir = os.path.isdir(os.path.join(library_path, '.git'))
 
     reasons = []
     if scan['non_media_count'] >= 20:
@@ -4164,6 +4167,8 @@ def analyze_convert_to_library_folder(library_path, media_count):
         reasons.append('busy_mixed_workspace_root')
     if scan['obvious_signals_present']:
         reasons.append('desktop_like_contents')
+    if has_version_control_dir:
+        reasons.append('version_control_dir')
 
     return _folder_warning_from_scan(scan, reasons)
 
@@ -4738,6 +4743,33 @@ def terraform_library():
             print(f"✅ Found {len(non_media_files)} non-media files (will be moved to trash)\n")
             
             log_manifest('scan_complete', {'total_files': total_files, 'non_media_files': len(non_media_files)})
+
+            quarantine_dirs, quarantine_files = scan_convert_quarantine(library_path)
+            quarantine_paths = quarantine_dirs + quarantine_files
+            if quarantine_paths:
+                print("🗑️  Quarantining hidden root entries...")
+                error_dir = os.path.join(trash_dir, 'errors')
+                os.makedirs(error_dir, exist_ok=True)
+
+                for quarantine_path in quarantine_paths:
+                    try:
+                        trash_path = move_file_to_category_trash(
+                            library_path,
+                            trash_dir,
+                            quarantine_path,
+                            'errors',
+                        )
+                        log_manifest(
+                            'quarantine',
+                            {'original': quarantine_path, 'moved_to': trash_path},
+                        )
+                        print(
+                            f"   🗑️  {os.path.relpath(quarantine_path, library_path)} → trash"
+                        )
+                    except Exception as e:
+                        print(f"   ⚠️  Could not quarantine {quarantine_path}: {e}")
+
+                print(f"✅ Quarantined {len(quarantine_paths)} hidden root entr{'y' if len(quarantine_paths) == 1 else 'ies'}\n")
             
             # Move non-media files to trash immediately
             if non_media_files:
@@ -4903,13 +4935,45 @@ def terraform_library():
 
             yield f"event: phase\ndata: {json.dumps({'phase': 'convert', 'status': 'complete', 'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
             
-            # Cleanup ALL folders except allowed ones
-            print("\n🧹 Cleaning up folders...")
+            # Cleanup non-canonical folders and trash any remaining non-media.
+            print("\n🧹 Cleaning up folders and non-media stragglers...")
             yield f"event: phase\ndata: {json.dumps({'phase': 'folders', 'status': 'starting'})}\n\n"
-            
-            removed_count = cleanup_terraform_folders(library_path)
-            print(f"✅ Cleanup complete - removed {removed_count} folder(s)\n")
-            yield f"event: phase\ndata: {json.dumps({'phase': 'folders', 'status': 'complete', 'removed': removed_count})}\n\n"
+
+            removed_count = 0
+            trashed_stragglers = 0
+            error_dir = os.path.join(trash_dir, 'errors')
+            os.makedirs(error_dir, exist_ok=True)
+
+            for _pass in range(3):
+                removed_this_pass, stragglers = finalize_convert_layout(library_path)
+                removed_count += removed_this_pass
+                if not stragglers:
+                    break
+
+                print(f"   🗑️  Trashing {len(stragglers)} non-media straggler(s)...")
+                for straggler_path in stragglers:
+                    if not os.path.exists(straggler_path):
+                        continue
+                    try:
+                        trash_path = move_file_to_category_trash(
+                            library_path,
+                            trash_dir,
+                            straggler_path,
+                            'errors',
+                        )
+                        trashed_stragglers += 1
+                        log_manifest(
+                            'non_media_straggler',
+                            {'original': straggler_path, 'moved_to': trash_path},
+                        )
+                    except Exception as e:
+                        print(f"   ⚠️  Could not trash {straggler_path}: {e}")
+
+            print(
+                f"✅ Cleanup complete - removed {removed_count} folder(s), "
+                f"trashed {trashed_stragglers} straggler(s)\n"
+            )
+            yield f"event: phase\ndata: {json.dumps({'phase': 'folders', 'status': 'complete', 'removed': removed_count, 'trashed_stragglers': trashed_stragglers})}\n\n"
             
             # Close DB
             conn.close()

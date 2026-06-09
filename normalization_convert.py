@@ -12,9 +12,14 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
-from library_cleanliness import ALL_MEDIA_EXTENSIONS, VIDEO_MEDIA_EXTENSIONS
+from library_cleanliness import (
+    ALL_MEDIA_EXTENSIONS,
+    IGNORED_LIBRARY_FILES,
+    VIDEO_MEDIA_EXTENSIONS,
+    in_infrastructure,
+)
 from library_layout import ROOT_INFRASTRUCTURE_DIRS
 from normalization_contract import CONVERT_POLICY, NormalizationPolicy
 from normalization_core import (
@@ -76,15 +81,33 @@ class ConvertScanResult:
 
 
 def scan_convert_library(library_path: str) -> ConvertScanResult:
-    """Walk an in-library tree and partition supported media from everything else."""
+    """
+    Walk the library and partition supported media from everything else.
+
+    Every file outside library infrastructure is classified — including dot-files
+    and paths under hidden folders (except allowed infrastructure like
+    ``.library`` and ``.trash``).
+    """
+    library_path = os.path.abspath(library_path)
     media_files: List[str] = []
     non_media_files: List[str] = []
 
-    for root, dirs, files in os.walk(library_path):
-        dirs[:] = [entry for entry in dirs if not entry.startswith(".")]
+    for root, dirs, files in os.walk(library_path, topdown=True):
+        rel_root = os.path.relpath(root, library_path)
+        if rel_root != "." and in_infrastructure(rel_root):
+            dirs[:] = []
+            continue
+
+        dirs[:] = [
+            entry
+            for entry in dirs
+            if not in_infrastructure(
+                os.path.relpath(os.path.join(root, entry), library_path)
+            )
+        ]
 
         for filename in files:
-            if filename.startswith("."):
+            if filename in IGNORED_LIBRARY_FILES:
                 continue
 
             full_path = os.path.join(root, filename)
@@ -97,6 +120,76 @@ def scan_convert_library(library_path: str) -> ConvertScanResult:
                 non_media_files.append(full_path)
 
     return ConvertScanResult(media_files=media_files, non_media_files=non_media_files)
+
+
+def scan_convert_quarantine(library_path: str) -> Tuple[List[str], List[str]]:
+    """
+    Hidden root entries that must leave the library before final audit.
+
+    Convert scans skip dot-directories, so folders like ``.git`` would otherwise
+    survive cleanup and fail verification with thousands of non-media issues.
+    """
+    library_path = os.path.abspath(library_path)
+    infrastructure = set(ROOT_INFRASTRUCTURE_DIRS)
+    quarantine_dirs: List[str] = []
+    quarantine_files: List[str] = []
+
+    try:
+        root_items = os.listdir(library_path)
+    except OSError:
+        return quarantine_dirs, quarantine_files
+
+    for item in root_items:
+        if not item.startswith("."):
+            continue
+        if item in IGNORED_LIBRARY_FILES:
+            continue
+
+        item_path = os.path.join(library_path, item)
+        if os.path.isdir(item_path):
+            if item not in infrastructure:
+                quarantine_dirs.append(item_path)
+        elif os.path.isfile(item_path):
+            quarantine_files.append(item_path)
+
+    return quarantine_dirs, quarantine_files
+
+
+def _directory_tree_has_media(dir_path: str) -> bool:
+    """Return True when any supported media file remains under ``dir_path``."""
+    dir_path = os.path.abspath(dir_path)
+    for root, dirs, files in os.walk(dir_path, topdown=True):
+        rel_root = os.path.relpath(root, dir_path)
+        if rel_root != "." and in_infrastructure(rel_root):
+            dirs[:] = []
+            continue
+
+        dirs[:] = [
+            entry
+            for entry in dirs
+            if not in_infrastructure(os.path.relpath(os.path.join(root, entry), dir_path))
+        ]
+
+        for filename in files:
+            if filename in IGNORED_LIBRARY_FILES:
+                continue
+            _, ext = os.path.splitext(filename)
+            if ext.lower() in ALL_MEDIA_EXTENSIONS:
+                return True
+    return False
+
+
+def finalize_convert_layout(library_path: str) -> Tuple[int, List[str]]:
+    """
+    Remove non-canonical folders and return any remaining non-media paths.
+
+    Callers should trash returned paths, then rerun until the list is empty if
+    needed. ``rewrite_library_layout`` runs first so empty project trees collapse
+    before the final non-media rescan.
+    """
+    removed_dirs = rewrite_library_layout(library_path)
+    stragglers = scan_convert_library(library_path).non_media_files
+    return removed_dirs, stragglers
 
 
 def normalize_convert_photo(
@@ -291,22 +384,10 @@ def rewrite_library_layout(library_path: str) -> int:
                     pass
             continue
 
-        try:
-            visible_entries = [
-                entry for entry in os.listdir(item_path) if entry not in ignored_entries
-            ]
-        except OSError:
-            continue
-
-        if visible_entries:
+        if _directory_tree_has_media(item_path):
             continue
 
         try:
-            for ignored_entry in os.listdir(item_path):
-                if ignored_entry in ignored_entries:
-                    ignored_path = os.path.join(item_path, ignored_entry)
-                    if os.path.isfile(ignored_path):
-                        os.remove(ignored_path)
             shutil.rmtree(item_path)
             removed_count += 1
         except OSError:
