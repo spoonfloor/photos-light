@@ -833,6 +833,17 @@ body.filter-chip-rail-visible {
   color: var(--text-secondary);
 }
 
+.dialog-message-warning {
+  display: block;
+  margin-bottom: 12px;
+  color: #ffb74d;
+}
+
+.dialog-message-body {
+  display: block;
+  color: #fff;
+}
+
 .dialog-actions {
   display: flex;
   gap: 12px;
@@ -1366,20 +1377,17 @@ body.filter-chip-rail-visible {
   color: var(--text-secondary);
 }
 
-#updateIndexOverlay .import-secondary-status {
-  margin-top: 8px;
-  font-size: 14px;
-  line-height: 1.4;
-  color: var(--text-secondary);
-}
-
-#updateIndexOverlay .clean-library-log-feed {
+.import-details-section .clean-library-log-feed {
   display: none;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   margin: 8px 0 0;
   padding: 10px 12px;
   max-height: 110px;
   overflow-y: auto;
-  overflow-x: auto;
+  overflow-x: hidden;
   font-family: inherit;
   font-size: 12px;
   line-height: 1.5;
@@ -1389,6 +1397,7 @@ body.filter-chip-rail-visible {
   border-radius: 6px;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* Debug file count / cleaner scoreboard: six metric columns must fit (no clipping). */
@@ -1667,8 +1676,13 @@ body.library-recovery-active .library-recovery-dock {
 }
 
 #updateIndexOverlay #updateIndexPreflightStats,
+#updateIndexOverlay #updateIndexInflightStats,
 #importOverlay #importPreflightStats,
-#importOverlay #importStats {
+#importOverlay #importStats,
+#terraformPreviewOverlay #terraformPreviewPreflightStats,
+#terraformPreviewOverlay #terraformPreviewConfirmStats,
+#terraformProgressOverlay #terraformProgressStats,
+#terraformCompleteOverlay #terraformCompleteStats {
   display: grid;
   grid-template-columns: repeat(
     3,
@@ -1681,8 +1695,13 @@ body.library-recovery-active .library-recovery-dock {
 }
 
 #updateIndexOverlay #updateIndexPreflightStats .import-stat,
+#updateIndexOverlay #updateIndexInflightStats .import-stat,
 #importOverlay #importPreflightStats .import-stat,
-#importOverlay #importStats .import-stat {
+#importOverlay #importStats .import-stat,
+#terraformPreviewOverlay #terraformPreviewPreflightStats .import-stat,
+#terraformPreviewOverlay #terraformPreviewConfirmStats .import-stat,
+#terraformProgressOverlay #terraformProgressStats .import-stat,
+#terraformCompleteOverlay #terraformCompleteStats .import-stat {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1692,10 +1711,59 @@ body.library-recovery-active .library-recovery-dock {
 
 #updateIndexOverlay #updateIndexPreflightStats .import-stat-label,
 #updateIndexOverlay #updateIndexPreflightStats .import-stat-value,
+#updateIndexOverlay #updateIndexInflightStats .import-stat-label,
+#updateIndexOverlay #updateIndexInflightStats .import-stat-value,
 #importOverlay #importPreflightStats .import-stat-label,
-#importOverlay #importPreflightStats .import-stat-value {
+#importOverlay #importPreflightStats .import-stat-value,
+#importOverlay #importStats .import-stat-label,
+#importOverlay #importStats .import-stat-value,
+#terraformPreviewOverlay #terraformPreviewPreflightStats .import-stat-label,
+#terraformPreviewOverlay #terraformPreviewPreflightStats .import-stat-value,
+#terraformPreviewOverlay #terraformPreviewConfirmStats .import-stat-label,
+#terraformPreviewOverlay #terraformPreviewConfirmStats .import-stat-value,
+#terraformProgressOverlay #terraformProgressStats .import-stat-label,
+#terraformProgressOverlay #terraformProgressStats .import-stat-value,
+#terraformCompleteOverlay #terraformCompleteStats .import-stat-label,
+#terraformCompleteOverlay #terraformCompleteStats .import-stat-value {
   align-self: flex-start;
   text-align: left;
+}
+
+#importOverlay .import-explainer,
+#terraformProgressOverlay .import-explainer,
+#terraformCompleteOverlay .import-explainer {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+#importOverlay .import-secondary-status,
+#updateIndexOverlay .import-secondary-status,
+#terraformProgressOverlay .import-secondary-status {
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+#terraformWarningOverlay .import-status-text {
+  display: block;
+}
+
+#terraformPreviewOverlay .import-explainer {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+#terraformPreviewOverlay .terraform-preview-path {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 16px;
+  word-break: break-all;
 }
 
 #updateIndexOverlay #updateIndexStats .import-stat {
@@ -1717,6 +1785,8 @@ body.library-recovery-active .library-recovery-dock {
 
 .import-details-section {
   padding: 12px 20px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .import-details-toggle {
@@ -1746,6 +1816,9 @@ body.library-recovery-active .library-recovery-dock {
 
 .import-details-list {
   max-height: 200px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   margin-top: 8px;
   padding: 8px 0;
@@ -1761,7 +1834,8 @@ body.library-recovery-active .library-recovery-dock {
   align-items: flex-start;
   gap: 8px;
   padding: 8px 0;
-  font-size: 13px;
+  font-size: 11px;
+  min-width: 0;
   /* No cards, no backgrounds, no borders */
 }
 
@@ -1784,14 +1858,19 @@ body.library-recovery-active .library-recovery-dock {
 
 .import-detail-text {
   flex: 1;
+  min-width: 0;
   color: var(--text-primary);
   line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .import-detail-message {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   margin-top: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .import-actions {
@@ -1983,9 +2062,6 @@ body.library-recovery-active .library-recovery-dock {
 
 .picker-subtitle-warning {
   display: block;
-}
-
-.picker-subtitle-warning-label {
   color: #ffb74d;
 }
 
@@ -2212,23 +2288,8 @@ body.library-recovery-active .library-recovery-dock {
   margin: 8px 0 0 0 !important;
   font-family: inherit !important;
   font-size: 13px !important;
-  color: var(--text-secondary, #b3b3b3) !important;
+  color: #fff !important;
   line-height: 1.4 !important;
-}
-
-.picker-convert-verdict {
-  margin: 8px 0 0 0 !important;
-  font-family: inherit !important;
-  font-size: 13px !important;
-  line-height: 1.4 !important;
-}
-
-.picker-convert-verdict--good {
-  color: #81c784 !important;
-}
-
-.picker-convert-verdict--bad {
-  color: #ffb74d !important;
 }
 
 .picker-actions {

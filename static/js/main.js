@@ -209,6 +209,334 @@ const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
 // ============================================================================
 const SHOW_FIRST_RUN_DEBUG_BUTTON = false;
 
+const DEBUG_FLOW_PREVIEW_SCAN_MS = 4000;
+const DEBUG_FLOW_PREVIEW_INFLIGHT_MS = 6000;
+const DEBUG_FLOW_LOG_PATHS = {
+  add: '.logs/import_20260609_143022.jsonl',
+  clean: '.logs/clean_library_20260609_143022.jsonl',
+  convert: '.logs/terraform_20260609_143022.jsonl',
+};
+const FLOW_INFLIGHT_BODY = {
+  add: 'Adding photos and videos to your library.',
+  clean: 'Checking media files, repairing issues, and updating library database.',
+  convert: 'Converting files and organizing your library.',
+};
+const debugFlowPreviewState = {
+  active: false,
+  flow: null,
+  screen: null,
+  runId: 0,
+  timers: [],
+  photoTarget: 0,
+  videoTarget: 0,
+  estimatedDisplay: '',
+  estimatedSeconds: 0,
+  inflightTargets: null,
+  onPreflightContinue: null,
+  onDismiss: null,
+};
+
+const CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES = 200;
+
+const FLOW_ACTIVITY_LOG_REGISTRY = {
+  add: {
+    toggleId: 'importDetailsToggle',
+    logFeedId: 'importLogFeed',
+    detailsListId: 'importDetailsList',
+    maxLines: 80,
+    activityModeLabel: false,
+  },
+  clean: {
+    toggleId: 'updateIndexDetailsToggle',
+    logFeedId: 'updateIndexLogFeed',
+    detailsListId: 'updateIndexDetailsList',
+    maxLines: CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES,
+    activityModeLabel: true,
+  },
+  convert: {
+    toggleId: 'terraformProgressDetailsToggle',
+    logFeedId: 'terraformProgressLogFeed',
+    detailsListId: null,
+    maxLines: 80,
+    activityModeLabel: false,
+  },
+  convertComplete: {
+    toggleId: 'terraformCompleteDetailsToggle',
+    logFeedId: 'terraformCompleteLogFeed',
+    detailsListId: null,
+    maxLines: 80,
+    activityModeLabel: false,
+  },
+};
+
+const flowActivityLogFeeds = {};
+
+function trimCleanLibraryFeedLines(lines) {
+  if (lines.length <= CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES) {
+    return lines;
+  }
+  const overflow = lines.length - CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES;
+  const startLine = lines[0]?.startsWith('Started:') ? lines[0] : null;
+  if (startLine) {
+    return [startLine, ...lines.slice(1 + overflow)];
+  }
+  return lines.slice(overflow);
+}
+
+function formatFlowLogPointer(logPath) {
+  return `A detailed log can be found at:\n${logPath}`;
+}
+
+function updateFlowDetailsToggleLabel(
+  toggleId,
+  expanded,
+  { activityMode = false } = {},
+) {
+  const detailsToggle = document.getElementById(toggleId);
+  if (!detailsToggle) {
+    return;
+  }
+  detailsToggle.classList.toggle('expanded', expanded);
+  const icon = detailsToggle.querySelector('.material-symbols-outlined');
+  if (icon) {
+    icon.textContent = expanded ? 'expand_less' : 'expand_more';
+  }
+  const labelSpan = detailsToggle.querySelector('span:last-child');
+  if (labelSpan) {
+    labelSpan.textContent = expanded
+      ? activityMode
+        ? 'Hide activity'
+        : 'Hide details'
+      : activityMode
+        ? 'Show activity'
+        : 'Show details';
+  }
+}
+
+function createFlowActivityLogFeed(flowKey) {
+  const config = FLOW_ACTIVITY_LOG_REGISTRY[flowKey];
+  if (!config) {
+    throw new Error(`Unknown flow activity log: ${flowKey}`);
+  }
+
+  let lines = [];
+  let logPointer = null;
+
+  const trimLines = (nextLines) => {
+    if (flowKey === 'clean') {
+      return trimCleanLibraryFeedLines(nextLines);
+    }
+    if (nextLines.length <= config.maxLines) {
+      return nextLines;
+    }
+    return nextLines.slice(-config.maxLines);
+  };
+
+  const buildDisplayLines = () => {
+    const output = [...lines];
+    if (logPointer) {
+      output.push(logPointer);
+    }
+    return output;
+  };
+
+  const splitLogPointerLine = (nextLines) => {
+    const adopted = [...nextLines];
+    const pointerIdx = adopted.findIndex((line) =>
+      String(line).startsWith('A detailed log can be found at:'),
+    );
+    if (pointerIdx < 0) {
+      return { lines: adopted, pointer: null };
+    }
+    const pointer = adopted[pointerIdx];
+    adopted.splice(pointerIdx, 1);
+    return { lines: adopted, pointer };
+  };
+
+  const render = () => {
+    const logFeed = document.getElementById(config.logFeedId);
+    if (!logFeed) {
+      return;
+    }
+    logFeed.textContent = buildDisplayLines().join('\n');
+    logFeed.scrollTop = logFeed.scrollHeight;
+  };
+
+  return {
+    getLines() {
+      return buildDisplayLines();
+    },
+    hasLines() {
+      return lines.length > 0 || Boolean(logPointer);
+    },
+    render,
+    reset(logPath) {
+      lines = [];
+      logPointer = logPath ? formatFlowLogPointer(logPath) : null;
+      render();
+    },
+    clear() {
+      lines = [];
+      logPointer = null;
+      render();
+    },
+    append(line) {
+      const text = String(line || '').trim();
+      if (!text) {
+        return;
+      }
+      lines = trimLines([...lines, text]);
+      render();
+    },
+    prepend(line) {
+      const text = String(line || '').trim();
+      if (!text) {
+        return;
+      }
+      lines = trimLines([text, ...lines]);
+      render();
+    },
+    adoptLines(nextLines) {
+      const { lines: adoptedLines, pointer } = splitLogPointerLine(nextLines);
+      lines = trimLines(adoptedLines);
+      logPointer = pointer;
+      render();
+    },
+    setLogPointer(logPath) {
+      logPointer = logPath ? formatFlowLogPointer(logPath) : null;
+      render();
+    },
+    isExpanded() {
+      const logFeed = document.getElementById(config.logFeedId);
+      return Boolean(logFeed && logFeed.style.display !== 'none');
+    },
+    setExpanded(visible, { activityMode = config.activityModeLabel } = {}) {
+      const logFeed = document.getElementById(config.logFeedId);
+      const detailsList = config.detailsListId
+        ? document.getElementById(config.detailsListId)
+        : null;
+      if (logFeed) {
+        logFeed.style.display = visible ? 'block' : 'none';
+        if (visible) {
+          render();
+        }
+      }
+      if (visible && detailsList) {
+        detailsList.style.display = 'none';
+      }
+      updateFlowDetailsToggleLabel(config.toggleId, visible, { activityMode });
+    },
+    collapseDetails() {
+      lines = [];
+      logPointer = null;
+      updateFlowDetailsToggleLabel(config.toggleId, false, {
+        activityMode: config.activityModeLabel,
+      });
+      const logFeed = document.getElementById(config.logFeedId);
+      if (logFeed) {
+        logFeed.textContent = '';
+        logFeed.style.display = 'none';
+      }
+      const detailsList = config.detailsListId
+        ? document.getElementById(config.detailsListId)
+        : null;
+      if (detailsList) {
+        detailsList.style.display = 'none';
+        detailsList.innerHTML = '';
+      }
+    },
+  };
+}
+
+function getFlowActivityLogFeed(flowKey) {
+  if (!flowActivityLogFeeds[flowKey]) {
+    flowActivityLogFeeds[flowKey] = createFlowActivityLogFeed(flowKey);
+  }
+  return flowActivityLogFeeds[flowKey];
+}
+
+function resetFlowDetailsPanel(flowKey) {
+  getFlowActivityLogFeed(flowKey).collapseDetails();
+}
+
+function shouldUseFlowActivityFeed(flowKey) {
+  const feed = getFlowActivityLogFeed(flowKey);
+  if (feed.hasLines()) {
+    return true;
+  }
+  if (
+    debugFlowPreviewState.active &&
+    debugFlowPreviewState.flow === flowKey &&
+    (debugFlowPreviewState.screen === 'inflight' ||
+      debugFlowPreviewState.screen === 'complete')
+  ) {
+    return true;
+  }
+  if (flowKey === 'add') {
+    return Boolean(
+      importState.isImporting ||
+        importState.overlayPhase === 'inflight' ||
+        importState.overlayPhase === 'complete',
+    );
+  }
+  if (flowKey === 'clean') {
+    return Boolean(
+      updateIndexState?.workingPhaseActive ||
+        updateIndexState?.overlayPhase === 'working' ||
+        updateIndexState?.overlayPhase === 'finished' ||
+        (cleanLibraryPreviewState?.active &&
+          cleanLibraryPreviewState.phase === 'working'),
+    );
+  }
+  if (flowKey === 'convert') {
+    return Boolean(terraformProgressState.active);
+  }
+  return false;
+}
+
+function wireFlowDetailsToggle(flowKey) {
+  const config = FLOW_ACTIVITY_LOG_REGISTRY[flowKey];
+  const toggle = document.getElementById(config.toggleId);
+  if (!toggle || toggle.dataset.flowDetailsWired === flowKey) {
+    return;
+  }
+  toggle.dataset.flowDetailsWired = flowKey;
+
+  toggle.addEventListener('click', () => {
+    const feed = getFlowActivityLogFeed(flowKey);
+    const activityMode = shouldUseFlowActivityFeed(flowKey);
+
+    if (activityMode) {
+      feed.setExpanded(!feed.isExpanded(), {
+        activityMode: config.activityModeLabel,
+      });
+      if (config.detailsListId) {
+        const detailsList = document.getElementById(config.detailsListId);
+        if (detailsList) {
+          detailsList.style.display = 'none';
+        }
+      }
+      return;
+    }
+
+    if (!config.detailsListId) {
+      return;
+    }
+    const detailsList = document.getElementById(config.detailsListId);
+    const logFeed = document.getElementById(config.logFeedId);
+    const isHidden = !detailsList || detailsList.style.display === 'none';
+    if (detailsList) {
+      detailsList.style.display = isHidden ? 'block' : 'none';
+    }
+    if (logFeed) {
+      logFeed.style.display = 'none';
+    }
+    updateFlowDetailsToggleLabel(config.toggleId, isHidden, {
+      activityMode: false,
+    });
+  });
+}
+
 // ============================================================================
 // DATABASE CORRUPTION DETECTION
 // ============================================================================
@@ -1413,7 +1741,11 @@ function showDialog(title, message, buttons, options = {}) {
     overlay.classList.toggle('dialog-overlay--over-import', Boolean(options.overImport));
 
     titleEl.textContent = title;
-    messageEl.textContent = message;
+    if (options.htmlMessage) {
+      messageEl.innerHTML = options.htmlMessage;
+    } else {
+      messageEl.textContent = message;
+    }
 
     // Clear and rebuild buttons
     actionsEl.innerHTML = '';
@@ -5532,8 +5864,7 @@ function renderFirstRunEmptyState() {
           <span>Add photos</span>
         </button>
         ${SHOW_FIRST_RUN_DEBUG_BUTTON ? `
-        <!-- TODO(cleanup): remove debug button and startCleanLibraryPreviewFlow entry point -->
-        <button class="btn" onclick="void startCleanLibraryPreviewFlow()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+        <button class="btn" onclick="void openDebugFlowPicker()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">bug_report</span>
           <span>Debug</span>
         </button>
@@ -6173,6 +6504,20 @@ let importState = {
   cancelRequested: false,
   preflight: null,
   preflightResolve: null,
+  overlayPhase: null,
+  runStartedAtMs: null,
+  estimatedSeconds: null,
+  estimatedDisplay: null,
+  inflightRemainingTimer: null,
+};
+
+let terraformProgressState = {
+  active: false,
+  runStartedAtMs: null,
+  estimatedSeconds: null,
+  estimatedDisplay: null,
+  remainingTimer: null,
+  abortController: null,
 };
 
 // Toggle this on if cancelling an import should require confirmation.
@@ -6183,16 +6528,27 @@ function setImportActionButtons({
   showContinue = false,
   showDone = false,
   showUndo = false,
+  continueDisabled = false,
 } = {}) {
   const cancelBtn = document.getElementById('importCancelBtn');
   const continueBtn = document.getElementById('importContinueBtn');
   const doneBtn = document.getElementById('importDoneBtn');
   const undoBtn = document.getElementById('importUndoBtn');
+  const actionsSection = document.querySelector('#importOverlay .import-actions');
 
-  if (cancelBtn) cancelBtn.style.display = showCancel ? 'block' : 'none';
-  if (continueBtn) continueBtn.style.display = showContinue ? 'block' : 'none';
+  if (cancelBtn) {
+    cancelBtn.style.display = showCancel ? 'block' : 'none';
+    cancelBtn.disabled = false;
+  }
+  if (continueBtn) {
+    continueBtn.style.display = showContinue ? 'block' : 'none';
+    continueBtn.disabled = showContinue ? continueDisabled : false;
+  }
   if (doneBtn) doneBtn.style.display = showDone ? 'block' : 'none';
   if (undoBtn) undoBtn.style.display = showUndo ? 'block' : 'none';
+  if (actionsSection && (showCancel || showContinue || showDone || showUndo)) {
+    actionsSection.style.display = 'flex';
+  }
 }
 
 function resetImportSession(totalFiles) {
@@ -6213,8 +6569,6 @@ function resetImportSession(totalFiles) {
   const preflightStats = document.getElementById('importPreflightStats');
   const stats = document.getElementById('importStats');
   const detailsSection = document.getElementById('importDetailsSection');
-  const detailsList = document.getElementById('importDetailsList');
-  const toggleBtn = document.getElementById('importDetailsToggle');
   const importedCount = document.getElementById('importedCount');
   const duplicateCount = document.getElementById('duplicateCount');
   const errorCount = document.getElementById('errorCount');
@@ -6229,17 +6583,7 @@ function resetImportSession(totalFiles) {
   if (preflightStats) preflightStats.style.display = 'none';
   if (stats) stats.style.display = 'none';
   if (detailsSection) detailsSection.style.display = 'none';
-  if (detailsList) {
-    detailsList.innerHTML = '';
-    detailsList.style.display = 'none';
-  }
-  if (toggleBtn) {
-    toggleBtn.classList.remove('expanded');
-    toggleBtn.innerHTML = `
-      <span class="material-symbols-outlined">expand_more</span>
-      <span>Show details</span>
-    `;
-  }
+  resetImportDetailsExpanded();
   if (importedCount) importedCount.textContent = '0';
   if (duplicateCount) duplicateCount.textContent = '0';
   if (errorCount) errorCount.textContent = '0';
@@ -6251,6 +6595,222 @@ function finishImportSession() {
   importState.isImporting = false;
   importState.abortController = null;
   importState.cancelRequested = false;
+  importState.overlayPhase = null;
+  stopImportInflightRemainingTicker();
+}
+
+function setImportInflightCounts(imported, duplicates, skipped) {
+  const preflightEl = document.getElementById('importPreflightStats');
+  const statsEl = document.getElementById('importStats');
+  const importedEl = document.getElementById('importedCount');
+  const duplicateEl = document.getElementById('duplicateCount');
+  const skippedEl = document.getElementById('errorCount');
+  if (preflightEl) preflightEl.style.display = 'none';
+  if (statsEl) statsEl.style.display = 'grid';
+  if (importedEl) importedEl.textContent = Number(imported).toLocaleString();
+  if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
+  if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
+}
+
+function stopImportInflightRemainingTicker() {
+  if (importState.inflightRemainingTimer) {
+    clearInterval(importState.inflightRemainingTimer);
+    importState.inflightRemainingTimer = null;
+  }
+}
+
+function syncImportInflightRemainingDisplay() {
+  const secondaryEl = document.getElementById('importSecondaryStatus');
+  if (!secondaryEl) {
+    return;
+  }
+  const totalSec = Number(importState.estimatedSeconds);
+  if (!importState.runStartedAtMs || !Number.isFinite(totalSec) || totalSec <= 0) {
+    secondaryEl.style.display = 'none';
+    return;
+  }
+  const elapsed = (Date.now() - importState.runStartedAtMs) / 1000;
+  const done = Math.min(
+    importState.totalFiles || 0,
+    (importState.importedCount || 0) +
+      (importState.duplicateCount || 0) +
+      (importState.errorCount || 0),
+  );
+  const total = Math.max(1, importState.totalFiles || 1);
+  const ratio = done / total;
+  const remainingSec = Math.max(5, totalSec * (1 - ratio));
+  secondaryEl.style.display = 'block';
+  secondaryEl.textContent = `Total time remaining: ${formatAboutDurationFromSeconds(
+    Math.max(5, remainingSec - Math.min(elapsed, totalSec * ratio)),
+  )}`;
+}
+
+function startImportInflightRemainingTicker() {
+  stopImportInflightRemainingTicker();
+  syncImportInflightRemainingDisplay();
+  importState.inflightRemainingTimer = setInterval(
+    syncImportInflightRemainingDisplay,
+    400,
+  );
+}
+
+function beginImportInflightUi() {
+  importState.overlayPhase = 'inflight';
+  importState.runStartedAtMs = Date.now();
+
+  const explainerEl = document.getElementById('importExplainer');
+  if (explainerEl) {
+    explainerEl.textContent = FLOW_INFLIGHT_BODY.add;
+    explainerEl.style.display = 'block';
+  }
+
+  setImportInflightCounts(0, 0, 0);
+
+  const detailsSection = document.getElementById('importDetailsSection');
+  if (detailsSection) {
+    detailsSection.style.display = 'block';
+  }
+  resetFlowDetailsPanel('add');
+  getFlowActivityLogFeed('add').prepend(
+    `Started: ${formatCleanLibraryFeedTimestamp(new Date(importState.runStartedAtMs))}`,
+  );
+  getFlowActivityLogFeed('add').setExpanded(false);
+
+  setImportActionButtons({ showCancel: true });
+  startImportInflightRemainingTicker();
+}
+
+function syncImportInflightStatus(current, total) {
+  const statusEl = document.getElementById('importStatusText');
+  if (statusEl && total > 0) {
+    setImportSpinnerStatus(
+      statusEl,
+      `Processing ${Math.min(current, total).toLocaleString()} of ${total.toLocaleString()} files`,
+    );
+  }
+  syncImportInflightRemainingDisplay();
+}
+
+function appendImportActivityLine(line) {
+  const text = String(line || '').trim();
+  if (!text) {
+    return;
+  }
+  getFlowActivityLogFeed('add').append(text);
+}
+
+function renderImportCompleteUi({ hasErrors = false, logPath = null } = {}) {
+  stopImportInflightRemainingTicker();
+  importState.overlayPhase = 'complete';
+
+  const explainerEl = document.getElementById('importExplainer');
+  if (explainerEl) {
+    explainerEl.style.display = 'none';
+  }
+  const secondaryEl = document.getElementById('importSecondaryStatus');
+  if (secondaryEl) {
+    secondaryEl.style.display = 'none';
+  }
+
+  const imported = importState.importedCount || 0;
+  const skipped = importState.errorCount || 0;
+  const statusEl = document.getElementById('importStatusText');
+  if (statusEl) {
+    if (hasErrors) {
+      statusEl.textContent = `Added ${imported.toLocaleString()} file${
+        imported === 1 ? '' : 's'
+      } with ${skipped} error${skipped === 1 ? '' : 's'}.`;
+    } else {
+      statusEl.textContent = `Added ${imported.toLocaleString()} file${
+        imported === 1 ? '' : 's'
+      } to your library.`;
+    }
+  }
+
+  setImportInflightCounts(
+    imported,
+    importState.duplicateCount || 0,
+    skipped,
+  );
+
+  appendImportActivityLine(
+    `Finished: ${formatCleanLibraryFeedTimestamp(new Date())}`,
+  );
+  if (logPath) {
+    getFlowActivityLogFeed('add').setLogPointer(logPath);
+  }
+
+  const detailsSection = document.getElementById('importDetailsSection');
+  if (detailsSection) {
+    detailsSection.style.display = 'block';
+  }
+
+  if (hasErrors) {
+    showUnifiedErrorDetails();
+  } else {
+    getFlowActivityLogFeed('add').setExpanded(false);
+  }
+
+  setImportActionButtons({
+    showDone: true,
+    showUndo: imported > 0,
+  });
+}
+
+function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, durationMs) {
+  const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const tick = () => {
+      const elapsed = Date.now() - startedAt;
+      const ratio = Math.min(1, elapsed / durationMs);
+      const eased = 1 - (1 - ratio) ** 2;
+      setTerraformDebugPreflightCounts(
+        Math.round(photoTarget * eased),
+        Math.round(videoTarget * eased),
+        Math.round(resolvedTotalTarget * eased),
+      );
+      if (ratio >= 1) {
+        setTerraformDebugPreflightCounts(
+          photoTarget,
+          videoTarget,
+          resolvedTotalTarget,
+        );
+        resolve();
+        return;
+      }
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
+function animateImportPreflightCounts(photoTarget, videoTarget, totalTarget, durationMs) {
+  const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const tick = () => {
+      const elapsed = Date.now() - startedAt;
+      const ratio = Math.min(1, elapsed / durationMs);
+      const eased = 1 - (1 - ratio) ** 2;
+      setImportDebugPreflightCounts(
+        Math.round(photoTarget * eased),
+        Math.round(videoTarget * eased),
+        Math.round(resolvedTotalTarget * eased),
+      );
+      if (ratio >= 1) {
+        setImportDebugPreflightCounts(
+          photoTarget,
+          videoTarget,
+          resolvedTotalTarget,
+        );
+        resolve();
+        return;
+      }
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
 }
 
 function scheduleImportRefresh(delayMs = 1500) {
@@ -6276,7 +6836,7 @@ async function loadImportOverlay() {
   }
 
   try {
-    const response = await fetch('fragments/importOverlay.html?v=4');
+    const response = await fetch('fragments/importOverlay.html?v=5');
     if (!response.ok)
       throw new Error(`Failed to load import overlay (${response.status})`);
 
@@ -6331,16 +6891,7 @@ function wireImportOverlay() {
     undoBtn.addEventListener('click', undoImport);
   }
 
-  if (detailsToggle) {
-    detailsToggle.addEventListener('click', () => {
-      const detailsList = document.getElementById('importDetailsList');
-      const isExpanded = detailsToggle.classList.toggle('expanded');
-
-      if (detailsList) {
-        detailsList.style.display = isExpanded ? 'block' : 'none';
-      }
-    });
-  }
+  wireFlowDetailsToggle('add');
 }
 
 /**
@@ -6401,6 +6952,15 @@ function showImportOverlay() {
 }
 
 function resolveImportPreflight(shouldContinue) {
+  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'add') {
+    if (debugFlowPreviewState.screen === 'preflight' && shouldContinue) {
+      triggerDebugPreflightContinue();
+    } else {
+      dismissDebugFlowPreview();
+    }
+    return;
+  }
+
   if (!importState.preflightResolve) {
     return;
   }
@@ -6425,6 +6985,11 @@ async function hideImportOverlay(reloadPhotos = true) {
  * Close import overlay
  */
 async function closeImportOverlay() {
+  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'add') {
+    dismissDebugFlowPreview();
+    return;
+  }
+
   if (importState.preflightResolve) {
     resolveImportPreflight(false);
     await hideImportOverlay(false);
@@ -6617,6 +7182,11 @@ async function cancelImport() {
  * Undo import - delete all imported photos
  */
 async function undoImport() {
+  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'add') {
+    dismissDebugFlowPreview();
+    return;
+  }
+
   if (importState.importedPhotoIds.length === 0) {
     showToast('Nothing to undo', null);
     return;
@@ -6833,7 +7403,6 @@ let updateIndexState = {
   resumeIntent: null,
   overlayPhase: null,
   workingPhaseActive: false,
-  logLines: [],
   runStartedAtMs: null,
   estimatedSeconds: 0,
   estimatedDisplay: '',
@@ -6850,7 +7419,7 @@ async function loadUpdateIndexOverlay() {
   }
 
   try {
-    const response = await fetch('fragments/updateIndexOverlay.html');
+    const response = await fetch('fragments/updateIndexOverlay.html?v=2');
     if (!response.ok) throw new Error('Failed to load Update Database overlay');
 
     const html = await response.text();
@@ -6872,30 +7441,858 @@ async function loadUpdateIndexOverlay() {
     }
     if (doneBtn) doneBtn.addEventListener('click', closeUpdateIndexOverlay);
 
-    if (detailsToggle) {
-      detailsToggle.addEventListener('click', () => {
-        const detailsList = document.getElementById('updateIndexDetailsList');
-        const logFeed = document.getElementById('updateIndexLogFeed');
-        const activityMode = shouldUseCleanLibraryActivityFeedToggle();
-
-        if (logFeed && activityMode) {
-          const isHidden = logFeed.style.display === 'none';
-          setCleanLibraryActivityFeedVisible(isHidden, { activityMode: true });
-          if (detailsList) detailsList.style.display = 'none';
-          return;
-        }
-
-        const isHidden =
-          !detailsList || detailsList.style.display === 'none';
-        if (detailsList) {
-          detailsList.style.display = isHidden ? 'block' : 'none';
-          if (logFeed) logFeed.style.display = 'none';
-        }
-        updateCleanLibraryDetailsToggleLabel(isHidden, { activityMode: false });
-      });
-    }
+    wireFlowDetailsToggle('clean');
   } catch (error) {
     console.error('❌ Failed to load Update Database overlay:', error);
+  }
+}
+
+function stopDebugFlowPreview() {
+  debugFlowPreviewState.runId += 1;
+  debugFlowPreviewState.active = false;
+  debugFlowPreviewState.flow = null;
+  debugFlowPreviewState.screen = null;
+  debugFlowPreviewState.onDismiss = null;
+  debugFlowPreviewState.onPreflightContinue = null;
+  debugFlowPreviewState.inflightTargets = null;
+  Object.keys(FLOW_ACTIVITY_LOG_REGISTRY).forEach(resetFlowDetailsPanel);
+  debugFlowPreviewState.timers.forEach((timerId) => {
+    clearTimeout(timerId);
+    clearInterval(timerId);
+  });
+  debugFlowPreviewState.timers = [];
+
+  cleanLibraryPreviewState.active = false;
+  cleanLibraryPreviewState.onProceed = null;
+  cleanLibraryPreviewState.onInterruptedChoice = null;
+
+  [
+    'importOverlay',
+    'updateIndexOverlay',
+    'terraformPreviewOverlay',
+    'terraformProgressOverlay',
+    'terraformCompleteOverlay',
+  ].forEach((id) => {
+    const overlay = document.getElementById(id);
+    if (overlay) {
+      overlay.style.display = 'none';
+    }
+  });
+}
+
+function dismissDebugFlowPreview() {
+  if (debugFlowPreviewState.onDismiss) {
+    debugFlowPreviewState.onDismiss();
+  } else {
+    stopDebugFlowPreview();
+  }
+}
+
+function triggerDebugPreflightContinue() {
+  if (debugFlowPreviewState.onPreflightContinue) {
+    debugFlowPreviewState.onPreflightContinue();
+  }
+}
+
+function waitForDebugPreflightContinue(runId) {
+  return new Promise((resolve, reject) => {
+    debugFlowPreviewState.onPreflightContinue = () => {
+      if (runId !== debugFlowPreviewState.runId) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      debugFlowPreviewState.onPreflightContinue = null;
+      resolve(true);
+    };
+    debugFlowPreviewState.onDismiss = () => {
+      if (runId !== debugFlowPreviewState.runId) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      debugFlowPreviewState.onDismiss = null;
+      resolve(false);
+    };
+  });
+}
+
+function waitForDebugFlowDismiss(runId) {
+  return new Promise((resolve, reject) => {
+    debugFlowPreviewState.onDismiss = () => {
+      if (runId !== debugFlowPreviewState.runId) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      debugFlowPreviewState.onDismiss = null;
+      resolve();
+    };
+  });
+}
+
+function getDebugFlowTotalCount() {
+  return (
+    debugFlowPreviewState.photoTarget + debugFlowPreviewState.videoTarget
+  );
+}
+
+function deriveDebugInflightTargets(total) {
+  const safeTotal = Math.max(1, Number(total) || 1);
+  const duplicates = Math.max(0, Math.round(safeTotal * 0.08));
+  const skipped = Math.max(0, Math.round(safeTotal * 0.03));
+  const primary = Math.max(0, safeTotal - duplicates - skipped);
+  return { primary, duplicates, skipped };
+}
+
+function resetDebugLogFeed(flow, logPath = DEBUG_FLOW_LOG_PATHS[flow]) {
+  getFlowActivityLogFeed(flow).reset(logPath);
+}
+
+function appendDebugLogFeed(flow, line) {
+  getFlowActivityLogFeed(flow).append(line);
+}
+
+function showDebugDetailsSection(flow, visible = true) {
+  if (flow === 'add') {
+    const section = document.getElementById('importDetailsSection');
+    if (section) {
+      section.style.display = visible ? 'block' : 'none';
+    }
+    return;
+  }
+  if (flow === 'clean') {
+    showCleanLibraryDetailsSection(visible);
+    return;
+  }
+  if (flow === 'convert') {
+    const section = document.getElementById('terraformProgressDetailsSection');
+    if (section) {
+      section.style.display = visible ? 'block' : 'none';
+    }
+  }
+}
+
+function setDebugInflightCounts(flow, primary, duplicates, skipped) {
+  if (flow === 'add') {
+    const preflightEl = document.getElementById('importPreflightStats');
+    const statsEl = document.getElementById('importStats');
+    const importedEl = document.getElementById('importedCount');
+    const duplicateEl = document.getElementById('duplicateCount');
+    const skippedEl = document.getElementById('errorCount');
+    if (preflightEl) preflightEl.style.display = 'none';
+    if (statsEl) statsEl.style.display = 'grid';
+    if (importedEl) importedEl.textContent = Number(primary).toLocaleString();
+    if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
+    if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
+    return;
+  }
+  if (flow === 'clean') {
+    const preflightEl = document.getElementById('updateIndexPreflightStats');
+    const statsEl = document.getElementById('updateIndexInflightStats');
+    const processedEl = document.getElementById('updateIndexInflightProcessed');
+    const duplicateEl = document.getElementById('updateIndexInflightDuplicates');
+    const skippedEl = document.getElementById('updateIndexInflightSkipped');
+    if (preflightEl) preflightEl.style.display = 'none';
+    if (statsEl) statsEl.style.display = 'grid';
+    hideUpdateIndexStats();
+    if (processedEl) processedEl.textContent = Number(primary).toLocaleString();
+    if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
+    if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
+    return;
+  }
+  if (flow === 'convert') {
+    const processedEl = document.getElementById('terraformProgressProcessed');
+    const duplicateEl = document.getElementById('terraformProgressDuplicates');
+    const skippedEl = document.getElementById('terraformProgressSkipped');
+    if (processedEl) processedEl.textContent = Number(primary).toLocaleString();
+    if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
+    if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
+  }
+}
+
+function animateDebugInflightCounts(runId, flow, targets, durationMs) {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const tick = () => {
+      if (runId !== debugFlowPreviewState.runId) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      const elapsed = Date.now() - startedAt;
+      const ratio = Math.min(1, elapsed / durationMs);
+      const eased = 1 - (1 - ratio) ** 2;
+      setDebugInflightCounts(
+        flow,
+        Math.round(targets.primary * eased),
+        Math.round(targets.duplicates * eased),
+        Math.round(targets.skipped * eased),
+      );
+      if (ratio >= 1) {
+        setDebugInflightCounts(
+          flow,
+          targets.primary,
+          targets.duplicates,
+          targets.skipped,
+        );
+        resolve();
+        return;
+      }
+      const timerId = setTimeout(tick, 50);
+      debugFlowPreviewState.timers.push(timerId);
+    };
+    tick();
+  });
+}
+
+function buildDebugInflightStatusLine(flow, ratio) {
+  const total = getDebugFlowTotalCount();
+  const current = Math.max(1, Math.round(total * ratio));
+  if (flow === 'add') {
+    return `Processing ${current.toLocaleString()} of ${total.toLocaleString()} files`;
+  }
+  if (flow === 'clean') {
+    const stepNumber = Math.min(
+      6,
+      Math.max(1, Math.ceil(ratio * CLEAN_LIBRARY_PREVIEW_WORKING_STEPS.length)),
+    );
+    const stepLabel = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1];
+    return `Step ${stepNumber} of 6: ${stepLabel}`;
+  }
+  const stepNumber = Math.min(3, Math.max(1, Math.ceil(ratio * 3)));
+  const labels = ['Converting files', 'Cleaning folders', 'Final verification'];
+  return `Step ${stepNumber} of 3: ${labels[stepNumber - 1]} (${current.toLocaleString()} / ${total.toLocaleString()})`;
+}
+
+function buildDebugInflightSecondaryStatus(ratio) {
+  const remainingSec = Math.max(
+    5,
+    Math.round(
+      (debugFlowPreviewState.estimatedSeconds || 30) * (1 - ratio),
+    ),
+  );
+  return `Total time remaining: ${formatAboutDurationFromSeconds(remainingSec)}`;
+}
+
+async function simulateDebugInflightPhase(flow, runId) {
+  debugFlowPreviewState.screen = 'inflight';
+  const total = getDebugFlowTotalCount();
+  const targets = deriveDebugInflightTargets(total);
+  debugFlowPreviewState.inflightTargets = targets;
+
+  if (flow === 'convert') {
+    const previewOverlay = document.getElementById('terraformPreviewOverlay');
+    if (previewOverlay) {
+      previewOverlay.style.display = 'none';
+    }
+    let progressOverlay = document.getElementById('terraformProgressOverlay');
+    if (!progressOverlay) {
+      await loadTerraformProgressOverlay();
+      progressOverlay = document.getElementById('terraformProgressOverlay');
+    }
+    if (!progressOverlay) {
+      return;
+    }
+    resetFlowDetailsPanel('convert');
+    progressOverlay.style.display = 'flex';
+    wireFlowDetailsToggle('convert');
+    wireDebugConvertProgressHandlers(runId);
+  }
+
+  if (flow === 'add') {
+    const explainerEl = document.getElementById('importExplainer');
+    if (explainerEl) {
+      explainerEl.textContent = FLOW_INFLIGHT_BODY.add;
+      explainerEl.style.display = 'block';
+    }
+    setImportActionButtons({ showCancel: true });
+    setDebugInflightCounts(flow, 0, 0, 0);
+    resetFlowDetailsPanel(flow);
+    showDebugDetailsSection(flow, true);
+    resetDebugLogFeed(flow);
+    appendDebugLogFeed(
+      flow,
+      `Started: ${formatCleanLibraryFeedTimestamp(new Date())}`,
+    );
+  }
+
+  if (flow === 'clean') {
+    showCleanLibraryWorkingBody();
+    setCleanLibrarySecondaryStatus(null, false);
+    showUpdateIndexButtons('cancel');
+    setDebugInflightCounts(flow, 0, 0, 0);
+    resetDebugLogFeed(flow);
+    showDebugDetailsSection(flow, true);
+    appendDebugLogFeed(
+      flow,
+      `Started: ${formatCleanLibraryFeedTimestamp(new Date())}`,
+    );
+  }
+
+  if (flow === 'convert') {
+    const explainerEl = document.getElementById('terraformProgressExplainer');
+    if (explainerEl) {
+      explainerEl.textContent = FLOW_INFLIGHT_BODY.convert;
+    }
+    setDebugInflightCounts(flow, 0, 0, 0);
+    resetFlowDetailsPanel(flow);
+    showDebugDetailsSection(flow, true);
+    resetDebugLogFeed(flow);
+    appendDebugLogFeed(
+      flow,
+      `Started: ${formatCleanLibraryFeedTimestamp(new Date())}`,
+    );
+  }
+
+  const startedAt = Date.now();
+  let logTicker = null;
+  const updateStatus = () => {
+    if (runId !== debugFlowPreviewState.runId) {
+      return;
+    }
+    const ratio = Math.min(
+      1,
+      (Date.now() - startedAt) / DEBUG_FLOW_PREVIEW_INFLIGHT_MS,
+    );
+    const statusLine = buildDebugInflightStatusLine(flow, ratio);
+    if (flow === 'add') {
+      const statusEl = document.getElementById('importStatusText');
+      if (statusEl) {
+        setImportSpinnerStatus(statusEl, statusLine);
+      }
+      const secondaryEl = document.getElementById('importSecondaryStatus');
+      if (secondaryEl) {
+        secondaryEl.style.display = 'block';
+        secondaryEl.textContent = buildDebugInflightSecondaryStatus(ratio);
+      }
+    } else if (flow === 'clean') {
+      const statusEl = document.getElementById('updateIndexStatusText');
+      if (statusEl) {
+        setImportSpinnerStatus(statusEl, statusLine);
+      }
+      setCleanLibrarySecondaryStatus(buildDebugInflightSecondaryStatus(ratio));
+    } else if (flow === 'convert') {
+      const statusEl = document.getElementById('terraformProgressStatus');
+      if (statusEl) {
+        setImportSpinnerStatus(statusEl, statusLine);
+      }
+      const secondaryEl = document.getElementById(
+        'terraformProgressSecondaryStatus',
+      );
+      if (secondaryEl) {
+        secondaryEl.style.display = 'block';
+        secondaryEl.textContent = buildDebugInflightSecondaryStatus(ratio);
+      }
+    }
+  };
+
+  updateStatus();
+  const statusTicker = setInterval(updateStatus, 400);
+  debugFlowPreviewState.timers.push(statusTicker);
+  logTicker = setInterval(() => {
+    if (runId !== debugFlowPreviewState.runId) {
+      return;
+    }
+    appendDebugLogFeed(flow, buildPreviewFakeLogLine());
+  }, 900);
+  debugFlowPreviewState.timers.push(logTicker);
+
+  try {
+    await animateDebugInflightCounts(
+      runId,
+      flow,
+      targets,
+      DEBUG_FLOW_PREVIEW_INFLIGHT_MS,
+    );
+  } finally {
+    clearInterval(statusTicker);
+    if (logTicker) {
+      clearInterval(logTicker);
+    }
+  }
+}
+
+async function showDebugAddComplete(runId) {
+  if (runId !== debugFlowPreviewState.runId) {
+    return;
+  }
+  debugFlowPreviewState.screen = 'complete';
+  const targets = debugFlowPreviewState.inflightTargets || deriveDebugInflightTargets(
+    getDebugFlowTotalCount(),
+  );
+  const explainerEl = document.getElementById('importExplainer');
+  if (explainerEl) {
+    explainerEl.style.display = 'none';
+  }
+  const secondaryEl = document.getElementById('importSecondaryStatus');
+  if (secondaryEl) {
+    secondaryEl.style.display = 'none';
+  }
+  const statusEl = document.getElementById('importStatusText');
+  if (statusEl) {
+    statusEl.textContent = `Added ${targets.primary.toLocaleString()} file${
+      targets.primary === 1 ? '' : 's'
+    } to your library.`;
+  }
+  setDebugInflightCounts('add', targets.primary, targets.duplicates, targets.skipped);
+  showDebugDetailsSection('add', true);
+  setImportActionButtons({ showDone: true, showUndo: targets.primary > 0 });
+}
+
+async function showDebugCleanComplete(runId) {
+  if (runId !== debugFlowPreviewState.runId) {
+    return;
+  }
+  debugFlowPreviewState.screen = 'complete';
+  const targets = debugFlowPreviewState.inflightTargets || deriveDebugInflightTargets(
+    getDebugFlowTotalCount(),
+  );
+  setCleanLibraryExplainerVisible(false);
+  setCleanLibrarySecondaryStatus(
+    `Total time: ${debugFlowPreviewState.estimatedDisplay}`,
+    true,
+  );
+  const inflightEl = document.getElementById('updateIndexInflightStats');
+  if (inflightEl) {
+    inflightEl.style.display = 'grid';
+  }
+  setDebugInflightCounts(
+    'clean',
+    targets.primary,
+    targets.duplicates,
+    targets.skipped,
+  );
+  updateUpdateIndexUI(
+    'Library check complete. Your library is clean and organized.',
+  );
+  showDebugDetailsSection('clean', true);
+  appendDebugLogFeed(
+    'clean',
+    `Finished: ${formatCleanLibraryFeedTimestamp(new Date())}`,
+  );
+  const detailsList = document.getElementById('updateIndexDetailsList');
+  if (detailsList) {
+    detailsList.style.display = 'none';
+  }
+  const detailsToggle = document.getElementById('updateIndexDetailsToggle');
+  const feed = getFlowActivityLogFeed('clean');
+  const feedExpanded =
+    feed.isExpanded() || Boolean(detailsToggle?.classList.contains('expanded'));
+  feed.setExpanded(feedExpanded, { activityMode: true });
+  showUpdateIndexButtons('done');
+}
+
+async function showDebugConvertComplete(runId) {
+  if (runId !== debugFlowPreviewState.runId) {
+    return;
+  }
+  debugFlowPreviewState.screen = 'complete';
+  const targets = debugFlowPreviewState.inflightTargets || deriveDebugInflightTargets(
+    getDebugFlowTotalCount(),
+  );
+  const progressOverlay = document.getElementById('terraformProgressOverlay');
+  if (progressOverlay) {
+    progressOverlay.style.display = 'none';
+  }
+
+  let completeOverlay = document.getElementById('terraformCompleteOverlay');
+  if (!completeOverlay) {
+    await loadTerraformCompleteOverlay();
+    completeOverlay = document.getElementById('terraformCompleteOverlay');
+  }
+  if (!completeOverlay) {
+    return;
+  }
+
+  wireFlowDetailsToggle('convertComplete');
+
+  document.getElementById('terraformCompleteProcessed').textContent =
+    targets.primary.toLocaleString();
+  document.getElementById('terraformCompleteDuplicates').textContent =
+    targets.duplicates.toLocaleString();
+  document.getElementById('terraformCompleteSkipped').textContent =
+    targets.skipped.toLocaleString();
+
+  const statusEl = document.getElementById('terraformCompleteStatusText');
+  if (statusEl) {
+    statusEl.textContent = `Converted ${targets.primary.toLocaleString()} file${
+      targets.primary === 1 ? '' : 's'
+    } to your library.`;
+  }
+
+  populateTerraformCompleteActivityFeed({
+    logPath: DEBUG_FLOW_LOG_PATHS.convert,
+    copyFromFlow: 'convert',
+  });
+  showTerraformCompleteDetailsSection(true);
+
+  const closeBtn = document.getElementById('terraformCompleteCloseBtn');
+  const doneBtn = document.getElementById('terraformCompleteDoneBtn');
+  const dismissHandler = () => dismissDebugFlowPreview();
+  if (closeBtn) closeBtn.onclick = dismissHandler;
+  if (doneBtn) doneBtn.onclick = dismissHandler;
+
+  completeOverlay.style.display = 'flex';
+}
+
+function wireDebugConvertPreviewHandlers() {
+  const dismissHandler = () => dismissDebugFlowPreview();
+  const continueHandler = () => {
+    if (debugFlowPreviewState.screen === 'preflight') {
+      triggerDebugPreflightContinue();
+    } else {
+      dismissDebugFlowPreview();
+    }
+  };
+
+  ['terraformPreviewCloseBtn', 'terraformPreviewCancelBtn', 'terraformPreviewGoBackBtn'].forEach(
+    (id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.onclick = dismissHandler;
+    },
+  );
+  const continueBtn = document.getElementById('terraformPreviewContinueBtn');
+  if (continueBtn) continueBtn.onclick = continueHandler;
+}
+
+function wireDebugConvertProgressHandlers(runId) {
+  const dismissHandler = () => dismissDebugFlowPreview();
+  const cancelBtn = document.getElementById('terraformProgressCancelBtn');
+  if (cancelBtn) cancelBtn.onclick = dismissHandler;
+}
+
+async function waitDebugPreflightOrientDelay(runId, orientStartedAtMs) {
+  const elapsed = Date.now() - orientStartedAtMs;
+  const remaining = Math.max(
+    0,
+    CLEAN_LIBRARY_PREFLIGHT_SCOREBOARD_DELAY_MS - elapsed,
+  );
+  if (remaining <= 0) {
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    const timerId = setTimeout(() => {
+      if (runId !== debugFlowPreviewState.runId) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      resolve();
+    }, remaining);
+    debugFlowPreviewState.timers.push(timerId);
+  });
+}
+
+function animateDebugPreflightCounts(
+  runId,
+  photoTarget,
+  videoTarget,
+  durationMs,
+  setCounts,
+  totalTarget = null,
+) {
+  const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+
+    const tick = () => {
+      if (runId !== debugFlowPreviewState.runId) {
+        reject(new Error('cancelled'));
+        return;
+      }
+      const elapsed = Date.now() - startedAt;
+      const ratio = Math.min(1, elapsed / durationMs);
+      const eased = 1 - (1 - ratio) ** 2;
+      setCounts(
+        Math.round(photoTarget * eased),
+        Math.round(videoTarget * eased),
+        Math.round(resolvedTotalTarget * eased),
+      );
+      if (ratio >= 1) {
+        setCounts(photoTarget, videoTarget, resolvedTotalTarget);
+        resolve();
+        return;
+      }
+      const timerId = setTimeout(tick, 50);
+      debugFlowPreviewState.timers.push(timerId);
+    };
+
+    tick();
+  });
+}
+
+function setImportDebugPreflightCounts(photoCount, videoCount, totalCount) {
+  const preflightEl = document.getElementById('importPreflightStats');
+  const runtimeEl = document.getElementById('importStats');
+  const photoEl = document.getElementById('importPhotoCount');
+  const videoEl = document.getElementById('importVideoCount');
+  const totalEl = document.getElementById('importTotalCount');
+  if (photoEl) photoEl.textContent = Number(photoCount).toLocaleString();
+  if (videoEl) videoEl.textContent = Number(videoCount).toLocaleString();
+  if (totalEl) totalEl.textContent = Number(totalCount).toLocaleString();
+  if (preflightEl) preflightEl.style.display = 'grid';
+  if (runtimeEl) runtimeEl.style.display = 'none';
+}
+
+function setTerraformDebugPreflightCounts(photoCount, videoCount, totalCount) {
+  const pairs = [
+    ['terraformPreviewPreflightPhotos', photoCount],
+    ['terraformPreviewPreflightVideos', videoCount],
+    ['terraformPreviewPreflightTotal', totalCount],
+    ['terraformPreviewPhotos', photoCount],
+    ['terraformPreviewVideos', videoCount],
+    ['terraformPreviewTotal', totalCount],
+  ];
+  pairs.forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.textContent = Number(value).toLocaleString();
+    }
+  });
+}
+
+function setTerraformPreviewPhase(phase) {
+  const scanningSection = document.getElementById('terraformPreviewScanningSection');
+  const confirmSection = document.getElementById('terraformPreviewConfirmSection');
+  const isScanning = phase === 'scanning';
+
+  if (scanningSection) {
+    scanningSection.style.display = isScanning ? 'block' : 'none';
+  }
+  if (confirmSection) {
+    confirmSection.style.display = isScanning ? 'none' : 'block';
+  }
+}
+
+function setTerraformPreviewActionButtons({ continueDisabled = false } = {}) {
+  const actionsSection = document.getElementById('terraformPreviewActions');
+  const cancelBtn = document.getElementById('terraformPreviewCancelBtn');
+  const goBackBtn = document.getElementById('terraformPreviewGoBackBtn');
+  const continueBtn = document.getElementById('terraformPreviewContinueBtn');
+
+  if (actionsSection) {
+    actionsSection.style.display = 'flex';
+  }
+  if (cancelBtn) {
+    cancelBtn.style.display = 'inline-block';
+    cancelBtn.disabled = false;
+  }
+  if (goBackBtn) {
+    goBackBtn.style.display = 'inline-block';
+    goBackBtn.disabled = false;
+  }
+  if (continueBtn) {
+    continueBtn.style.display = 'inline-block';
+    continueBtn.disabled = continueDisabled;
+  }
+}
+
+function initDebugFlowTargets() {
+  debugFlowPreviewState.photoTarget = previewRandomMediaCount();
+  debugFlowPreviewState.videoTarget = previewRandomMediaCount();
+  const estimate = estimatePreviewCleanDuration(
+    debugFlowPreviewState.photoTarget,
+    debugFlowPreviewState.videoTarget,
+  );
+  debugFlowPreviewState.estimatedDisplay = estimate.display;
+  debugFlowPreviewState.estimatedSeconds = estimate.seconds;
+}
+
+async function prepareDebugFlowOverlay(flow) {
+  if (flow === 'add') {
+    await loadImportOverlay();
+    return document.getElementById('importOverlay');
+  }
+  if (flow === 'clean') {
+    await loadUpdateIndexOverlay();
+    return document.getElementById('updateIndexOverlay');
+  }
+  if (flow === 'convert') {
+    let overlay = document.getElementById('terraformPreviewOverlay');
+    if (!overlay) {
+      await loadTerraformPreviewOverlay();
+      overlay = document.getElementById('terraformPreviewOverlay');
+    }
+    return overlay;
+  }
+  return null;
+}
+
+function setupDebugFlowInitialUi(flow, overlay) {
+  overlay.style.display = 'flex';
+  resetFlowDetailsPanel(flow);
+
+  if (flow === 'add') {
+    setImportOverlayTitle();
+    const explainerEl = document.getElementById('importExplainer');
+    if (explainerEl) {
+      explainerEl.style.display = 'none';
+    }
+    showDebugDetailsSection('add', false);
+    setImportDebugPreflightCounts(0, 0, 0);
+    setImportActionButtons({
+      showCancel: true,
+      showContinue: true,
+      continueDisabled: true,
+    });
+    return;
+  }
+
+  if (flow === 'clean') {
+    resetUpdateIndexOverlayTitle();
+    resetCleanLibraryLogFeed();
+    showCleanLibraryPreflightExplainer();
+    setCleanLibrarySecondaryStatus(null, false);
+    showDebugDetailsSection('clean', false);
+    showUpdateIndexPreflightStats(null);
+    hideUpdateIndexStats();
+    const inflightEl = document.getElementById('updateIndexInflightStats');
+    if (inflightEl) {
+      inflightEl.style.display = 'none';
+    }
+    showUpdateIndexButtons('cancel', 'proceed-disabled');
+    showPreflightScoreboardZeros();
+    return;
+  }
+
+  const pathEl = document.getElementById('terraformPreviewPath');
+  if (pathEl) {
+    pathEl.textContent = '/Users/example/Photos/library';
+  }
+  setTerraformPreviewPhase('scanning');
+  setTerraformDebugPreflightCounts(0, 0, 0);
+  setTerraformPreviewActionButtons({ continueDisabled: true });
+  wireDebugConvertPreviewHandlers();
+}
+
+async function runDebugPreflightScan(flow, runId) {
+  let statusEl = null;
+  if (flow === 'add') {
+    statusEl = document.getElementById('importStatusText');
+    if (statusEl) {
+      setImportSpinnerStatus(statusEl, 'Scanning library…');
+    }
+  } else if (flow === 'clean') {
+    statusEl = document.getElementById('updateIndexStatusText');
+    if (statusEl) {
+      setImportSpinnerStatus(statusEl, 'Scanning library…');
+    }
+  } else {
+    statusEl = document.getElementById('terraformPreviewScanStatus');
+    if (statusEl) {
+      setImportSpinnerStatus(statusEl, 'Scanning library…');
+    }
+  }
+
+  const orientStartedAt = Date.now();
+  await waitDebugPreflightOrientDelay(runId, orientStartedAt);
+
+  const setCounts =
+    flow === 'add'
+      ? setImportDebugPreflightCounts
+      : flow === 'clean'
+        ? (photos, videos, total) => {
+            setPreviewPreflightCounts(photos, videos, total);
+          }
+        : setTerraformDebugPreflightCounts;
+
+  await animateDebugPreflightCounts(
+    runId,
+    debugFlowPreviewState.photoTarget,
+    debugFlowPreviewState.videoTarget,
+    DEBUG_FLOW_PREVIEW_SCAN_MS,
+    setCounts,
+  );
+
+  if (flow === 'convert') {
+    setTerraformPreviewPhase('confirm');
+    setTerraformDebugPreflightCounts(
+      debugFlowPreviewState.photoTarget,
+      debugFlowPreviewState.videoTarget,
+      getDebugFlowTotalCount(),
+    );
+    setTerraformPreviewActionButtons({ continueDisabled: false });
+    return;
+  }
+
+  if (flow === 'clean') {
+    showCleanLibraryPreflightExplainer();
+    setPreviewPreflightCounts(
+      debugFlowPreviewState.photoTarget,
+      debugFlowPreviewState.videoTarget,
+    );
+    if (statusEl) {
+      statusEl.textContent = `Time required: ${debugFlowPreviewState.estimatedDisplay}`;
+    }
+    showUpdateIndexButtons('cancel', 'proceed');
+    return;
+  }
+
+  if (statusEl) {
+    statusEl.textContent = `Time required: ${debugFlowPreviewState.estimatedDisplay}`;
+  }
+  setImportActionButtons({
+    showCancel: true,
+    showContinue: true,
+    continueDisabled: false,
+  });
+}
+
+async function runDebugFlowPreview(flow) {
+  stopDebugFlowPreview();
+
+  const overlay = await prepareDebugFlowOverlay(flow);
+  if (!overlay) {
+    return;
+  }
+
+  debugFlowPreviewState.active = true;
+  debugFlowPreviewState.flow = flow;
+  if (flow === 'clean') {
+    cleanLibraryPreviewState.active = true;
+    if (!updateIndexState) {
+      updateIndexState = {};
+    }
+  }
+
+  const runId = (debugFlowPreviewState.runId += 1);
+  initDebugFlowTargets();
+  setupDebugFlowInitialUi(flow, overlay);
+
+  try {
+    debugFlowPreviewState.screen = 'preflight';
+    await runDebugPreflightScan(flow, runId);
+    const continued = await waitForDebugPreflightContinue(runId);
+    if (!continued) {
+      return;
+    }
+
+    await simulateDebugInflightPhase(flow, runId);
+
+    if (flow === 'add') {
+      await showDebugAddComplete(runId);
+    } else if (flow === 'clean') {
+      await showDebugCleanComplete(runId);
+    } else {
+      await showDebugConvertComplete(runId);
+    }
+
+    await waitForDebugFlowDismiss(runId);
+  } catch (error) {
+    if (error?.message !== 'cancelled') {
+      console.error(`❌ ${flow} flow preview failed:`, error);
+    }
+  } finally {
+    stopDebugFlowPreview();
+  }
+}
+
+async function openDebugFlowPicker() {
+  const choice = await showDialog('Debug flows', 'Pick a flow to preview.', [
+    { text: 'Cancel', value: 'cancel', primary: false },
+    { text: 'Add photos', value: 'add', primary: false },
+    { text: 'Clean library', value: 'clean', primary: false },
+    { text: 'Convert to library', value: 'convert', primary: false },
+  ]);
+
+  if (choice === 'add' || choice === 'clean' || choice === 'convert') {
+    await runDebugFlowPreview(choice);
   }
 }
 
@@ -6986,7 +8383,6 @@ const cleanLibraryPreviewState = {
   videoTarget: 0,
   estimatedDisplay: '',
   estimatedSeconds: 0,
-  logLines: [],
   phase: null,
   onProceed: null,
   onStartOver: null,
@@ -7238,25 +8634,37 @@ function formatCleanLibraryManifestLine(line) {
   }
 }
 
-function updateCleanLibraryDetailsToggleLabel(expanded, { activityMode = false } = {}) {
-  const detailsToggle = document.getElementById('updateIndexDetailsToggle');
+function setDetailsToggleCollapsed(
+  toggleId,
+  { label = 'Show details', activityMode = false } = {},
+) {
+  const detailsToggle = document.getElementById(toggleId);
   if (!detailsToggle) {
     return;
   }
+  detailsToggle.classList.remove('expanded');
   const icon = detailsToggle.querySelector('.material-symbols-outlined');
   if (icon) {
-    icon.textContent = expanded ? 'expand_less' : 'expand_more';
+    icon.textContent = 'expand_more';
   }
   const labelSpan = detailsToggle.querySelector('span:last-child');
   if (labelSpan) {
-    labelSpan.textContent = expanded
-      ? activityMode
-        ? 'Hide activity'
-        : 'Hide details'
-      : activityMode
-        ? 'Show activity'
-        : 'Show details';
+    labelSpan.textContent = activityMode ? 'Show activity' : label;
   }
+}
+
+function resetImportDetailsExpanded() {
+  resetFlowDetailsPanel('add');
+}
+
+function resetTerraformProgressDetailsExpanded() {
+  resetFlowDetailsPanel('convert');
+}
+
+function updateCleanLibraryDetailsToggleLabel(expanded, { activityMode = false } = {}) {
+  updateFlowDetailsToggleLabel('updateIndexDetailsToggle', expanded, {
+    activityMode,
+  });
 }
 
 function formatCleanLibraryFeedTimestamp(date) {
@@ -7270,128 +8678,52 @@ function formatCleanLibraryFeedTimestamp(date) {
 }
 
 function isCleanLibraryActivityFeedExpanded() {
-  const logFeed = document.getElementById('updateIndexLogFeed');
-  return Boolean(logFeed && logFeed.style.display !== 'none');
+  return getFlowActivityLogFeed('clean').isExpanded();
 }
 
 function shouldUseCleanLibraryActivityFeedToggle() {
-  if (cleanLibraryPreviewState.active && cleanLibraryPreviewState.logLines.length > 0) {
-    return true;
-  }
-  if (updateIndexState?.logLines?.length > 0) {
-    return true;
-  }
-  return Boolean(
-    updateIndexState?.workingPhaseActive ||
-      updateIndexState?.overlayPhase === 'working' ||
-      updateIndexState?.overlayPhase === 'finished',
-  );
+  return shouldUseFlowActivityFeed('clean');
 }
 
 function setCleanLibraryActivityFeedVisible(visible, { activityMode = false } = {}) {
-  const logFeed = document.getElementById('updateIndexLogFeed');
-  const detailsList = document.getElementById('updateIndexDetailsList');
-  if (logFeed) {
-    logFeed.style.display = visible ? 'block' : 'none';
-    if (visible) {
-      renderCleanLibraryActivityFeed();
-    }
-  }
-  if (visible && detailsList) {
-    detailsList.style.display = 'none';
-  }
-  updateCleanLibraryDetailsToggleLabel(visible, { activityMode });
+  getFlowActivityLogFeed('clean').setExpanded(visible, { activityMode });
 }
 
 function renderCleanLibraryActivityFeed() {
-  const logFeed = document.getElementById('updateIndexLogFeed');
-  if (!logFeed) {
-    return;
-  }
-  const lines = cleanLibraryPreviewState.active
-    ? cleanLibraryPreviewState.logLines
-    : updateIndexState?.logLines || [];
-  logFeed.textContent = lines.join('\n');
-  logFeed.scrollTop = logFeed.scrollHeight;
+  getFlowActivityLogFeed('clean').render();
 }
 
-const CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES = 200;
-
-function trimCleanLibraryFeedLines(lines) {
-  if (lines.length <= CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES) {
-    return lines;
+function canWriteCleanLibraryActivityFeed({
+  previewOnly = false,
+  allowInactive = false,
+} = {}) {
+  if (previewOnly && cleanLibraryPreviewState.active) {
+    return true;
   }
-  const overflow = lines.length - CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES;
-  const startLine = lines[0]?.startsWith('Started:') ? lines[0] : null;
-  if (startLine) {
-    return [startLine, ...lines.slice(1 + overflow)];
-  }
-  return lines.slice(overflow);
+  return Boolean(
+    updateIndexState &&
+      (updateIndexState.workingPhaseActive || allowInactive),
+  );
 }
 
 function prependCleanLibraryActivityLine(
   line,
   { previewOnly = false, allowInactive = false } = {},
 ) {
-  const text = String(line || '').trim();
-  if (!text) {
+  if (!canWriteCleanLibraryActivityFeed({ previewOnly, allowInactive })) {
     return;
   }
-
-  let target = null;
-  if (previewOnly && cleanLibraryPreviewState.active) {
-    target = cleanLibraryPreviewState.logLines;
-  } else if (
-    updateIndexState &&
-    (updateIndexState.workingPhaseActive || allowInactive)
-  ) {
-    if (!updateIndexState.logLines) {
-      updateIndexState.logLines = [];
-    }
-    target = updateIndexState.logLines;
-  }
-  if (!target) {
-    return;
-  }
-
-  target.unshift(text);
-  const trimmed = trimCleanLibraryFeedLines(target);
-  target.splice(0, target.length, ...trimmed);
-  renderCleanLibraryActivityFeed();
+  getFlowActivityLogFeed('clean').prepend(line);
 }
 
 function appendCleanLibraryActivityLine(
   line,
   { previewOnly = false, allowInactive = false } = {},
 ) {
-  const text = String(line || '').trim();
-  if (!text) {
+  if (!canWriteCleanLibraryActivityFeed({ previewOnly, allowInactive })) {
     return;
   }
-
-  if (previewOnly && cleanLibraryPreviewState.active) {
-    cleanLibraryPreviewState.logLines.push(text);
-    const trimmed = trimCleanLibraryFeedLines(cleanLibraryPreviewState.logLines);
-    cleanLibraryPreviewState.logLines.splice(
-      0,
-      cleanLibraryPreviewState.logLines.length,
-      ...trimmed,
-    );
-  } else if (
-    updateIndexState &&
-    (updateIndexState.workingPhaseActive || allowInactive)
-  ) {
-    if (!updateIndexState.logLines) {
-      updateIndexState.logLines = [];
-    }
-    updateIndexState.logLines.push(text);
-    const trimmed = trimCleanLibraryFeedLines(updateIndexState.logLines);
-    updateIndexState.logLines.splice(0, updateIndexState.logLines.length, ...trimmed);
-  } else {
-    return;
-  }
-
-  renderCleanLibraryActivityFeed();
+  getFlowActivityLogFeed('clean').append(line);
 }
 
 function maybeAppendCleanLibraryProgressMilestone(phase, processed, total) {
@@ -7451,22 +8783,8 @@ function appendCleanLibraryEngineLogEntry(entry, { previewOnly = false } = {}) {
 }
 
 function resetCleanLibraryLogFeed() {
-  cleanLibraryPreviewState.logLines = [];
   resetCleanLibraryActivityFeedState();
-  if (updateIndexState) {
-    updateIndexState.logLines = [];
-  }
-  const logFeed = document.getElementById('updateIndexLogFeed');
-  if (logFeed) {
-    logFeed.textContent = '';
-    logFeed.style.display = 'none';
-  }
-  const detailsList = document.getElementById('updateIndexDetailsList');
-  if (detailsList) {
-    detailsList.style.display = 'none';
-    detailsList.innerHTML = '';
-  }
-  updateCleanLibraryDetailsToggleLabel(false, { activityMode: false });
+  resetFlowDetailsPanel('clean');
 }
 
 function appendCleanLibraryLogLine(line, { previewOnly = false } = {}) {
@@ -7814,47 +9132,19 @@ function showPreviewFinishedScreen() {
 }
 
 async function startCleanLibraryPreviewFlow() {
-  stopCleanLibraryPreview();
-  await loadUpdateIndexOverlay();
-
-  const overlay = document.getElementById('updateIndexOverlay');
-  if (!overlay) return;
-
-  cleanLibraryPreviewState.active = true;
-  const runId = (cleanLibraryPreviewState.runId += 1);
-  cleanLibraryPreviewState.photoTarget = previewRandomMediaCount();
-  cleanLibraryPreviewState.videoTarget = previewRandomMediaCount();
-  const estimate = estimatePreviewCleanDuration(
-    cleanLibraryPreviewState.photoTarget,
-    cleanLibraryPreviewState.videoTarget,
-  );
-  cleanLibraryPreviewState.estimatedDisplay = estimate.display;
-  cleanLibraryPreviewState.estimatedSeconds = estimate.seconds;
-
-  overlay.style.display = 'flex';
-  resetUpdateIndexOverlayTitle();
-
-  try {
-    if (Math.random() < CLEAN_LIBRARY_PREVIEW_INTERRUPTED_CHANCE) {
-      const interruptedChoice = await showPreviewInterruptedScreen(runId);
-      if (interruptedChoice === 'continue') {
-        showContinueLibraryCleanupTitle();
-      } else if (interruptedChoice === 'start-over') {
-        resetUpdateIndexOverlayTitle();
-      }
-    }
-    await showPreviewScanningPhase(runId);
-    await showPreviewEtaScreen(runId);
-    await showPreviewWorkingPhase(runId);
-    showPreviewFinishedScreen();
-  } catch (error) {
-    if (error?.message !== 'cancelled') {
-      console.error('❌ Clean library preview failed:', error);
-    }
-  }
+  await runDebugFlowPreview('clean');
 }
 
 function handleUpdateIndexProceedClick() {
+  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'clean') {
+    if (debugFlowPreviewState.screen === 'preflight') {
+      triggerDebugPreflightContinue();
+    } else {
+      dismissDebugFlowPreview();
+    }
+    return;
+  }
+
   if (cleanLibraryPreviewState.active) {
     if (cleanLibraryPreviewState.onProceed) {
       cleanLibraryPreviewState.onProceed();
@@ -8186,6 +9476,7 @@ function handleCleanLibraryWorkingProgressEvent(event = {}) {
     return;
   }
   updateCleanLibraryWorkingProgress(event.phase, event.processed, event.total);
+  syncCleanLibraryInflightFromProgress(event);
   maybeAppendCleanLibraryProgressMilestone(
     event.phase,
     event.processed,
@@ -8218,6 +9509,7 @@ function beginCleanLibraryWorkingUi() {
   showCleanLibraryWorkingBody();
   showUpdateIndexPreflightStats(null);
   hideUpdateIndexStats();
+  initCleanLibraryInflightStats();
   showCleanLibraryDetailsSection(true);
   resetCleanLibraryLogFeed();
   prependCleanLibraryActivityLine(
@@ -8255,6 +9547,7 @@ function showCleanLibraryFinishedUi() {
     : Number(updateIndexState.estimatedSeconds) || 0;
   const totalDisplay = formatPreciseDurationFromSeconds(elapsedSec);
 
+  syncCleanLibraryInflightFromResultStats(updateIndexState.resultStats);
   appendCleanLibraryFinishFeedLines(finishedAt, elapsedSec, { allowInactive: true });
 
   endCleanLibraryWorkingUi();
@@ -8543,8 +9836,9 @@ function showPreflightScoreboardZeros() {
 
 async function runUpdateIndexPreflightScan() {
   updateIndexState.overlayPhase = 'scanning';
+  resetCleanLibraryLogFeed();
   updateUpdateIndexUI('Scanning library…', true);
-  showUpdateIndexButtons('cancel');
+  showUpdateIndexButtons('cancel', 'proceed-disabled');
   showCleanLibraryPreflightExplainer();
   showPreflightScoreboardZeros();
   hideUpdateIndexStats();
@@ -8656,7 +9950,6 @@ async function openUpdateIndexOverlay() {
     resumeIntent: null,
     overlayPhase: null,
     workingPhaseActive: false,
-    logLines: [],
     runStartedAtMs: null,
     estimatedSeconds: 0,
     estimatedDisplay: '',
@@ -8665,6 +9958,7 @@ async function openUpdateIndexOverlay() {
 
   const detailsSection = document.getElementById('updateIndexDetailsSection');
   if (detailsSection) detailsSection.style.display = 'none';
+  resetCleanLibraryLogFeed();
 
   overlay.style.display = 'flex';
   resetUpdateIndexOverlayTitle();
@@ -8764,12 +10058,80 @@ async function executeUpdateIndex() {
 /**
  * Update Clean library overlay status text (no spinner — use n/m counts instead).
  */
-function updateUpdateIndexUI(statusText) {
+function updateUpdateIndexUI(statusText, showSpinner = false) {
   const statusTextEl = document.getElementById('updateIndexStatusText');
-
-  if (statusTextEl) {
+  if (!statusTextEl) {
+    return;
+  }
+  if (showSpinner) {
+    setImportSpinnerStatus(statusTextEl, statusText);
+  } else {
     statusTextEl.textContent = statusText;
   }
+}
+
+function setCleanLibraryInflightCounts(processed, duplicates, skipped) {
+  const preflightEl = document.getElementById('updateIndexPreflightStats');
+  const statsEl = document.getElementById('updateIndexInflightStats');
+  const processedEl = document.getElementById('updateIndexInflightProcessed');
+  const duplicateEl = document.getElementById('updateIndexInflightDuplicates');
+  const skippedEl = document.getElementById('updateIndexInflightSkipped');
+  if (preflightEl) {
+    preflightEl.style.display = 'none';
+  }
+  if (statsEl) {
+    statsEl.style.display = 'grid';
+  }
+  hideUpdateIndexStats();
+  if (processedEl) {
+    processedEl.textContent = Number(processed).toLocaleString();
+  }
+  if (duplicateEl) {
+    duplicateEl.textContent = Number(duplicates).toLocaleString();
+  }
+  if (skippedEl) {
+    skippedEl.textContent = Number(skipped).toLocaleString();
+  }
+}
+
+function initCleanLibraryInflightStats() {
+  updateIndexState.inflightStats = { processed: 0, duplicates: 0, skipped: 0 };
+  setCleanLibraryInflightCounts(0, 0, 0);
+}
+
+function syncCleanLibraryInflightFromProgress(event = {}) {
+  if (!updateIndexState.inflightStats) {
+    return;
+  }
+  const processed = Number(event.processed);
+  if (Number.isFinite(processed)) {
+    updateIndexState.inflightStats.processed = Math.max(
+      updateIndexState.inflightStats.processed,
+      processed,
+    );
+  }
+  setCleanLibraryInflightCounts(
+    updateIndexState.inflightStats.processed,
+    updateIndexState.inflightStats.duplicates,
+    updateIndexState.inflightStats.skipped,
+  );
+}
+
+function syncCleanLibraryInflightFromResultStats(resultStats) {
+  if (!resultStats) {
+    return;
+  }
+  const duplicates = Number(resultStats.duplicates_trashed) || 0;
+  const skipped = Math.max(
+    0,
+    (Number(resultStats.moved_to_trash) || 0) - duplicates,
+  );
+  const processed = updateIndexState.inflightStats?.processed || 0;
+  if (updateIndexState.inflightStats) {
+    updateIndexState.inflightStats.duplicates = duplicates;
+    updateIndexState.inflightStats.skipped = skipped;
+  }
+  setCleanLibraryInflightCounts(processed, duplicates, skipped);
 }
 
 /**
@@ -9043,6 +10405,11 @@ async function confirmStopCleanLibraryRun() {
 }
 
 async function handleUpdateIndexCancelClick() {
+  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'clean') {
+    dismissDebugFlowPreview();
+    return;
+  }
+
   if (cleanLibraryPreviewState.active) {
     if (cleanLibraryPreviewState.phase === 'working') {
       const confirmed = await confirmStopCleanLibraryRun();
@@ -9075,6 +10442,14 @@ async function handleUpdateIndexCancelClick() {
 }
 
 function closeUpdateIndexOverlay() {
+  if (
+    debugFlowPreviewState.active &&
+    debugFlowPreviewState.flow === 'clean' &&
+    debugFlowPreviewState.screen === 'complete'
+  ) {
+    dismissDebugFlowPreview();
+    return;
+  }
   void handleUpdateIndexCancelClick();
 }
 
@@ -10208,7 +11583,7 @@ async function showTerraformChoiceDialog(options = {}) {
  */
 async function loadTerraformPreviewOverlay() {
   try {
-    const response = await fetch('/fragments/terraformPreviewOverlay.html');
+    const response = await fetch('/fragments/terraformPreviewOverlay.html?v=8');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
   } catch (error) {
@@ -10216,34 +11591,132 @@ async function loadTerraformPreviewOverlay() {
   }
 }
 
+function stopTerraformProgressRemainingTicker() {
+  if (terraformProgressState.remainingTimer) {
+    clearInterval(terraformProgressState.remainingTimer);
+    terraformProgressState.remainingTimer = null;
+  }
+}
+
+function syncTerraformProgressRemainingDisplay() {
+  const secondaryEl = document.getElementById('terraformProgressSecondaryStatus');
+  if (!secondaryEl) {
+    return;
+  }
+  const totalSec = Number(terraformProgressState.estimatedSeconds);
+  if (
+    !terraformProgressState.runStartedAtMs ||
+    !Number.isFinite(totalSec) ||
+    totalSec <= 0
+  ) {
+    secondaryEl.style.display = 'block';
+    secondaryEl.textContent = `Estimated time: ${terraformProgressState.estimatedDisplay || 'calculating...'}`;
+    return;
+  }
+  const elapsed = (Date.now() - terraformProgressState.runStartedAtMs) / 1000;
+  secondaryEl.style.display = 'block';
+  secondaryEl.textContent = `Total time remaining: ${formatAboutDurationFromSeconds(
+    Math.max(5, totalSec - elapsed),
+  )}`;
+}
+
+function startTerraformProgressRemainingTicker() {
+  stopTerraformProgressRemainingTicker();
+  syncTerraformProgressRemainingDisplay();
+  terraformProgressState.remainingTimer = setInterval(
+    syncTerraformProgressRemainingDisplay,
+    400,
+  );
+}
+
+function endTerraformProgressUi() {
+  terraformProgressState.active = false;
+  stopTerraformProgressRemainingTicker();
+  terraformProgressState.abortController = null;
+}
+
+function beginTerraformProgressUi(preflight = {}) {
+  terraformProgressState.active = true;
+  terraformProgressState.runStartedAtMs = Date.now();
+  terraformProgressState.estimatedSeconds = Number(preflight.estimated_seconds) || null;
+  terraformProgressState.estimatedDisplay = preflight.estimated_display || null;
+
+  const explainerEl = document.getElementById('terraformProgressExplainer');
+  if (explainerEl) {
+    explainerEl.textContent = FLOW_INFLIGHT_BODY.convert;
+  }
+  const detailsSection = document.getElementById('terraformProgressDetailsSection');
+  if (detailsSection) {
+    detailsSection.style.display = 'block';
+  }
+  resetFlowDetailsPanel('convert');
+  getFlowActivityLogFeed('convert').prepend(
+    `Started: ${formatCleanLibraryFeedTimestamp(new Date(terraformProgressState.runStartedAtMs))}`,
+  );
+  getFlowActivityLogFeed('convert').setExpanded(false);
+
+  const statusEl = document.getElementById('terraformProgressStatus');
+  if (statusEl) {
+    setImportSpinnerStatus(statusEl, 'Step 1 of 3: Converting files');
+  }
+
+  startTerraformProgressRemainingTicker();
+
+  const cancelBtn = document.getElementById('terraformProgressCancelBtn');
+  if (cancelBtn) {
+    cancelBtn.onclick = () => {
+      if (terraformProgressState.abortController) {
+        terraformProgressState.abortController.abort();
+      }
+      endTerraformProgressUi();
+      const progressOverlay = document.getElementById('terraformProgressOverlay');
+      if (progressOverlay) {
+        progressOverlay.style.display = 'none';
+      }
+    };
+  }
+}
+
 /**
  * Show terraform preview dialog
- * @param {Object} options - { path: string, photo_count: number, video_count: number }
- * @returns {Promise<boolean>} true to continue, false to go back
+ * @param {Object} options - { path: string, photo_count: number, video_count: number, estimated_display?: string }
+ * @returns {Promise<true | false | 'back_to_picker'>}
  */
 async function showTerraformPreviewDialog(options = {}) {
   return new Promise(async (resolve) => {
-    // Load overlay if needed
     let overlay = document.getElementById('terraformPreviewOverlay');
     if (!overlay) {
       await loadTerraformPreviewOverlay();
       overlay = document.getElementById('terraformPreviewOverlay');
     }
 
-    // Set values
+    const photoCount = Number(options.photo_count) || 0;
+    const videoCount = Number(options.video_count) || 0;
+    const totalCount = photoCount + videoCount;
+
     document.getElementById('terraformPreviewPath').textContent = options.path;
-    document.getElementById('terraformPreviewPhotos').textContent =
-      options.photo_count.toLocaleString();
-    document.getElementById('terraformPreviewVideos').textContent =
-      options.video_count.toLocaleString();
+    setTerraformPreviewPhase('scanning');
+    setTerraformDebugPreflightCounts(0, 0, 0);
+    setTerraformPreviewActionButtons({ continueDisabled: true });
+
+    const statusEl = document.getElementById('terraformPreviewScanStatus');
+    if (statusEl) {
+      setImportSpinnerStatus(statusEl, 'Scanning library…');
+    }
 
     const closeBtn = document.getElementById('terraformPreviewCloseBtn');
+    const cancelBtn = document.getElementById('terraformPreviewCancelBtn');
+    const goBackBtn = document.getElementById('terraformPreviewGoBackBtn');
     const continueBtn = document.getElementById('terraformPreviewContinueBtn');
-    const backBtn = document.getElementById('terraformPreviewBackBtn');
 
-    const handleClose = () => {
+    const handleCancel = () => {
       overlay.style.display = 'none';
       resolve(false);
+    };
+
+    const handleGoBack = () => {
+      overlay.style.display = 'none';
+      resolve('back_to_picker');
     };
 
     const handleContinue = () => {
@@ -10251,16 +11724,28 @@ async function showTerraformPreviewDialog(options = {}) {
       resolve(true);
     };
 
-    const handleBack = () => {
-      overlay.style.display = 'none';
-      resolve(false);
-    };
-
-    closeBtn.onclick = handleClose;
+    closeBtn.onclick = handleCancel;
+    cancelBtn.onclick = handleCancel;
+    if (goBackBtn) goBackBtn.onclick = handleGoBack;
     continueBtn.onclick = handleContinue;
-    backBtn.onclick = handleBack;
 
     overlay.style.display = 'flex';
+
+    const orientStartedAt = Date.now();
+    await waitPreflightScoreboardOrientDelay(orientStartedAt);
+    await animateTerraformPreflightCounts(
+      photoCount,
+      videoCount,
+      totalCount,
+      CLEAN_LIBRARY_PREFLIGHT_COUNT_ANIMATION_MS,
+    );
+
+    setTerraformPreviewPhase('confirm');
+    setTerraformDebugPreflightCounts(photoCount, videoCount, totalCount);
+    setTerraformPreviewActionButtons({ continueDisabled: false });
+    if (statusEl && options.estimated_display) {
+      statusEl.textContent = `Time required: ${options.estimated_display}`;
+    }
   });
 }
 
@@ -10269,7 +11754,7 @@ async function showTerraformPreviewDialog(options = {}) {
  */
 async function loadTerraformWarningOverlay() {
   try {
-    const response = await fetch('/fragments/terraformWarningOverlay.html');
+    const response = await fetch('/fragments/terraformWarningOverlay.html?v=3');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
   } catch (error) {
@@ -10279,8 +11764,8 @@ async function loadTerraformWarningOverlay() {
 
 /**
  * Show terraform warning dialog
- * @param {Object} options - { total_files: number, estimated_time: string }
- * @returns {Promise<boolean>} true to continue, false to go back
+ * @param {Object} options - { media_count: number, incompatible_count: number, estimated_time: string }
+ * @returns {Promise<true | false | 'back_to_picker'>}
  */
 async function showTerraformWarningDialog(options = {}) {
   return new Promise(async (resolve) => {
@@ -10291,9 +11776,13 @@ async function showTerraformWarningDialog(options = {}) {
       overlay = document.getElementById('terraformWarningOverlay');
     }
 
-    // Set values
-    document.getElementById('terraformWarningCount').textContent =
-      options.total_files.toLocaleString();
+    const mediaCount = Number(options.media_count) || 0;
+    const incompatibleCount = Number(options.incompatible_count) || 0;
+
+    document.getElementById('terraformWarningMediaCount').textContent =
+      mediaCount.toLocaleString();
+    document.getElementById('terraformWarningIncompatibleCount').textContent =
+      incompatibleCount.toLocaleString();
     document.getElementById('terraformWarningEta').textContent =
       options.estimated_time || 'calculating...';
 
@@ -10313,7 +11802,7 @@ async function showTerraformWarningDialog(options = {}) {
 
     const handleBack = () => {
       overlay.style.display = 'none';
-      resolve(false);
+      resolve('back_to_picker');
     };
 
     closeBtn.onclick = handleClose;
@@ -10328,10 +11817,14 @@ async function showTerraformWarningDialog(options = {}) {
  * Load terraform progress overlay
  */
 async function loadTerraformProgressOverlay() {
+  if (document.getElementById('terraformProgressOverlay')) {
+    return;
+  }
   try {
-    const response = await fetch('/fragments/terraformProgressOverlay.html');
+    const response = await fetch('/fragments/terraformProgressOverlay.html?v=3');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
+    wireFlowDetailsToggle('convert');
   } catch (error) {
     console.error('❌ Failed to load terraform progress overlay:', error);
   }
@@ -10340,11 +11833,39 @@ async function loadTerraformProgressOverlay() {
 /**
  * Load terraform complete overlay
  */
+function showTerraformCompleteDetailsSection(visible = true) {
+  const section = document.getElementById('terraformCompleteDetailsSection');
+  if (section) {
+    section.style.display = visible ? 'block' : 'none';
+  }
+}
+
+function populateTerraformCompleteActivityFeed({
+  logPath = null,
+  copyFromFlow = null,
+} = {}) {
+  const feed = getFlowActivityLogFeed('convertComplete');
+  const sourceLines = copyFromFlow
+    ? getFlowActivityLogFeed(copyFromFlow).getLines()
+    : [];
+  resetFlowDetailsPanel('convertComplete');
+  if (sourceLines.length > 0) {
+    feed.adoptLines(sourceLines);
+  } else if (logPath) {
+    feed.reset(logPath);
+  }
+  feed.setExpanded(false);
+}
+
 async function loadTerraformCompleteOverlay() {
+  if (document.getElementById('terraformCompleteOverlay')) {
+    return;
+  }
   try {
-    const response = await fetch('/fragments/terraformCompleteOverlay.html');
+    const response = await fetch('/fragments/terraformCompleteOverlay.html?v=3');
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
+    wireFlowDetailsToggle('convertComplete');
   } catch (error) {
     console.error('❌ Failed to load terraform complete overlay:', error);
   }
@@ -10363,15 +11884,28 @@ async function showTerraformCompleteDialog(results = {}) {
       overlay = document.getElementById('terraformCompleteOverlay');
     }
 
-    // Set values
+    wireFlowDetailsToggle('convertComplete');
+
     document.getElementById('terraformCompleteProcessed').textContent =
       results.processed.toLocaleString();
     document.getElementById('terraformCompleteDuplicates').textContent =
       results.duplicates.toLocaleString();
-    document.getElementById('terraformCompleteErrors').textContent =
-      results.errors.toLocaleString();
-    document.getElementById('terraformCompleteLogPath').textContent =
-      `A detailed log has been saved to ${results.log_path}`;
+    document.getElementById('terraformCompleteSkipped').textContent =
+      (Number(results.errors) || 0).toLocaleString();
+
+    const processed = Number(results.processed) || 0;
+    const statusEl = document.getElementById('terraformCompleteStatusText');
+    if (statusEl) {
+      statusEl.textContent = `Converted ${processed.toLocaleString()} file${
+        processed === 1 ? '' : 's'
+      } to your library.`;
+    }
+
+    populateTerraformCompleteActivityFeed({
+      logPath: results.log_path,
+      copyFromFlow: 'convert',
+    });
+    showTerraformCompleteDetailsSection(true);
 
     const closeBtn = document.getElementById('terraformCompleteCloseBtn');
     const doneBtn = document.getElementById('terraformCompleteDoneBtn');
@@ -10411,6 +11945,9 @@ function formatTerraformStepStatus(phase, payload = {}) {
   return `Step ${step.step} of 3: ${step.label}${suffix}`;
 }
 
+const CONVERT_OS_PRIMARY_MESSAGE =
+  'Unable to convert primary OS directories. Pick another folder to continue.';
+
 async function fetchTerraformPreflight(path) {
   const response = await fetch('/api/library/terraform/scan', {
     method: 'POST',
@@ -10419,39 +11956,33 @@ async function fetchTerraformPreflight(path) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (data.convert_blocked) {
+      return { convert_blocked: true };
+    }
     throw new Error(data.error || 'Failed to scan folder');
   }
   return data;
 }
 
-function formatTerraformFolderWarningBody(warning = {}) {
-  const reasons = new Set(warning.reasons || []);
-  if (reasons.has('desktop_like_contents')) {
-    return 'This folder looks like a Desktop, Downloads, or project folder. Converting it will move non-media files to .trash/ and reorganize media in place.';
-  }
-  if (
-    reasons.has('many_non_media_files') ||
-    reasons.has('non_media_outnumbers_media') ||
-    reasons.has('busy_mixed_workspace_root')
-  ) {
-    return 'This folder has many non-media files or a busy mixed layout. Convert works best on a dedicated photo/video folder.';
-  }
-  return 'This folder may not be a good conversion candidate. Convert works best on a dedicated photo/video folder.';
-}
-
-async function showTerraformPoorCandidateDialog(warning = {}) {
+async function showTerraformPoorCandidateDialog(_warning = {}) {
   return await showDialog(
-    'Convert this folder anyway?',
-    formatTerraformFolderWarningBody(warning),
+    'Are you sure?',
+    '',
     [
       { text: 'Cancel', value: 'cancel', primary: false },
-      { text: 'Convert anyway', value: 'continue', primary: true },
+      { text: 'Go back', value: 'back_to_picker', primary: false },
+      { text: 'Yes, convert', value: 'continue', primary: true },
     ],
+    {
+      htmlMessage:
+        '<span class="dialog-message-warning">This may not be a good folder for conversion.</span>' +
+        '<span class="dialog-message-body">This folder mixes photos and videos with many other files, subfolders, or workspace-related content. Please ensure that you\'ve selected the correct folder to convert.</span>',
+    },
   );
 }
 
 /**
- * Execute terraform conversion (preview → warning → convert → complete)
+ * Execute terraform conversion (preflight → bad-folder speedbump → warning → convert → complete)
  * @param {Object} options - { path: string, media_count: number }
  */
 async function executeTerraformFlow(options = {}) {
@@ -10462,9 +11993,29 @@ async function executeTerraformFlow(options = {}) {
     }
 
     const preflight = await fetchTerraformPreflight(path);
+    if (preflight.convert_blocked) {
+      showToast(CONVERT_OS_PRIMARY_MESSAGE);
+      return 'back_to_picker';
+    }
+
     const mediaCount = Number(preflight.media_count) || 0;
     if (mediaCount <= 0) {
       showToast('No supported photos or videos found in this folder.');
+      return false;
+    }
+
+    const continuePreview = await showTerraformPreviewDialog({
+      path,
+      photo_count: Number(preflight.photo_count) || 0,
+      video_count: Number(preflight.video_count) || 0,
+      estimated_display: preflight.estimated_display || 'calculating...',
+    });
+
+    if (continuePreview === 'back_to_picker') {
+      return 'back_to_picker';
+    }
+
+    if (!continuePreview) {
       return false;
     }
 
@@ -10472,29 +12023,23 @@ async function executeTerraformFlow(options = {}) {
       const candidateChoice = await showTerraformPoorCandidateDialog(
         preflight.convert_folder_warning,
       );
+      if (candidateChoice === 'back_to_picker') {
+        return 'back_to_picker';
+      }
       if (candidateChoice !== 'continue') {
         return false;
       }
     }
 
-    // Step 1: Preview
-
-    const continuePreview = await showTerraformPreviewDialog({
-      path,
-      photo_count: Number(preflight.photo_count) || 0,
-      video_count: Number(preflight.video_count) || 0,
-    });
-
-    if (!continuePreview) {
-      return false;
-    }
-
-    // Step 2: Warning
-
     const continueWarning = await showTerraformWarningDialog({
-      total_files: mediaCount,
+      media_count: mediaCount,
+      incompatible_count: Number(preflight.non_media_count) || 0,
       estimated_time: preflight.estimated_display || 'calculating...',
     });
+
+    if (continueWarning === 'back_to_picker') {
+      return 'back_to_picker';
+    }
 
     if (!continueWarning) {
       return false;
@@ -10510,22 +12055,20 @@ async function executeTerraformFlow(options = {}) {
     }
 
     progressOverlay.style.display = 'flex';
+    beginTerraformProgressUi(preflight);
     document.getElementById('terraformProgressProcessed').textContent = '0';
     document.getElementById('terraformProgressDuplicates').textContent = '0';
-    document.getElementById('terraformProgressErrors').textContent = '0';
-    document.getElementById('terraformProgressStatus').textContent =
-      'Step 1 of 3: Converting files';
-    const secondaryStatus = document.getElementById('terraformProgressSecondaryStatus');
-    if (secondaryStatus) {
-      secondaryStatus.style.display = 'block';
-      secondaryStatus.textContent = `Estimated time: ${preflight.estimated_display || 'calculating...'}`;
-    }
+    document.getElementById('terraformProgressSkipped').textContent = '0';
+
+    const terraformAbort = new AbortController();
+    terraformProgressState.abortController = terraformAbort;
 
     // Start SSE
     const response = await fetch('/api/library/terraform', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ library_path: path }),
+      signal: terraformAbort.signal,
     });
     if (!response.ok || !response.body) {
       const data = await response.json().catch(() => ({}));
@@ -10572,13 +12115,26 @@ async function executeTerraformFlow(options = {}) {
           if (eventType === 'phase') {
             const statusEl = document.getElementById('terraformProgressStatus');
             if (statusEl && data.phase) {
-              statusEl.textContent = formatTerraformStepStatus(data.phase, data);
+              setImportSpinnerStatus(
+                statusEl,
+                formatTerraformStepStatus(data.phase, data),
+              );
             }
+            if (data.status === 'starting' && data.phase) {
+              getFlowActivityLogFeed('convert').append(
+                formatTerraformStepStatus(data.phase, data),
+              );
+            }
+            const secondaryStatus = document.getElementById(
+              'terraformProgressSecondaryStatus',
+            );
             if (secondaryStatus && data.phase === 'audit') {
               secondaryStatus.textContent =
                 data.status === 'complete'
                   ? 'Final verification complete'
                   : 'Verifying converted library before opening it…';
+            } else {
+              syncTerraformProgressRemainingDisplay();
             }
             continue;
           }
@@ -10596,7 +12152,7 @@ async function executeTerraformFlow(options = {}) {
           }
           if (data.errors !== undefined) {
             errors = data.errors;
-            document.getElementById('terraformProgressErrors').textContent =
+            document.getElementById('terraformProgressSkipped').textContent =
               errors.toLocaleString();
           }
           if (data.log_path) {
@@ -10610,7 +12166,11 @@ async function executeTerraformFlow(options = {}) {
             completed = true;
           } else if (data.total) {
             const statusEl = document.getElementById('terraformProgressStatus');
-            statusEl.textContent = formatTerraformStepStatus('convert', data);
+            setImportSpinnerStatus(
+              statusEl,
+              formatTerraformStepStatus('convert', data),
+            );
+            syncTerraformProgressRemainingDisplay();
           }
         }
       }
@@ -10620,7 +12180,7 @@ async function executeTerraformFlow(options = {}) {
       throw new Error('Conversion did not complete');
     }
 
-    // Hide progress overlay
+    endTerraformProgressUi();
     progressOverlay.style.display = 'none';
 
     // Step 4: Show completion
@@ -10636,9 +12196,11 @@ async function executeTerraformFlow(options = {}) {
     return await switchToLibrary(path, dbPath);
   } catch (error) {
     console.error('❌ Terraform failed:', error);
-    showToast(`Terraform failed: ${error.message}`);
+    if (error?.name !== 'AbortError') {
+      showToast(`Terraform failed: ${error.message}`);
+    }
 
-    // Hide progress overlay if showing
+    endTerraformProgressUi();
     const progressOverlay = document.getElementById('terraformProgressOverlay');
     if (progressOverlay) {
       progressOverlay.style.display = 'none';
@@ -11280,7 +12842,7 @@ async function runSwitchDeferReloadNormalizeAndLoad(libraryPath, dbPath) {
 // -----------------------------------------------------------------------------
 
 const CONVERT_TO_LIBRARY_PICKER_SUBTITLE =
-  'Select a folder containing media files to convert into a new library.\n⚠️ Warning! This process makes permanent changes to your files, including renaming, reorganizing, and moving incompatible files to a Trash folder for review.';
+  'Select a folder containing media files to convert into a new library.\nWARNING: This process permanently renames and reorganizes media files, and moves incompatible files to a trash folder for review.';
 
 async function loadConvertToLibraryCompleteOverlay() {
   if (document.getElementById('convertToLibraryCompleteOverlay')) {
@@ -11334,17 +12896,22 @@ async function showConvertToLibraryCompleteDialog(options = {}) {
  */
 async function convertToLibrary() {
   try {
-    const selectedPath = await FolderPicker.show({
-      intent: FolderPicker.INTENT.CONVERT_TO_LIBRARY,
-      title: 'Convert to library',
-      subtitle: CONVERT_TO_LIBRARY_PICKER_SUBTITLE,
-    });
+    while (true) {
+      const selectedPath = await FolderPicker.show({
+        intent: FolderPicker.INTENT.CONVERT_TO_LIBRARY,
+        title: 'Convert to library',
+        subtitle: CONVERT_TO_LIBRARY_PICKER_SUBTITLE,
+      });
 
-    if (!selectedPath) {
-      return false;
+      if (!selectedPath) {
+        return false;
+      }
+
+      const result = await executeTerraformFlow({ path: selectedPath });
+      if (result !== 'back_to_picker') {
+        return result;
+      }
     }
-
-    return await executeTerraformFlow({ path: selectedPath });
   } catch (error) {
     console.error('❌ Failed to convert to library:', error);
     showToast(`Error: ${error.message}`);
@@ -11363,7 +12930,7 @@ async function openExistingLibrary() {
     const selectedPath = await FolderPicker.show({
       intent: FolderPicker.INTENT.OPEN_EXISTING_LIBRARY,
       title: 'Open library',
-      subtitle: 'Select a photo library folder to open.',
+      subtitle: 'Select a library folder to open.',
     });
 
     if (!selectedPath) {
@@ -12434,7 +14001,7 @@ async function scanImportPaths(paths) {
   return result;
 }
 
-async function showImportPreflight(scanResult) {
+async function runImportPreflightInOverlay(paths) {
   await loadImportOverlay();
 
   const overlay = document.getElementById('importOverlay');
@@ -12442,66 +14009,106 @@ async function showImportPreflight(scanResult) {
     throw new Error('Import overlay unavailable');
   }
 
-  importState.preflight = scanResult;
-  const statusText = document.getElementById('importStatusText');
-  const preflightStats = document.getElementById('importPreflightStats');
-  const runtimeStats = document.getElementById('importStats');
-  const detailsSection = document.getElementById('importDetailsSection');
-  const photoCount = document.getElementById('importPhotoCount');
-  const videoCount = document.getElementById('importVideoCount');
-  const totalCount = document.getElementById('importTotalCount');
-
-  const { photos, videos, total } = getImportPreflightCounts(scanResult);
-  const estimate = getImportEstimateDisplay(scanResult);
-
+  importState.overlayPhase = 'scanning';
   setImportOverlayTitle();
 
-  if (statusText) {
-    statusText.textContent = `Time required: ${estimate}`;
+  const explainerEl = document.getElementById('importExplainer');
+  if (explainerEl) {
+    explainerEl.style.display = 'none';
   }
-  if (photoCount) photoCount.textContent = photos.toLocaleString();
-  if (videoCount) videoCount.textContent = videos.toLocaleString();
-  if (totalCount) totalCount.textContent = total.toLocaleString();
-  if (preflightStats) preflightStats.style.display = 'grid';
-  if (runtimeStats) runtimeStats.style.display = 'none';
-  if (detailsSection) detailsSection.style.display = 'none';
+  const detailsSection = document.getElementById('importDetailsSection');
+  if (detailsSection) {
+    detailsSection.style.display = 'none';
+  }
+  resetFlowDetailsPanel('add');
 
-  setImportActionButtons({ showCancel: true, showContinue: true });
+  const preflightStats = document.getElementById('importPreflightStats');
+  const runtimeStats = document.getElementById('importStats');
+  if (preflightStats) {
+    preflightStats.style.display = 'grid';
+  }
+  if (runtimeStats) {
+    runtimeStats.style.display = 'none';
+  }
+  setImportDebugPreflightCounts(0, 0, 0);
+  setImportActionButtons({
+    showCancel: true,
+    showContinue: true,
+    continueDisabled: true,
+  });
+
+  const statusEl = document.getElementById('importStatusText');
+  if (statusEl) {
+    setImportSpinnerStatus(statusEl, 'Scanning library…');
+  }
+
   showImportOverlay();
+
+  const orientStartedAt = Date.now();
+  let scanResult;
+  try {
+    scanResult = await scanImportPaths(paths);
+  } catch (error) {
+    await closeImportOverlay();
+    throw error;
+  }
+
+  await waitPreflightScoreboardOrientDelay(orientStartedAt);
+
+  if ((scanResult.total_count || 0) === 0) {
+    await closeImportOverlay();
+    showToast('No media files found', null);
+    return null;
+  }
+
+  const { photos, videos, total } = getImportPreflightCounts(scanResult);
+  await animateImportPreflightCounts(
+    photos,
+    videos,
+    total,
+    CLEAN_LIBRARY_PREFLIGHT_COUNT_ANIMATION_MS,
+  );
+
+  importState.preflight = scanResult;
+  importState.estimatedDisplay = getImportEstimateDisplay(scanResult);
+  importState.estimatedSeconds = Number(scanResult.estimated_seconds) || null;
+  importState.overlayPhase = 'preflight';
+
+  if (statusEl) {
+    statusEl.textContent = `Time required: ${importState.estimatedDisplay}`;
+  }
+  setImportActionButtons({
+    showCancel: true,
+    showContinue: true,
+    continueDisabled: false,
+  });
 
   const confirmed = await new Promise((resolve) => {
     importState.preflightResolve = resolve;
   });
 
+  importState.preflightResolve = null;
   importState.preflight = null;
-  return confirmed;
-}
+  importState.overlayPhase = null;
 
-async function confirmAndStartImport(scanResult) {
-  const { files, total_count } = scanResult;
-
-  if (total_count === 0) {
-    showToast('No media files found', null);
-    return;
-  }
-
-  const confirmed = await showImportPreflight(scanResult);
   if (!confirmed) {
-    return;
+    await closeImportOverlay();
+    return null;
   }
 
-  await startImportFromPaths(files);
+  return scanResult;
 }
 
 /**
- * Scan paths, show cheap preflight, then import on Continue.
+ * Scan paths in-overlay, show preflight, then import on Continue.
  */
 async function scanAndImport(paths) {
   try {
-    showToast('Scanning...', null, 0);
-
-    const result = await scanImportPaths(paths);
-    await confirmAndStartImport(result);
+    const result = await runImportPreflightInOverlay(paths);
+    if (!result) {
+      return;
+    }
+    await startImportFromPaths(result.files);
   } catch (error) {
     console.error('❌ Failed to scan paths:', error);
     showToast(`Error: ${error.message}`, 'error');
@@ -12512,15 +14119,7 @@ async function scanAndImport(paths) {
  * Scan selected paths and show confirmation
  */
 async function scanAndConfirmImport(paths) {
-  try {
-    showToast('Scanning...', null, 0);
-
-    const result = await scanImportPaths(paths);
-    await confirmAndStartImport(result);
-  } catch (error) {
-    console.error('❌ Failed to scan paths:', error);
-    showToast(`Error: ${error.message}`, 'error');
-  }
+  return scanAndImport(paths);
 }
 
 /**
@@ -12712,24 +14311,8 @@ function handleImportEvent(event, data) {
     importState.importedPhotoIds = [];
 
     setImportOverlayTitle();
-
-    if (statusText) {
-      statusText.textContent = `Importing (0 of ${importState.totalFiles.toLocaleString()})`;
-    }
-    const preflightStats = document.getElementById('importPreflightStats');
-    if (preflightStats) {
-      preflightStats.style.display = 'none';
-    }
-    if (stats) {
-      stats.style.display = 'grid';
-    }
-
-    const detailsSection = document.getElementById('importDetailsSection');
-    if (detailsSection) {
-      detailsSection.style.display = 'none';
-    }
-
-    setImportActionButtons({ showCancel: true });
+    beginImportInflightUi();
+    syncImportInflightStatus(0, importState.totalFiles);
   }
 
   if (event === 'progress') {
@@ -12739,19 +14322,12 @@ function handleImportEvent(event, data) {
     const current = Number(data.current || 0);
     const total = Number(data.total || importState.totalFiles || 0);
 
-    if (statusText && total > 0) {
-      statusText.textContent = `Importing (${Math.min(current, total).toLocaleString()} of ${total.toLocaleString()})`;
-    }
-
-    if (importedCount) {
-      importedCount.textContent = importState.importedCount;
-    }
-    if (duplicateCount) {
-      duplicateCount.textContent = importState.duplicateCount;
-    }
-    if (errorCount) {
-      errorCount.textContent = importState.errorCount;
-    }
+    syncImportInflightStatus(current, total);
+    setImportInflightCounts(
+      importState.importedCount,
+      importState.duplicateCount,
+      importState.errorCount,
+    );
 
     // Track imported photo ID if provided
     if (data.photo_id) {
@@ -12768,6 +14344,7 @@ function handleImportEvent(event, data) {
         file: data.error_file,
         message: data.error,
       });
+      appendImportActivityLine(`${data.error_file}: ${data.error}`);
     }
   }
 
@@ -12785,18 +14362,12 @@ function handleImportEvent(event, data) {
 
     const current = Number(data.current || 0);
     const total = Number(data.total || importState.totalFiles || 0);
-    if (statusText && total > 0) {
-      statusText.textContent = `Importing (${Math.min(current, total).toLocaleString()} of ${total.toLocaleString()})`;
-    }
-    if (importedCount) {
-      importedCount.textContent = importState.importedCount;
-    }
-    if (duplicateCount) {
-      duplicateCount.textContent = importState.duplicateCount;
-    }
-    if (errorCount) {
-      errorCount.textContent = importState.errorCount;
-    }
+    syncImportInflightStatus(current, total);
+    setImportInflightCounts(
+      importState.importedCount,
+      importState.duplicateCount,
+      importState.errorCount,
+    );
 
     if (!window.importRejections) {
       window.importRejections = [];
@@ -12808,6 +14379,9 @@ function handleImportEvent(event, data) {
       category: data.category,
       technical_error: data.technical_error,
     });
+    if (data.file && data.reason) {
+      appendImportActivityLine(`${data.file}: ${data.reason}`);
+    }
   }
 
   if (event === 'complete') {
@@ -12815,70 +14389,11 @@ function handleImportEvent(event, data) {
     importState.duplicateCount = data.duplicates || 0;
     importState.errorCount = data.errors || 0;
 
-    const totalErrors = data.errors || 0;
-
-    if (totalErrors > 0) {
-      statusText.innerHTML = `<p>Import complete with ${totalErrors} error${
-        totalErrors > 1 ? 's' : ''
-      }</p>`;
-
-      // Show unified error details (includes both general errors and rejections)
-      showUnifiedErrorDetails();
-
-      // Show error details if we have them
-      if (window.importErrors && window.importErrors.length > 0) {
-        const detailsSection = document.getElementById('importDetailsSection');
-        const detailsList = document.getElementById('importDetailsList');
-        const toggleBtn = document.getElementById('importDetailsToggle');
-
-        if (detailsSection && detailsList) {
-          detailsSection.style.display = 'block';
-          detailsList.innerHTML = '';
-
-          window.importErrors.forEach((err) => {
-            const item = document.createElement('div');
-            item.className = 'import-detail-item';
-            item.innerHTML = `
-              <span class="material-symbols-outlined import-detail-icon error">error</span>
-              <div class="import-detail-text">
-                <div>${err.file}</div>
-                <div class="import-detail-message">${err.message}</div>
-              </div>
-            `;
-            detailsList.appendChild(item);
-          });
-
-          // Keep list collapsed initially, update toggle button text
-          detailsList.style.display = 'none';
-          if (toggleBtn) {
-            toggleBtn.classList.remove('expanded');
-            toggleBtn.innerHTML = `
-              <span class="material-symbols-outlined">expand_more</span>
-              <span>Show details</span>
-            `;
-          }
-        }
-      }
-    } else {
-      statusText.innerHTML = '<p>Import complete</p>';
-    }
-
-    if (importedCount) {
-      importedCount.textContent = importState.importedCount;
-    }
-    if (duplicateCount) {
-      duplicateCount.textContent = importState.duplicateCount;
-    }
-    if (errorCount) {
-      errorCount.textContent = importState.errorCount;
-    }
-
-    setImportActionButtons({
-      showDone: true,
-      showUndo: importState.importedCount > 0,
+    renderImportCompleteUi({
+      hasErrors: (data.errors || 0) > 0,
+      logPath: data.log_path || null,
     });
 
-    // Reload grid so the library matches the DB (imports, dupes-only, or mixed)
     loadAndRenderPhotos(false);
   }
 

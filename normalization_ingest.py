@@ -50,10 +50,17 @@ def iter_ingest_events(
     deps: IngestDependencies,
     *,
     stop_check: Optional[Callable[[], bool]] = None,
+    log_entry: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Iterator[Tuple[str, Dict[str, Any]]]:
     paths = list(file_paths)
     total = len(paths)
     counters = IngestCounters()
+
+    def _log(event_type: str, data: Dict[str, Any]) -> None:
+        if log_entry is not None:
+            log_entry(event_type, data)
+
+    _log("start", {"total": total})
 
     for file_index, source_path in enumerate(paths, 1):
         if stop_check and stop_check():
@@ -62,6 +69,7 @@ def iter_ingest_events(
         filename = os.path.basename(source_path)
         if not os.path.exists(source_path):
             counters.errors += 1
+            _log("missing_file", {"file": source_path})
             yield "progress", counters.progress_payload(current=file_index, total=total)
             continue
 
@@ -73,9 +81,14 @@ def iter_ingest_events(
                 payload = counters.progress_payload(current=file_index, total=total)
                 if result.photo_id:
                     payload["photo_id"] = result.photo_id
+                _log(
+                    "imported",
+                    {"file": source_path, "photo_id": result.photo_id},
+                )
                 yield "progress", payload
             elif result.status == "duplicate":
                 counters.duplicates += 1
+                _log("duplicate", {"file": source_path})
                 yield "progress", counters.progress_payload(current=file_index, total=total)
             elif result.status == "rejected":
                 rejection = dict(result.rejection or {})
@@ -84,10 +97,25 @@ def iter_ingest_events(
                     counters.duplicates += 1
                 else:
                     counters.errors += 1
+                _log(
+                    "rejected",
+                    {
+                        "file": rejection.get("file") or source_path,
+                        "reason": rejection.get("reason"),
+                        "category": category,
+                    },
+                )
                 rejection.update(counters.progress_payload(current=file_index, total=total))
                 yield "rejected", rejection
             else:
                 counters.errors += 1
+                _log(
+                    "error",
+                    {
+                        "file": result.error_file or source_path,
+                        "message": result.error,
+                    },
+                )
                 yield "progress", counters.progress_payload(
                     current=file_index,
                     total=total,
@@ -96,6 +124,7 @@ def iter_ingest_events(
                 )
         except Exception as error:
             counters.errors += 1
+            _log("error", {"file": source_path, "message": str(error)})
             yield "progress", counters.progress_payload(
                 current=file_index,
                 total=total,
@@ -103,9 +132,11 @@ def iter_ingest_events(
                 error_file=filename,
             )
 
-    yield "complete", {
+    complete_payload = {
         "imported": counters.imported,
         "duplicates": counters.duplicates,
         "errors": counters.errors,
         "total": total,
     }
+    _log("complete", complete_payload)
+    yield "complete", complete_payload

@@ -2,7 +2,7 @@
 <div class="import-overlay" id="terraformPreviewOverlay" style="display: none">
   <div class="import-card">
     <div class="import-header">
-      <span class="import-title">Convert library</span>
+      <span class="import-title">Convert to library</span>
       <button
         class="import-close-btn"
         id="terraformPreviewCloseBtn"
@@ -12,51 +12,72 @@
       </button>
     </div>
     <div class="import-progress-section">
-      <div class="import-status-text">
-        <p
-          style="
-            margin: 0 0 4px 0;
-            font-size: 14px;
-            color: var(--text-secondary);
-          "
-        >
-          Found in:
-        </p>
-        <p
-          id="terraformPreviewPath"
-          style="
-            font-family: monospace;
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin: 0 0 16px 0;
-          "
-        >
-          /path/to/folder/
-        </p>
+      <div id="terraformPreviewScanningSection" style="display: none">
+        <div class="import-status-text" id="terraformPreviewScanStatus"></div>
+        <div class="import-stats" id="terraformPreviewPreflightStats">
+          <span class="import-stat">
+            <span class="import-stat-label">Photos:</span>
+            <span
+              class="import-stat-value"
+              id="terraformPreviewPreflightPhotos"
+              >0</span
+            >
+          </span>
+          <span class="import-stat">
+            <span class="import-stat-label">Videos:</span>
+            <span
+              class="import-stat-value"
+              id="terraformPreviewPreflightVideos"
+              >0</span
+            >
+          </span>
+          <span class="import-stat">
+            <span class="import-stat-label">Total:</span>
+            <span
+              class="import-stat-value"
+              id="terraformPreviewPreflightTotal"
+              >0</span
+            >
+          </span>
+        </div>
       </div>
-      <!-- SCOREBOARD FORMAT (no borders) -->
-      <div class="import-stats">
-        <span class="import-stat">
-          <span class="import-stat-label">Photos:</span>
-          <span class="import-stat-value" id="terraformPreviewPhotos">0</span>
-        </span>
-        <span class="import-stat">
-          <span class="import-stat-label">Videos:</span>
-          <span class="import-stat-value" id="terraformPreviewVideos">0</span>
-        </span>
-      </div>
-      <div class="import-status-text" style="margin-top: 16px">
-        <p style="margin: 0; font-size: 13px; color: var(--text-secondary)">
+
+      <div id="terraformPreviewConfirmSection">
+        <p class="import-explainer" id="terraformPreviewExplainer">
           Is this the correct folder?
         </p>
+        <p id="terraformPreviewPath" class="terraform-preview-path">
+          /path/to/folder/
+        </p>
+        <div class="import-stats" id="terraformPreviewConfirmStats">
+          <span class="import-stat">
+            <span class="import-stat-label">Photos:</span>
+            <span class="import-stat-value" id="terraformPreviewPhotos">0</span>
+          </span>
+          <span class="import-stat">
+            <span class="import-stat-label">Videos:</span>
+            <span class="import-stat-value" id="terraformPreviewVideos">0</span>
+          </span>
+          <span class="import-stat">
+            <span class="import-stat-label">Total:</span>
+            <span class="import-stat-value" id="terraformPreviewTotal">0</span>
+          </span>
+        </div>
       </div>
     </div>
-    <div class="import-actions">
-      <button class="btn btn-secondary" id="terraformPreviewContinueBtn">
-        Yes, continue
+    <div class="import-actions" id="terraformPreviewActions">
+      <button class="btn btn-secondary" id="terraformPreviewCancelBtn">
+        Cancel
       </button>
-      <button class="btn btn-primary" id="terraformPreviewBackBtn">
-        No, go back
+      <button class="btn btn-secondary" id="terraformPreviewGoBackBtn">
+        Go back
+      </button>
+      <button
+        class="btn btn-primary"
+        id="terraformPreviewContinueBtn"
+        disabled
+      >
+        Continue
       </button>
     </div>
   </div>

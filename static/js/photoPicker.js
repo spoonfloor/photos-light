@@ -517,7 +517,7 @@ const PhotoPicker = (() => {
 
     // At virtual root, show curated top-level locations
     if (currentPath === VIRTUAL_ROOT) {
-      fileList.innerHTML = topLevelLocations
+      fileList.innerHTML = PickerUtils.sortPickerItems(topLevelLocations)
         .map(
           (loc) => `
         <div class="photo-picker-item" data-real-path="${loc.path}" data-item-path="${loc.path}" data-item-key="${getPhotoItemKey('location', loc.path)}" data-type="location" aria-selected="false">

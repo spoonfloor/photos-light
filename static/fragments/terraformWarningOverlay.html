@@ -2,7 +2,7 @@
 <div class="import-overlay" id="terraformWarningOverlay" style="display: none">
   <div class="import-card">
     <div class="import-header">
-      <span class="import-title">Convert library</span>
+      <span class="import-title">Convert to library</span>
       <button
         class="import-close-btn"
         id="terraformWarningCloseBtn"
@@ -15,11 +15,11 @@
       <div class="import-status-text">
         <p style="margin: 0 0 16px 0; font-size: 14px">
           This will directly alter
-          <strong id="terraformWarningCount">0</strong>
-          <span id="terraformWarningFileLabel">files</span> and the entire
-          folder structure:
+          <strong id="terraformWarningMediaCount">0</strong>
+          media files and
+          <strong id="terraformWarningIncompatibleCount">0</strong>
+          incompatible files:
         </p>
-        <!-- REORDERED CHECKLIST: 2, 3, 1, 4, 5 -->
         <div
           style="
             display: flex;
@@ -44,53 +44,19 @@
           </div>
           <div style="display: flex; gap: 8px">
             <span style="color: #4caf50">✓</span
-            ><span>Move duplicates to .trash/</span>
-          </div>
-          <div style="display: flex; gap: 8px">
-            <span style="color: #4caf50">✓</span
-            ><span>Skip files that fail processing (move to .trash/)</span>
+            ><span
+              >Move duplicates and files that can't be processed to
+              .trash/</span
+            >
           </div>
         </div>
         <div
           style="
+            width: 100%;
+            box-sizing: border-box;
             padding: 12px;
             background: rgba(255, 165, 0, 0.1);
             border: 1px solid rgba(255, 165, 0, 0.3);
-            border-radius: 6px;
-            margin-bottom: 12px;
-          "
-        >
-          <div
-            style="
-              display: flex;
-              gap: 8px;
-              margin-bottom: 8px;
-              font-size: 13px;
-              font-weight: 500;
-              color: #ffa500;
-            "
-          >
-            <span class="material-symbols-outlined" style="font-size: 18px"
-              >warning</span
-            >
-            <span>WARNING: This modifies files permanently.</span>
-          </div>
-          <p
-            style="
-              margin: 0;
-              font-size: 13px;
-              color: var(--text-secondary);
-              line-height: 1.5;
-            "
-          >
-            EXIF changes cannot be undone.
-          </p>
-        </div>
-        <div
-          style="
-            padding: 12px;
-            background: rgba(255, 107, 107, 0.1);
-            border: 1px solid rgba(255, 107, 107, 0.3);
             border-radius: 6px;
             margin-bottom: 16px;
           "
@@ -98,32 +64,24 @@
           <div
             style="
               display: flex;
+              justify-content: center;
+              align-items: center;
               gap: 8px;
-              margin-bottom: 8px;
               font-size: 13px;
-              font-weight: 500;
-              color: #ff6b6b;
+              color: #ffb74d;
+              line-height: 1.5;
+              text-align: center;
             "
           >
             <span class="material-symbols-outlined" style="font-size: 18px"
-              >priority_high</span
+              >warning</span
             >
-            <span>CRITICAL: Make a backup before proceeding!</span>
+            <span>Back up critical files before proceeding.</span>
           </div>
-          <p
-            style="
-              margin: 0;
-              font-size: 13px;
-              color: var(--text-secondary);
-              line-height: 1.5;
-            "
-          >
-            Time Machine, copy to external drive, etc.
-          </p>
         </div>
         <p style="margin: 0; font-size: 13px; color: var(--text-secondary)">
           Estimated time:
-          <strong id="terraformWarningEta">calculating...</strong>
+          <span id="terraformWarningEta">calculating...</span>
         </p>
       </div>
     </div>

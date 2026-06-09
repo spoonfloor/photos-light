@@ -1,35 +1,77 @@
 <!-- Terraform Progress Overlay -->
-<div class="import-overlay" id="terraformProgressOverlay" style="display: none;">
+<div class="import-overlay" id="terraformProgressOverlay" style="display: none">
   <div class="import-card">
     <div class="import-header">
-      <span class="import-title">Converting library</span>
-      <!-- No close button during operation -->
+      <span class="import-title">Converting to library</span>
+      <button
+        class="import-close-btn"
+        id="terraformProgressCloseBtn"
+        aria-label="Close"
+        style="display: none"
+      >
+        <span class="material-symbols-outlined">close</span>
+      </button>
     </div>
     <div class="import-progress-section">
-      <div class="import-status-text" id="terraformProgressStatus">Processing files...</div>
+      <p class="import-explainer" id="terraformProgressExplainer">
+        Converting files and organizing your library.
+      </p>
+      <div class="import-status-text" id="terraformProgressStatus">
+        Processing files...
+      </div>
       <div
         class="import-secondary-status"
         id="terraformProgressSecondaryStatus"
         style="display: none"
       ></div>
-      <!-- SCOREBOARD ONLY -->
-      <div class="import-stats">
+      <div class="import-stats" id="terraformProgressStats">
         <span class="import-stat">
           <span class="import-stat-label">Processed:</span>
-          <span class="import-stat-value" id="terraformProgressProcessed">0</span>
+          <span
+            class="import-stat-value"
+            id="terraformProgressProcessed"
+            >0</span
+          >
         </span>
         <span class="import-stat">
           <span class="import-stat-label">Duplicates:</span>
-          <span class="import-stat-value" id="terraformProgressDuplicates">0</span>
+          <span
+            class="import-stat-value"
+            id="terraformProgressDuplicates"
+            >0</span
+          >
         </span>
         <span class="import-stat">
-          <span class="import-stat-label">Errors:</span>
-          <span class="import-stat-value" id="terraformProgressErrors">0</span>
+          <span class="import-stat-label">Skipped:</span>
+          <span class="import-stat-value" id="terraformProgressSkipped">0</span>
         </span>
       </div>
     </div>
+
+    <div
+      class="import-details-section"
+      id="terraformProgressDetailsSection"
+      style="display: none"
+    >
+      <button
+        class="import-details-toggle"
+        id="terraformProgressDetailsToggle"
+      >
+        <span class="material-symbols-outlined">expand_more</span>
+        <span>Show details</span>
+      </button>
+      <pre
+        class="clean-library-log-feed"
+        id="terraformProgressLogFeed"
+        style="display: none"
+        aria-live="polite"
+      ></pre>
+    </div>
+
     <div class="import-actions">
-      <!-- No buttons during operation -->
+      <button class="btn btn-secondary" id="terraformProgressCancelBtn">
+        Cancel
+      </button>
     </div>
   </div>
 </div>

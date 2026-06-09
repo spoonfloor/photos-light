@@ -551,5 +551,62 @@ class FolderWarningHeuristicTest(unittest.TestCase):
         self.assertIn("busy_mixed_workspace_root", convert_warning["reasons"])
 
 
+class ConvertBlockedPathTest(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _home(self, username='testuser'):
+        return os.path.join(self.tmpdir.name, 'Users', username)
+
+    def test_blocks_user_home_and_primary_shell_folders(self):
+        home = self._home()
+        desktop = os.path.join(home, 'Desktop')
+        os.makedirs(desktop)
+
+        with patch('app.os.path.expanduser', return_value=home):
+            self.assertTrue(photo_app.is_convert_blocked_path(home))
+            self.assertTrue(photo_app.is_convert_blocked_path(desktop))
+
+    def test_allows_subfolder_inside_primary_shell_directory(self):
+        home = self._home()
+        trip_folder = os.path.join(home, 'Desktop', 'trip-photos')
+        os.makedirs(trip_folder)
+
+        with patch('app.os.path.expanduser', return_value=home):
+            self.assertFalse(photo_app.is_convert_blocked_path(trip_folder))
+
+    def test_allows_unrelated_desktop_named_folder(self):
+        unrelated_desktop = os.path.join(self.tmpdir.name, 'Desktop', 'photos')
+        os.makedirs(unrelated_desktop)
+
+        with patch('app.os.path.expanduser', return_value=self._home()):
+            self.assertFalse(photo_app.is_convert_blocked_path(unrelated_desktop))
+
+    @unittest.skipUnless(os.path.exists('/Users/Shared'), '/Users/Shared not available')
+    def test_blocks_users_shared(self):
+        with patch('app.os.path.expanduser', return_value=self._home()):
+            self.assertTrue(photo_app.is_convert_blocked_path('/Users/Shared'))
+
+    def test_blocks_system_prefix_trees(self):
+        with patch('app.os.path.expanduser', return_value=self._home()):
+            self.assertTrue(photo_app.is_convert_blocked_path('/Applications'))
+            self.assertTrue(photo_app.is_convert_blocked_path('/System/Library'))
+            self.assertTrue(photo_app.is_convert_blocked_path('/Library/Fonts'))
+
+    def test_probe_reports_convert_blocked_for_primary_directory(self):
+        home = self._home()
+        desktop = os.path.join(home, 'Desktop')
+        os.makedirs(desktop)
+
+        with patch('app.os.path.expanduser', return_value=home):
+            payload = photo_app.inspect_library_path(desktop, fast=True)
+
+        self.assertTrue(payload['convert_blocked'])
+        self.assertEqual(payload['convert_block_reason'], 'os_primary_directory')
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -104,6 +104,7 @@ from photo_canonicalization import (
     write_photo_date_metadata,
 )
 from make_library_perfect import _compute_photo_duplicate_key, verify_media_file
+from picker_sort import sort_picker_items
 from rotation_utils import (
     HEIC_ROTATION_EXTENSIONS,
     JPEG_LOSSY_QUALITY,
@@ -2399,11 +2400,14 @@ def get_years():
             SELECT DISTINCT substr(date_taken, 1, 4) as year
             FROM photos
             WHERE date_taken IS NOT NULL
-            ORDER BY year DESC
+            ORDER BY year ASC
         """)
         
         rows = cursor.fetchall()
-        years = [int(row['year']) for row in rows]
+        years = sort_picker_items(
+            [int(row['year']) for row in rows],
+            key=str,
+        )
         
         conn.close()
         
@@ -2809,7 +2813,23 @@ def import_from_paths():
             
             if not (yield from emit_event('start', {'total': total_files})):
                 return
-            
+
+            logs_dir = os.path.join(LIBRARY_PATH, '.logs')
+            os.makedirs(logs_dir, exist_ok=True)
+            log_filename = f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+            log_path_abs = os.path.join(logs_dir, log_filename)
+            log_path_rel = os.path.relpath(log_path_abs, LIBRARY_PATH)
+            log_file = open(log_path_abs, 'w')
+
+            def log_import_entry(event_type, data):
+                entry = {
+                    'timestamp': datetime.now().isoformat(),
+                    'event': event_type,
+                    **data,
+                }
+                log_file.write(json.dumps(entry) + '\n')
+                log_file.flush()
+
             conn = get_db_connection()
             ingest_deps = IngestDependencies(
                 library_path=LIBRARY_PATH,
@@ -2827,26 +2847,33 @@ def import_from_paths():
                 remove_source_after_commit=False,
             )
 
-            for event_name, payload in iter_ingest_events(
-                conn,
-                file_paths,
-                ingest_deps,
-                stop_check=lambda: client_disconnected,
-            ):
-                if event_name == 'complete':
-                    print(f"\n{'='*60}")
-                    print("IMPORT COMPLETE:")
-                    print(f"  Imported: {payload.get('imported', 0)}")
-                    print(f"  Duplicates: {payload.get('duplicates', 0)}")
-                    print(f"  Errors: {payload.get('errors', 0)}")
-                    print(f"{'='*60}\n")
+            try:
+                for event_name, payload in iter_ingest_events(
+                    conn,
+                    file_paths,
+                    ingest_deps,
+                    stop_check=lambda: client_disconnected,
+                    log_entry=log_import_entry,
+                ):
+                    if event_name == 'complete':
+                        print(f"\n{'='*60}")
+                        print("IMPORT COMPLETE:")
+                        print(f"  Imported: {payload.get('imported', 0)}")
+                        print(f"  Duplicates: {payload.get('duplicates', 0)}")
+                        print(f"  Errors: {payload.get('errors', 0)}")
+                        print(f"  Log: {log_path_rel}")
+                        print(f"{'='*60}\n")
+                        payload = dict(payload)
+                        payload['log_path'] = log_path_rel
 
-                if not (yield from emit_event(event_name, payload)):
-                    break
+                    if not (yield from emit_event(event_name, payload)):
+                        break
 
-            if client_disconnected:
-                print("\n🛑 IMPORT STOPPED BY CLIENT\n")
-                return
+                if client_disconnected:
+                    print("\n🛑 IMPORT STOPPED BY CLIENT\n")
+                    return
+            finally:
+                log_file.close()
             
         except GeneratorExit:
             print("🛑 Import stream disconnected")
@@ -3700,10 +3727,12 @@ def list_directory():
                 # Skip items we can't access
                 continue
         
-        # Sort alphabetically
-        folders.sort(key=lambda x: x['name'] if isinstance(x, dict) else x)
+        folders = sort_picker_items(
+            folders,
+            key=lambda folder: folder['name'] if isinstance(folder, dict) else folder,
+        )
         if include_files:
-            files.sort(key=lambda x: x['name'])
+            files = sort_picker_items(files, key=lambda file_info: file_info['name'])
         
         response = {
             'current_path': path,
@@ -3890,6 +3919,8 @@ def get_locations():
             except (PermissionError, OSError):
                 # If we can't read /Volumes, skip it
                 pass
+
+        locations = sort_picker_items(locations, key=lambda location: location['name'])
         
         return jsonify({'locations': locations})
         
@@ -3996,6 +4027,60 @@ DESKTOP_WARNING_FOLDER_NAMES = {
     'work',
     'workspace',
 }
+
+MACOS_USER_PRIMARY_DIR_NAMES = frozenset({
+    'Desktop',
+    'Documents',
+    'Downloads',
+    'Library',
+    'Movies',
+    'Music',
+    'Pictures',
+    'Public',
+})
+
+SYSTEM_CONVERT_BLOCK_PREFIXES = (
+    '/Applications',
+    '/System',
+    '/Library',
+    '/usr',
+    '/bin',
+    '/sbin',
+    '/etc',
+    '/opt',
+)
+
+CONVERT_OS_PRIMARY_MESSAGE = (
+    'Unable to convert primary OS directories. Pick another folder to continue.'
+)
+
+
+def is_convert_blocked_path(library_path):
+    """Hard deny: macOS user shell folders and system directory trees."""
+    try:
+        real_path = os.path.realpath(os.path.abspath(library_path))
+    except OSError:
+        return False
+
+    if real_path == '/Volumes':
+        return True
+
+    home = os.path.realpath(os.path.expanduser('~'))
+    shared = os.path.realpath('/Users/Shared')
+
+    if real_path in {home, shared}:
+        return True
+
+    primary_in_home = {os.path.join(home, name) for name in MACOS_USER_PRIMARY_DIR_NAMES}
+    if real_path in primary_in_home:
+        return True
+
+    for prefix in SYSTEM_CONVERT_BLOCK_PREFIXES:
+        normalized_prefix = os.path.realpath(prefix)
+        if real_path == normalized_prefix or real_path.startswith(normalized_prefix + os.sep):
+            return True
+
+    return False
 
 
 def ensure_library_support_dirs(library_path):
@@ -4217,6 +4302,7 @@ def inspect_library_path(library_path, *, fast=False):
     _, media_eta = estimate_duration(media_count)
     folder_warning = analyze_general_purpose_folder(abs_library_path, media_count)
     convert_folder_warning = analyze_convert_to_library_folder(abs_library_path, media_count)
+    convert_blocked = is_convert_blocked_path(abs_library_path)
 
     return {
         'exists': has_openable_db,
@@ -4232,6 +4318,8 @@ def inspect_library_path(library_path, *, fast=False):
         'media_eta': media_eta,
         'folder_warning': folder_warning,
         'convert_folder_warning': convert_folder_warning,
+        'convert_blocked': convert_blocked,
+        'convert_block_reason': 'os_primary_directory' if convert_blocked else None,
         'library_path': abs_library_path,
     }
 
@@ -4593,6 +4681,13 @@ def scan_terraform_library():
             return jsonify({'error': 'Selected folder is not accessible'}), 503
 
         abs_library_path = os.path.abspath(library_path)
+        if is_convert_blocked_path(abs_library_path):
+            return jsonify({
+                'error': CONVERT_OS_PRIMARY_MESSAGE,
+                'convert_blocked': True,
+                'convert_block_reason': 'os_primary_directory',
+            }), 400
+
         scan_result = scan_convert_library(abs_library_path)
 
         photo_count = 0
@@ -4658,6 +4753,10 @@ def terraform_library():
             
             if not library_path or not os.path.exists(library_path):
                 yield f"event: error\ndata: {json.dumps({'error': 'Invalid library path'})}\n\n"
+                return
+
+            if is_convert_blocked_path(library_path):
+                yield f"event: error\ndata: {json.dumps({'error': CONVERT_OS_PRIMARY_MESSAGE, 'convert_blocked': True})}\n\n"
                 return
             
             print(f"\n{'='*60}")

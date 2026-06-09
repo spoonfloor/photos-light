@@ -4,6 +4,30 @@
 
 const PickerUtils = (() => {
   const VIRTUAL_ROOT = '__LOCATIONS__';
+  // Keep in sync with picker_sort.DEFAULT_PICKER_SORT
+  const PICKER_DEFAULT_SORT = { mode: 'name_asc' };
+
+  function getPickerSortKey(value) {
+    return `${value ?? ''}`.toLocaleLowerCase();
+  }
+
+  function sortPickerItems(
+    items,
+    {
+      mode = PICKER_DEFAULT_SORT.mode,
+      getKey = (item) => item?.name ?? item,
+    } = {},
+  ) {
+    const sorted = [...items].sort((left, right) =>
+      getPickerSortKey(getKey(left)).localeCompare(
+        getPickerSortKey(getKey(right)),
+        undefined,
+        { sensitivity: 'base' },
+      ),
+    );
+
+    return mode === 'name_desc' ? sorted.reverse() : sorted;
+  }
 
   /**
    * Gets the default picker path, trying Desktop first, then home, then first location
@@ -92,6 +116,8 @@ const PickerUtils = (() => {
 
   return {
     VIRTUAL_ROOT,
+    PICKER_DEFAULT_SORT,
+    sortPickerItems,
     getDefaultPath,
     isTypingTarget,
     getNavigableRows,

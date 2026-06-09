@@ -11,9 +11,17 @@
 
     <!-- Progress Section -->
     <div class="import-progress-section">
+      <p class="import-explainer" id="importExplainer" style="display: none"></p>
+
       <div class="import-status-text" id="importStatusText">
         Preparing import
       </div>
+
+      <div
+        class="import-secondary-status"
+        id="importSecondaryStatus"
+        style="display: none"
+      ></div>
 
       <div class="import-stats" id="importPreflightStats" style="display: none">
         <span class="import-stat">
@@ -32,7 +40,7 @@
 
       <div class="import-stats" id="importStats" style="display: none">
         <span class="import-stat">
-          <span class="import-stat-label">Imported:</span>
+          <span class="import-stat-label">Added:</span>
           <span class="import-stat-value" id="importedCount">0</span>
         </span>
         <span class="import-stat">
@@ -40,7 +48,7 @@
           <span class="import-stat-value" id="duplicateCount">0</span>
         </span>
         <span class="import-stat">
-          <span class="import-stat-label">Errors:</span>
+          <span class="import-stat-label">Skipped:</span>
           <span class="import-stat-value" id="errorCount">0</span>
         </span>
       </div>
@@ -56,6 +64,13 @@
         <span class="material-symbols-outlined">expand_more</span>
         <span>Show details</span>
       </button>
+
+      <pre
+        class="clean-library-log-feed"
+        id="importLogFeed"
+        style="display: none"
+        aria-live="polite"
+      ></pre>
 
       <div
         class="import-details-list"
