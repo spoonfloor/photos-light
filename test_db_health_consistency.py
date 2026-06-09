@@ -171,6 +171,41 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertTrue(payload["can_continue"])
         self.assertEqual(payload["library_path"], library_path)
 
+    def test_library_status_resolves_stale_legacy_config_to_canonical_db(self):
+        library_path = self._make_library("stale-legacy-config")
+        legacy_db_path = os.path.join(library_path, "photo_library.db")
+        sqlite3.connect(legacy_db_path).close()
+        canonical_path = self._create_healthy_db(library_path)
+        self._write_config(library_path, legacy_db_path)
+
+        response = self.client.get("/api/library/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "healthy")
+        self.assertEqual(payload["db_path"], canonical_path)
+        self.assertEqual(photo_app.DB_PATH, canonical_path)
+        with open(self.config_path, "r", encoding="utf-8") as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved["db_path"], canonical_path)
+
+    def test_startup_resolves_stale_legacy_config_to_canonical_db(self):
+        library_path = self._make_library("startup-stale-legacy-config")
+        legacy_db_path = os.path.join(library_path, "photo_library.db")
+        sqlite3.connect(legacy_db_path).close()
+        canonical_path = self._create_healthy_db(library_path)
+
+        photo_app.load_configured_library_on_startup({
+            "library_path": library_path,
+            "db_path": legacy_db_path,
+        })
+
+        self.assertEqual(photo_app.LIBRARY_PATH, library_path)
+        self.assertEqual(photo_app.DB_PATH, canonical_path)
+        with open(self.config_path, "r", encoding="utf-8") as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved["db_path"], canonical_path)
+
     def test_switch_library_missing_db_requires_create_new(self):
         library_path = self._make_library("switch-missing-db")
 

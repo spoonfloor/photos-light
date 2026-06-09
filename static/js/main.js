@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v389';
+const MAIN_JS_VERSION = 'v390';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 // =====================
@@ -203,6 +203,11 @@ const IMPORT_OVERLAY_TITLE = 'Add photos';
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
 // ============================================================================
 const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
+
+// ============================================================================
+// DEBUG FLAG - First-run empty state button (TODO: delete in future cleanup)
+// ============================================================================
+const SHOW_FIRST_RUN_DEBUG_BUTTON = false;
 
 // ============================================================================
 // DATABASE CORRUPTION DETECTION
@@ -4452,8 +4457,6 @@ function wireLightbox() {
         'Are you sure you want to delete this photo?',
         () => {
           deletePhotos([photoId]);
-          // Close lightbox after delete
-          closeLightbox();
         },
       );
     });
@@ -4703,6 +4706,20 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
       video.style.backgroundColor = 'transparent';
     });
 
+    video.addEventListener('error', async () => {
+      try {
+        const response = await fetch(`/api/photo/${photo.id}/file`);
+        if (response.status !== 404) return;
+
+        const data = await response.json().catch(() => ({}));
+        if (data.error === 'Photo not found') {
+          await handleStalePhoto(photo.id);
+        }
+      } catch (error) {
+        console.error('❌ Error checking video availability:', error);
+      }
+    });
+
     frame.appendChild(video);
   } else {
     // For images, preload in memory first
@@ -4759,7 +4776,7 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
       img.onerror = async () => {
         console.error(`❌ Image ${photo.id} failed to load`);
 
-        // Check if failure was due to database corruption
+        // Check if failure was due to database corruption or stale grid entry
         try {
           const response = await fetch(`/api/photo/${photo.id}/file`);
 
@@ -4771,6 +4788,11 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
 
               if (checkForDatabaseCorruption(data)) {
                 return; // Corruption dialog shown, stop here
+              }
+
+              if (response.status === 404 && data.error === 'Photo not found') {
+                await handleStalePhoto(photo.id);
+                return;
               }
             }
           }
@@ -4911,7 +4933,9 @@ async function openLightbox(photoIndex) {
         if (!response.ok) {
           const error = await response.json();
           console.error('❌ Failed to reveal in Finder:', error);
-        } else {
+          if (response.status === 404 && error.error === 'Photo not found') {
+            await handleStalePhoto(photo.id);
+          }
         }
       } catch (error) {
         console.error('❌ Error revealing in Finder:', error);
@@ -5507,10 +5531,13 @@ function renderFirstRunEmptyState() {
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
           <span>Add photos</span>
         </button>
+        ${SHOW_FIRST_RUN_DEBUG_BUTTON ? `
+        <!-- TODO(cleanup): remove debug button and startCleanLibraryPreviewFlow entry point -->
         <button class="btn" onclick="void startCleanLibraryPreviewFlow()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">bug_report</span>
           <span>Debug</span>
         </button>
+        ` : ''}
       </div>
     </div>
   `;
@@ -5962,6 +5989,47 @@ function updateMonthCircleStates() {
 // =====================
 
 /**
+ * Drop photos from in-memory grid state and re-render immediately.
+ */
+function removePhotosFromState(photoIds) {
+  const idSet = new Set(photoIds.map((id) => Number(id)));
+  if (!idSet.size) return false;
+
+  const prevCount = state.photos.length;
+  state.photos = state.photos.filter((photo) => !idSet.has(photo.id));
+  if (state.photos.length === prevCount) return false;
+
+  idSet.forEach((id) => state.selectedPhotos.delete(id));
+  state.lastClickedIndex = null;
+
+  renderPhotoGrid(getFilteredPhotos(state.photos), false);
+  setupThumbnailLazyLoading();
+  updateDeleteButtonVisibility();
+  return true;
+}
+
+/**
+ * Photo exists in client state but not on server (already deleted / stale cache).
+ */
+async function handleStalePhoto(photoId, { closeLightbox = true } = {}) {
+  const wasViewingInLightbox =
+    state.lightboxOpen &&
+    state.lightboxPhotoIndex !== null &&
+    state.photos[state.lightboxPhotoIndex]?.id === photoId;
+
+  const removed = removePhotosFromState([photoId]);
+  if (!removed) return false;
+
+  if (closeLightbox && wasViewingInLightbox) {
+    await closeLightbox({ commitRotations: false });
+  }
+
+  showToast('Photo is no longer in the library', null);
+  loadAndRenderPhotos(false);
+  return true;
+}
+
+/**
  * Delete photos - with undo support via trash tracking
  */
 async function deletePhotos(photoIds) {
@@ -5989,17 +6057,36 @@ async function deletePhotos(photoIds) {
 
     // Close lightbox if open
     if (state.lightboxOpen) {
-      closeLightbox();
+      await closeLightbox({ commitRotations: false });
     }
 
-    // Reload grid to sync with DB
-    await loadAndRenderPhotos(false);
-
-    // Show success toast with undo
-    const count = result.deleted;
-    showToast(`Deleted ${count} photo${count > 1 ? 's' : ''}`, () =>
-      undoDelete(photoIds),
+    const deletedCount = result.deleted || 0;
+    const errors = Array.isArray(result.errors) ? result.errors : [];
+    const notFoundIds = photoIds.filter((id) =>
+      errors.some((message) => message === `Photo ${id} not found`),
     );
+
+    if (deletedCount > 0) {
+      removePhotosFromState(photoIds);
+    } else if (notFoundIds.length > 0) {
+      removePhotosFromState(notFoundIds);
+    }
+
+    // Full reload can take a long time on large libraries; run in background.
+    loadAndRenderPhotos(false);
+
+    if (deletedCount > 0) {
+      showToast(
+        `Deleted ${deletedCount} photo${deletedCount > 1 ? 's' : ''}`,
+        () => undoDelete(photoIds),
+      );
+    } else if (notFoundIds.length > 0) {
+      showToast('Photo was already deleted', null);
+    } else if (errors.length > 0) {
+      showToast(errors[0], null);
+    } else {
+      showToast('Nothing to delete', null);
+    }
   } catch (error) {
     console.error('❌ Delete error:', error);
     showToast('Delete failed', null);
@@ -10301,37 +10388,92 @@ async function showTerraformCompleteDialog(results = {}) {
   });
 }
 
+const TERRAFORM_PHASE_STEPS = {
+  convert: { step: 1, label: 'Converting files' },
+  folders: { step: 2, label: 'Cleaning folders' },
+  audit: { step: 3, label: 'Final verification' },
+};
+
+function formatTerraformStepStatus(phase, payload = {}) {
+  const step = TERRAFORM_PHASE_STEPS[phase] || TERRAFORM_PHASE_STEPS.convert;
+  let suffix = '';
+  if (
+    phase === 'convert' &&
+    Number.isFinite(Number(payload.current)) &&
+    Number.isFinite(Number(payload.total)) &&
+    Number(payload.total) > 0
+  ) {
+    suffix = ` (${Number(payload.current).toLocaleString()} / ${Number(payload.total).toLocaleString()})`;
+  }
+  if (phase === 'audit' && payload.status === 'failed') {
+    return `Step ${step.step} of 3: ${step.label} failed`;
+  }
+  return `Step ${step.step} of 3: ${step.label}${suffix}`;
+}
+
+async function fetchTerraformPreflight(path) {
+  const response = await fetch('/api/library/terraform/scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ library_path: path }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to scan folder');
+  }
+  return data;
+}
+
+function formatTerraformFolderWarningBody(warning = {}) {
+  const reasons = new Set(warning.reasons || []);
+  if (reasons.has('desktop_like_contents')) {
+    return 'This folder looks like a Desktop, Downloads, or project folder. Converting it will move non-media files to .trash/ and reorganize media in place.';
+  }
+  if (
+    reasons.has('many_non_media_files') ||
+    reasons.has('non_media_outnumbers_media') ||
+    reasons.has('busy_mixed_workspace_root')
+  ) {
+    return 'This folder has many non-media files or a busy mixed layout. Convert works best on a dedicated photo/video folder.';
+  }
+  return 'This folder may not be a good conversion candidate. Convert works best on a dedicated photo/video folder.';
+}
+
+async function showTerraformPoorCandidateDialog(warning = {}) {
+  return await showDialog(
+    'Convert this folder anyway?',
+    formatTerraformFolderWarningBody(warning),
+    [
+      { text: 'Cancel', value: 'cancel', primary: false },
+      { text: 'Convert anyway', value: 'continue', primary: true },
+    ],
+  );
+}
+
 /**
  * Execute terraform conversion (preview → warning → convert → complete)
  * @param {Object} options - { path: string, media_count: number }
  */
 async function executeTerraformFlow(options = {}) {
   try {
-    const { path, media_count, photo_count = 0, video_count = 0 } = options;
+    const { path } = options;
+    if (!path) {
+      throw new Error('No folder selected');
+    }
 
-    // Use counts from checkResult if provided, otherwise query database
-    let finalPhotoCount = photo_count;
-    let finalVideoCount = video_count;
+    const preflight = await fetchTerraformPreflight(path);
+    const mediaCount = Number(preflight.media_count) || 0;
+    if (mediaCount <= 0) {
+      showToast('No supported photos or videos found in this folder.');
+      return false;
+    }
 
-    // If counts weren't provided (shouldn't happen), try database
-    if (photo_count === 0 && video_count === 0 && media_count > 0) {
-      try {
-        const response = await fetch('/api/file-counts');
-        if (response.ok) {
-          const data = await response.json();
-          finalPhotoCount = data.photo_count;
-          finalVideoCount = data.video_count;
-        } else {
-          // Fallback to estimate if API fails
-          console.warn('Failed to get file counts, using estimate');
-          finalPhotoCount = Math.floor(media_count * 0.9);
-          finalVideoCount = media_count - finalPhotoCount;
-        }
-      } catch (error) {
-        console.error('Error fetching file counts:', error);
-        // Fallback to estimate
-        finalPhotoCount = Math.floor(media_count * 0.9);
-        finalVideoCount = media_count - finalPhotoCount;
+    if (preflight.convert_folder_warning?.show) {
+      const candidateChoice = await showTerraformPoorCandidateDialog(
+        preflight.convert_folder_warning,
+      );
+      if (candidateChoice !== 'continue') {
+        return false;
       }
     }
 
@@ -10339,8 +10481,8 @@ async function executeTerraformFlow(options = {}) {
 
     const continuePreview = await showTerraformPreviewDialog({
       path,
-      photo_count: finalPhotoCount,
-      video_count: finalVideoCount,
+      photo_count: Number(preflight.photo_count) || 0,
+      video_count: Number(preflight.video_count) || 0,
     });
 
     if (!continuePreview) {
@@ -10349,17 +10491,9 @@ async function executeTerraformFlow(options = {}) {
 
     // Step 2: Warning
 
-    // Estimate time: ~2 seconds per file
-    const estimated_seconds = Math.ceil(media_count * 2);
-    const estimated_minutes = Math.ceil(estimated_seconds / 60);
-    const estimated_time =
-      estimated_minutes < 60
-        ? `${estimated_minutes}-${estimated_minutes + 2} minutes`
-        : `${Math.floor(estimated_minutes / 60)}-${Math.ceil(estimated_minutes / 60)} hours`;
-
     const continueWarning = await showTerraformWarningDialog({
-      total_files: media_count,
-      estimated_time,
+      total_files: mediaCount,
+      estimated_time: preflight.estimated_display || 'calculating...',
     });
 
     if (!continueWarning) {
@@ -10376,6 +10510,16 @@ async function executeTerraformFlow(options = {}) {
     }
 
     progressOverlay.style.display = 'flex';
+    document.getElementById('terraformProgressProcessed').textContent = '0';
+    document.getElementById('terraformProgressDuplicates').textContent = '0';
+    document.getElementById('terraformProgressErrors').textContent = '0';
+    document.getElementById('terraformProgressStatus').textContent =
+      'Step 1 of 3: Converting files';
+    const secondaryStatus = document.getElementById('terraformProgressSecondaryStatus');
+    if (secondaryStatus) {
+      secondaryStatus.style.display = 'block';
+      secondaryStatus.textContent = `Estimated time: ${preflight.estimated_display || 'calculating...'}`;
+    }
 
     // Start SSE
     const response = await fetch('/api/library/terraform', {
@@ -10383,16 +10527,22 @@ async function executeTerraformFlow(options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ library_path: path }),
     });
+    if (!response.ok || !response.body) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to start conversion');
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let currentEvent = 'message';
 
     let processed = 0;
     let duplicates = 0;
     let errors = 0;
     let log_path = '';
     let dbPath = null;
+    let completed = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -10406,12 +10556,32 @@ async function executeTerraformFlow(options = {}) {
         if (!line.trim()) continue;
 
         if (line.startsWith('event: ')) {
-          const event = line.substring(7);
+          currentEvent = line.substring(7).trim();
           continue;
         }
 
         if (line.startsWith('data: ')) {
           const data = JSON.parse(line.substring(6));
+          const eventType = currentEvent;
+          currentEvent = 'message';
+
+          if (eventType === 'error') {
+            throw new Error(data.error || 'Conversion failed');
+          }
+
+          if (eventType === 'phase') {
+            const statusEl = document.getElementById('terraformProgressStatus');
+            if (statusEl && data.phase) {
+              statusEl.textContent = formatTerraformStepStatus(data.phase, data);
+            }
+            if (secondaryStatus && data.phase === 'audit') {
+              secondaryStatus.textContent =
+                data.status === 'complete'
+                  ? 'Final verification complete'
+                  : 'Verifying converted library before opening it…';
+            }
+            continue;
+          }
 
           // Update progress UI
           if (data.processed !== undefined) {
@@ -10436,13 +10606,18 @@ async function executeTerraformFlow(options = {}) {
             dbPath = data.db_path;
           }
 
-          // Update status (static - shows total)
-          if (data.total) {
+          if (eventType === 'complete') {
+            completed = true;
+          } else if (data.total) {
             const statusEl = document.getElementById('terraformProgressStatus');
-            statusEl.textContent = `Processing ${data.total} files...`;
+            statusEl.textContent = formatTerraformStepStatus('convert', data);
           }
         }
       }
+    }
+
+    if (!completed || !dbPath) {
+      throw new Error('Conversion did not complete');
     }
 
     // Hide progress overlay
@@ -11169,8 +11344,7 @@ async function convertToLibrary() {
       return false;
     }
 
-    await showConvertToLibraryCompleteDialog({ path: selectedPath });
-    return true;
+    return await executeTerraformFlow({ path: selectedPath });
   } catch (error) {
     console.error('❌ Failed to convert to library:', error);
     showToast(`Error: ${error.message}`);

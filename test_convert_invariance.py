@@ -81,7 +81,9 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         return rows[0]
 
-    def _run_convert(self, library_path, *, exif_date, write_side_effect):
+    def _run_convert(self, library_path, *, exif_date, write_side_effect, audit_issues=None):
+        if audit_issues is None:
+            audit_issues = []
         with patch.object(photo_app, "extract_exif_date", return_value=exif_date), patch.object(
             photo_app,
             "bake_orientation",
@@ -102,7 +104,10 @@ class ConvertInvarianceContractTest(unittest.TestCase):
             photo_app,
             "write_photo_exif",
             side_effect=write_side_effect,
-        ), patch("app.subprocess.run", return_value=self.fake_subprocess_result):
+        ), patch("app.subprocess.run", return_value=self.fake_subprocess_result), patch(
+            "clean_library_fast_audit.run_fast_library_audit",
+            return_value=audit_issues,
+        ):
             response = self.client.post(
                 "/api/library/terraform",
                 json={"library_path": library_path},
@@ -269,6 +274,64 @@ class ConvertInvarianceContractTest(unittest.TestCase):
             sorted(os.listdir(import_temp_dir)),
             [],
         )
+
+    def test_convert_preflight_reports_counts_non_media_and_eta(self):
+        library_path, _ = self._make_convert_library(
+            "convert-preflight-lib",
+            "photo.jpg",
+            b"photo",
+            123,
+        )
+        video_path = os.path.join(library_path, "incoming", "clip.mov")
+        with open(video_path, "wb") as handle:
+            handle.write(b"video")
+        notes_path = os.path.join(library_path, "incoming", "notes.txt")
+        with open(notes_path, "wb") as handle:
+            handle.write(b"notes")
+
+        response = self.client.post(
+            "/api/library/terraform/scan",
+            json={"library_path": library_path},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "INVENTORY")
+        self.assertEqual(payload["photo_count"], 1)
+        self.assertEqual(payload["video_count"], 1)
+        self.assertEqual(payload["media_count"], 2)
+        self.assertEqual(payload["non_media_count"], 1)
+        self.assertIn("estimated_display", payload)
+
+    def test_convert_final_audit_blocks_completion(self):
+        payload = b"convert-audit-failure"
+        library_path, _ = self._make_convert_library(
+            "convert-audit-failure-lib",
+            "audit.jpg",
+            payload,
+            123,
+        )
+
+        def fake_write_photo_exif(file_path, target_date):
+            with open(file_path, "ab") as handle:
+                handle.write(b"|canonical-date|" + target_date.encode("utf-8"))
+
+        response_text = self._run_convert(
+            library_path,
+            exif_date=None,
+            write_side_effect=fake_write_photo_exif,
+            audit_issues=[
+                {
+                    "kind": "misnamed_or_misfiled",
+                    "path": "incoming/audit.jpg",
+                    "detail": "expected canonical path",
+                }
+            ],
+        )
+
+        self.assertIn("event: error", response_text)
+        self.assertIn("Final verification failed", response_text)
+        self.assertNotIn("event: complete", response_text)
 
     def test_convert_followed_by_clean_scan_reports_no_photo_issues(self):
         payload = b"convert-clean-scan"

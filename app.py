@@ -87,6 +87,12 @@ from library_layout import (
     resolve_db_path,
 )
 from media_finalization import finalize_mutated_media
+from normalization_convert import (
+    ConvertDependencies,
+    iter_convert_events,
+    rewrite_library_layout,
+    scan_convert_library,
+)
 from normalization_ingest import IngestDependencies, iter_ingest_events
 from photo_canonicalization import (
     CanonicalizedPhoto,
@@ -3511,6 +3517,10 @@ def library_status():
                 'valid': False
             })
 
+        if payload['valid'] and resolved_db_path != db_path:
+            update_app_paths(library_path, resolved_db_path)
+            save_config(library_path, resolved_db_path)
+
         return jsonify(payload)
         
     except Exception as e:
@@ -4444,107 +4454,8 @@ def reset_library():
 
 
 def cleanup_terraform_folders(library_path):
-    """
-    Remove ALL folders after terraform except:
-    - Infrastructure folders at root: .thumbnails, .logs, .trash, .db_backups
-    - Year folders at root: YYYY/ (4-digit folders)
-    - Date folders inside year folders: YYYY-MM-DD/
-    
-    This is a whitelist approach - anything not explicitly allowed is deleted.
-    """
-    removed_count = 0
-    
-    # Get all items in library root
-    try:
-        root_items = os.listdir(library_path)
-    except Exception as e:
-        print(f"⚠️  Could not list library path: {e}")
-        return 0
-    
-    # Whitelist: allowed folder names at root level
-    INFRASTRUCTURE_FOLDERS = set(ROOT_INFRASTRUCTURE_DIRS)
-    ignored_entries = {'.DS_Store'}
-    
-    for item in root_items:
-        item_path = os.path.join(library_path, item)
-        
-        # Skip files (like photo_library.db)
-        if not os.path.isdir(item_path):
-            continue
-        
-        # Check if this is an allowed infrastructure folder
-        if item in INFRASTRUCTURE_FOLDERS:
-            continue
-        
-        # Check if this is a year folder (YYYY - 4 digits)
-        if len(item) == 4 and item.isdigit():
-            # Year folder is allowed - but clean up its contents
-            # Only YYYY-MM-DD subfolders should remain
-            try:
-                year_items = os.listdir(item_path)
-                for year_item in year_items:
-                    year_item_path = os.path.join(item_path, year_item)
-                    
-                    if not os.path.isdir(year_item_path):
-                        # Preserve non-directory entries so failed converts never
-                        # lose the only remaining copy of a media file.
-                        print(f"    ⚠️  Preserving file during cleanup: {os.path.relpath(year_item_path, library_path)}")
-                        continue
-                    
-                    # Check if this is a valid date folder (YYYY-MM-DD)
-                    is_valid_date_folder = (
-                        len(year_item) == 10 and
-                        year_item[4] == '-' and
-                        year_item[7] == '-' and
-                        year_item[:4].isdigit() and
-                        year_item[5:7].isdigit() and
-                        year_item[8:10].isdigit()
-                    )
-                    
-                    if not is_valid_date_folder:
-                        visible_entries = [entry for entry in os.listdir(year_item_path) if entry not in ignored_entries]
-                        if visible_entries:
-                            print(
-                                f"    ⚠️  Preserving noncanonical folder with remaining files: "
-                                f"{os.path.relpath(year_item_path, library_path)}"
-                            )
-                            continue
-
-                        # Not a valid date folder - delete it if now empty/noise-only
-                        try:
-                            for ignored_entry in os.listdir(year_item_path):
-                                if ignored_entry in ignored_entries:
-                                    ignored_path = os.path.join(year_item_path, ignored_entry)
-                                    if os.path.isfile(ignored_path):
-                                        os.remove(ignored_path)
-                            shutil.rmtree(year_item_path)
-                            print(f"    🗑️  Removed folder: {os.path.relpath(year_item_path, library_path)}")
-                            removed_count += 1
-                        except Exception as e:
-                            print(f"    ⚠️  Could not remove {year_item_path}: {e}")
-            except Exception as e:
-                print(f"    ⚠️  Could not clean year folder {item}: {e}")
-            
-            continue
-        
-        # Not infrastructure, not a year folder - DELETE IT
-        try:
-            visible_entries = [entry for entry in os.listdir(item_path) if entry not in ignored_entries]
-            if visible_entries:
-                print(f"    ⚠️  Preserving noncanonical folder with remaining files: {os.path.relpath(item_path, library_path)}")
-                continue
-            for ignored_entry in os.listdir(item_path):
-                if ignored_entry in ignored_entries:
-                    ignored_path = os.path.join(item_path, ignored_entry)
-                    if os.path.isfile(ignored_path):
-                        os.remove(ignored_path)
-            shutil.rmtree(item_path)
-            print(f"    🗑️  Removed folder: {os.path.relpath(item_path, library_path)}")
-            removed_count += 1
-        except Exception as e:
-            print(f"    ⚠️  Could not remove {item_path}: {e}")
-    
-    return removed_count
+    """Remove non-canonical folders after convert (delegates to shared convert helper)."""
+    return rewrite_library_layout(library_path)
 
 
 def cleanup_empty_folders_recursive(root_path):
@@ -4660,6 +4571,67 @@ def cleanup_terraform_source_folders(source_folders, library_path):
     return removed_count
 
 
+@app.route('/api/library/terraform/scan', methods=['POST'])
+def scan_terraform_library():
+    """Cheap Convert preflight: media counts, non-media count, and ETA."""
+    try:
+        data = request.get_json(silent=True) or {}
+        library_path = data.get('library_path')
+
+        if not library_path or not os.path.exists(library_path):
+            return jsonify({'error': 'Invalid library path'}), 400
+        if not os.path.isdir(library_path):
+            return jsonify({'error': 'Selected path is not a folder'}), 400
+        if not os.access(library_path, os.R_OK | os.X_OK):
+            return jsonify({'error': 'Selected folder is not accessible'}), 503
+
+        abs_library_path = os.path.abspath(library_path)
+        scan_result = scan_convert_library(abs_library_path)
+
+        photo_count = 0
+        video_count = 0
+        photo_bytes = 0
+        video_bytes = 0
+        for media_path in scan_result.media_files:
+            ext = os.path.splitext(media_path)[1].lower()
+            try:
+                size_bytes = os.path.getsize(media_path)
+            except OSError:
+                size_bytes = 0
+            if ext in VIDEO_EXTENSIONS:
+                video_count += 1
+                video_bytes += size_bytes
+            else:
+                photo_count += 1
+                photo_bytes += size_bytes
+
+        estimated_seconds = estimate_clean_duration_seconds(
+            photo_count=photo_count,
+            video_count=video_count,
+            photo_bytes=photo_bytes,
+            video_bytes=video_bytes,
+        )
+        _seconds, estimated_display = format_about_duration(estimated_seconds)
+        media_count = photo_count + video_count
+
+        return jsonify({
+            'status': 'INVENTORY',
+            'preflight': True,
+            'library_path': abs_library_path,
+            'photo_count': photo_count,
+            'video_count': video_count,
+            'media_count': media_count,
+            'non_media_count': len(scan_result.non_media_files),
+            'estimated_seconds': round(estimated_seconds, 1),
+            'estimated_display': estimated_display,
+            'convert_folder_warning': analyze_convert_to_library_folder(abs_library_path, media_count),
+        })
+    except Exception as e:
+        error_logger.error(f"Convert preflight failed: {e}")
+        error_logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/library/terraform', methods=['POST'])
 def terraform_library():
     """
@@ -4671,6 +4643,8 @@ def terraform_library():
     - Moves duplicates and errors to .trash/
     """
     def generate():
+        conn = None
+        log_file = None
         try:
             data = request.json
             library_path = data.get('library_path')
@@ -4756,29 +4730,10 @@ def terraform_library():
             
             # SCAN for all files recursively
             print("📂 Scanning for files...")
-            media_files = []
-            non_media_files = []
-            
-            for root, dirs, files in os.walk(library_path):
-                # Skip hidden directories
-                dirs[:] = [d for d in dirs if not d.startswith('.')]
-                
-                for filename in files:
-                    # Skip .DS_Store and other system files
-                    if filename.startswith('.'):
-                        continue
-                    
-                    full_path = os.path.join(root, filename)
-                    _, ext = os.path.splitext(filename)
-                    ext_lower = ext.lower()
-                    
-                    if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
-                        media_files.append(full_path)
-                    else:
-                        # Non-media file - will be moved to trash
-                        non_media_files.append(full_path)
-            
-            total_files = len(media_files)
+            scan_result = scan_convert_library(library_path)
+            media_files = scan_result.media_files
+            non_media_files = scan_result.non_media_files
+            total_files = scan_result.total_media
             print(f"✅ Found {total_files} media files")
             print(f"✅ Found {len(non_media_files)} non-media files (will be moved to trash)\n")
             
@@ -4806,248 +4761,181 @@ def terraform_library():
                 print(f"✅ Moved {len(non_media_files)} non-media files to trash\n")
             
             yield f"event: start\ndata: {json.dumps({'total': total_files})}\n\n"
+            yield f"event: phase\ndata: {json.dumps({'phase': 'convert', 'status': 'starting', 'total': total_files})}\n\n"
             
             # Create database
             db_path = canonical_db_path(library_path)
             conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row  # Return rows as dictionaries
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             hash_cache = HashCache(conn)
             
-            # Create schema
-            from db_schema import create_database_schema
             create_database_schema(cursor)
             conn.commit()
             print("✅ Database created\n")
-            
-            # Track results
+
+            def _move_duplicate(source_path):
+                return move_file_to_category_trash(
+                    library_path,
+                    trash_dir,
+                    source_path,
+                    'duplicates',
+                )
+
+            convert_deps = ConvertDependencies(
+                library_path=library_path,
+                hash_cache=hash_cache,
+                stage_photo_for_canonicalization=lambda source_path, **kwargs: stage_photo_for_canonicalization(
+                    source_path,
+                    temp_prefix=kwargs.get('temp_prefix', 'convert_photo_'),
+                    temp_dir=import_temp_dir,
+                ),
+                cleanup_staged_file=cleanup_staged_file,
+                commit_staged_canonical_photo=commit_staged_canonical_photo,
+                categorize_processing_error=categorize_processing_error,
+                extract_exif_date=extract_exif_date,
+                write_video_metadata=write_video_metadata,
+                finalize_mutated_media=finalize_mutated_media,
+                compute_hash=compute_full_hash,
+                get_dimensions=get_image_dimensions,
+                delete_thumbnail_for_hash=delete_thumbnail_for_hash,
+                remove_source_after_commit=True,
+                move_duplicate_to_trash=_move_duplicate,
+                move_unsupported_to_trash=lambda source_path: move_file_to_category_trash(
+                    library_path,
+                    trash_dir,
+                    source_path,
+                    'errors',
+                ),
+                photo_temp_prefix='convert_photo_',
+            )
+
             processed_count = 0
             duplicate_count = 0
             error_count = 0
-            
-            # PROCESS each file
-            for file_index, source_path in enumerate(media_files, 1):
-                try:
-                    filename = os.path.basename(source_path)
-                    print(f"{file_index}/{total_files}. Processing: {filename}")
-                    
-                    _, ext = os.path.splitext(filename)
-                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
-                    log_manifest('processing', {'file': source_path, 'file_type': file_type})
 
-                    if file_type == 'photo':
-                        staged_path = None
-                        try:
-                            staged_photo = stage_photo_for_canonicalization(
-                                source_path,
-                                temp_prefix='convert_photo_',
-                                temp_dir=import_temp_dir,
-                            )
-                            staged_path = staged_photo.staged_path
-                            canonical_photo = staged_photo.canonical_photo
-                            print(
-                                f"   📦 Canonical photo staged: {os.path.basename(staged_path)} "
-                                f"→ {canonical_photo.relative_path}"
-                            )
+            def _on_file_start(source_path, filename, file_index, total):
+                _, ext = os.path.splitext(filename)
+                file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
+                print(f"{file_index}/{total}. Processing: {filename}")
+                log_manifest('processing', {'file': source_path, 'file_type': file_type})
 
-                            cursor.execute(
-                                "SELECT id, current_path FROM photos WHERE content_hash = ?",
-                                (canonical_photo.content_hash,),
-                            )
-                            existing = cursor.fetchone()
-                            if existing:
-                                dup_path = move_file_to_category_trash(
-                                    library_path,
-                                    trash_dir,
-                                    source_path,
-                                    'duplicates',
-                                )
-                                cleanup_staged_file(staged_path)
-                                staged_path = None
-                                print(f"   ⏭️  Duplicate canonical photo -> {os.path.relpath(dup_path, library_path)}")
-                                log_manifest(
-                                    'duplicate',
-                                    {
-                                        'original': source_path,
-                                        'staged': staged_path,
-                                        'moved_to': dup_path,
-                                        'hash': canonical_photo.content_hash,
-                                        'canonical_path': canonical_photo.relative_path,
-                                        'existing_id': existing['id'],
-                                        'existing_path': existing['current_path'],
-                                    },
-                                )
-                                duplicate_count += 1
-                                yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                                continue
-
-                            photo_id, target_path = commit_staged_canonical_photo(
-                                conn,
-                                library_path=library_path,
-                                source_path=source_path,
-                                original_filename=filename,
-                                staged_photo=staged_photo,
-                                remove_source_after_commit=True,
-                            )
-                            staged_path = None
-                            print(f"   ✅ Canonical photo committed: {canonical_photo.relative_path}")
-                            log_manifest(
-                                'success',
-                                {
-                                    'original': source_path,
-                                    'canonical_path': canonical_photo.relative_path,
-                                    'new': target_path,
-                                    'hash': canonical_photo.content_hash,
-                                    'id': photo_id,
-                                    'file_type': 'photo',
-                                    'date_taken': canonical_photo.date_taken,
-                                },
-                            )
-
-                            processed_count += 1
-                            yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                            continue
-                        except Exception as photo_error:
-                            print(f"   ❌ Photo convert failed: {photo_error}")
-                            cleanup_staged_file(staged_path)
-                            category, user_message = categorize_processing_error(photo_error)
-                            log_manifest(
-                                'failed',
-                                {
-                                    'file': source_path,
-                                    'staged': staged_path,
-                                    'reason': str(photo_error),
-                                    'category': category,
-                                    'preserved_original': os.path.exists(source_path),
-                                },
-                            )
-
-                            if category == 'duplicate':
-                                duplicate_count += 1
-                            else:
-                                error_count += 1
-                            yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                            yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(photo_error)})}\n\n"
-                            continue
-
-                    content_hash, cache_hit = hash_cache.get_hash(source_path)
-                    if cache_hit:
-                        print(f"   Hash: {content_hash[:16]}... (cached)")
-                    else:
-                        print(f"   Hash: {content_hash[:16]}...")
-
-                    if content_hash is None:
-                        raise RuntimeError("Failed to hash file")
-
-                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
-                    existing = cursor.fetchone()
-                    if existing:
-                        dup_path = move_file_to_category_trash(
-                            library_path,
-                            trash_dir,
-                            source_path,
-                            'duplicates',
-                        )
-                        print(f"   ⏭️  Duplicate video -> {os.path.relpath(dup_path, library_path)}")
-                        log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
-                        duplicate_count += 1
-                        yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                        continue
-
-                    date_taken, _ = parse_metadata_datetime(
-                        extract_exif_date(source_path),
-                        os.path.getmtime(source_path),
-                    )
-                    print(f"   Date: {date_taken}")
-
-                    dimensions = get_image_dimensions(source_path)
-                    width = dimensions[0] if dimensions else None
-                    height = dimensions[1] if dimensions else None
-
-                    print("   🔧 Writing video metadata...")
-                    write_video_metadata(source_path, date_taken)
-
-                    content_hash = compute_full_hash(source_path)
-                    if not content_hash:
-                        raise RuntimeError("Failed to compute canonical video hash after metadata write")
-
-                    cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
-                    existing = cursor.fetchone()
-                    if existing:
-                        dup_path = move_file_to_category_trash(
-                            library_path,
-                            trash_dir,
-                            source_path,
-                            'duplicates',
-                        )
-                        print(f"   ⏭️  Duplicate video after metadata write -> {os.path.relpath(dup_path, library_path)}")
-                        log_manifest('duplicate', {'original': source_path, 'moved_to': dup_path, 'hash': content_hash})
-                        duplicate_count += 1
-                        yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                        continue
-
-                    relative_path, _ = build_canonical_photo_path(date_taken, content_hash, ext)
-                    target_path = os.path.join(library_path, relative_path)
-                    if os.path.exists(target_path) and os.path.abspath(target_path) != os.path.abspath(source_path):
-                        raise RuntimeError(
-                            f"Refusing to overwrite existing file at canonical path {relative_path}"
-                        )
-
-                    if os.path.abspath(target_path) != os.path.abspath(source_path):
-                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                        shutil.move(source_path, target_path)
-
-                    file_size = os.path.getsize(target_path)
-                    cursor.execute(
-                        '''
-                            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ''',
-                        (relative_path, filename, content_hash, file_size, file_type, date_taken, width, height),
-                    )
-                    photo_id = cursor.lastrowid
-                    conn.commit()
-
+            def _on_success(source_path, result):
+                row = conn.execute(
+                    "SELECT current_path, content_hash, date_taken FROM photos WHERE id = ?",
+                    (result.photo_id,),
+                ).fetchone()
+                if row:
+                    target_path = os.path.join(library_path, row['current_path'])
+                    print(f"   ✅ Canonical media committed: {row['current_path']}")
                     log_manifest(
                         'success',
                         {
                             'original': source_path,
+                            'canonical_path': row['current_path'],
                             'new': target_path,
-                            'canonical_path': relative_path,
-                            'hash': content_hash,
-                            'id': photo_id,
-                            'file_type': file_type,
-                            'date_taken': date_taken,
+                            'hash': row['content_hash'],
+                            'id': result.photo_id,
+                            'date_taken': row['date_taken'],
                         },
                     )
 
-                    processed_count += 1
-                    yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                    
-                except Exception as e:
-                    print(f"   ❌ Error: {e}")
-                    category, user_message = categorize_processing_error(e)
-                    log_manifest(
-                        'failed',
-                        {
-                            'file': source_path,
-                            'reason': str(e),
-                            'category': category,
-                            'preserved_original': os.path.exists(source_path),
-                        },
+            def _on_duplicate(source_path, _result, dup_path):
+                print(f"   ⏭️  Duplicate -> {os.path.relpath(dup_path, library_path)}")
+                log_manifest(
+                    'duplicate',
+                    {
+                        'original': source_path,
+                        'moved_to': dup_path,
+                    },
+                )
+
+            def _on_rejected(source_path, result):
+                rejection = result.rejection or {}
+                category = rejection.get('category')
+                print(f"   ❌ Convert failed: {rejection.get('technical_error', rejection.get('reason'))}")
+                log_manifest(
+                    'failed',
+                    {
+                        'file': source_path,
+                        'reason': rejection.get('technical_error'),
+                        'category': category,
+                        'preserved_original': os.path.exists(source_path),
+                    },
+                )
+
+            def _on_error(source_path, result):
+                print(f"   ❌ Error: {result.error}")
+                log_manifest(
+                    'failed',
+                    {
+                        'file': source_path,
+                        'reason': result.error,
+                        'category': 'error',
+                        'preserved_original': os.path.exists(source_path),
+                    },
+                )
+
+            for event_name, payload in iter_convert_events(
+                conn,
+                media_files,
+                convert_deps,
+                on_file_start=_on_file_start,
+                on_success=_on_success,
+                on_duplicate=_on_duplicate,
+                on_rejected=_on_rejected,
+                on_error=_on_error,
+            ):
+                if event_name == 'progress':
+                    processed_count = payload.get('processed', processed_count)
+                    duplicate_count = payload.get('duplicates', duplicate_count)
+                    error_count = payload.get('errors', error_count)
+                    yield (
+                        f"event: progress\ndata: "
+                        f"{json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': payload.get('current'), 'total': payload.get('total')})}\n\n"
                     )
-                    error_count += 1
-                    yield f"event: progress\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'current': file_index, 'total': total_files})}\n\n"
-                    yield f"event: rejected\ndata: {json.dumps({'file': filename, 'source_path': source_path, 'reason': user_message, 'category': category, 'technical_error': str(e)})}\n\n"
+                elif event_name == 'rejected':
+                    yield f"event: rejected\ndata: {json.dumps(payload)}\n\n"
+                elif event_name == 'complete':
+                    processed_count = payload.get('processed', processed_count)
+                    duplicate_count = payload.get('duplicates', duplicate_count)
+                    error_count = payload.get('errors', error_count)
+
+            yield f"event: phase\ndata: {json.dumps({'phase': 'convert', 'status': 'complete', 'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count})}\n\n"
             
             # Cleanup ALL folders except allowed ones
             print("\n🧹 Cleaning up folders...")
+            yield f"event: phase\ndata: {json.dumps({'phase': 'folders', 'status': 'starting'})}\n\n"
             
             removed_count = cleanup_terraform_folders(library_path)
             print(f"✅ Cleanup complete - removed {removed_count} folder(s)\n")
+            yield f"event: phase\ndata: {json.dumps({'phase': 'folders', 'status': 'complete', 'removed': removed_count})}\n\n"
             
             # Close DB
             conn.close()
+            conn = None
+
+            print("🔎 Running final verification...")
+            log_manifest('final_audit_started', {'media_count': processed_count})
+            yield f"event: phase\ndata: {json.dumps({'phase': 'audit', 'status': 'starting', 'total': max(processed_count, 1)})}\n\n"
+            from clean_library_fast_audit import run_fast_library_audit
+            issues = run_fast_library_audit(
+                library_path,
+                db_path=db_path,
+                progress_callback=None,
+                audit_progress_total=max(processed_count, 1),
+            )
+
+            if issues:
+                preview = issues[:10]
+                log_manifest('final_audit_failed', {'issue_count': len(issues), 'issues': preview})
+                yield f"event: phase\ndata: {json.dumps({'phase': 'audit', 'status': 'failed', 'issue_count': len(issues)})}\n\n"
+                log_file.close()
+                yield f"event: error\ndata: {json.dumps({'error': f'Final verification failed with {len(issues)} issue(s)', 'issue_count': len(issues), 'issues': preview})}\n\n"
+                return
+
+            log_manifest('final_audit_complete', {'issue_count': 0})
+            yield f"event: phase\ndata: {json.dumps({'phase': 'audit', 'status': 'complete', 'issue_count': 0})}\n\n"
             
             # Log completion
             log_manifest('complete', {'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count})
@@ -5064,6 +4952,16 @@ def terraform_library():
             yield f"event: complete\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'log_path': os.path.relpath(log_path, library_path), 'db_path': db_path})}\n\n"
             
         except Exception as e:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+            try:
+                if log_file is not None and not log_file.closed:
+                    log_file.close()
+            except Exception:
+                pass
             error_logger.error(f"Terraform failed: {e}")
             print(f"\n❌ Terraform failed: {e}")
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
@@ -5655,6 +5553,49 @@ def bulk_favorite():
         return jsonify({'error': str(e)}), 500
 
 
+def load_configured_library_on_startup(config):
+    """Load saved library config after resolving stale legacy DB paths."""
+    library_path = config.get('library_path')
+    db_path = config.get('db_path')
+
+    if not library_path or not db_path or not os.path.exists(library_path):
+        print(f"⚠️  Saved library not found - user will be prompted")
+        delete_config()
+        return
+
+    try:
+        resolved_db_path = resolve_db_path(library_path, db_path)
+    except (OSError, PermissionError) as e:
+        print(f"⚠️  Saved library database is inaccessible: {e}")
+        delete_config()
+        return
+
+    if not os.path.exists(resolved_db_path):
+        print(f"⚠️  Saved library database not found - user will be prompted")
+        delete_config()
+        return
+
+    print(f"✅ Loading library: {library_path}")
+    update_app_paths(library_path, resolved_db_path)
+
+    if resolved_db_path != db_path:
+        print(f"🔁 Resolved database path: {resolved_db_path}")
+        save_config(library_path, resolved_db_path)
+
+    # Auto-migrate database to latest schema.
+    print(f"🔍 Checking database schema...")
+    try:
+        from migrate_db import check_and_migrate_schema
+        migrated = check_and_migrate_schema(resolved_db_path)
+        if not migrated:
+            report = check_database_health(resolved_db_path)
+            if report.status == DBStatus.CORRUPTED:
+                print(f"⚠️  Database health check failed: {report.get_user_message()}")
+    except Exception as e:
+        print(f"⚠️  Migration check failed: {e}")
+        print(f"   Database may need manual migration")
+
+
 if __name__ == '__main__':
     print("\n🖼️  Photos Light Starting...")
     print(f"📁 Static files: {STATIC_DIR}")
@@ -5662,25 +5603,7 @@ if __name__ == '__main__':
     # Load config on startup
     config = load_config()
     if config:
-        library_path = config.get('library_path')
-        db_path = config.get('db_path')
-        
-        # Validate paths still exist
-        if library_path and db_path and os.path.exists(library_path) and os.path.exists(db_path):
-            print(f"✅ Loading library: {library_path}")
-            update_app_paths(library_path, db_path)
-            
-            # Auto-migrate database to latest schema
-            print(f"🔍 Checking database schema...")
-            try:
-                from migrate_db import check_and_migrate_schema
-                check_and_migrate_schema(db_path)
-            except Exception as e:
-                print(f"⚠️  Migration check failed: {e}")
-                print(f"   Database may need manual migration")
-        else:
-            print(f"⚠️  Saved library not found - user will be prompted")
-            delete_config()  # Clean up stale config
+        load_configured_library_on_startup(config)
     else:
         print(f"⚠️  No library configured - user will be prompted")
     
