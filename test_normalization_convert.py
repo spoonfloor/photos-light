@@ -8,12 +8,10 @@ from db_schema import create_database_schema
 from library_layout import canonical_db_path
 from normalization_convert import (
     ConvertDependencies,
-    finalize_convert_layout,
     iter_convert_events,
     normalize_convert_file,
     rewrite_library_layout,
     scan_convert_library,
-    scan_convert_quarantine,
 )
 from normalization_core import NormalizationFileResult, expected_canonical_rel_path
 from photo_canonicalization import UNKNOWN_PHOTO_DATE_TAKEN
@@ -44,106 +42,25 @@ class _CanonicalPhoto:
 
 
 class NormalizationConvertTest(unittest.TestCase):
-    def test_scan_convert_library_partitions_media_and_non_media(self):
+    def test_scan_convert_library_delegates_to_shared_partition(self):
         with TemporaryDirectory() as tmpdir:
-            os.makedirs(os.path.join(tmpdir, "incoming"))
-            media_path = os.path.join(tmpdir, "incoming", "photo.jpg")
-            other_path = os.path.join(tmpdir, "incoming", "notes.txt")
-            hidden_path = os.path.join(tmpdir, ".hidden", "secret.jpg")
+            media_path = os.path.join(tmpdir, "photo.jpg")
+            other_path = os.path.join(tmpdir, "notes.txt")
             with open(media_path, "wb") as handle:
                 handle.write(b"photo")
             with open(other_path, "wb") as handle:
                 handle.write(b"notes")
-            os.makedirs(os.path.dirname(hidden_path), exist_ok=True)
-            with open(hidden_path, "wb") as handle:
-                handle.write(b"hidden")
 
             scan = scan_convert_library(tmpdir)
 
-        self.assertEqual(set(scan.media_files), {media_path, hidden_path})
+        self.assertEqual(scan.media_files, [media_path])
         self.assertEqual(scan.non_media_files, [other_path])
+        self.assertEqual(scan.total_media, 1)
 
-    def test_scan_convert_library_classifies_dot_files_as_non_media(self):
+    def test_rewrite_library_layout_delegates_to_shared_cleanup(self):
         with TemporaryDirectory() as tmpdir:
-            dotfile_path = os.path.join(tmpdir, "incoming", ".env")
-            os.makedirs(os.path.dirname(dotfile_path), exist_ok=True)
-            with open(dotfile_path, "wb") as handle:
-                handle.write(b"secret")
-
-            scan = scan_convert_library(tmpdir)
-
-        self.assertEqual(scan.non_media_files, [dotfile_path])
-
-    def test_scan_convert_library_skips_infrastructure_subtrees(self):
-        with TemporaryDirectory() as tmpdir:
-            trash_path = os.path.join(tmpdir, ".trash", "errors", "old.txt")
-            os.makedirs(os.path.dirname(trash_path), exist_ok=True)
-            with open(trash_path, "wb") as handle:
-                handle.write(b"already trashed")
-
-            scan = scan_convert_library(tmpdir)
-
-        self.assertEqual(scan.media_files, [])
-        self.assertEqual(scan.non_media_files, [])
-
-    def test_finalize_convert_layout_returns_remaining_non_media(self):
-        with TemporaryDirectory() as tmpdir:
-            notes_path = os.path.join(tmpdir, "notes.txt")
-            with open(notes_path, "wb") as handle:
-                handle.write(b"notes")
-
-            removed, stragglers = finalize_convert_layout(tmpdir)
-
-        self.assertEqual(removed, 0)
-        self.assertEqual(stragglers, [notes_path])
-
-    def test_finalize_convert_layout_cleans_project_tree_after_non_media_removed(self):
-        with TemporaryDirectory() as tmpdir:
-            os.makedirs(os.path.join(tmpdir, "static", "js"), exist_ok=True)
-            os.makedirs(os.path.join(tmpdir, ".git", "objects"), exist_ok=True)
-            with open(os.path.join(tmpdir, ".git", "HEAD"), "wb") as handle:
-                handle.write(b"ref")
-            with open(os.path.join(tmpdir, ".gitignore"), "wb") as handle:
-                handle.write(b"*.pyc")
-            with open(os.path.join(tmpdir, "static", "js", "app.js"), "wb") as handle:
-                handle.write(b"js")
-            photo_path = os.path.join(tmpdir, "2026", "2026-04-12", "img.jpg")
-            os.makedirs(os.path.dirname(photo_path), exist_ok=True)
-            with open(photo_path, "wb") as handle:
-                handle.write(b"photo")
-
-            quarantine_dirs, quarantine_files = scan_convert_quarantine(tmpdir)
-            self.assertEqual(len(quarantine_dirs), 1)
-            self.assertEqual(len(quarantine_files), 1)
-
-            scan = scan_convert_library(tmpdir)
-            self.assertIn(os.path.join(tmpdir, "static", "js", "app.js"), scan.non_media_files)
-
-            removed, stragglers = finalize_convert_layout(tmpdir)
-
-            self.assertGreaterEqual(removed, 1)
-            self.assertFalse(os.path.exists(os.path.join(tmpdir, "static")))
-            self.assertTrue(os.path.exists(os.path.join(tmpdir, "2026", "2026-04-12", "img.jpg")))
-            self.assertIn(os.path.join(tmpdir, ".gitignore"), stragglers)
-
-    def test_scan_convert_quarantine_finds_hidden_root_entries(self):
-        with TemporaryDirectory() as tmpdir:
-            os.makedirs(os.path.join(tmpdir, ".git", "objects"), exist_ok=True)
-            with open(os.path.join(tmpdir, ".git", "HEAD"), "wb") as handle:
-                handle.write(b"ref")
-            with open(os.path.join(tmpdir, ".gitignore"), "wb") as handle:
-                handle.write(b"*.pyc")
-            os.makedirs(os.path.join(tmpdir, ".library"), exist_ok=True)
-
-            quarantine_dirs, quarantine_files = scan_convert_quarantine(tmpdir)
-
-        self.assertEqual(quarantine_dirs, [os.path.join(tmpdir, ".git")])
-        self.assertEqual(quarantine_files, [os.path.join(tmpdir, ".gitignore")])
-
-    def test_rewrite_library_layout_removes_noncanonical_folders(self):
-        with TemporaryDirectory() as tmpdir:
-            os.makedirs(os.path.join(tmpdir, "2026", "2026-04-12"), exist_ok=True)
             os.makedirs(os.path.join(tmpdir, "incoming"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "2026", "2026-04-12"), exist_ok=True)
             with open(os.path.join(tmpdir, "2026", "2026-04-12", "img.jpg"), "wb") as handle:
                 handle.write(b"photo")
 
@@ -151,22 +68,6 @@ class NormalizationConvertTest(unittest.TestCase):
 
             self.assertEqual(removed, 1)
             self.assertFalse(os.path.exists(os.path.join(tmpdir, "incoming")))
-            self.assertTrue(os.path.exists(os.path.join(tmpdir, "2026", "2026-04-12", "img.jpg")))
-
-    def test_rewrite_library_layout_removes_nested_noncanonical_trees_without_media(self):
-        with TemporaryDirectory() as tmpdir:
-            os.makedirs(os.path.join(tmpdir, "2026", "2026-04-12"), exist_ok=True)
-            os.makedirs(os.path.join(tmpdir, "static", "js"), exist_ok=True)
-            os.makedirs(os.path.join(tmpdir, "Photo Library copy", "2025", "2025-11-11"), exist_ok=True)
-            with open(os.path.join(tmpdir, "2026", "2026-04-12", "img.jpg"), "wb") as handle:
-                handle.write(b"photo")
-
-            removed = rewrite_library_layout(tmpdir)
-
-            self.assertEqual(removed, 2)
-            self.assertFalse(os.path.exists(os.path.join(tmpdir, "static")))
-            self.assertFalse(os.path.exists(os.path.join(tmpdir, "Photo Library copy")))
-            self.assertTrue(os.path.exists(os.path.join(tmpdir, "2026", "2026-04-12", "img.jpg")))
 
     def test_normalize_convert_photo_uses_shared_ingest_and_removes_source(self):
         content_hash = "abc12345" + ("0" * 56)

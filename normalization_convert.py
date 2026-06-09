@@ -12,15 +12,16 @@ from __future__ import annotations
 import os
 import shutil
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
-from library_cleanliness import (
-    ALL_MEDIA_EXTENSIONS,
-    IGNORED_LIBRARY_FILES,
-    VIDEO_MEDIA_EXTENSIONS,
-    in_infrastructure,
+from library_cleanliness import VIDEO_MEDIA_EXTENSIONS
+from library_filesystem import (
+    LibraryPartition,
+    finalize_library_layout,
+    partition_library_files,
+    quarantine_root_hidden,
+    remove_noncanonical_trees,
 )
-from library_layout import ROOT_INFRASTRUCTURE_DIRS
 from normalization_contract import CONVERT_POLICY, NormalizationPolicy
 from normalization_core import (
     NormalizationCoreDependencies,
@@ -70,126 +71,17 @@ class ConvertCounters:
         return payload
 
 
-@dataclass(frozen=True)
-class ConvertScanResult:
-    media_files: List[str]
-    non_media_files: List[str]
-
-    @property
-    def total_media(self) -> int:
-        return len(self.media_files)
+ConvertScanResult = LibraryPartition
 
 
 def scan_convert_library(library_path: str) -> ConvertScanResult:
-    """
-    Walk the library and partition supported media from everything else.
-
-    Every file outside library infrastructure is classified — including dot-files
-    and paths under hidden folders (except allowed infrastructure like
-    ``.library`` and ``.trash``).
-    """
-    library_path = os.path.abspath(library_path)
-    media_files: List[str] = []
-    non_media_files: List[str] = []
-
-    for root, dirs, files in os.walk(library_path, topdown=True):
-        rel_root = os.path.relpath(root, library_path)
-        if rel_root != "." and in_infrastructure(rel_root):
-            dirs[:] = []
-            continue
-
-        dirs[:] = [
-            entry
-            for entry in dirs
-            if not in_infrastructure(
-                os.path.relpath(os.path.join(root, entry), library_path)
-            )
-        ]
-
-        for filename in files:
-            if filename in IGNORED_LIBRARY_FILES:
-                continue
-
-            full_path = os.path.join(root, filename)
-            _, ext = os.path.splitext(filename)
-            ext_lower = ext.lower()
-
-            if ext_lower in ALL_MEDIA_EXTENSIONS:
-                media_files.append(full_path)
-            else:
-                non_media_files.append(full_path)
-
-    return ConvertScanResult(media_files=media_files, non_media_files=non_media_files)
+    """Convert-facing alias for the shared library partition scan."""
+    return partition_library_files(library_path)
 
 
-def scan_convert_quarantine(library_path: str) -> Tuple[List[str], List[str]]:
-    """
-    Hidden root entries that must leave the library before final audit.
-
-    Convert scans skip dot-directories, so folders like ``.git`` would otherwise
-    survive cleanup and fail verification with thousands of non-media issues.
-    """
-    library_path = os.path.abspath(library_path)
-    infrastructure = set(ROOT_INFRASTRUCTURE_DIRS)
-    quarantine_dirs: List[str] = []
-    quarantine_files: List[str] = []
-
-    try:
-        root_items = os.listdir(library_path)
-    except OSError:
-        return quarantine_dirs, quarantine_files
-
-    for item in root_items:
-        if not item.startswith("."):
-            continue
-        if item in IGNORED_LIBRARY_FILES:
-            continue
-
-        item_path = os.path.join(library_path, item)
-        if os.path.isdir(item_path):
-            if item not in infrastructure:
-                quarantine_dirs.append(item_path)
-        elif os.path.isfile(item_path):
-            quarantine_files.append(item_path)
-
-    return quarantine_dirs, quarantine_files
-
-
-def _directory_tree_has_media(dir_path: str) -> bool:
-    """Return True when any supported media file remains under ``dir_path``."""
-    dir_path = os.path.abspath(dir_path)
-    for root, dirs, files in os.walk(dir_path, topdown=True):
-        rel_root = os.path.relpath(root, dir_path)
-        if rel_root != "." and in_infrastructure(rel_root):
-            dirs[:] = []
-            continue
-
-        dirs[:] = [
-            entry
-            for entry in dirs
-            if not in_infrastructure(os.path.relpath(os.path.join(root, entry), dir_path))
-        ]
-
-        for filename in files:
-            if filename in IGNORED_LIBRARY_FILES:
-                continue
-            _, ext = os.path.splitext(filename)
-            if ext.lower() in ALL_MEDIA_EXTENSIONS:
-                return True
-    return False
-
-
-def finalize_convert_layout(library_path: str) -> Tuple[int, List[str]]:
-    """
-    Remove non-canonical folders and return any remaining non-media paths.
-
-    Callers should trash returned paths, then rerun until the list is empty if
-    needed. ``rewrite_library_layout`` runs first so empty project trees collapse
-    before the final non-media rescan.
-    """
-    removed_dirs = rewrite_library_layout(library_path)
-    stragglers = scan_convert_library(library_path).non_media_files
-    return removed_dirs, stragglers
+scan_convert_quarantine = quarantine_root_hidden
+finalize_convert_layout = finalize_library_layout
+rewrite_library_layout = remove_noncanonical_trees
 
 
 def normalize_convert_photo(
@@ -311,89 +203,6 @@ def normalize_convert_file(
         error=f"Unsupported file type: {ext}",
         error_file=filename,
     )
-
-
-def rewrite_library_layout(library_path: str) -> int:
-    """
-    Remove non-canonical folders after convert, preserving stray media files.
-
-    Allowed layout after convert:
-    - Root infrastructure folders (``.library``, ``.logs``, …)
-    - ``YYYY/YYYY-MM-DD/`` canonical media trees
-    """
-    removed_count = 0
-    ignored_entries = {".DS_Store"}
-    infrastructure_folders = set(ROOT_INFRASTRUCTURE_DIRS)
-
-    try:
-        root_items = os.listdir(library_path)
-    except OSError:
-        return 0
-
-    for item in root_items:
-        item_path = os.path.join(library_path, item)
-        if not os.path.isdir(item_path):
-            continue
-
-        if item in infrastructure_folders:
-            continue
-
-        if len(item) == 4 and item.isdigit():
-            try:
-                year_items = os.listdir(item_path)
-            except OSError:
-                continue
-
-            for year_item in year_items:
-                year_item_path = os.path.join(item_path, year_item)
-                if not os.path.isdir(year_item_path):
-                    continue
-
-                is_valid_date_folder = (
-                    len(year_item) == 10
-                    and year_item[4] == "-"
-                    and year_item[7] == "-"
-                    and year_item[:4].isdigit()
-                    and year_item[5:7].isdigit()
-                    and year_item[8:10].isdigit()
-                )
-                if is_valid_date_folder:
-                    continue
-
-                try:
-                    visible_entries = [
-                        entry
-                        for entry in os.listdir(year_item_path)
-                        if entry not in ignored_entries
-                    ]
-                except OSError:
-                    continue
-
-                if visible_entries:
-                    continue
-
-                try:
-                    for ignored_entry in os.listdir(year_item_path):
-                        if ignored_entry in ignored_entries:
-                            ignored_path = os.path.join(year_item_path, ignored_entry)
-                            if os.path.isfile(ignored_path):
-                                os.remove(ignored_path)
-                    shutil.rmtree(year_item_path)
-                    removed_count += 1
-                except OSError:
-                    pass
-            continue
-
-        if _directory_tree_has_media(item_path):
-            continue
-
-        try:
-            shutil.rmtree(item_path)
-            removed_count += 1
-        except OSError:
-            pass
-
-    return removed_count
 
 
 def iter_convert_events(

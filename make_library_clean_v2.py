@@ -62,6 +62,11 @@ from library_layout import (
     quarantine_unexpected_metadata_entries,
     resolve_db_path,
 )
+from library_filesystem import (
+    finalize_library_layout,
+    iter_library_walk,
+    quarantine_root_hidden,
+)
 from clean_library_fast_audit import (
     FastAuditCancelled,
     _basename_layout_issue,
@@ -676,10 +681,9 @@ def _build_directory_snapshot(
     child_dirs: Dict[str, set[str]] = {".": set()}
     file_entries: Dict[str, set[str]] = {".": set()}
 
-    for root, dirs, files in os.walk(library_path, topdown=True):
+    for root, dirs, files in iter_library_walk(library_path):
         rel_root = os.path.relpath(root, library_path)
         if rel_root != "." and in_infrastructure(rel_root):
-            dirs[:] = []
             continue
 
         child_dirs.setdefault(rel_root, set())
@@ -690,8 +694,6 @@ def _build_directory_snapshot(
         filtered_dirs: List[str] = []
         for dirname in dirs:
             child_rel = os.path.relpath(os.path.join(root, dirname), library_path)
-            if in_infrastructure(child_rel):
-                continue
             filtered_dirs.append(dirname)
             child_dirs[rel_root].add(dirname)
             child_dirs.setdefault(child_rel, set())
@@ -1497,6 +1499,8 @@ class LibraryCleaner:
                 paths=[os.path.relpath(path, self.library_path) for path in quarantined_metadata],
             )
 
+        self._quarantine_root_hidden_entries()
+
         repaired_paths = {
             os.path.relpath(path, self.library_path) for path in quarantined_metadata
         }
@@ -1552,13 +1556,24 @@ class LibraryCleaner:
         )
         self.db_path = target_db_path
 
-    def active_walk(self) -> Iterable[Tuple[str, List[str], List[str]]]:
-        for root, dirs, files in os.walk(self.library_path, topdown=True):
-            rel_root = os.path.relpath(root, self.library_path)
-            if rel_root != "." and in_infrastructure(rel_root):
-                dirs[:] = []
+    def _quarantine_root_hidden_entries(self) -> None:
+        quarantine_dirs, quarantine_files = quarantine_root_hidden(self.library_path)
+        for source_path in quarantine_dirs + quarantine_files:
+            if not os.path.exists(source_path):
                 continue
-            yield root, dirs, files
+            destination = self.move_to_trash(source_path, "non_media")
+            self.log(
+                "root_hidden_quarantined",
+                source=os.path.relpath(source_path, self.library_path),
+                destination=os.path.relpath(destination, self.library_path),
+            )
+            self._resolve_signal_paths(
+                {"unsupported_files": [os.path.relpath(source_path, self.library_path)]},
+                action="trash_unsupported",
+            )
+
+    def active_walk(self) -> Iterable[Tuple[str, List[str], List[str]]]:
+        return iter_library_walk(self.library_path)
 
     def move_to_trash(self, file_path: str, category: str) -> str:
         rel_path = os.path.relpath(file_path, self.library_path)
@@ -1920,28 +1935,27 @@ class LibraryCleaner:
         return canonicalized
 
     def remove_empty_noncanonical_folders(self) -> None:
-        for root, _, _ in os.walk(self.library_path, topdown=False):
+        for _pass in range(3):
             self._raise_if_cancelled()
-            rel_root = os.path.relpath(root, self.library_path)
-            if rel_root == ".":
-                continue
-            if in_infrastructure(rel_root):
-                continue
-            if os.path.isdir(root) and not visible_directory_entries(root):
-                remove_ignored_directory_files(root)
-                try:
-                    os.rmdir(root)
-                except OSError as exc:
-                    self.log("folder_remove_skipped", path=rel_root, error=str(exc))
+            removed_dirs, stragglers = finalize_library_layout(self.library_path)
+            if removed_dirs:
+                self.stats["folders_removed"] += removed_dirs
+                self.log("folders_removed", count=removed_dirs, cleanup_pass=_pass + 1)
+            if not stragglers:
+                break
+            for straggler_path in stragglers:
+                self._raise_if_cancelled()
+                if not os.path.exists(straggler_path):
                     continue
-                self.stats["folders_removed"] += 1
-                self.log("folder_removed", path=rel_root)
+                rel_path = os.path.relpath(straggler_path, self.library_path)
+                self.move_to_trash(straggler_path, "non_media")
                 self._resolve_signal_paths(
                     {
-                        "misfiled_media": [rel_root],
-                        "folder_cleanup": [rel_root],
+                        "misfiled_media": [rel_path],
+                        "folder_cleanup": [rel_path],
+                        "unsupported_files": [rel_path],
                     },
-                    action="remove_folder",
+                    action="trash_unsupported",
                 )
 
     def rebuild_photos_table(self, records: List[MediaRecord]) -> None:

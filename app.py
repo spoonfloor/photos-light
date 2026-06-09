@@ -87,13 +87,15 @@ from library_layout import (
     resolve_db_path,
 )
 from media_finalization import finalize_mutated_media
+from library_filesystem import (
+    iter_layout_cleanup_passes,
+    quarantine_root_hidden,
+    remove_noncanonical_trees,
+)
 from normalization_convert import (
     ConvertDependencies,
-    finalize_convert_layout,
     iter_convert_events,
-    rewrite_library_layout,
     scan_convert_library,
-    scan_convert_quarantine,
 )
 from normalization_ingest import IngestDependencies, iter_ingest_events
 from photo_canonicalization import (
@@ -4459,8 +4461,8 @@ def reset_library():
 
 
 def cleanup_terraform_folders(library_path):
-    """Remove non-canonical folders after convert (delegates to shared convert helper)."""
-    return rewrite_library_layout(library_path)
+    """Remove non-canonical folders after convert (delegates to shared filesystem helper)."""
+    return remove_noncanonical_trees(library_path)
 
 
 def cleanup_empty_folders_recursive(root_path):
@@ -4744,7 +4746,7 @@ def terraform_library():
             
             log_manifest('scan_complete', {'total_files': total_files, 'non_media_files': len(non_media_files)})
 
-            quarantine_dirs, quarantine_files = scan_convert_quarantine(library_path)
+            quarantine_dirs, quarantine_files = quarantine_root_hidden(library_path)
             quarantine_paths = quarantine_dirs + quarantine_files
             if quarantine_paths:
                 print("🗑️  Quarantining hidden root entries...")
@@ -4944,8 +4946,10 @@ def terraform_library():
             error_dir = os.path.join(trash_dir, 'errors')
             os.makedirs(error_dir, exist_ok=True)
 
-            for _pass in range(3):
-                removed_this_pass, stragglers = finalize_convert_layout(library_path)
+            for _pass, (removed_this_pass, stragglers) in enumerate(
+                iter_layout_cleanup_passes(library_path),
+                start=1,
+            ):
                 removed_count += removed_this_pass
                 if not stragglers:
                     break

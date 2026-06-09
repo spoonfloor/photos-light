@@ -3,6 +3,9 @@ Shared library cleanliness policy helpers.
 
 These helpers are pure rule definitions used by import, cleanup, and audit
 flows so canonical naming and folder validation do not drift.
+
+Filesystem walk, classification, quarantine, and tree cleanup live in
+``library_filesystem`` and are shared by Convert and Clean.
 """
 
 from __future__ import annotations
