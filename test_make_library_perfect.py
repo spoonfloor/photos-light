@@ -102,6 +102,7 @@ class MakeLibraryPerfectHelpersTest(unittest.TestCase):
         self.assertTrue(in_infrastructure(".logs/run.jsonl"))
         self.assertTrue(in_infrastructure(".library/photo_library.db"))
         self.assertTrue(in_infrastructure(".import_temp/staged.jpg"))
+        self.assertTrue(in_infrastructure("1900/.thumbnails/03/58/cache.jpg"))
         self.assertFalse(in_infrastructure("2026/2026-04-12/img_20260412_abc1234.jpg"))
 
     def test_shared_media_extension_policy_classifies_types_and_subsets(self):

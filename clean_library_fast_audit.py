@@ -135,9 +135,9 @@ def _path_structure_issues(library_path: str) -> List[Dict[str, str]]:
 
         for dirname in list(dirs):
             dir_rel = os.path.relpath(os.path.join(root, dirname), library_path)
-            dir_parts = path_parts(dir_rel)
-            if dir_parts and dir_parts[0] in {LIBRARY_METADATA_DIR, ".db_backups", ".import_temp", ".logs", ".thumbnails", ".trash"}:
+            if in_infrastructure(dir_rel):
                 continue
+            dir_parts = path_parts(dir_rel)
             if len(dir_parts) > 2:
                 issues.append(format_issue("noncanonical_folder", dir_rel))
 

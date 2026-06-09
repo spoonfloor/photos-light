@@ -6,7 +6,9 @@ from library_filesystem import (
     finalize_library_layout,
     iter_library_walk,
     partition_library_files,
+    prune_empty_year_subfolders,
     quarantine_root_hidden,
+    remove_misplaced_infrastructure_trees,
     remove_noncanonical_trees,
 )
 
@@ -94,6 +96,68 @@ class LibraryFilesystemTest(unittest.TestCase):
             self.assertEqual(removed, 2)
             self.assertFalse(os.path.exists(os.path.join(tmpdir, "static")))
             self.assertFalse(os.path.exists(os.path.join(tmpdir, "Photo Library copy")))
+
+    def test_remove_misplaced_infrastructure_trees_deletes_nested_thumbnails(self):
+        with TemporaryDirectory() as tmpdir:
+            shard_dir = os.path.join(tmpdir, "1900", ".thumbnails", "03", "58")
+            os.makedirs(shard_dir, exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "1900", "1900-01-01"), exist_ok=True)
+            with open(os.path.join(tmpdir, "1900", "1900-01-01", "img.jpg"), "wb") as handle:
+                handle.write(b"photo")
+
+            removed = remove_misplaced_infrastructure_trees(tmpdir)
+
+            self.assertEqual(removed, 1)
+            self.assertFalse(os.path.exists(os.path.join(tmpdir, "1900", ".thumbnails")))
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, "1900", "1900-01-01", "img.jpg")))
+
+    def test_partition_library_files_ignores_misplaced_thumbnail_cache(self):
+        with TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "1900", ".thumbnails", "03", "58"), exist_ok=True)
+            cache_path = os.path.join(
+                tmpdir,
+                "1900",
+                ".thumbnails",
+                "03",
+                "58",
+                "035831671f5f0050deedac83e6c253b32bdcf1327d5846bcc3e00f9ca6f5863a.jpg",
+            )
+            with open(cache_path, "wb") as handle:
+                handle.write(b"cache")
+
+            partition = partition_library_files(tmpdir)
+
+            self.assertEqual(partition.media_files, [])
+            self.assertEqual(partition.non_media_files, [])
+
+    def test_prune_empty_year_subfolders_removes_nested_empty_year_tree(self):
+        with TemporaryDirectory() as tmpdir:
+            nested_day = os.path.join(tmpdir, "1900", "1900", "1900-01-01")
+            os.makedirs(nested_day, exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "1900", "1900-01-01"), exist_ok=True)
+            with open(os.path.join(tmpdir, "1900", "1900-01-01", "img.jpg"), "wb") as handle:
+                handle.write(b"photo")
+
+            removed = prune_empty_year_subfolders(tmpdir)
+
+            self.assertGreaterEqual(removed, 2)
+            self.assertFalse(os.path.exists(nested_day))
+            self.assertFalse(os.path.exists(os.path.join(tmpdir, "1900", "1900")))
+
+    def test_finalize_library_layout_clears_misplaced_infrastructure_debris(self):
+        with TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "1900", ".thumbnails", "03", "58"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "1900", "1900", "1900-01-01"), exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "1900", "1900-01-01"), exist_ok=True)
+            with open(os.path.join(tmpdir, "1900", "1900-01-01", "img.jpg"), "wb") as handle:
+                handle.write(b"photo")
+
+            removed, stragglers = finalize_library_layout(tmpdir)
+
+            self.assertGreaterEqual(removed, 1)
+            self.assertEqual(stragglers, [])
+            self.assertFalse(os.path.exists(os.path.join(tmpdir, "1900", ".thumbnails")))
+            self.assertFalse(os.path.exists(os.path.join(tmpdir, "1900", "1900")))
 
     def test_finalize_library_layout_returns_remaining_non_media(self):
         with TemporaryDirectory() as tmpdir:

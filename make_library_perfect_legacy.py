@@ -1555,9 +1555,9 @@ class LibraryCleaner:
 
             for dirname in dirs:
                 dir_rel = os.path.relpath(os.path.join(root, dirname), self.library_path)
-                dir_parts = path_parts(dir_rel)
-                if dir_parts and dir_parts[0] in INFRASTRUCTURE_DIRS:
+                if in_infrastructure(dir_rel):
                     continue
+                dir_parts = path_parts(dir_rel)
                 if len(dir_parts) > 2:
                     issues.append(format_issue("noncanonical_folder", dir_rel))
 

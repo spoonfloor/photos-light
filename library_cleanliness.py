@@ -170,5 +170,14 @@ def root_entry_allowed(name: str, is_dir: bool) -> bool:
 
 
 def in_infrastructure(rel_path: str) -> bool:
+    """True when any path segment is library infrastructure (root or misplaced)."""
     parts = path_parts(rel_path)
-    return bool(parts) and parts[0] in INFRASTRUCTURE_DIRS
+    return any(part in INFRASTRUCTURE_DIRS for part in parts)
+
+
+def is_misplaced_infrastructure_rel(rel_path: str) -> bool:
+    """Infrastructure folder copied inside a year/media tree instead of at library root."""
+    parts = path_parts(rel_path)
+    if not parts or parts[0] in INFRASTRUCTURE_DIRS:
+        return False
+    return any(part in INFRASTRUCTURE_DIRS for part in parts)

@@ -17,6 +17,10 @@ from library_cleanliness import (
     ALL_MEDIA_EXTENSIONS,
     IGNORED_LIBRARY_FILES,
     in_infrastructure,
+    is_misplaced_infrastructure_rel,
+    is_day_folder_name,
+    is_year_folder_name,
+    path_parts,
 )
 from library_layout import ROOT_INFRASTRUCTURE_DIRS
 
@@ -138,6 +142,99 @@ def directory_tree_has_media(dir_path: str, *, library_path: str) -> bool:
     return False
 
 
+def remove_misplaced_infrastructure_trees(library_path: str) -> int:
+    """Delete infrastructure folders that were copied inside year/media trees."""
+    library_path = _abs_library_path(library_path)
+    infrastructure = set(ROOT_INFRASTRUCTURE_DIRS)
+    removed_count = 0
+    roots_to_remove: List[str] = []
+
+    for root, dirs, _files in os.walk(library_path, topdown=True):
+        rel_root = os.path.relpath(root, library_path)
+        if rel_root != "." and in_infrastructure(rel_root):
+            dirs[:] = []
+            continue
+
+        for dirname in list(dirs):
+            if dirname not in infrastructure:
+                continue
+            dir_path = os.path.join(root, dirname)
+            dir_rel = os.path.relpath(dir_path, library_path)
+            if not is_misplaced_infrastructure_rel(dir_rel):
+                continue
+            roots_to_remove.append(dir_path)
+            dirs.remove(dirname)
+
+    for dir_path in roots_to_remove:
+        try:
+            shutil.rmtree(dir_path)
+            removed_count += 1
+        except OSError:
+            pass
+
+    return removed_count
+
+
+def prune_empty_year_subfolders(library_path: str) -> int:
+    """Remove empty non-day folders and empty day folders under year directories."""
+    library_path = _abs_library_path(library_path)
+    removed_count = 0
+    ignored_entries = set(IGNORED_LIBRARY_FILES)
+
+    try:
+        root_items = os.listdir(library_path)
+    except OSError:
+        return 0
+
+    for item in root_items:
+        if not (len(item) == 4 and item.isdigit()):
+            continue
+
+        year_path = os.path.join(library_path, item)
+        if not os.path.isdir(year_path):
+            continue
+
+        for root, dirs, files in os.walk(year_path, topdown=False):
+            rel_root = os.path.relpath(root, library_path)
+            if in_infrastructure(rel_root):
+                continue
+
+            for filename in files:
+                if filename in ignored_entries:
+                    file_path = os.path.join(root, filename)
+                    if os.path.isfile(file_path):
+                        try:
+                            os.remove(file_path)
+                        except OSError:
+                            pass
+
+            try:
+                visible_entries = [
+                    entry
+                    for entry in os.listdir(root)
+                    if entry not in ignored_entries
+                ]
+            except OSError:
+                continue
+
+            if visible_entries:
+                continue
+
+            parts = path_parts(rel_root)
+            if len(parts) == 2 and is_year_folder_name(parts[0]) and is_day_folder_name(parts[0], parts[1]):
+                pass
+            elif len(parts) < 2:
+                continue
+
+            try:
+                shutil.rmtree(root)
+                removed_count += 1
+            except OSError:
+                pass
+
+    return removed_count
+
+
 def remove_noncanonical_trees(library_path: str) -> int:
     """
     Remove non-canonical folder trees that contain no supported media.
@@ -229,7 +326,11 @@ def finalize_library_layout(library_path: str) -> Tuple[int, List[str]]:
     Callers should trash returned paths, then rerun until the list is empty if
     needed.
     """
-    removed_dirs = remove_noncanonical_trees(library_path)
+    removed_dirs = (
+        remove_misplaced_infrastructure_trees(library_path)
+        + prune_empty_year_subfolders(library_path)
+        + remove_noncanonical_trees(library_path)
+    )
     stragglers = partition_library_files(library_path).non_media_files
     return removed_dirs, stragglers
 
