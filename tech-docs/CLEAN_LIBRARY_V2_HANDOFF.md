@@ -1,7 +1,7 @@
 # Clean Library v2 — Handoff
 
-**Status:** v2 is the default engine. Cheap inventory preflight, resume, live ETA, **blocking final verification**, and **skip-unchanged** re-runs are implemented.
-**Last doc sync:** 2026-06-08 (aligned with `make_library_clean_v2.py`, `main.js`, tests).
+**Status:** v2 is the default engine. Add Photos and Clean now share normalization primitives; Clean keeps cheap inventory preflight, resume, live ETA, **blocking final verification**, and **skip-unchanged** re-runs.
+**Last doc sync:** 2026-06-08 (aligned with shared normalization runtime, `make_library_clean_v2.py`, `main.js`, tests).
 **Test library:** `/Volumes/public/clean-lib-speed-test` (~400 media files on NAS/WiFi)
 **Last full clean (R7):** 2026-06-07 — 847.2s wall, SUCCESS, 371 survivors
 **Last profile:** `tools/results/scan-profile_2026-06-07T16-40-35+00-00.json`
@@ -17,8 +17,9 @@ Clean library was too slow on NAS-scale libraries (~60k photos). We:
 3. **Revived preflight** as a **cheap inventory** (walk + stat only) — photos/videos count + **about X hours** — then **Continue** (bail-out before a 30h+ run).
 4. **Implemented resume** — checkpoint files on NAS; manual restart after disconnect (auto-reconnect deferred).
 5. **Profiled** the NAS fixture and ran an **end-to-end clean** on `/Volumes/public/clean-lib-speed-test`.
+6. **Converged Add Photos and Clean** on shared normalization primitives while preserving Clean-only orchestration.
 
-**Bottom line:** First full clean @ 60k extrapolates to **~30–35h** on good WiFi (down from legacy ~55h). Preflight is seconds–low minutes, not hours. Every successful run ends with a **blocking final verification** (UI step 6); re-runs skip already-clean files. Remaining gaps are mostly **first-pass wall time**, **audit rulebook depth** (regex vs computed canonical path), and **auto NAS reconnect**.
+**Bottom line:** First full clean @ 60k extrapolates to **~30–35h** on good WiFi (down from legacy ~55h). Preflight is seconds–low minutes, not hours. Every successful run ends with a **blocking final verification** (UI step 6); re-runs skip already-clean files. Add Photos and Clean now share the same normalization identity/canonical path primitives. Remaining gaps are mostly **first-pass wall time**, **Convert mode**, and **auto NAS reconnect**.
 
 > **Note:** “v3” in older docs (`RESUME_NECESSITY_ANALYSIS.md`, `V3_MIGRATION_COMPLETE.md`) refers to **DB schema v3** or “no checkpoints” — not a third clean engine. Only **legacy** and **v2** exist in code.
 
@@ -47,22 +48,41 @@ Clean library was too slow on NAS-scale libraries (~60k photos). We:
 ## Architecture
 
 ```
-make_library_perfect.py          # Router (default v2, PHOTOS_CLEAN_LIBRARY_ENGINE=legacy)
-├── make_library_clean_v2.py     # v2 engine (default): inventory preflight, resume, run
+make_library_perfect.py             # Router (default v2, PHOTOS_CLEAN_LIBRARY_ENGINE=legacy)
+├── make_library_clean_v2.py        # v2 engine: setup, scan walk, resume/checkpoints, final audit
+├── normalization_contract.py       # Mode policies + duplicate/canonical identity helpers
+├── normalization_core.py           # Shared per-file ingest primitives
+├── normalization_ingest.py         # Thin Add Photos event/counter wrapper over core
+├── normalization_repair.py         # Clean repair primitives + post-scan phase iterator
 ├── make_library_perfect_legacy.py  # Archived engine (unchanged behavior)
-├── clean_library_inventory.py # Cheap walk+stat inventory + duration estimate
-├── clean_library_fast_audit.py  # Read-only verify audit (?verify=1)
-└── library_cleanliness.py       # Shared rules (zip artifacts, layout, etc.)
+├── clean_library_inventory.py      # Cheap walk+stat inventory + duration estimate
+├── clean_library_fast_audit.py     # Read-only verify audit (?verify=1)
+└── library_cleanliness.py          # Shared rules (extension sets, layout, date formats)
 ```
 
 | Piece | Role |
 |-------|------|
 | `make_library_perfect_legacy.py` | Frozen pre-v2: full audit preflight, pixel dupes, blocking final audit |
-| `make_library_clean_v2.py` | v2: inventory preflight, resume checkpoints, hash-only dupes, skip-unchanged, blocking `final_audit()` |
+| `make_library_clean_v2.py` | v2: inventory preflight, resume checkpoints, scan walk, Clean-only orchestration, blocking `final_audit()` |
+| `normalization_contract.py` | Source of truth for mode policy: ingest skips duplicates/rejects unsupported, repair trashes losers/unsupported, Convert deferred |
+| `normalization_core.py` | Shared per-file normalization identity and ingest photo/video primitives |
+| `normalization_ingest.py` | Add Photos orchestration wrapper over `normalization_core.py` |
+| `normalization_repair.py` | Repair scan identity, duplicate planning, canonical move, and post-scan phase iterator used by Clean v2 |
 | `clean_library_inventory.py` | `inventory_media_library()` — photo/video counts, bytes, `about X hours` estimate |
-| `clean_library_fast_audit.py` | Read-only yardstick audit — blocking at end of every run + optional `?verify=1` preflight scan |
+| `clean_library_fast_audit.py` | Read-only yardstick audit using contract canonical path helpers — blocking at end of every run + optional `?verify=1` preflight scan |
 | `tools/benchmark_clean_library.py` | Scan / run / suite harness |
 | `tools/profile_clean_library_scan.py` | Per-file scan cost breakdown (dev/diagnostic) |
+
+### Normalization convergence
+
+Add Photos and Clean now share normalization identity rules instead of carrying separate forks:
+
+- Duplicate identity is hash-only via `normalization_contract.compute_duplicate_key()`.
+- Canonical paths flow through contract/library cleanliness helpers.
+- Add Photos uses `normalization_ingest.iter_ingest_events()` over `normalization_core.py`.
+- Clean v2 uses `normalization_repair.py` for scan-time identity, duplicate winner/loser planning, canonical moves, and post-scan repair phase iteration.
+- Clean v2 still owns setup, inventory preflight, checkpoints/resume files, walk order, trash/log/stat side effects, DB rebuild, final blocking audit, and SSE event compatibility.
+- Convert remains deferred; `CONVERT_POLICY` is present but destructive layout rewrite is not part of this convergence.
 
 ---
 
