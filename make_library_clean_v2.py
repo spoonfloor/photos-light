@@ -1174,7 +1174,16 @@ class LibraryCleaner:
 
             self._emit({"type": "phase", "phase": "setup", "status": "starting"})
             self.setup()
-            self._emit({"type": "phase", "phase": "setup", "status": "complete"})
+            self._emit(
+                {
+                    "type": "phase",
+                    "phase": "setup",
+                    "status": "complete",
+                    "manifest_path": os.path.relpath(self._manifest_path, self.library_path)
+                    if self._manifest_path
+                    else None,
+                }
+            )
             self._raise_if_cancelled()
 
             resume_phase = str(self._resume_checkpoint.get("phase") or "setup") if self._resume_checkpoint else "setup"
@@ -1270,6 +1279,8 @@ class LibraryCleaner:
             self._write_checkpoint(phase="complete", status="complete", force=True, records=canonicalized)
             self.log("operation_complete", stats=self.stats, resumed_from=resumed_from)
             result: Dict[str, Any] = {"status": "SUCCESS", "stats": self.stats}
+            if self._manifest_path:
+                result["log_path"] = os.path.relpath(self._manifest_path, self.library_path)
             if resumed_from:
                 result["resumed"] = True
                 result["resumed_from"] = resumed_from

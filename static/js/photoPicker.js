@@ -999,12 +999,18 @@ const PhotoPicker = (() => {
           resolve(null);
         };
 
-        const handleImport = () => {
+        const handleImport = async () => {
           if (selectedPaths.size === 0) return;
 
           // Save current path to localStorage for next session
           localStorage.setItem('picker.lastPath', currentPath);
-          
+
+          const rootSelections = getRootSelections();
+          const beforeResolveImport =
+            options.beforeResolveImport || options.beforeResolveChoose;
+          if (typeof beforeResolveImport === 'function') {
+            await beforeResolveImport(rootSelections);
+          }
 
           overlay.style.display = 'none';
           if (keyboardHandler) {
@@ -1015,7 +1021,6 @@ const PhotoPicker = (() => {
 
           // Return only root selections (folders/files user checked)
           // Backend will scan folders recursively - no need to send expanded children
-          const rootSelections = getRootSelections();
           invalidateBackgroundCounting();
 
           resolve(rootSelections);

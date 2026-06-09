@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Tuple
 
 from normalization_core import (
@@ -56,11 +57,21 @@ def iter_ingest_events(
     total = len(paths)
     counters = IngestCounters()
 
-    def _log(event_type: str, data: Dict[str, Any]) -> None:
+    def _build_log_entry(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "event": event_type,
+            **data,
+        }
+
+    def _log(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        entry = _build_log_entry(event_type, data)
         if log_entry is not None:
             log_entry(event_type, data)
+        return entry
 
-    _log("start", {"total": total})
+    start_entry = _log("start", {"total": total})
+    yield "log", {"entry": start_entry}
 
     for file_index, source_path in enumerate(paths, 1):
         if stop_check and stop_check():
@@ -69,7 +80,8 @@ def iter_ingest_events(
         filename = os.path.basename(source_path)
         if not os.path.exists(source_path):
             counters.errors += 1
-            _log("missing_file", {"file": source_path})
+            missing_entry = _log("missing_file", {"file": source_path})
+            yield "log", {"entry": missing_entry}
             yield "progress", counters.progress_payload(current=file_index, total=total)
             continue
 
@@ -81,14 +93,16 @@ def iter_ingest_events(
                 payload = counters.progress_payload(current=file_index, total=total)
                 if result.photo_id:
                     payload["photo_id"] = result.photo_id
-                _log(
+                imported_entry = _log(
                     "imported",
                     {"file": source_path, "photo_id": result.photo_id},
                 )
+                yield "log", {"entry": imported_entry}
                 yield "progress", payload
             elif result.status == "duplicate":
                 counters.duplicates += 1
-                _log("duplicate", {"file": source_path})
+                duplicate_entry = _log("duplicate", {"file": source_path})
+                yield "log", {"entry": duplicate_entry}
                 yield "progress", counters.progress_payload(current=file_index, total=total)
             elif result.status == "rejected":
                 rejection = dict(result.rejection or {})
@@ -97,7 +111,7 @@ def iter_ingest_events(
                     counters.duplicates += 1
                 else:
                     counters.errors += 1
-                _log(
+                rejected_entry = _log(
                     "rejected",
                     {
                         "file": rejection.get("file") or source_path,
@@ -105,17 +119,19 @@ def iter_ingest_events(
                         "category": category,
                     },
                 )
+                yield "log", {"entry": rejected_entry}
                 rejection.update(counters.progress_payload(current=file_index, total=total))
                 yield "rejected", rejection
             else:
                 counters.errors += 1
-                _log(
+                error_entry = _log(
                     "error",
                     {
                         "file": result.error_file or source_path,
                         "message": result.error,
                     },
                 )
+                yield "log", {"entry": error_entry}
                 yield "progress", counters.progress_payload(
                     current=file_index,
                     total=total,
@@ -124,7 +140,8 @@ def iter_ingest_events(
                 )
         except Exception as error:
             counters.errors += 1
-            _log("error", {"file": source_path, "message": str(error)})
+            error_entry = _log("error", {"file": source_path, "message": str(error)})
+            yield "log", {"entry": error_entry}
             yield "progress", counters.progress_payload(
                 current=file_index,
                 total=total,
@@ -138,5 +155,6 @@ def iter_ingest_events(
         "errors": counters.errors,
         "total": total,
     }
-    _log("complete", complete_payload)
+    complete_entry = _log("complete", complete_payload)
+    yield "log", {"entry": complete_entry}
     yield "complete", complete_payload

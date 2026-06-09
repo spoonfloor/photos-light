@@ -243,8 +243,8 @@ const FLOW_ACTIVITY_LOG_REGISTRY = {
     toggleId: 'importDetailsToggle',
     logFeedId: 'importLogFeed',
     detailsListId: 'importDetailsList',
-    maxLines: 80,
-    activityModeLabel: false,
+    maxLines: CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES,
+    activityModeLabel: true,
   },
   clean: {
     toggleId: 'updateIndexDetailsToggle',
@@ -257,15 +257,15 @@ const FLOW_ACTIVITY_LOG_REGISTRY = {
     toggleId: 'terraformProgressDetailsToggle',
     logFeedId: 'terraformProgressLogFeed',
     detailsListId: null,
-    maxLines: 80,
-    activityModeLabel: false,
+    maxLines: CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES,
+    activityModeLabel: true,
   },
   convertComplete: {
     toggleId: 'terraformCompleteDetailsToggle',
     logFeedId: 'terraformCompleteLogFeed',
     detailsListId: null,
-    maxLines: 80,
-    activityModeLabel: false,
+    maxLines: CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES,
+    activityModeLabel: true,
   },
 };
 
@@ -285,6 +285,28 @@ function trimCleanLibraryFeedLines(lines) {
 
 function formatFlowLogPointer(logPath) {
   return `A detailed log can be found at:\n${logPath}`;
+}
+
+function appendFlowFinishFeedLines(flowKey, finishedAt, elapsedSec) {
+  const feed = getFlowActivityLogFeed(flowKey);
+  feed.append(`Finished: ${formatCleanLibraryFeedTimestamp(finishedAt)}`);
+  feed.append(
+    `Total time: ${formatPreciseDurationFromSeconds(elapsedSec)}`,
+  );
+}
+
+function appendFlowLogPointer(flowKey, logPath) {
+  if (logPath) {
+    getFlowActivityLogFeed(flowKey).setLogPointer(logPath);
+  }
+}
+
+function finalizeFlowActivityFeed(
+  flowKey,
+  { finishedAt = new Date(), elapsedSec = 0, logPath = null } = {},
+) {
+  appendFlowFinishFeedLines(flowKey, finishedAt, elapsedSec);
+  appendFlowLogPointer(flowKey, logPath);
 }
 
 function updateFlowDetailsToggleLabel(
@@ -323,13 +345,15 @@ function createFlowActivityLogFeed(flowKey) {
   let logPointer = null;
 
   const trimLines = (nextLines) => {
-    if (flowKey === 'clean') {
+    if (nextLines.length <= config.maxLines) {
       return trimCleanLibraryFeedLines(nextLines);
     }
-    if (nextLines.length <= config.maxLines) {
-      return nextLines;
+    const overflow = nextLines.length - config.maxLines;
+    const startLine = nextLines[0]?.startsWith('Started:') ? nextLines[0] : null;
+    if (startLine) {
+      return [startLine, ...nextLines.slice(1 + overflow)];
     }
-    return nextLines.slice(-config.maxLines);
+    return nextLines.slice(overflow);
   };
 
   const buildDisplayLines = () => {
@@ -408,7 +432,11 @@ function createFlowActivityLogFeed(flowKey) {
     },
     isExpanded() {
       const logFeed = document.getElementById(config.logFeedId);
-      return Boolean(logFeed && logFeed.style.display !== 'none');
+      if (logFeed && logFeed.style.display !== 'none') {
+        return true;
+      }
+      const toggle = document.getElementById(config.toggleId);
+      return Boolean(toggle?.classList.contains('expanded'));
     },
     setExpanded(visible, { activityMode = config.activityModeLabel } = {}) {
       const logFeed = document.getElementById(config.logFeedId);
@@ -488,10 +516,352 @@ function shouldUseFlowActivityFeed(flowKey) {
           cleanLibraryPreviewState.phase === 'working'),
     );
   }
-  if (flowKey === 'convert') {
+  if (flowKey === 'convert' || flowKey === 'convertComplete') {
     return Boolean(terraformProgressState.active);
   }
   return false;
+}
+
+const FLOW_ACTIVITY_FEED_TIME_FALLBACK_MS = 5000;
+const FLOW_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT = 5;
+
+const FLOW_LOG_SKIP_ACTIONS = new Set([
+  'scan_unchanged_skip',
+  'operation_started',
+  'operation_complete',
+  'operation_cancelled',
+  'operation_failed',
+  'orientation_kept',
+  'folder_remove_skipped',
+  'date_metadata_canonicalized',
+  'metadata_artifacts_quarantined',
+  'db_migrated_to_hidden_folder',
+]);
+
+const FLOW_LOG_SKIP_EVENTS = new Set([
+  'start',
+  'complete',
+  'imported',
+  'duplicate',
+]);
+
+const CLEAN_LIBRARY_FEED_PROGRESS_VERBS = {
+  scan: 'Scanned',
+  canonicalize: 'Organized',
+  rebuild_db: 'Rebuilt',
+  audit: 'Verifying',
+};
+
+const flowActivityMilestoneState = new Map();
+
+function flowActivityMilestoneKey(flowKey, phaseKey = '') {
+  return `${flowKey}:${phaseKey || '__default__'}`;
+}
+
+function resetFlowActivityMilestones(flowKey, phaseKey = '') {
+  if (phaseKey) {
+    flowActivityMilestoneState.delete(flowActivityMilestoneKey(flowKey, phaseKey));
+    return;
+  }
+  for (const key of [...flowActivityMilestoneState.keys()]) {
+    if (key.startsWith(`${flowKey}:`)) {
+      flowActivityMilestoneState.delete(key);
+    }
+  }
+}
+
+function flowProgressMilestoneInterval(total) {
+  const cap = Math.max(1, Number(total) || 1);
+  if (cap <= 25) return 1;
+  if (cap <= 100) return 5;
+  if (cap <= 500) return 10;
+  if (cap <= 2500) return 25;
+  if (cap < 50000) return 50;
+  return 100;
+}
+
+function flowFeedBasename(filePath) {
+  if (!filePath) {
+    return '';
+  }
+  const parts = String(filePath).split(/[/\\]/);
+  return parts[parts.length - 1] || String(filePath);
+}
+
+function formatFlowLogEntry(entry) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  if (entry.action) {
+    const action = entry.action;
+    if (!action || FLOW_LOG_SKIP_ACTIONS.has(action)) {
+      return null;
+    }
+    switch (action) {
+      case 'media_moved':
+        return entry.source && entry.destination
+          ? `Moved ${entry.source} → ${entry.destination}`
+          : null;
+      case 'duplicate_trashed':
+        return entry.loser ? `Removed duplicate: ${entry.loser}` : null;
+      case 'moved_to_trash':
+        return entry.source ? `Moved to trash: ${entry.source}` : null;
+      case 'orientation_baked':
+        return entry.file ? `Baked rotation: ${entry.file}` : null;
+      case 'rating_stripped':
+        return entry.file ? `Stripped rating flag: ${entry.file}` : null;
+      case 'folder_removed':
+        return entry.path ? `Removed empty folder: ${entry.path}` : null;
+      case 'photos_table_rebuilt': {
+        const rows = Number(entry.row_count);
+        if (Number.isFinite(rows) && rows > 0) {
+          return `Database rebuilt (${rows.toLocaleString()} rows)`;
+        }
+        return 'Database rebuilt';
+      }
+      case 'scan_complete': {
+        const count = Number(entry.media_count);
+        if (Number.isFinite(count) && count > 0) {
+          return `Scan complete (${count.toLocaleString()} media files)`;
+        }
+        return 'Scan complete';
+      }
+      case 'final_audit_failed': {
+        const count = Number(entry.issue_count);
+        if (Number.isFinite(count)) {
+          return `Final verification found ${count.toLocaleString()} issue(s)`;
+        }
+        return 'Final verification found issues';
+      }
+      default:
+        return null;
+    }
+  }
+
+  const event = entry.event;
+  if (!event || FLOW_LOG_SKIP_EVENTS.has(event)) {
+    return null;
+  }
+  switch (event) {
+    case 'missing_file':
+      return entry.file
+        ? `Missing file: ${flowFeedBasename(entry.file)}`
+        : 'Missing file';
+    case 'rejected': {
+      const file = flowFeedBasename(entry.file);
+      if (file && entry.reason) {
+        return `${file}: ${entry.reason}`;
+      }
+      return file || entry.reason || null;
+    }
+    case 'error': {
+      const file = flowFeedBasename(entry.file);
+      if (file && entry.message) {
+        return `${file}: ${entry.message}`;
+      }
+      return entry.message || null;
+    }
+    default:
+      return null;
+  }
+}
+
+function canWriteFlowActivityFeed(
+  flowKey,
+  { previewOnly = false, allowInactive = false } = {},
+) {
+  if (allowInactive) {
+    return true;
+  }
+  if (previewOnly) {
+    if (debugFlowPreviewState.active && debugFlowPreviewState.flow === flowKey) {
+      return true;
+    }
+    if (flowKey === 'clean' && cleanLibraryPreviewState.active) {
+      return true;
+    }
+    return false;
+  }
+  return shouldUseFlowActivityFeed(flowKey);
+}
+
+function appendFlowActivityLine(
+  flowKey,
+  line,
+  { previewOnly = false, allowInactive = false } = {},
+) {
+  if (!canWriteFlowActivityFeed(flowKey, { previewOnly, allowInactive })) {
+    return;
+  }
+  const text = String(line || '').trim();
+  if (!text) {
+    return;
+  }
+  getFlowActivityLogFeed(flowKey).append(text);
+}
+
+function prependFlowActivityLine(
+  flowKey,
+  line,
+  { previewOnly = false, allowInactive = false } = {},
+) {
+  if (!canWriteFlowActivityFeed(flowKey, { previewOnly, allowInactive })) {
+    return;
+  }
+  const text = String(line || '').trim();
+  if (!text) {
+    return;
+  }
+  getFlowActivityLogFeed(flowKey).prepend(text);
+}
+
+function appendFlowEngineLogEntry(
+  flowKey,
+  entry,
+  { previewOnly = false, allowInactive = false } = {},
+) {
+  const line = formatFlowLogEntry(entry);
+  if (line) {
+    appendFlowActivityLine(flowKey, line, { previewOnly, allowInactive });
+  }
+}
+
+function getFlowProgressVerb(flowKey, phaseKey = '') {
+  if (flowKey === 'add') {
+    return 'Processed';
+  }
+  if (flowKey === 'clean') {
+    return CLEAN_LIBRARY_FEED_PROGRESS_VERBS[phaseKey] || null;
+  }
+  if (flowKey === 'convert') {
+    const convertVerbs = {
+      convert: 'Converting',
+      folders: 'Cleaning folders',
+      audit: 'Verifying',
+    };
+    return convertVerbs[phaseKey] || null;
+  }
+  return null;
+}
+
+function maybeAppendFlowProgressMilestone(
+  flowKey,
+  phaseKey,
+  current,
+  total,
+  { previewOnly = false, allowInactive = false, verb = null } = {},
+) {
+  const progressVerb = verb || getFlowProgressVerb(flowKey, phaseKey);
+  if (!progressVerb) {
+    return;
+  }
+
+  const done = Number(current);
+  const cap = Number(total);
+  if (!Number.isFinite(done) || !Number.isFinite(cap) || cap < 1) {
+    return;
+  }
+
+  const stateKey = flowActivityMilestoneKey(flowKey, phaseKey);
+  const prior = flowActivityMilestoneState.get(stateKey) || {
+    lastMilestone: 0,
+    lastEmittedAtMs: null,
+  };
+  const interval = flowProgressMilestoneInterval(cap);
+  const now = Date.now();
+  let marker = null;
+
+  if (done >= cap) {
+    marker = cap;
+  } else {
+    const bucket = Math.floor(done / interval) * interval;
+    if (bucket > 0 && bucket > prior.lastMilestone) {
+      marker = bucket;
+    } else if (prior.lastEmittedAtMs === null) {
+      prior.lastEmittedAtMs = now;
+    } else if (now - prior.lastEmittedAtMs >= FLOW_ACTIVITY_FEED_TIME_FALLBACK_MS) {
+      const timeBucket =
+        Math.floor(done / FLOW_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT) *
+        FLOW_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT;
+      if (timeBucket > 0 && timeBucket > prior.lastMilestone) {
+        marker = timeBucket;
+      }
+    }
+  }
+
+  if (marker === null || marker <= prior.lastMilestone) {
+    flowActivityMilestoneState.set(stateKey, prior);
+    return;
+  }
+
+  prior.lastMilestone = marker;
+  prior.lastEmittedAtMs = now;
+  flowActivityMilestoneState.set(stateKey, prior);
+  appendFlowActivityLine(
+    flowKey,
+    `${progressVerb} ${Math.min(marker, cap).toLocaleString()} of ${cap.toLocaleString()}`,
+    { previewOnly, allowInactive },
+  );
+}
+
+function resetFlowActivityFeed(flowKey) {
+  resetFlowActivityMilestones(flowKey);
+  resetFlowDetailsPanel(flowKey);
+}
+
+function beginFlowInflightFeed(flowKey, startedAtMs, options = {}) {
+  resetFlowActivityFeed(flowKey);
+  prependFlowActivityLine(
+    flowKey,
+    `Started: ${formatCleanLibraryFeedTimestamp(new Date(startedAtMs))}`,
+    options,
+  );
+}
+
+function completeFlowActivityFeed(
+  flowKey,
+  {
+    finishedAt = new Date(),
+    elapsedSec = 0,
+    logPath = null,
+    preserveExpanded = true,
+    expanded = null,
+  } = {},
+) {
+  const feed = getFlowActivityLogFeed(flowKey);
+  const priorExpanded = expanded ?? feed.isExpanded();
+  finalizeFlowActivityFeed(flowKey, { finishedAt, elapsedSec, logPath });
+  if (!preserveExpanded) {
+    return;
+  }
+  feed.setExpanded(priorExpanded, {
+    activityMode: FLOW_ACTIVITY_LOG_REGISTRY[flowKey]?.activityModeLabel,
+  });
+}
+
+function handoffFlowActivityFeed(
+  fromFlowKey,
+  toFlowKey,
+  {
+    finishedAt = new Date(),
+    elapsedSec = 0,
+    logPath = null,
+  } = {},
+) {
+  const priorExpanded = getFlowActivityLogFeed(fromFlowKey).isExpanded();
+  resetFlowDetailsPanel(toFlowKey);
+  const sourceLines = getFlowActivityLogFeed(fromFlowKey).getLines();
+  if (sourceLines.length > 0) {
+    getFlowActivityLogFeed(toFlowKey).adoptLines(sourceLines);
+  }
+  completeFlowActivityFeed(toFlowKey, {
+    finishedAt,
+    elapsedSec,
+    logPath,
+    preserveExpanded: true,
+    expanded: priorExpanded,
+  });
 }
 
 function wireFlowDetailsToggle(flowKey) {
@@ -1865,6 +2235,36 @@ function setLibraryRecoveryShellHidden(hidden) {
  */
 function setOpenLibraryModalHandoffShellHidden(hidden) {
   document.body.classList.toggle('open-library-modal-handoff', hidden);
+}
+
+/** Show a flow overlay (import-style dock). */
+function showFlowOverlay(el) {
+  if (el) {
+    el.style.display = 'flex';
+  }
+}
+
+/** Hide a flow overlay. */
+function hideFlowOverlay(el) {
+  if (el) {
+    el.style.display = 'none';
+  }
+}
+
+/**
+ * Paint the next overlay before hiding the previous one so the scrim never drops.
+ */
+function handoffFlowOverlays(nextEl, ...previousEls) {
+  showFlowOverlay(nextEl);
+  for (const prev of previousEls) {
+    if (prev && prev !== nextEl) {
+      hideFlowOverlay(prev);
+    }
+  }
+}
+
+function isFlowOverlayVisible(el) {
+  return !!el && el.style.display === 'flex';
 }
 
 function hideLibraryRecoveryDock() {
@@ -6670,11 +7070,7 @@ function beginImportInflightUi() {
   if (detailsSection) {
     detailsSection.style.display = 'block';
   }
-  resetFlowDetailsPanel('add');
-  getFlowActivityLogFeed('add').prepend(
-    `Started: ${formatCleanLibraryFeedTimestamp(new Date(importState.runStartedAtMs))}`,
-  );
-  getFlowActivityLogFeed('add').setExpanded(false);
+  beginFlowInflightFeed('add', importState.runStartedAtMs);
 
   setImportActionButtons({ showCancel: true });
   startImportInflightRemainingTicker();
@@ -6691,12 +7087,20 @@ function syncImportInflightStatus(current, total) {
   syncImportInflightRemainingDisplay();
 }
 
-function appendImportActivityLine(line) {
-  const text = String(line || '').trim();
-  if (!text) {
-    return;
-  }
-  getFlowActivityLogFeed('add').append(text);
+function resetImportLogFeed() {
+  resetFlowActivityFeed('add');
+}
+
+function appendImportActivityLine(line, options = {}) {
+  appendFlowActivityLine('add', line, options);
+}
+
+function appendImportEngineLogEntry(entry) {
+  appendFlowEngineLogEntry('add', entry);
+}
+
+function maybeAppendImportProgressMilestone(current, total) {
+  maybeAppendFlowProgressMilestone('add', '', current, total);
 }
 
 function renderImportCompleteUi({ hasErrors = false, logPath = null } = {}) {
@@ -6733,22 +7137,20 @@ function renderImportCompleteUi({ hasErrors = false, logPath = null } = {}) {
     skipped,
   );
 
-  appendImportActivityLine(
-    `Finished: ${formatCleanLibraryFeedTimestamp(new Date())}`,
-  );
-  if (logPath) {
-    getFlowActivityLogFeed('add').setLogPointer(logPath);
-  }
+  const finishedAt = new Date();
+  const elapsedSec = importState.runStartedAtMs
+    ? (finishedAt.getTime() - importState.runStartedAtMs) / 1000
+    : Number(importState.estimatedSeconds) || 0;
+  completeFlowActivityFeed('add', {
+    finishedAt,
+    elapsedSec,
+    logPath,
+    preserveExpanded: true,
+  });
 
   const detailsSection = document.getElementById('importDetailsSection');
   if (detailsSection) {
     detailsSection.style.display = 'block';
-  }
-
-  if (hasErrors) {
-    showUnifiedErrorDetails();
-  } else {
-    getFlowActivityLogFeed('add').setExpanded(false);
   }
 
   setImportActionButtons({
@@ -6843,6 +7245,7 @@ async function loadImportOverlay() {
     const html = await response.text();
     mount.insertAdjacentHTML('beforeend', html);
     wireImportOverlay();
+    hideFlowOverlay(document.getElementById('importOverlay'));
   } catch (error) {
     console.error('❌ Import overlay load failed:', error);
   }
@@ -6945,10 +7348,7 @@ function updateImportUI(statusText, showSpinner = false) {
  * Show import overlay
  */
 function showImportOverlay() {
-  const overlay = document.getElementById('importOverlay');
-  if (overlay) {
-    overlay.style.display = 'flex';
-  }
+  showFlowOverlay(document.getElementById('importOverlay'));
 }
 
 function resolveImportPreflight(shouldContinue) {
@@ -7396,6 +7796,7 @@ let updateIndexState = {
   databaseRepairs: 0,
   details: null,
   resultStats: null,
+  logPath: null,
   preflight: null,
   isRunning: false,
   abortController: null,
@@ -7442,6 +7843,7 @@ async function loadUpdateIndexOverlay() {
     if (doneBtn) doneBtn.addEventListener('click', closeUpdateIndexOverlay);
 
     wireFlowDetailsToggle('clean');
+    hideFlowOverlay(document.getElementById('updateIndexOverlay'));
   } catch (error) {
     console.error('❌ Failed to load Update Database overlay:', error);
   }
@@ -7679,9 +8081,6 @@ async function simulateDebugInflightPhase(flow, runId) {
 
   if (flow === 'convert') {
     const previewOverlay = document.getElementById('terraformPreviewOverlay');
-    if (previewOverlay) {
-      previewOverlay.style.display = 'none';
-    }
     let progressOverlay = document.getElementById('terraformProgressOverlay');
     if (!progressOverlay) {
       await loadTerraformProgressOverlay();
@@ -7691,7 +8090,7 @@ async function simulateDebugInflightPhase(flow, runId) {
       return;
     }
     resetFlowDetailsPanel('convert');
-    progressOverlay.style.display = 'flex';
+    handoffFlowOverlays(progressOverlay, previewOverlay);
     wireFlowDetailsToggle('convert');
     wireDebugConvertProgressHandlers(runId);
   }
@@ -7833,6 +8232,12 @@ async function showDebugAddComplete(runId) {
   }
   setDebugInflightCounts('add', targets.primary, targets.duplicates, targets.skipped);
   showDebugDetailsSection('add', true);
+  completeFlowActivityFeed('add', {
+    finishedAt: new Date(),
+    elapsedSec: Number(debugFlowPreviewState.estimatedSeconds) || 0,
+    logPath: DEBUG_FLOW_LOG_PATHS.add,
+    preserveExpanded: true,
+  });
   setImportActionButtons({ showDone: true, showUndo: targets.primary > 0 });
 }
 
@@ -7863,19 +8268,16 @@ async function showDebugCleanComplete(runId) {
     'Library check complete. Your library is clean and organized.',
   );
   showDebugDetailsSection('clean', true);
-  appendDebugLogFeed(
-    'clean',
-    `Finished: ${formatCleanLibraryFeedTimestamp(new Date())}`,
-  );
+  completeFlowActivityFeed('clean', {
+    finishedAt: new Date(),
+    elapsedSec: Number(debugFlowPreviewState.estimatedSeconds) || 0,
+    logPath: DEBUG_FLOW_LOG_PATHS.clean,
+    preserveExpanded: true,
+  });
   const detailsList = document.getElementById('updateIndexDetailsList');
   if (detailsList) {
     detailsList.style.display = 'none';
   }
-  const detailsToggle = document.getElementById('updateIndexDetailsToggle');
-  const feed = getFlowActivityLogFeed('clean');
-  const feedExpanded =
-    feed.isExpanded() || Boolean(detailsToggle?.classList.contains('expanded'));
-  feed.setExpanded(feedExpanded, { activityMode: true });
   showUpdateIndexButtons('done');
 }
 
@@ -7888,10 +8290,6 @@ async function showDebugConvertComplete(runId) {
     getDebugFlowTotalCount(),
   );
   const progressOverlay = document.getElementById('terraformProgressOverlay');
-  if (progressOverlay) {
-    progressOverlay.style.display = 'none';
-  }
-
   let completeOverlay = document.getElementById('terraformCompleteOverlay');
   if (!completeOverlay) {
     await loadTerraformCompleteOverlay();
@@ -7900,6 +8298,8 @@ async function showDebugConvertComplete(runId) {
   if (!completeOverlay) {
     return;
   }
+
+  handoffFlowOverlays(completeOverlay, progressOverlay);
 
   wireFlowDetailsToggle('convertComplete');
 
@@ -7919,7 +8319,8 @@ async function showDebugConvertComplete(runId) {
 
   populateTerraformCompleteActivityFeed({
     logPath: DEBUG_FLOW_LOG_PATHS.convert,
-    copyFromFlow: 'convert',
+    finishedAt: new Date(),
+    elapsedSec: Number(debugFlowPreviewState.estimatedSeconds) || 0,
   });
   showTerraformCompleteDetailsSection(true);
 
@@ -7928,8 +8329,6 @@ async function showDebugConvertComplete(runId) {
   const dismissHandler = () => dismissDebugFlowPreview();
   if (closeBtn) closeBtn.onclick = dismissHandler;
   if (doneBtn) doneBtn.onclick = dismissHandler;
-
-  completeOverlay.style.display = 'flex';
 }
 
 function wireDebugConvertPreviewHandlers() {
@@ -8348,32 +8747,7 @@ const CLEAN_LIBRARY_STEP_PROGRESS_PHASES = new Set([
   'audit',
 ]);
 
-const CLEAN_LIBRARY_FEED_PROGRESS_VERBS = {
-  scan: 'Scanned',
-  canonicalize: 'Organized',
-  rebuild_db: 'Rebuilt',
-  audit: 'Verifying',
-};
-
-const CLEAN_LIBRARY_LOG_SKIP_ACTIONS = new Set([
-  'scan_unchanged_skip',
-  'operation_started',
-  'operation_complete',
-  'operation_cancelled',
-  'operation_failed',
-  'orientation_kept',
-  'folder_remove_skipped',
-  'date_metadata_canonicalized',
-  'metadata_artifacts_quarantined',
-  'db_migrated_to_hidden_folder',
-]);
-
 let cleanLibraryWorkingStepState = null;
-
-let cleanLibraryActivityFeedState = {
-  lastMilestoneByPhase: {},
-  lastEmittedAtMsByPhase: {},
-};
 
 const cleanLibraryPreviewState = {
   active: false,
@@ -8536,90 +8910,8 @@ function setCleanLibrarySecondaryStatus(text, visible = true) {
   secondaryEl.textContent = text;
 }
 
-function resetCleanLibraryActivityFeedState() {
-  cleanLibraryActivityFeedState = {
-    lastMilestoneByPhase: {},
-    lastEmittedAtMsByPhase: {},
-  };
-}
-
-const CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_MS = 5000;
-const CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT = 5;
-
-function cleanLibraryProgressMilestoneInterval(total) {
-  const cap = Math.max(1, Number(total) || 1);
-  if (cap <= 25) return 1;
-  if (cap <= 100) return 5;
-  if (cap <= 500) return 10;
-  if (cap <= 2500) return 25;
-  if (cap < 50000) return 50;
-  return 100;
-}
-
 function formatCleanLibraryLogEntry(entry) {
-  if (!entry || typeof entry !== 'object') {
-    return null;
-  }
-  const action = entry.action;
-  if (!action || CLEAN_LIBRARY_LOG_SKIP_ACTIONS.has(action)) {
-    return null;
-  }
-
-  switch (action) {
-    case 'media_moved':
-      if (entry.source && entry.destination) {
-        return `Moved ${entry.source} → ${entry.destination}`;
-      }
-      return null;
-    case 'duplicate_trashed':
-      if (entry.loser) {
-        return `Removed duplicate: ${entry.loser}`;
-      }
-      return null;
-    case 'moved_to_trash':
-      if (entry.source) {
-        return `Moved to trash: ${entry.source}`;
-      }
-      return null;
-    case 'orientation_baked':
-      if (entry.file) {
-        return `Baked rotation: ${entry.file}`;
-      }
-      return null;
-    case 'rating_stripped':
-      if (entry.file) {
-        return `Stripped rating flag: ${entry.file}`;
-      }
-      return null;
-    case 'folder_removed':
-      if (entry.path) {
-        return `Removed empty folder: ${entry.path}`;
-      }
-      return null;
-    case 'photos_table_rebuilt': {
-      const rows = Number(entry.row_count);
-      if (Number.isFinite(rows) && rows > 0) {
-        return `Database rebuilt (${rows.toLocaleString()} rows)`;
-      }
-      return 'Database rebuilt';
-    }
-    case 'scan_complete': {
-      const count = Number(entry.media_count);
-      if (Number.isFinite(count) && count > 0) {
-        return `Scan complete (${count.toLocaleString()} media files)`;
-      }
-      return 'Scan complete';
-    }
-    case 'final_audit_failed': {
-      const count = Number(entry.issue_count);
-      if (Number.isFinite(count)) {
-        return `Final verification found ${count.toLocaleString()} issue(s)`;
-      }
-      return 'Final verification found issues';
-    }
-    default:
-      return null;
-  }
+  return formatFlowLogEntry(entry);
 }
 
 function formatCleanLibraryManifestLine(line) {
@@ -8654,7 +8946,7 @@ function setDetailsToggleCollapsed(
 }
 
 function resetImportDetailsExpanded() {
-  resetFlowDetailsPanel('add');
+  resetImportLogFeed();
 }
 
 function resetTerraformProgressDetailsExpanded() {
@@ -8693,98 +8985,20 @@ function renderCleanLibraryActivityFeed() {
   getFlowActivityLogFeed('clean').render();
 }
 
-function canWriteCleanLibraryActivityFeed({
-  previewOnly = false,
-  allowInactive = false,
-} = {}) {
-  if (previewOnly && cleanLibraryPreviewState.active) {
-    return true;
-  }
-  return Boolean(
-    updateIndexState &&
-      (updateIndexState.workingPhaseActive || allowInactive),
-  );
+function appendCleanLibraryActivityLine(line, options = {}) {
+  appendFlowActivityLine('clean', line, options);
 }
 
-function prependCleanLibraryActivityLine(
-  line,
-  { previewOnly = false, allowInactive = false } = {},
-) {
-  if (!canWriteCleanLibraryActivityFeed({ previewOnly, allowInactive })) {
-    return;
-  }
-  getFlowActivityLogFeed('clean').prepend(line);
+function maybeAppendCleanLibraryProgressMilestone(phase, processed, total, options = {}) {
+  maybeAppendFlowProgressMilestone('clean', phase, processed, total, options);
 }
 
-function appendCleanLibraryActivityLine(
-  line,
-  { previewOnly = false, allowInactive = false } = {},
-) {
-  if (!canWriteCleanLibraryActivityFeed({ previewOnly, allowInactive })) {
-    return;
-  }
-  getFlowActivityLogFeed('clean').append(line);
-}
-
-function maybeAppendCleanLibraryProgressMilestone(phase, processed, total) {
-  if (!CLEAN_LIBRARY_FEED_PROGRESS_VERBS[phase]) {
-    return;
-  }
-  const done = Number(processed);
-  const cap = Number(total);
-  if (!Number.isFinite(done) || !Number.isFinite(cap) || cap < 1) {
-    return;
-  }
-
-  const interval = cleanLibraryProgressMilestoneInterval(cap);
-  const lastMarker = cleanLibraryActivityFeedState.lastMilestoneByPhase[phase] ?? 0;
-  const lastEmittedAtMs =
-    cleanLibraryActivityFeedState.lastEmittedAtMsByPhase[phase] ?? null;
-  const now = Date.now();
-  let marker = null;
-
-  if (done >= cap) {
-    marker = cap;
-  } else {
-    const bucket = Math.floor(done / interval) * interval;
-    if (bucket > 0 && bucket > lastMarker) {
-      marker = bucket;
-    } else if (lastEmittedAtMs === null) {
-      cleanLibraryActivityFeedState.lastEmittedAtMsByPhase[phase] = now;
-    } else if (
-      now - lastEmittedAtMs >= CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_MS
-    ) {
-      const timeBucket =
-        Math.floor(done / CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT) *
-        CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT;
-      if (timeBucket > 0 && timeBucket > lastMarker) {
-        marker = timeBucket;
-      }
-    }
-  }
-
-  if (marker === null || marker <= lastMarker) {
-    return;
-  }
-
-  cleanLibraryActivityFeedState.lastMilestoneByPhase[phase] = marker;
-  cleanLibraryActivityFeedState.lastEmittedAtMsByPhase[phase] = now;
-  const verb = CLEAN_LIBRARY_FEED_PROGRESS_VERBS[phase];
-  appendCleanLibraryActivityLine(
-    `${verb} ${Math.min(marker, cap).toLocaleString()} of ${cap.toLocaleString()}`,
-  );
-}
-
-function appendCleanLibraryEngineLogEntry(entry, { previewOnly = false } = {}) {
-  const line = formatCleanLibraryLogEntry(entry);
-  if (line) {
-    appendCleanLibraryActivityLine(line, { previewOnly });
-  }
+function appendCleanLibraryEngineLogEntry(entry, options = {}) {
+  appendFlowEngineLogEntry('clean', entry, options);
 }
 
 function resetCleanLibraryLogFeed() {
-  resetCleanLibraryActivityFeedState();
-  resetFlowDetailsPanel('clean');
+  resetFlowActivityFeed('clean');
 }
 
 function appendCleanLibraryLogLine(line, { previewOnly = false } = {}) {
@@ -9008,10 +9222,7 @@ async function showPreviewWorkingPhase(runId) {
   };
   cleanLibraryPreviewState.workingProgress = workingProgress;
   cleanLibraryPreviewState.runStartedAtMs = workingProgress.startedAt;
-  prependCleanLibraryActivityLine(
-    `Started: ${formatCleanLibraryFeedTimestamp(new Date(workingProgress.startedAt))}`,
-    { previewOnly: true },
-  );
+  beginFlowInflightFeed('clean', workingProgress.startedAt, { previewOnly: true });
 
   let logTicker = null;
   let frameTicker = null;
@@ -9103,7 +9314,6 @@ async function showPreviewWorkingPhase(runId) {
 }
 
 function showPreviewFinishedScreen() {
-  const feedExpanded = isCleanLibraryActivityFeedExpanded();
   const finishedAt = new Date();
   const startedAtMs =
     cleanLibraryPreviewState.runStartedAtMs ||
@@ -9113,7 +9323,11 @@ function showPreviewFinishedScreen() {
     : Number(cleanLibraryPreviewState.estimatedSeconds) || 0;
   const totalDisplay = formatPreciseDurationFromSeconds(elapsedSec);
 
-  appendCleanLibraryFinishFeedLines(finishedAt, elapsedSec, { previewOnly: true });
+  completeFlowActivityFeed('clean', {
+    finishedAt,
+    elapsedSec,
+    preserveExpanded: true,
+  });
 
   cleanLibraryPreviewState.phase = 'finished';
   setCleanLibraryExplainerVisible(false);
@@ -9128,7 +9342,6 @@ function showPreviewFinishedScreen() {
   if (detailsList) {
     detailsList.style.display = 'none';
   }
-  setCleanLibraryActivityFeedVisible(feedExpanded, { activityMode: true });
 }
 
 async function startCleanLibraryPreviewFlow() {
@@ -9270,17 +9483,6 @@ function formatPreciseDurationFromSeconds(totalSeconds) {
     parts.push(`${remSec} sec`);
   }
   return parts.join(' ');
-}
-
-function appendCleanLibraryFinishFeedLines(finishedAt, elapsedSec, options = {}) {
-  appendCleanLibraryActivityLine(
-    `Finished: ${formatCleanLibraryFeedTimestamp(finishedAt)}`,
-    options,
-  );
-  appendCleanLibraryActivityLine(
-    `Total time: ${formatPreciseDurationFromSeconds(elapsedSec)}`,
-    options,
-  );
 }
 
 function estimateCleanRunRemainingSeconds(processed, total, elapsedSec, phase) {
@@ -9511,11 +9713,9 @@ function beginCleanLibraryWorkingUi() {
   hideUpdateIndexStats();
   initCleanLibraryInflightStats();
   showCleanLibraryDetailsSection(true);
-  resetCleanLibraryLogFeed();
-  prependCleanLibraryActivityLine(
-    `Started: ${formatCleanLibraryFeedTimestamp(new Date(updateIndexState.runStartedAtMs))}`,
-    { allowInactive: true },
-  );
+  beginFlowInflightFeed('clean', updateIndexState.runStartedAtMs, {
+    allowInactive: true,
+  });
   showUpdateIndexButtons('cancel');
   requestCleanLibraryWorkingStep('setup');
 }
@@ -9539,8 +9739,29 @@ function syncCleanLibraryWorkingRemainingDisplay() {
   );
 }
 
+function trackCleanLibraryRunManifest(event = {}) {
+  if (!updateIndexState) {
+    return;
+  }
+  const manifestPath =
+    event.manifest_path || event.resumed_from?.manifest_path || null;
+  if (manifestPath) {
+    updateIndexState.runManifestPath = manifestPath;
+  }
+}
+
+function resolveCleanLibraryLogPath(result) {
+  const fromResult = result?.log_path || result?.manifest_path || null;
+  if (fromResult) {
+    return fromResult;
+  }
+  if (updateIndexState?.runManifestPath) {
+    return updateIndexState.runManifestPath;
+  }
+  return updateIndexState?.preflight?.resume?.manifest_path || null;
+}
+
 function showCleanLibraryFinishedUi() {
-  const feedExpanded = isCleanLibraryActivityFeedExpanded();
   const finishedAt = new Date();
   const elapsedSec = updateIndexState.runStartedAtMs
     ? (finishedAt.getTime() - updateIndexState.runStartedAtMs) / 1000
@@ -9548,7 +9769,12 @@ function showCleanLibraryFinishedUi() {
   const totalDisplay = formatPreciseDurationFromSeconds(elapsedSec);
 
   syncCleanLibraryInflightFromResultStats(updateIndexState.resultStats);
-  appendCleanLibraryFinishFeedLines(finishedAt, elapsedSec, { allowInactive: true });
+  completeFlowActivityFeed('clean', {
+    finishedAt,
+    elapsedSec,
+    logPath: updateIndexState.logPath,
+    preserveExpanded: true,
+  });
 
   endCleanLibraryWorkingUi();
   updateIndexState.overlayPhase = 'finished';
@@ -9563,7 +9789,6 @@ function showCleanLibraryFinishedUi() {
   if (detailsList) {
     detailsList.style.display = 'none';
   }
-  setCleanLibraryActivityFeedVisible(feedExpanded, { activityMode: true });
 }
 
 function resolveCleanLibraryStreamResume() {
@@ -9876,6 +10101,9 @@ function renderUpdateIndexPreflightResult(scanResult) {
   if (scanResult.status === 'INVENTORY' || scanResult.status === 'RESUME') {
     if (scanResult.status === 'RESUME') {
       updateIndexState.resumeIntent = true;
+      if (scanResult.resume?.manifest_path) {
+        updateIndexState.runManifestPath = scanResult.resume.manifest_path;
+      }
       showContinueLibraryCleanupTitle();
     } else if (updateIndexState.resumeIntent === true) {
       updateIndexState.resumeIntent = false;
@@ -9943,6 +10171,8 @@ async function openUpdateIndexOverlay() {
     databaseRepairs: 0,
     details: null,
     resultStats: null,
+    logPath: null,
+    runManifestPath: null,
     preflight: null,
     isRunning: false,
     abortController: null,
@@ -9960,7 +10190,7 @@ async function openUpdateIndexOverlay() {
   if (detailsSection) detailsSection.style.display = 'none';
   resetCleanLibraryLogFeed();
 
-  overlay.style.display = 'flex';
+  showFlowOverlay(overlay);
   resetUpdateIndexOverlayTitle();
 
   try {
@@ -10015,6 +10245,7 @@ async function executeUpdateIndex() {
         if (cleanLibraryRunUiPaused) {
           return;
         }
+        trackCleanLibraryRunManifest(event);
         applyCleanerStreamToUpdateIndex(event);
         updateIndexStatusForCleanerPhase(event);
       },
@@ -10029,6 +10260,7 @@ async function executeUpdateIndex() {
 
     updateIndexState.resumeIntent = null;
     updateIndexState.resultStats = result?.stats || null;
+    updateIndexState.logPath = resolveCleanLibraryLogPath(result);
     showCleanLibraryFinishedUi();
     await loadAndRenderPhotos(false);
   } catch (error) {
@@ -11591,6 +11823,47 @@ async function loadTerraformPreviewOverlay() {
   }
 }
 
+async function ensureTerraformPreviewOverlay() {
+  let overlay = document.getElementById('terraformPreviewOverlay');
+  if (!overlay) {
+    await loadTerraformPreviewOverlay();
+    overlay = document.getElementById('terraformPreviewOverlay');
+  }
+  return overlay;
+}
+
+async function preloadConvertFlowOverlays() {
+  await Promise.all([
+    loadTerraformWarningOverlay(),
+    loadTerraformProgressOverlay(),
+    loadTerraformCompleteOverlay(),
+  ]);
+}
+
+async function prepareTerraformPreviewScanningShell(path) {
+  const overlay = await ensureTerraformPreviewOverlay();
+  if (!overlay) {
+    return null;
+  }
+
+  const pathEl = document.getElementById('terraformPreviewPath');
+  if (pathEl) {
+    pathEl.textContent = path;
+  }
+  setTerraformPreviewPhase('scanning');
+  setTerraformDebugPreflightCounts(0, 0, 0);
+  setTerraformPreviewActionButtons({ continueDisabled: true });
+
+  const statusEl = document.getElementById('terraformPreviewScanStatus');
+  if (statusEl) {
+    setImportSpinnerStatus(statusEl, 'Scanning library…');
+  }
+
+  showFlowOverlay(overlay);
+  void preloadConvertFlowOverlays();
+  return overlay;
+}
+
 function stopTerraformProgressRemainingTicker() {
   if (terraformProgressState.remainingTimer) {
     clearInterval(terraformProgressState.remainingTimer);
@@ -11649,11 +11922,7 @@ function beginTerraformProgressUi(preflight = {}) {
   if (detailsSection) {
     detailsSection.style.display = 'block';
   }
-  resetFlowDetailsPanel('convert');
-  getFlowActivityLogFeed('convert').prepend(
-    `Started: ${formatCleanLibraryFeedTimestamp(new Date(terraformProgressState.runStartedAtMs))}`,
-  );
-  getFlowActivityLogFeed('convert').setExpanded(false);
+  beginFlowInflightFeed('convert', terraformProgressState.runStartedAtMs);
 
   const statusEl = document.getElementById('terraformProgressStatus');
   if (statusEl) {
@@ -11685,9 +11954,12 @@ function beginTerraformProgressUi(preflight = {}) {
 async function showTerraformPreviewDialog(options = {}) {
   return new Promise(async (resolve) => {
     let overlay = document.getElementById('terraformPreviewOverlay');
+    if (!isFlowOverlayVisible(overlay)) {
+      overlay = await prepareTerraformPreviewScanningShell(options.path);
+    }
     if (!overlay) {
-      await loadTerraformPreviewOverlay();
-      overlay = document.getElementById('terraformPreviewOverlay');
+      resolve(false);
+      return;
     }
 
     const photoCount = Number(options.photo_count) || 0;
@@ -11710,17 +11982,16 @@ async function showTerraformPreviewDialog(options = {}) {
     const continueBtn = document.getElementById('terraformPreviewContinueBtn');
 
     const handleCancel = () => {
-      overlay.style.display = 'none';
+      hideFlowOverlay(overlay);
       resolve(false);
     };
 
     const handleGoBack = () => {
-      overlay.style.display = 'none';
+      hideFlowOverlay(overlay);
       resolve('back_to_picker');
     };
 
     const handleContinue = () => {
-      overlay.style.display = 'none';
       resolve(true);
     };
 
@@ -11729,7 +12000,7 @@ async function showTerraformPreviewDialog(options = {}) {
     if (goBackBtn) goBackBtn.onclick = handleGoBack;
     continueBtn.onclick = handleContinue;
 
-    overlay.style.display = 'flex';
+    showFlowOverlay(overlay);
 
     const orientStartedAt = Date.now();
     await waitPreflightScoreboardOrientDelay(orientStartedAt);
@@ -11767,13 +12038,17 @@ async function loadTerraformWarningOverlay() {
  * @param {Object} options - { media_count: number, incompatible_count: number, estimated_time: string }
  * @returns {Promise<true | false | 'back_to_picker'>}
  */
-async function showTerraformWarningDialog(options = {}) {
+async function showTerraformWarningDialog(options = {}, handoffFromEl = null) {
   return new Promise(async (resolve) => {
     // Load overlay if needed
     let overlay = document.getElementById('terraformWarningOverlay');
     if (!overlay) {
       await loadTerraformWarningOverlay();
       overlay = document.getElementById('terraformWarningOverlay');
+    }
+    if (!overlay) {
+      resolve(false);
+      return;
     }
 
     const mediaCount = Number(options.media_count) || 0;
@@ -11791,17 +12066,22 @@ async function showTerraformWarningDialog(options = {}) {
     const backBtn = document.getElementById('terraformWarningBackBtn');
 
     const handleClose = () => {
-      overlay.style.display = 'none';
+      hideFlowOverlay(overlay);
+      if (handoffFromEl) {
+        hideFlowOverlay(handoffFromEl);
+      }
       resolve(false);
     };
 
     const handleContinue = () => {
-      overlay.style.display = 'none';
       resolve(true);
     };
 
     const handleBack = () => {
-      overlay.style.display = 'none';
+      hideFlowOverlay(overlay);
+      if (handoffFromEl) {
+        hideFlowOverlay(handoffFromEl);
+      }
       resolve('back_to_picker');
     };
 
@@ -11809,7 +12089,7 @@ async function showTerraformWarningDialog(options = {}) {
     continueBtn.onclick = handleContinue;
     backBtn.onclick = handleBack;
 
-    overlay.style.display = 'flex';
+    handoffFlowOverlays(overlay, handoffFromEl);
   });
 }
 
@@ -11842,19 +12122,14 @@ function showTerraformCompleteDetailsSection(visible = true) {
 
 function populateTerraformCompleteActivityFeed({
   logPath = null,
-  copyFromFlow = null,
+  finishedAt = null,
+  elapsedSec = null,
 } = {}) {
-  const feed = getFlowActivityLogFeed('convertComplete');
-  const sourceLines = copyFromFlow
-    ? getFlowActivityLogFeed(copyFromFlow).getLines()
-    : [];
-  resetFlowDetailsPanel('convertComplete');
-  if (sourceLines.length > 0) {
-    feed.adoptLines(sourceLines);
-  } else if (logPath) {
-    feed.reset(logPath);
-  }
-  feed.setExpanded(false);
+  handoffFlowActivityFeed('convert', 'convertComplete', {
+    finishedAt: finishedAt ?? new Date(),
+    elapsedSec: elapsedSec ?? 0,
+    logPath,
+  });
 }
 
 async function loadTerraformCompleteOverlay() {
@@ -11875,13 +12150,17 @@ async function loadTerraformCompleteOverlay() {
  * Show terraform complete dialog
  * @param {Object} results - { processed: number, duplicates: number, errors: number, log_path: string }
  */
-async function showTerraformCompleteDialog(results = {}) {
+async function showTerraformCompleteDialog(results = {}, handoffFromEl = null) {
   return new Promise(async (resolve) => {
     // Load overlay if needed
     let overlay = document.getElementById('terraformCompleteOverlay');
     if (!overlay) {
       await loadTerraformCompleteOverlay();
       overlay = document.getElementById('terraformCompleteOverlay');
+    }
+    if (!overlay) {
+      resolve();
+      return;
     }
 
     wireFlowDetailsToggle('convertComplete');
@@ -11903,7 +12182,11 @@ async function showTerraformCompleteDialog(results = {}) {
 
     populateTerraformCompleteActivityFeed({
       logPath: results.log_path,
-      copyFromFlow: 'convert',
+      finishedAt: new Date(),
+      elapsedSec:
+        terraformProgressState.runStartedAtMs != null
+          ? (Date.now() - terraformProgressState.runStartedAtMs) / 1000
+          : Number(terraformProgressState.estimatedSeconds) || 0,
     });
     showTerraformCompleteDetailsSection(true);
 
@@ -11911,14 +12194,14 @@ async function showTerraformCompleteDialog(results = {}) {
     const doneBtn = document.getElementById('terraformCompleteDoneBtn');
 
     const handleDone = () => {
-      overlay.style.display = 'none';
+      hideFlowOverlay(overlay);
       resolve();
     };
 
     closeBtn.onclick = handleDone;
     doneBtn.onclick = handleDone;
 
-    overlay.style.display = 'flex';
+    handoffFlowOverlays(overlay, handoffFromEl);
   });
 }
 
@@ -11986,20 +12269,36 @@ async function showTerraformPoorCandidateDialog(_warning = {}) {
  * @param {Object} options - { path: string, media_count: number }
  */
 async function executeTerraformFlow(options = {}) {
+  const previewOverlayRef = { current: null };
+  const warningOverlayRef = { current: null };
+  let progressOverlay = null;
+
   try {
     const { path } = options;
     if (!path) {
       throw new Error('No folder selected');
     }
 
+    const existingPreview = document.getElementById('terraformPreviewOverlay');
+    if (isFlowOverlayVisible(existingPreview)) {
+      previewOverlayRef.current = existingPreview;
+    } else {
+      previewOverlayRef.current = await prepareTerraformPreviewScanningShell(path);
+    }
+    if (!previewOverlayRef.current) {
+      throw new Error('Convert preview overlay unavailable');
+    }
+
     const preflight = await fetchTerraformPreflight(path);
     if (preflight.convert_blocked) {
+      hideFlowOverlay(previewOverlayRef.current);
       showToast(CONVERT_OS_PRIMARY_MESSAGE);
       return 'back_to_picker';
     }
 
     const mediaCount = Number(preflight.media_count) || 0;
     if (mediaCount <= 0) {
+      hideFlowOverlay(previewOverlayRef.current);
       showToast('No supported photos or videos found in this folder.');
       return false;
     }
@@ -12024,18 +12323,23 @@ async function executeTerraformFlow(options = {}) {
         preflight.convert_folder_warning,
       );
       if (candidateChoice === 'back_to_picker') {
+        hideFlowOverlay(previewOverlayRef.current);
         return 'back_to_picker';
       }
       if (candidateChoice !== 'continue') {
+        hideFlowOverlay(previewOverlayRef.current);
         return false;
       }
     }
 
-    const continueWarning = await showTerraformWarningDialog({
-      media_count: mediaCount,
-      incompatible_count: Number(preflight.non_media_count) || 0,
-      estimated_time: preflight.estimated_display || 'calculating...',
-    });
+    const continueWarning = await showTerraformWarningDialog(
+      {
+        media_count: mediaCount,
+        incompatible_count: Number(preflight.non_media_count) || 0,
+        estimated_time: preflight.estimated_display || 'calculating...',
+      },
+      previewOverlayRef.current,
+    );
 
     if (continueWarning === 'back_to_picker') {
       return 'back_to_picker';
@@ -12045,16 +12349,22 @@ async function executeTerraformFlow(options = {}) {
       return false;
     }
 
+    warningOverlayRef.current = document.getElementById('terraformWarningOverlay');
+
     // Step 3: Execute terraform
 
     // Load progress overlay
-    let progressOverlay = document.getElementById('terraformProgressOverlay');
+    progressOverlay = document.getElementById('terraformProgressOverlay');
     if (!progressOverlay) {
       await loadTerraformProgressOverlay();
       progressOverlay = document.getElementById('terraformProgressOverlay');
     }
 
-    progressOverlay.style.display = 'flex';
+    handoffFlowOverlays(
+      progressOverlay,
+      warningOverlayRef.current,
+      previewOverlayRef.current,
+    );
     beginTerraformProgressUi(preflight);
     document.getElementById('terraformProgressProcessed').textContent = '0';
     document.getElementById('terraformProgressDuplicates').textContent = '0';
@@ -12112,6 +12422,11 @@ async function executeTerraformFlow(options = {}) {
             throw new Error(data.error || 'Conversion failed');
           }
 
+          if (eventType === 'log' && data.entry) {
+            appendFlowEngineLogEntry('convert', data.entry);
+            continue;
+          }
+
           if (eventType === 'phase') {
             const statusEl = document.getElementById('terraformProgressStatus');
             if (statusEl && data.phase) {
@@ -12121,7 +12436,8 @@ async function executeTerraformFlow(options = {}) {
               );
             }
             if (data.status === 'starting' && data.phase) {
-              getFlowActivityLogFeed('convert').append(
+              appendFlowActivityLine(
+                'convert',
                 formatTerraformStepStatus(data.phase, data),
               );
             }
@@ -12170,6 +12486,12 @@ async function executeTerraformFlow(options = {}) {
               statusEl,
               formatTerraformStepStatus('convert', data),
             );
+            maybeAppendFlowProgressMilestone(
+              'convert',
+              'convert',
+              data.current ?? data.processed,
+              data.total,
+            );
             syncTerraformProgressRemainingDisplay();
           }
         }
@@ -12181,16 +12503,18 @@ async function executeTerraformFlow(options = {}) {
     }
 
     endTerraformProgressUi();
-    progressOverlay.style.display = 'none';
 
     // Step 4: Show completion
 
-    await showTerraformCompleteDialog({
-      processed,
-      duplicates,
-      errors,
-      log_path,
-    });
+    await showTerraformCompleteDialog(
+      {
+        processed,
+        duplicates,
+        errors,
+        log_path,
+      },
+      progressOverlay,
+    );
 
     // Step 5: Switch to this library
     return await switchToLibrary(path, dbPath);
@@ -12901,6 +13225,9 @@ async function convertToLibrary() {
         intent: FolderPicker.INTENT.CONVERT_TO_LIBRARY,
         title: 'Convert to library',
         subtitle: CONVERT_TO_LIBRARY_PICKER_SUBTITLE,
+        beforeResolveChoose: async (path) => {
+          await prepareTerraformPreviewScanningShell(path);
+        },
       });
 
       if (!selectedPath) {
@@ -13812,6 +14139,9 @@ async function triggerImport(options = {}) {
     const selectedPaths = await PhotoPicker.show({
       title: 'Select photos',
       subtitle: 'Choose photos and folders to import',
+      beforeResolveImport: async () => {
+        await prepareImportPreflightOverlay();
+      },
       onOverlayReady: () => {
         if (deferHandoff) {
           hideLibraryTransitionOverlay();
@@ -14001,7 +14331,7 @@ async function scanImportPaths(paths) {
   return result;
 }
 
-async function runImportPreflightInOverlay(paths) {
+async function prepareImportPreflightOverlay() {
   await loadImportOverlay();
 
   const overlay = document.getElementById('importOverlay');
@@ -14042,7 +14372,23 @@ async function runImportPreflightInOverlay(paths) {
     setImportSpinnerStatus(statusEl, 'Scanning library…');
   }
 
-  showImportOverlay();
+  showFlowOverlay(overlay);
+  return overlay;
+}
+
+async function runImportPreflightInOverlay(paths) {
+  const existingOverlay = document.getElementById('importOverlay');
+  if (
+    !isFlowOverlayVisible(existingOverlay) ||
+    importState.overlayPhase !== 'scanning'
+  ) {
+    await prepareImportPreflightOverlay();
+  }
+
+  const overlay = document.getElementById('importOverlay');
+  if (!overlay) {
+    throw new Error('Import overlay unavailable');
+  }
 
   const orientStartedAt = Date.now();
   let scanResult;
@@ -14074,6 +14420,7 @@ async function runImportPreflightInOverlay(paths) {
   importState.estimatedSeconds = Number(scanResult.estimated_seconds) || null;
   importState.overlayPhase = 'preflight';
 
+  const statusEl = document.getElementById('importStatusText');
   if (statusEl) {
     statusEl.textContent = `Time required: ${importState.estimatedDisplay}`;
   }
@@ -14303,6 +14650,11 @@ function handleImportEvent(event, data) {
   const duplicateCount = document.getElementById('duplicateCount');
   const errorCount = document.getElementById('errorCount');
 
+  if (event === 'log' && data.entry) {
+    appendImportEngineLogEntry(data.entry);
+    return;
+  }
+
   if (event === 'start') {
     importState.totalFiles = data.total || importState.totalFiles;
     importState.importedCount = 0;
@@ -14328,6 +14680,7 @@ function handleImportEvent(event, data) {
       importState.duplicateCount,
       importState.errorCount,
     );
+    maybeAppendImportProgressMilestone(current, total);
 
     // Track imported photo ID if provided
     if (data.photo_id) {
@@ -14335,7 +14688,6 @@ function handleImportEvent(event, data) {
       window.importedPhotoIds = [...importState.importedPhotoIds];
     }
 
-    // Track error details if present
     if (data.error && data.error_file) {
       if (!window.importErrors) {
         window.importErrors = [];
@@ -14344,7 +14696,6 @@ function handleImportEvent(event, data) {
         file: data.error_file,
         message: data.error,
       });
-      appendImportActivityLine(`${data.error_file}: ${data.error}`);
     }
   }
 
@@ -14368,6 +14719,7 @@ function handleImportEvent(event, data) {
       importState.duplicateCount,
       importState.errorCount,
     );
+    maybeAppendImportProgressMilestone(current, total);
 
     if (!window.importRejections) {
       window.importRejections = [];
@@ -14379,9 +14731,6 @@ function handleImportEvent(event, data) {
       category: data.category,
       technical_error: data.technical_error,
     });
-    if (data.file && data.reason) {
-      appendImportActivityLine(`${data.file}: ${data.reason}`);
-    }
   }
 
   if (event === 'complete') {

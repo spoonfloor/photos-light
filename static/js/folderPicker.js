@@ -1138,7 +1138,7 @@ const FolderPicker = (() => {
           localStorage.setItem('picker.lastPath', selectedPath);
 
           if (typeof options.beforeResolveChoose === 'function') {
-            await options.beforeResolveChoose();
+            await options.beforeResolveChoose(selectedPath);
           }
 
           if (keyboardHandler) {

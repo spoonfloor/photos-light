@@ -920,7 +920,11 @@ class LibraryCleaner:
             self._emit({"type": "phase", "phase": "audit", "status": "complete"})
 
             self.log("operation_complete", stats=self.stats)
-            return {"status": "SUCCESS", "stats": self.stats}
+            result: Dict[str, Any] = {"status": "SUCCESS", "stats": self.stats}
+            manifest_path = getattr(self, "_manifest_path", None)
+            if manifest_path:
+                result["log_path"] = os.path.relpath(manifest_path, self.library_path)
+            return result
         except Exception as exc:
             self.log(
                 "operation_failed",
@@ -1008,6 +1012,7 @@ class LibraryCleaner:
             ".logs",
             f"clean_library_{timestamp}.jsonl",
         )
+        self._manifest_path = manifest_path
         self.manifest = open(manifest_path, "a", encoding="utf-8")
         self.log("operation_started", library_path=self.library_path, db_path=self.db_path)
         if quarantined_metadata:
