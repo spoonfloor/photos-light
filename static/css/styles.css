@@ -45,6 +45,9 @@
   --app-bar-title-size: 20px;
   --app-bar-gap: 4px;
 
+  /* --- Import-style overlay scoreboards (preflight + in-flight) --- */
+  --scoreboard-col-min-width: 64px;
+
   /* --- Z-index scale --- */
   --z-app-chrome: 1000;
   --z-import-overlay: 20001;
@@ -1653,31 +1656,44 @@ body.library-recovery-active .library-recovery-dock {
 
 #updateIndexOverlay .import-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(72px, max-content));
+  grid-template-columns: repeat(
+    5,
+    minmax(var(--scoreboard-col-min-width), max-content)
+  );
   column-gap: 14px;
   row-gap: 8px;
   align-items: end;
   justify-content: space-between;
 }
 
-#updateIndexOverlay #updateIndexPreflightStats {
-  display: flex;
-  flex-direction: row;
-  gap: 20px;
+#updateIndexOverlay #updateIndexPreflightStats,
+#importOverlay #importPreflightStats,
+#importOverlay #importStats {
+  display: grid;
+  grid-template-columns: repeat(
+    3,
+    minmax(var(--scoreboard-col-min-width), max-content)
+  );
+  column-gap: 20px;
+  row-gap: 0;
   justify-content: flex-start;
   align-items: flex-start;
 }
 
-#updateIndexOverlay #updateIndexPreflightStats .import-stat {
+#updateIndexOverlay #updateIndexPreflightStats .import-stat,
+#importOverlay #importPreflightStats .import-stat,
+#importOverlay #importStats .import-stat {
   display: flex;
   flex-direction: column;
   gap: 4px;
   align-items: flex-start;
-  min-width: 88px;
+  min-width: var(--scoreboard-col-min-width);
 }
 
 #updateIndexOverlay #updateIndexPreflightStats .import-stat-label,
-#updateIndexOverlay #updateIndexPreflightStats .import-stat-value {
+#updateIndexOverlay #updateIndexPreflightStats .import-stat-value,
+#importOverlay #importPreflightStats .import-stat-label,
+#importOverlay #importPreflightStats .import-stat-value {
   align-self: flex-start;
   text-align: left;
 }
@@ -1687,6 +1703,7 @@ body.library-recovery-active .library-recovery-dock {
   grid-template-rows: minmax(28px, auto) auto;
   gap: 8px;
   align-content: end;
+  min-width: var(--scoreboard-col-min-width);
 }
 
 #updateIndexOverlay #updateIndexStats .import-stat-label {
@@ -1954,6 +1971,22 @@ body.library-recovery-active .library-recovery-dock {
   color: #e7e7e7;
   margin: 0;
   line-height: 1.5;
+  white-space: pre-line;
+}
+
+.picker-subtitle--stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  white-space: normal;
+}
+
+.picker-subtitle-warning {
+  display: block;
+}
+
+.picker-subtitle-warning-label {
+  color: #ffb74d;
 }
 
 .breadcrumb {
@@ -2168,11 +2201,34 @@ body.library-recovery-active .library-recovery-dock {
   line-height: 1.5;
 }
 
-.selected-path p:last-child {
+.selected-path p:nth-child(2) {
   margin: 0;
   font-family: monospace;
   font-size: 12px;
   color: #b3b3b3;
+}
+
+.picker-selection-hint {
+  margin: 8px 0 0 0 !important;
+  font-family: inherit !important;
+  font-size: 13px !important;
+  color: var(--text-secondary, #b3b3b3) !important;
+  line-height: 1.4 !important;
+}
+
+.picker-convert-verdict {
+  margin: 8px 0 0 0 !important;
+  font-family: inherit !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+}
+
+.picker-convert-verdict--good {
+  color: #81c784 !important;
+}
+
+.picker-convert-verdict--bad {
+  color: #ffb74d !important;
 }
 
 .picker-actions {

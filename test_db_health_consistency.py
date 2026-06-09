@@ -196,19 +196,38 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertEqual(payload["action"], "rebuild")
         self.assertIn("database", payload["error"].lower())
 
-    def test_switch_library_missing_columns_requires_migration(self):
+    def test_switch_library_missing_columns_migrates_and_succeeds(self):
         library_path = self._make_library("switch-missing-columns")
         db_path = canonical_db_path(library_path)
         create_photos_only_db(db_path, include_rating=False)
 
         response = self.client.post("/api/library/switch", json={"library_path": library_path})
 
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertEqual(payload["status"], "needs_migration")
-        self.assertEqual(payload["action"], "migrate")
-        self.assertEqual(payload["missing_columns"], ["rating"])
-        self.assertTrue(payload["can_continue"])
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["library_path"], library_path)
+        self.assertEqual(payload["db_path"], db_path)
+        self.assertEqual(photo_app.LIBRARY_PATH, library_path)
+        self.assertEqual(photo_app.DB_PATH, db_path)
+        self.assertEqual(check_database_health(db_path).status, DBStatus.HEALTHY)
+
+    def test_switch_library_legacy_root_db_missing_columns_migrates_and_succeeds(self):
+        library_path = self._make_library("switch-legacy-missing-columns")
+        db_path = os.path.join(library_path, "photo_library.db")
+        create_photos_only_db(db_path, include_rating=False)
+
+        response = self.client.post(
+            "/api/library/switch",
+            json={"library_path": library_path, "db_path": db_path},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["library_path"], library_path)
+        self.assertEqual(payload["db_path"], db_path)
+        self.assertEqual(check_database_health(db_path).status, DBStatus.HEALTHY)
 
     def test_switch_library_extra_columns_still_succeeds(self):
         library_path = self._make_library("switch-extra-columns")
@@ -441,6 +460,60 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertTrue(payload["has_db"])
         self.assertFalse(payload["has_openable_db"])
         self.assertEqual(payload["current_path"], library_path)
+
+
+class FolderWarningHeuristicTest(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _make_folder(self, name):
+        path = os.path.join(self.tmpdir.name, name)
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def test_legacy_warning_flags_photo_dump_with_subfolder(self):
+        library_path = self._make_folder("photo-dump-legacy")
+        os.makedirs(os.path.join(library_path, "add-to-library"))
+        for index in range(20):
+            with open(os.path.join(library_path, f"img_{index:03d}.jpg"), "wb") as handle:
+                handle.write(b"photo")
+
+        warning = photo_app.analyze_general_purpose_folder(library_path, media_count=20)
+
+        self.assertTrue(warning["show"])
+        self.assertIn("busy_mixed_root", warning["reasons"])
+
+    def test_convert_warning_allows_photo_dump_with_subfolder(self):
+        library_path = self._make_folder("photo-dump-convert")
+        os.makedirs(os.path.join(library_path, "add-to-library"))
+        for index in range(20):
+            with open(os.path.join(library_path, f"img_{index:03d}.jpg"), "wb") as handle:
+                handle.write(b"photo")
+
+        warning = photo_app.analyze_convert_to_library_folder(library_path, media_count=20)
+
+        self.assertFalse(warning["show"])
+        self.assertEqual(warning["reasons"], [])
+
+    def test_convert_warning_still_flags_workspace_with_non_media(self):
+        library_path = self._make_folder("workspace-convert")
+        os.makedirs(os.path.join(library_path, "projects"))
+        for index in range(20):
+            with open(os.path.join(library_path, f"img_{index:03d}.jpg"), "wb") as handle:
+                handle.write(b"photo")
+        with open(os.path.join(library_path, "notes.txt"), "w", encoding="utf-8") as handle:
+            handle.write("notes")
+
+        legacy_warning = photo_app.analyze_general_purpose_folder(library_path, media_count=20)
+        convert_warning = photo_app.analyze_convert_to_library_folder(library_path, media_count=20)
+
+        self.assertTrue(legacy_warning["show"])
+        self.assertTrue(convert_warning["show"])
+        self.assertIn("busy_mixed_root", legacy_warning["reasons"])
+        self.assertIn("busy_mixed_workspace_root", convert_warning["reasons"])
 
 
 if __name__ == "__main__":

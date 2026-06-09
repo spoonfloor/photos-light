@@ -3,7 +3,7 @@
   <div class="import-card">
     <!-- Header -->
     <div class="import-header">
-      <span class="import-title">Import</span>
+      <span class="import-title">Add photos</span>
       <button class="import-close-btn" id="importCloseBtn" aria-label="Close">
         <span class="material-symbols-outlined">close</span>
       </button>
@@ -13,6 +13,21 @@
     <div class="import-progress-section">
       <div class="import-status-text" id="importStatusText">
         Preparing import
+      </div>
+
+      <div class="import-stats" id="importPreflightStats" style="display: none">
+        <span class="import-stat">
+          <span class="import-stat-label">Photos:</span>
+          <span class="import-stat-value" id="importPhotoCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Videos:</span>
+          <span class="import-stat-value" id="importVideoCount">0</span>
+        </span>
+        <span class="import-stat">
+          <span class="import-stat-label">Total:</span>
+          <span class="import-stat-value" id="importTotalCount">0</span>
+        </span>
       </div>
 
       <div class="import-stats" id="importStats" style="display: none">
@@ -59,6 +74,13 @@
         style="display: none"
       >
         Cancel
+      </button>
+      <button
+        class="btn btn-primary"
+        id="importContinueBtn"
+        style="display: none"
+      >
+        Continue
       </button>
       <button
         class="btn btn-secondary"

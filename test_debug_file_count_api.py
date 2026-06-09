@@ -52,7 +52,7 @@ class DebugFileCountApiTest(unittest.TestCase):
         ) = self.original_paths
         self.tmpdir.cleanup()
 
-    def test_debug_file_count_groups_pixel_duplicates_and_counts_non_media(self):
+    def test_debug_file_count_uses_hash_duplicates_and_counts_non_media(self):
         keep_path = os.path.join(self.scan_path, "keep.png")
         dup_path = os.path.join(self.scan_path, "dup.png")
         note_path = os.path.join(self.scan_path, "notes.txt")
@@ -84,8 +84,8 @@ class DebugFileCountApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
 
-        self.assertEqual(payload["unique_media_count"], 1)
-        self.assertEqual(payload["duplicate_media_count"], 1)
+        self.assertEqual(payload["unique_media_count"], 2)
+        self.assertEqual(payload["duplicate_media_count"], 0)
         self.assertEqual(payload["other_file_count"], 1)
         self.assertCountEqual(payload["files"], [keep_path, dup_path, note_path])
         self.assertEqual(len(payload["file_buckets"]), len(payload["files"]))
@@ -93,10 +93,8 @@ class DebugFileCountApiTest(unittest.TestCase):
             os.path.basename(p): b for p, b in zip(payload["files"], payload["file_buckets"])
         }
         self.assertEqual(by_base["notes.txt"], "other_files")
-        self.assertEqual(
-            {by_base["keep.png"], by_base["dup.png"]},
-            {"unique_media", "duplicate_media"},
-        )
+        self.assertEqual(by_base["keep.png"], "unique_media")
+        self.assertEqual(by_base["dup.png"], "unique_media")
 
     def test_debug_file_count_buckets_unreadable_media_as_other(self):
         fake_png_path = os.path.join(self.scan_path, "broken.png")

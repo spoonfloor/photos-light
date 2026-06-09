@@ -64,6 +64,12 @@ class ImportInvarianceContractTest(unittest.TestCase):
         conn.close()
         return row
 
+    def _photo_count(self, db_path):
+        conn = sqlite3.connect(db_path)
+        count = conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+        conn.close()
+        return count
+
     def _import_photo(self, *, library_path, db_path, source_name, source_bytes, exif_date, mtime):
         photo_app.update_app_paths(library_path, db_path)
         client = photo_app.app.test_client()
@@ -188,6 +194,62 @@ class ImportInvarianceContractTest(unittest.TestCase):
         self.assertEqual(row["date_taken"], UNKNOWN_PHOTO_DATE_TAKEN)
         self.assertTrue(row["current_path"].startswith("1900/1900-01-01/"))
         self.assertIn(UNKNOWN_PHOTO_DATE_TAKEN.encode("utf-8"), stored_bytes)
+
+    def test_second_same_photo_import_reports_duplicate_without_new_row(self):
+        source_bytes = b"mickey-photo-duplicate"
+        exif_date = "2026:04:12 09:30:15"
+        library_path, db_path = self._create_library("library-duplicate")
+
+        self._import_photo(
+            library_path=library_path,
+            db_path=db_path,
+            source_name="dup-a.jpg",
+            source_bytes=source_bytes,
+            exif_date=exif_date,
+            mtime=100,
+        )
+
+        photo_app.update_app_paths(library_path, db_path)
+        client = photo_app.app.test_client()
+        duplicate_path = os.path.join(self.tmpdir.name, "dup-b.jpg")
+        with open(duplicate_path, "wb") as fh:
+            fh.write(source_bytes)
+
+        def fake_write_photo_exif(file_path, target_date):
+            with open(file_path, "ab") as fh:
+                fh.write(b"|canonical-date|" + target_date.encode("utf-8"))
+
+        with patch.object(photo_app, "extract_exif_date", return_value=exif_date), patch.object(
+            photo_app,
+            "bake_orientation",
+            return_value=(False, "No orientation flag", None),
+        ), patch.object(
+            photo_app,
+            "get_image_dimensions",
+            return_value=(640, 480),
+        ), patch.object(
+            photo_app,
+            "extract_exif_rating",
+            return_value=None,
+        ), patch.object(
+            photo_app,
+            "strip_exif_rating",
+            return_value=True,
+        ), patch.object(
+            photo_app,
+            "write_photo_exif",
+            side_effect=fake_write_photo_exif,
+        ):
+            response = client.post(
+                "/api/photos/import-from-paths",
+                json={"paths": [duplicate_path]},
+                buffered=True,
+            )
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"duplicates": 1', body)
+        self.assertEqual(self._photo_count(db_path), 1)
 
     def test_clean_library_is_noop_for_already_canonical_import(self):
         source_bytes = b"mickey-photo-clean-idempotent"

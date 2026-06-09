@@ -13,7 +13,7 @@
         </button>
       </div>
       <p class="picker-subtitle" id="folderPickerSubtitle">
-        Select an existing library folder (or choose where to create one).
+        Select a photo library folder to open.
       </p>
     </div>
 
@@ -24,6 +24,8 @@
     <div class="selected-path">
       <p>Selected:</p>
       <p id="folderPickerSelectedPath">No path selected</p>
+      <p class="picker-selection-hint" id="folderPickerSelectionHint" hidden></p>
+      <p class="picker-convert-verdict" id="folderPickerConvertVerdict" hidden></p>
     </div>
 
     <div class="picker-actions">
@@ -39,7 +41,7 @@
         Go back
       </button>
       <button class="btn btn-primary" id="folderPickerChooseBtn" type="button">
-        Continue
+        Open
       </button>
     </div>
   </div>

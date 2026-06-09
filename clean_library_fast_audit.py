@@ -32,6 +32,11 @@ from library_layout import (
     is_library_metadata_file,
     resolve_db_path,
 )
+from normalization_contract import (
+    canonical_path_issue_message,
+    compute_content_hash,
+    expected_canonical_rel_path_from_db_date,
+)
 
 from make_library_perfect_legacy import (
     format_issue,
@@ -155,6 +160,32 @@ def _basename_layout_issue(rel_path: str) -> Optional[Dict[str, str]]:
     return None
 
 
+def _canonical_path_issue(
+    rel_path: str,
+    *,
+    content_hash: Optional[str] = None,
+    date_taken: Optional[str] = None,
+) -> Optional[Dict[str, str]]:
+    if content_hash and date_taken:
+        try:
+            expected_rel = expected_canonical_rel_path_from_db_date(
+                date_taken,
+                content_hash,
+                os.path.splitext(rel_path)[1].lower(),
+            )
+        except (TypeError, ValueError):
+            expected_rel = None
+
+        if expected_rel and expected_rel != rel_path:
+            return format_issue(
+                "misnamed_or_misfiled",
+                rel_path,
+                canonical_path_issue_message(expected_rel),
+            )
+
+    return _basename_layout_issue(rel_path)
+
+
 def _raise_if_cancelled(cancel_check: CancelCheck) -> None:
     if cancel_check and cancel_check():
         raise FastAuditCancelled()
@@ -204,7 +235,7 @@ def run_fast_library_audit(
         db_conn = sqlite3.connect(f"file:{resolved_db}?mode=ro", uri=True)
         db_conn.row_factory = sqlite3.Row
         cursor = db_conn.cursor()
-        cursor.execute("SELECT current_path, content_hash, file_type FROM photos")
+        cursor.execute("SELECT current_path, content_hash, file_type, date_taken FROM photos")
         db_rows = cursor.fetchall()
         db_by_path = {row["current_path"]: row for row in db_rows}
 
@@ -249,10 +280,6 @@ def run_fast_library_audit(
 
             active_media_paths.add(rel_path)
 
-            layout_issue = _basename_layout_issue(rel_path)
-            if layout_issue is not None:
-                issues.append(layout_issue)
-
             if include_metadata_checks:
                 file_type = media_kind_for_extension(ext) or "photo"
                 if file_type == "photo":
@@ -264,9 +291,13 @@ def run_fast_library_audit(
                     issues.append(format_issue("rating_zero", rel_path))
 
             file_hash: Optional[str] = None
+            row = db_by_path.get(rel_path)
             if include_hash_checks:
                 try:
-                    file_hash = compute_hash_legacy(full_path)
+                    file_hash = compute_content_hash(
+                        full_path,
+                        compute_hash=compute_hash_legacy,
+                    )
                 except Exception:
                     issues.append(format_issue("corrupted_media", rel_path))
                     continue
@@ -277,7 +308,6 @@ def run_fast_library_audit(
                         (rel_path, get_birth_time(stat_result))
                     )
 
-                row = db_by_path.get(rel_path)
                 if row is not None and file_hash and row["content_hash"] != file_hash:
                     issues.append(
                         format_issue(
@@ -296,6 +326,14 @@ def run_fast_library_audit(
                             f"db_type={row['file_type']} disk_type={expected_type}",
                         )
                     )
+
+            layout_issue = _canonical_path_issue(
+                rel_path,
+                content_hash=file_hash,
+                date_taken=(row["date_taken"] if row is not None else None),
+            )
+            if layout_issue is not None:
+                issues.append(layout_issue)
 
     _raise_if_cancelled(cancel_check)
     if include_hash_checks:

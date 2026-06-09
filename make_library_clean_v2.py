@@ -73,6 +73,18 @@ from clean_library_inventory import (
     format_about_duration,
     inventory_media_library,
 )
+from normalization_contract import compute_duplicate_key
+from normalization_repair import (
+    RepairDependencies,
+    RepairFileError,
+    RepairPhaseDependencies,
+    RepairPhaseState,
+    RepairScanDependencies,
+    iter_repair_events,
+    normalize_repair_file,
+    normalize_repair_scan_identity,
+    plan_repair_duplicate_decisions,
+)
 from photo_canonicalization import (
     UNKNOWN_PHOTO_DATE_TAKEN,
     canonicalize_photo_date,
@@ -290,12 +302,10 @@ def abandon_clean_library_checkpoint(checkpoint_path: str) -> None:
 
 def _compute_photo_duplicate_key(full_path: str, fallback_hash: Optional[str] = None) -> str:
     """Duplicate key === file content hash (pixel-level dedupe excluded from spec)."""
-    if fallback_hash:
-        return fallback_hash
-    file_hash, _ = compute_hash_legacy(full_path)
-    if not file_hash:
+    duplicate_key = compute_duplicate_key(full_path, fallback_hash=fallback_hash)
+    if not duplicate_key:
         raise CleanLibraryError(f"Failed to compute duplicate key for {full_path}")
-    return file_hash
+    return duplicate_key
 
 def get_birth_time(stat_result: os.stat_result) -> float:
     """Use birthtime when available, otherwise fall back to mtime."""
@@ -1200,87 +1210,30 @@ class LibraryCleaner:
                 self._emit_stats_feedback()
                 self._raise_if_cancelled()
 
-            if self._phase_is_before(resume_phase, "dedupe_complete"):
-                self._raise_if_cancelled()
-                self._current_phase = "dedupe"
-                self._flush_checkpoint(records=records)
-                self._emit({"type": "phase", "phase": "dedupe", "status": "starting"})
-                deduped = self.trash_duplicates(records)
-                records = deduped
-                self._current_phase = "dedupe_complete"
-                self._flush_checkpoint(records=records)
-                self._emit(
-                    {
-                        "type": "phase",
-                        "phase": "dedupe",
-                        "status": "complete",
-                        "remaining": len(deduped),
-                    }
-                )
-                self._emit_stats_feedback()
-                self._raise_if_cancelled()
-            else:
-                deduped = records
-
-            if self._phase_is_before(resume_phase, "canonicalize_complete"):
-                self._raise_if_cancelled()
-                self._current_phase = "canonicalize"
-                self._flush_checkpoint(records=deduped)
-                self._emit(
-                    {
-                        "type": "phase",
-                        "phase": "canonicalize",
-                        "status": "starting",
-                        "total": len(deduped),
-                        "resumed_index": self._canonicalize_index,
-                    }
-                )
-                canonicalized = self.move_to_canonical_locations(
-                    deduped,
-                    start_index=self._canonicalize_index,
-                )
-                records = canonicalized
-                self._current_phase = "canonicalize_complete"
-                self._flush_checkpoint(records=records)
-                self._emit({"type": "phase", "phase": "canonicalize", "status": "complete"})
-                self._emit_stats_feedback()
-                self._raise_if_cancelled()
-            else:
-                canonicalized = records
-
-            if self._phase_is_before(resume_phase, "folders_complete"):
-                self._raise_if_cancelled()
-                self.stats["metadata_fixed"] = sum(
-                    1 for record in canonicalized if record.metadata_cleaned
-                )
-                self._current_phase = "folders"
-                self._flush_checkpoint(records=canonicalized)
-                self._emit({"type": "phase", "phase": "folders", "status": "starting"})
-                self.remove_empty_noncanonical_folders()
-                self._current_phase = "folders_complete"
-                self._flush_checkpoint(records=canonicalized)
-                self._emit({"type": "phase", "phase": "folders", "status": "complete"})
-                self._emit_stats_feedback()
-                self._raise_if_cancelled()
-
-            if self._phase_is_before(resume_phase, "rebuild_db_complete"):
-                self._raise_if_cancelled()
-                self._current_phase = "rebuild_db"
-                self._flush_checkpoint(records=canonicalized)
-                self._emit(
-                    {
-                        "type": "phase",
-                        "phase": "rebuild_db",
-                        "status": "starting",
-                        "total": len(canonicalized),
-                    }
-                )
-                self.rebuild_photos_table(canonicalized)
-                self._current_phase = "rebuild_db_complete"
-                self._flush_checkpoint(records=canonicalized)
-                self._emit({"type": "phase", "phase": "rebuild_db", "status": "complete"})
-                self._emit_stats_feedback()
-                self._raise_if_cancelled()
+            repair_state = RepairPhaseState(
+                records=records,
+                canonicalize_index=self._canonicalize_index,
+            )
+            repair_deps = RepairPhaseDependencies(
+                phase_is_before=self._phase_is_before,
+                raise_if_cancelled=self._raise_if_cancelled,
+                set_current_phase=lambda phase: setattr(self, "_current_phase", phase),
+                flush_checkpoint=self._flush_checkpoint,
+                emit_stats_feedback=self._emit_stats_feedback,
+                set_metadata_fixed=lambda count: self.stats.__setitem__("metadata_fixed", count),
+                trash_duplicates=self.trash_duplicates,
+                move_to_canonical_locations=self.move_to_canonical_locations,
+                remove_empty_noncanonical_folders=self.remove_empty_noncanonical_folders,
+                rebuild_photos_table=self.rebuild_photos_table,
+            )
+            for event in iter_repair_events(
+                repair_state,
+                resume_phase=resume_phase,
+                deps=repair_deps,
+            ):
+                self._emit(event)
+            records = repair_state.records
+            canonicalized = repair_state.canonicalized or records
 
             if self._phase_is_before(resume_phase, "audit_complete"):
                 self._raise_if_cancelled()
@@ -1728,103 +1681,39 @@ class LibraryCleaner:
             return None
 
         stat_result = os.stat(full_path)
-        file_type = media_kind_for_extension(ext) or "photo"
-        metadata_cleaned = False
-        has_metadata_cleanup_signal = False
-
-        if file_type == "photo":
-            assert self.hash_cache is not None
-            original_orientation = get_orientation_flag(full_path)
-            original_rating = extract_exif_rating(full_path)
-            has_metadata_cleanup_signal = (
-                original_orientation not in (None, 1)
-                and can_bake_losslessly(full_path)
-            ) or original_rating == 0
-            try:
-                canonical_photo = canonicalize_photo_file(
-                    full_path,
+        assert self.hash_cache is not None
+        try:
+            identity = normalize_repair_scan_identity(
+                full_path,
+                ext=ext,
+                stat_result=stat_result,
+                deps=RepairScanDependencies(
+                    hash_cache=self.hash_cache,
                     extract_exif_date=extract_exif_date,
-                    bake_orientation=bake_orientation,
-                    get_dimensions=lambda path: read_dimensions(path),
-                    compute_hash=lambda path: self.hash_cache.get_hash(path)[0],
-                    write_photo_exif=write_photo_date_metadata,
                     extract_exif_rating=extract_exif_rating,
                     strip_exif_rating=strip_exif_rating,
-                )
-            except Exception as exc:
-                raise CleanLibraryError(str(exc)) from exc
-
-            if canonical_photo.orientation_baked:
-                self.log("orientation_baked", file=rel_path, message="canonicalized")
-            else:
-                orientation = get_orientation_flag(full_path)
-                if orientation not in (None, 1) and ext in LOSSLESS_ROTATION_EXTENSIONS:
-                    self.log("orientation_kept", file=rel_path, message=str(orientation))
-
-            if canonical_photo.rating_stripped:
-                self.log("rating_stripped", file=rel_path)
-
-            if canonical_photo.metadata_changed and not (
-                canonical_photo.orientation_baked or canonical_photo.rating_stripped
-            ):
-                self.log("date_metadata_canonicalized", file=rel_path, date=canonical_photo.date_taken)
-
-            valid, _ = verify_media_file(full_path)
-            if not valid:
-                self.move_to_trash(full_path, "corrupted")
-                self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
-                return None
-
-            content_hash = canonical_photo.content_hash
-            duplicate_key = canonical_photo.content_hash
-            date_taken = canonical_photo.date_taken
-            date_obj = canonical_photo.date_obj
-            width = canonical_photo.width
-            height = canonical_photo.height
-            rating = canonical_photo.rating
-            metadata_cleaned = canonical_photo.metadata_changed
-        else:
-            orientation = get_orientation_flag(full_path)
-            has_metadata_cleanup_signal = (
-                orientation not in (None, 1)
-                and ext in LOSSLESS_ROTATION_EXTENSIONS
+                    get_orientation_flag=get_orientation_flag,
+                    can_bake_losslessly=can_bake_losslessly,
+                    bake_orientation=bake_orientation,
+                    canonicalize_photo_file=canonicalize_photo_file,
+                    write_photo_date_metadata=write_photo_date_metadata,
+                    read_dimensions=read_dimensions,
+                    lossless_rotation_extensions=LOSSLESS_ROTATION_EXTENSIONS,
+                ),
             )
-            if orientation not in (None, 1) and ext in LOSSLESS_ROTATION_EXTENSIONS:
-                baked, message, baked_orientation = bake_orientation(full_path)
-                if baked:
-                    metadata_cleaned = True
-                    self.log("orientation_baked", file=rel_path, message=message)
-                elif baked_orientation is not None:
-                    self.log("orientation_kept", file=rel_path, message=message)
+        except RepairFileError as exc:
+            raise CleanLibraryError(str(exc).replace(full_path, rel_path)) from exc
+        except Exception as exc:
+            raise CleanLibraryError(str(exc)) from exc
 
-            rating = extract_exif_rating(full_path)
-            if rating == 0:
-                has_metadata_cleanup_signal = True
-                if not strip_exif_rating(full_path):
-                    raise CleanLibraryError(f"Failed to strip rating=0 from {rel_path}")
-                metadata_cleaned = True
-                self.log("rating_stripped", file=rel_path)
+        for event in identity.log_events if identity is not None else []:
+            self.log(event.action, file=rel_path, **event.payload)
 
-            valid, _ = verify_media_file(full_path)
-            if not valid:
-                self.move_to_trash(full_path, "corrupted")
-                self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
-                return None
-
-            assert self.hash_cache is not None
-            content_hash, _ = self.hash_cache.get_hash(full_path)
-            if not content_hash:
-                self.move_to_trash(full_path, "corrupted")
-                self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
-                return None
-            duplicate_key = content_hash
-
-            date_taken, date_obj = parse_metadata_datetime(
-                extract_exif_date(full_path),
-                stat_result.st_mtime,
-            )
-            width, height = read_dimensions(full_path)
-            rating = extract_exif_rating(full_path)
+        valid, _ = verify_media_file(full_path)
+        if not valid or identity is None:
+            self.move_to_trash(full_path, "corrupted")
+            self._resolve_signal_paths({"unsupported_files": [rel_path]}, action="trash_corrupted")
+            return None
 
         return MediaRecord(
             original_filename=original_filename,
@@ -1832,16 +1721,16 @@ class LibraryCleaner:
             full_path=full_path,
             rel_path=rel_path,
             ext=ext,
-            file_type=file_type,
-            content_hash=content_hash,
-            duplicate_key=duplicate_key,
-            date_taken=date_taken,
-            date_obj=date_obj,
-            width=width,
-            height=height,
-            rating=rating if rating != 0 else None,
-            metadata_cleaned=metadata_cleaned,
-            has_metadata_cleanup_signal=has_metadata_cleanup_signal,
+            file_type=identity.file_type,
+            content_hash=identity.content_hash,
+            duplicate_key=identity.duplicate_key,
+            date_taken=identity.date_taken,
+            date_obj=identity.date_obj,
+            width=identity.width,
+            height=identity.height,
+            rating=identity.rating if identity.rating != 0 else None,
+            metadata_cleaned=identity.metadata_cleaned,
+            has_metadata_cleanup_signal=identity.has_metadata_cleanup_signal,
             birth_time=get_birth_time(stat_result),
             modified_time=float(stat_result.st_mtime),
         )
@@ -1918,14 +1807,14 @@ class LibraryCleaner:
         )
 
     def trash_duplicates(self, records: List[MediaRecord]) -> List[MediaRecord]:
-        live_records = [record for record in records if os.path.exists(record.full_path)]
-        grouped: Dict[str, List[MediaRecord]] = {}
-        for record in live_records:
-            grouped.setdefault(record.duplicate_key, []).append(record)
+        decisions = plan_repair_duplicate_decisions(
+            records,
+            sort_key=self.duplicate_sort_key,
+        )
 
         survivors: List[MediaRecord] = []
-        total_groups = len(grouped)
-        for gi, (duplicate_key, group) in enumerate(grouped.items(), start=1):
+        total_groups = len(decisions)
+        for gi, decision in enumerate(decisions, start=1):
             self._raise_if_cancelled()
             self._emit(
                 {
@@ -1935,16 +1824,15 @@ class LibraryCleaner:
                     "total": max(total_groups, 1),
                 }
             )
-            ordered = sorted(group, key=self.duplicate_sort_key)
-            winner = ordered[0]
+            winner = decision.winner
             survivors.append(winner)
-            loser_count = max(0, len(ordered) - 1)
-            duplicate_group_paths = {record.source_rel_path for record in ordered}
+            loser_count = len(decision.losers)
+            duplicate_group_paths = {record.source_rel_path for record in decision.records}
             planned_duplicate_paths = sorted(
                 duplicate_group_paths & self._remaining_operation_paths.get("duplicates", set())
             )
 
-            for loser in ordered[1:]:
+            for loser in decision.losers:
                 self.move_to_trash(loser.full_path, "duplicates")
                 self.stats["duplicates_trashed"] += 1
                 self._resolve_signal_paths(
@@ -1958,7 +1846,7 @@ class LibraryCleaner:
                     "duplicate_trashed",
                     winner=winner.rel_path,
                     loser=loser.rel_path,
-                    duplicate_key=duplicate_key,
+                    duplicate_key=decision.duplicate_key,
                 )
             if loser_count:
                 self._resolve_signal_paths(
@@ -1987,6 +1875,8 @@ class LibraryCleaner:
                 occupied.add(target_rel)
                 canonicalized.append(record)
 
+        repair_deps = RepairDependencies(library_path=self.library_path)
+
         for idx in range(start_index, len(sorted_records)):
             self._raise_if_cancelled()
             record = sorted_records[idx]
@@ -2003,34 +1893,20 @@ class LibraryCleaner:
             if target_rel in occupied:
                 raise CleanLibraryError(f"Canonical path collision for {target_rel}")
 
-            target_full = os.path.join(self.library_path, target_rel)
-            source_rel_path = record.rel_path
-            if not os.path.exists(record.full_path):
-                if os.path.exists(target_full):
-                    record.full_path = target_full
-                    record.rel_path = target_rel
-                else:
-                    raise CleanLibraryError(
-                        f"Missing media file during canonicalize resume: {record.source_rel_path}"
-                    )
-            elif os.path.abspath(record.full_path) != os.path.abspath(target_full):
-                os.makedirs(os.path.dirname(target_full), exist_ok=True)
-                if os.path.exists(target_full):
-                    raise CleanLibraryError(
-                        f"Refusing to overwrite existing file at canonical path {target_rel}"
-                    )
-                shutil.move(record.full_path, target_full)
-                self.stats["media_moved"] += 1
-                self.log("media_moved", source=record.rel_path, destination=target_rel)
-                record.full_path = target_full
-                record.rel_path = target_rel
+            try:
+                repair_result = normalize_repair_file(record, repair_deps)
+            except RepairFileError as exc:
+                raise CleanLibraryError(str(exc)) from exc
 
-            resolved_paths: Dict[str, List[str]] = {}
-            if source_rel_path != target_rel:
-                resolved_paths["misfiled_media"] = [source_rel_path]
-            if record.has_metadata_cleanup_signal:
-                resolved_paths.setdefault("metadata_cleanup", []).append(record.source_rel_path)
-            self._resolve_signal_paths(resolved_paths, action="canonicalize")
+            if repair_result.moved:
+                self.stats["media_moved"] += 1
+                self.log(
+                    "media_moved",
+                    source=repair_result.source_rel_path,
+                    destination=repair_result.target_rel_path,
+                )
+
+            self._resolve_signal_paths(repair_result.issue_paths, action="canonicalize")
 
             occupied.add(target_rel)
             canonicalized.append(record)

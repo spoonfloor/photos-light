@@ -7,6 +7,14 @@ from unittest.mock import patch
 from clean_library_fast_audit import FastAuditCancelled, run_fast_library_audit
 from db_schema import create_database_schema
 from library_layout import canonical_db_path
+from normalization_contract import (
+    INGEST_POLICY,
+    REPAIR_POLICY,
+    NormalizationMode,
+    compute_duplicate_key,
+    expected_canonical_rel_path_from_db_date,
+    normalize_hash_result,
+)
 
 
 class CleanLibraryFastAuditTest(unittest.TestCase):
@@ -119,6 +127,85 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
 
             dupes = [issue for issue in issues if issue["kind"] == "duplicate_media"]
             self.assertEqual(len(dupes), 1)
+
+    def test_shared_normalization_contract_is_hash_based(self):
+        self.assertEqual(NormalizationMode.INGEST.value, "ingest")
+        self.assertFalse(INGEST_POLICY.blocking_audit)
+        self.assertTrue(REPAIR_POLICY.blocking_audit)
+        self.assertEqual(INGEST_POLICY.source_scope, "external")
+        self.assertEqual(REPAIR_POLICY.source_scope, "library")
+        self.assertEqual(INGEST_POLICY.duplicate_action, "skip")
+        self.assertEqual(REPAIR_POLICY.duplicate_action, "trash_loser")
+        self.assertEqual(INGEST_POLICY.misfiled_action, "copy_to_canonical")
+        self.assertEqual(REPAIR_POLICY.misfiled_action, "move_to_canonical")
+        self.assertEqual(INGEST_POLICY.unsupported_action, "reject")
+        self.assertEqual(REPAIR_POLICY.unsupported_action, "trash")
+        self.assertEqual(normalize_hash_result(("abc123", False)), "abc123")
+        self.assertEqual(
+            compute_duplicate_key(
+                "/tmp/not-read.jpg",
+                fallback_hash="f" * 64,
+            ),
+            "f" * 64,
+        )
+        self.assertEqual(
+            expected_canonical_rel_path_from_db_date(
+                "2026:04:12 09:30:15",
+                "abc12345" + ("0" * 56),
+                ".JPG",
+            ),
+            os.path.join("2026", "2026-04-12", "img_20260412_abc12345.jpg"),
+        )
+
+    def test_fast_audit_uses_computed_canonical_path_not_regex_only(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            actual_hash = "abc12345" + ("0" * 56)
+            rel_path = os.path.join("2026", "2026-04-12", "img_20260412_deadbeef.jpg")
+            full_path = os.path.join(tmpdir, rel_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "wb") as handle:
+                handle.write(b"photo-bytes")
+
+            conn.execute(
+                """
+                INSERT INTO photos (
+                    original_filename, current_path, date_taken, content_hash,
+                    file_size, file_type, width, height
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "img_20260412_deadbeef.jpg",
+                    rel_path,
+                    "2026:04:12 09:30:15",
+                    actual_hash,
+                    os.path.getsize(full_path),
+                    "photo",
+                    1,
+                    1,
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            with patch(
+                "clean_library_fast_audit.verify_media_file",
+                return_value=(True, "mock"),
+            ), patch(
+                "clean_library_fast_audit.compute_hash_legacy",
+                return_value=actual_hash,
+            ), patch(
+                "clean_library_fast_audit.extract_exif_rating",
+                return_value=None,
+            ), patch(
+                "clean_library_fast_audit.get_orientation_flag",
+                return_value=1,
+            ):
+                issues = run_fast_library_audit(tmpdir, db_path=db_path)
+
+            misfiled = [issue for issue in issues if issue["kind"] == "misnamed_or_misfiled"]
+            self.assertEqual(len(misfiled), 1)
+            self.assertIn("img_20260412_abc12345.jpg", misfiled[0]["detail"])
 
     def test_audit_progress_uses_fixed_total(self):
         with TemporaryDirectory() as tmpdir:

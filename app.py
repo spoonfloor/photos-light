@@ -74,6 +74,7 @@ from library_sync import (
     count_media_files_by_type,
     estimate_duration,
 )
+from clean_library_inventory import estimate_clean_duration_seconds, format_about_duration
 from library_layout import (
     LIBRARY_METADATA_DIR,
     ROOT_INFRASTRUCTURE_DIRS,
@@ -86,6 +87,7 @@ from library_layout import (
     resolve_db_path,
 )
 from media_finalization import finalize_mutated_media
+from normalization_ingest import IngestDependencies, iter_ingest_events
 from photo_canonicalization import (
     CanonicalizedPhoto,
     canonicalize_photo_file,
@@ -2611,6 +2613,32 @@ def scan_import_paths():
         media_files = []
         files_count = 0
         folders_count = 0
+        photo_count = 0
+        video_count = 0
+        photo_bytes = 0
+        video_bytes = 0
+
+        def add_media_file(full_path):
+            nonlocal photo_count, video_count, photo_bytes, video_bytes
+
+            _, ext = os.path.splitext(full_path)
+            ext_lower = ext.lower()
+            if ext_lower not in PHOTO_EXTENSIONS and ext_lower not in VIDEO_EXTENSIONS:
+                return False
+
+            media_files.append(full_path)
+            try:
+                size_bytes = os.path.getsize(full_path)
+            except OSError:
+                size_bytes = 0
+
+            if ext_lower in VIDEO_EXTENSIONS:
+                video_count += 1
+                video_bytes += size_bytes
+            else:
+                photo_count += 1
+                photo_bytes += size_bytes
+            return True
         
         for path in paths:
             if not os.path.exists(path):
@@ -2619,10 +2647,7 @@ def scan_import_paths():
             
             if os.path.isfile(path):
                 # Individual file
-                _, ext = os.path.splitext(path)
-                ext_lower = ext.lower()
-                if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
-                    media_files.append(path)
+                if add_media_file(path):
                     files_count += 1
             
             elif os.path.isdir(path):
@@ -2632,19 +2657,31 @@ def scan_import_paths():
                 
                 for root, dirs, files in os.walk(path):
                     for filename in files:
-                        _, ext = os.path.splitext(filename)
-                        ext_lower = ext.lower()
-                        if ext_lower in PHOTO_EXTENSIONS or ext_lower in VIDEO_EXTENSIONS:
-                            full_path = os.path.join(root, filename)
-                            media_files.append(full_path)
+                        full_path = os.path.join(root, filename)
+                        add_media_file(full_path)
         
         print(f"  ✅ Found {len(media_files)} media files")
         print(f"     {files_count} direct file(s), {folders_count} folder(s) scanned")
+
+        estimated_seconds = estimate_clean_duration_seconds(
+            photo_count=photo_count,
+            video_count=video_count,
+            photo_bytes=photo_bytes,
+            video_bytes=video_bytes,
+        )
+        _seconds, estimated_display = format_about_duration(estimated_seconds)
         
         return jsonify({
             'status': 'success',
             'files': media_files,
             'total_count': len(media_files),
+            'photo_count': photo_count,
+            'video_count': video_count,
+            'photo_bytes': photo_bytes,
+            'video_bytes': video_bytes,
+            'total_bytes': photo_bytes + video_bytes,
+            'estimated_seconds': round(estimated_seconds, 1),
+            'estimated_display': estimated_display,
             'files_selected': files_count,
             'folders_scanned': folders_count
         })
@@ -2763,375 +2800,43 @@ def import_from_paths():
             if not (yield from emit_event('start', {'total': total_files})):
                 return
             
-            # Track results
-            imported_count = 0
-            duplicate_count = 0
-            error_count = 0
-            
             conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Initialize hash cache for this import
-            hash_cache = HashCache(conn)
-            
-            for file_index, source_path in enumerate(file_paths, 1):
-                if client_disconnected:
-                    print(f"🛑 Import stream closed after {imported_count} imported file(s)")
+            ingest_deps = IngestDependencies(
+                library_path=LIBRARY_PATH,
+                hash_cache=HashCache(conn),
+                stage_photo_for_canonicalization=stage_photo_for_canonicalization,
+                cleanup_staged_file=cleanup_staged_file,
+                commit_staged_canonical_photo=commit_staged_canonical_photo,
+                categorize_processing_error=categorize_processing_error,
+                extract_exif_date=extract_exif_date,
+                write_video_metadata=write_video_metadata,
+                finalize_mutated_media=finalize_mutated_media,
+                compute_hash=compute_full_hash,
+                get_dimensions=get_image_dimensions,
+                delete_thumbnail_for_hash=delete_thumbnail_for_hash,
+                remove_source_after_commit=False,
+            )
+
+            for event_name, payload in iter_ingest_events(
+                conn,
+                file_paths,
+                ingest_deps,
+                stop_check=lambda: client_disconnected,
+            ):
+                if event_name == 'complete':
+                    print(f"\n{'='*60}")
+                    print("IMPORT COMPLETE:")
+                    print(f"  Imported: {payload.get('imported', 0)}")
+                    print(f"  Duplicates: {payload.get('duplicates', 0)}")
+                    print(f"  Errors: {payload.get('errors', 0)}")
+                    print(f"{'='*60}\n")
+
+                if not (yield from emit_event(event_name, payload)):
                     break
 
-                try:
-                    if not os.path.exists(source_path):
-                        print(f"{file_index}. ❌ File not found: {source_path}")
-                        error_count += 1
-                        if not (yield from emit_event('progress', {
-                            'imported': imported_count,
-                            'duplicates': duplicate_count,
-                            'errors': error_count,
-                            'current': file_index,
-                            'total': total_files
-                        })):
-                            break
-                        continue
-                    
-                    filename = os.path.basename(source_path)
-                    print(f"{file_index}. Processing: {filename}")
-                    
-                    _, ext = os.path.splitext(filename)
-                    file_type = 'video' if ext.lower() in VIDEO_EXTENSIONS else 'photo'
-
-                    if file_type == 'photo':
-                        staged_path = None
-                        try:
-                            staged_photo = stage_photo_for_canonicalization(
-                                source_path,
-                                temp_prefix='import_photo_',
-                            )
-                            staged_path = staged_photo.staged_path
-                            canonical_photo = staged_photo.canonical_photo
-                            print(f"   📦 Staged photo for canonicalization: {os.path.basename(staged_path)}")
-                            print(
-                                f"   🔎 Canonical photo: date={canonical_photo.date_taken} "
-                                f"hash={canonical_photo.content_hash[:16]}... "
-                                f"path={canonical_photo.relative_path}"
-                            )
-
-                            cursor.execute(
-                                "SELECT id, current_path FROM photos WHERE content_hash = ?",
-                                (canonical_photo.content_hash,),
-                            )
-                            existing = cursor.fetchone()
-                            print(
-                                f"   🔎 Import canonical preflight: source={source_path} "
-                                f"final_hash={canonical_photo.content_hash} "
-                                f"existing_match={existing['id'] if existing else None} "
-                                f"existing_path={existing['current_path'] if existing else None}"
-                            )
-
-                            if existing:
-                                print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
-                                cleanup_staged_file(staged_path)
-                                staged_path = None
-                                duplicate_count += 1
-                                if not (yield from emit_event('progress', {
-                                    'imported': imported_count,
-                                    'duplicates': duplicate_count,
-                                    'errors': error_count,
-                                    'current': file_index,
-                                    'total': total_files
-                                })):
-                                    break
-                                continue
-
-                            relative_path = canonical_photo.relative_path
-                            target_path = os.path.join(LIBRARY_PATH, relative_path)
-                            if os.path.exists(target_path):
-                                print(f"   ⏭️  Duplicate canonical path already exists: {relative_path}")
-                                cleanup_staged_file(staged_path)
-                                staged_path = None
-                                duplicate_count += 1
-                                if not (yield from emit_event('progress', {
-                                    'imported': imported_count,
-                                    'duplicates': duplicate_count,
-                                    'errors': error_count,
-                                    'current': file_index,
-                                    'total': total_files
-                                })):
-                                    break
-                                continue
-
-                            photo_id, target_path = commit_staged_canonical_photo(
-                                conn,
-                                library_path=LIBRARY_PATH,
-                                source_path=source_path,
-                                original_filename=filename,
-                                staged_photo=staged_photo,
-                                remove_source_after_commit=False,
-                            )
-                            staged_path = None
-                            print(f"   ✅ Canonical photo stored at: {relative_path}")
-                            print(
-                                f"   ✅ Imported canonical photo: photo_id={photo_id} "
-                                f"path={relative_path} hash={canonical_photo.content_hash[:8]}"
-                            )
-                        except Exception as exif_error:
-                            print(f"   ❌ EXIF write failed: {exif_error}")
-                            cleanup_staged_file(staged_path)
-                            category, user_message = categorize_processing_error(exif_error)
-
-                            if category == 'duplicate':
-                                duplicate_count += 1
-                            else:
-                                error_count += 1
-
-                            if not (yield from emit_event('rejected', {
-                                'file': filename,
-                                'source_path': source_path,
-                                'reason': user_message,
-                                'category': category,
-                                'technical_error': str(exif_error)
-                            })):
-                                break
-                            continue
-                    else:
-                        # Hash the file (with caching)
-                        content_hash, cache_hit = hash_cache.get_hash(source_path)
-                        if cache_hit:
-                            print(f"   Hash: {content_hash[:16]}... (cached)")
-                        else:
-                            print(f"   Hash: {content_hash[:16]}...")
-
-                        if content_hash is None:
-                            print(f"   ❌ Failed to hash file")
-                            error_count += 1
-                            if not (yield from emit_event('progress', {
-                                'imported': imported_count,
-                                'duplicates': duplicate_count,
-                                'errors': error_count,
-                                'current': file_index,
-                                'total': total_files
-                            })):
-                                break
-                            continue
-
-                        # Check for duplicates
-                        cursor.execute("SELECT id, current_path FROM photos WHERE content_hash = ?", (content_hash,))
-                        existing = cursor.fetchone()
-                        print(
-                            f"   🔎 Import preflight: source={source_path} "
-                            f"initial_hash={content_hash} "
-                            f"existing_match={existing['id'] if existing else None} "
-                            f"existing_path={existing['current_path'] if existing else None}"
-                        )
-
-                        if existing:
-                            print(f"   ⏭️  Duplicate (existing ID: {existing['id']})")
-                            duplicate_count += 1
-                            if not (yield from emit_event('progress', {
-                                'imported': imported_count,
-                                'duplicates': duplicate_count,
-                                'errors': error_count,
-                                'current': file_index,
-                                'total': total_files
-                            })):
-                                break
-                            continue
-
-                        # Determine date_taken
-                        date_taken, _ = parse_metadata_datetime(
-                            extract_exif_date(source_path),
-                            os.path.getmtime(source_path),
-                        )
-                        print(f"   Date: {date_taken}")
-
-                        # Build target path
-                        relative_path, canonical_name = build_canonical_photo_path(date_taken, content_hash, ext)
-                        target_path = os.path.join(LIBRARY_PATH, relative_path)
-                        target_dir = os.path.dirname(target_path)
-                        os.makedirs(target_dir, exist_ok=True)
-                        base_name, _ = os.path.splitext(canonical_name)
-
-                        # Handle naming collisions
-                        counter = 1
-                        while os.path.exists(target_path):
-                            canonical_name = f"{base_name}_{counter}{ext.lower()}"
-                            relative_path = os.path.join(os.path.dirname(relative_path), canonical_name)
-                            target_path = os.path.join(target_dir, canonical_name)
-                            counter += 1
-
-                        # Insert into DB FIRST (atomic) - dimensions will be updated after baking
-                        file_size = os.path.getsize(source_path)
-
-                        cursor.execute('''
-                            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (relative_path, filename, content_hash, file_size, file_type, date_taken, None, None))
-
-                        photo_id = cursor.lastrowid
-                        conn.commit()
-                        print(f"   DB: Inserted ID {photo_id}")
-
-                        # Copy file to library
-                        shutil.copy2(source_path, target_path)
-                        print(f"   ✅ Copied to: {relative_path}")
-
-                        # Write metadata to file
-                        try:
-                            print(f"   🔧 Writing EXIF metadata...")
-                            write_video_metadata(target_path, date_taken)
-                            finalize_result = finalize_mutated_media(
-                                conn=conn,
-                                photo_id=photo_id,
-                                library_path=LIBRARY_PATH,
-                                current_rel_path=relative_path,
-                                date_taken=date_taken,
-                                old_hash=content_hash,
-                                build_canonical_path=build_canonical_photo_path,
-                                compute_hash=compute_full_hash,
-                                get_dimensions=get_image_dimensions,
-                                delete_thumbnail_for_hash=delete_thumbnail_for_hash,
-                                duplicate_policy='delete',
-                            )
-                            print(
-                                f"   🔎 Import finalize: photo_id={photo_id} "
-                                f"status={finalize_result.status} "
-                                f"final_hash={finalize_result.content_hash} "
-                                f"final_path={finalize_result.current_path} "
-                                f"matched_id={finalize_result.duplicate.photo_id if finalize_result.duplicate else None} "
-                                f"matched_path={finalize_result.duplicate.current_path if finalize_result.duplicate else None}"
-                            )
-                            conn.commit()
-                            if finalize_result.status == 'duplicate_removed':
-                                print("   ⏭️  Duplicate detected after metadata write; removed imported copy")
-                                duplicate_count += 1
-                                if not (yield from emit_event('progress', {
-                                    'imported': imported_count,
-                                    'duplicates': duplicate_count,
-                                    'errors': error_count,
-                                    'current': file_index,
-                                    'total': total_files
-                                })):
-                                    break
-                                continue
-
-                            target_path = finalize_result.full_path
-                            relative_path = finalize_result.current_path
-                            print(
-                                f"   ✅ Finalized import path/hash: "
-                                f"{finalize_result.current_path} ({finalize_result.content_hash[:8]})"
-                            )
-
-                        except Exception as exif_error:
-                            # EXIF write failed - rollback this file
-                            print(f"   ❌ EXIF write failed: {exif_error}")
-
-                            # Clean up: Delete copied file
-                            try:
-                                if os.path.exists(target_path):
-                                    os.remove(target_path)
-                                    print(f"   🗑️  Deleted copied file")
-                            except Exception as cleanup_error:
-                                print(f"   ⚠️  Couldn't delete file: {cleanup_error}")
-
-                            # Clean up: Delete database record
-                            try:
-                                cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
-                                conn.commit()
-                                print(f"   🗑️  Deleted database record (ID: {photo_id})")
-                            except Exception as db_error:
-                                print(f"   ⚠️  Couldn't delete DB record: {db_error}")
-
-                            # Categorize error
-                            error_str = str(exif_error).lower()
-                            if 'timeout' in error_str:
-                                category = 'timeout'
-                                user_message = "Processing timeout (file too large or slow storage)"
-                            # Check for duplicate hash collision (UNIQUE constraint during rehash update)
-                            elif 'unique constraint' in error_str and 'content_hash' in error_str:
-                                category = 'duplicate'
-                                user_message = "Duplicate file (detected after processing)"
-                            # Check for corruption BEFORE tool detection (avoid false positives)
-                            elif ('not a valid' in error_str or 'corrupt' in error_str or
-                                  'invalid data' in error_str or 'moov atom' in error_str):
-                                category = 'corrupted'
-                                user_message = "File corrupted or invalid format"
-                            elif 'not found' in error_str and 'ffmpeg' in error_str:
-                                category = 'missing_tool'
-                                user_message = "Required tool not installed (ffmpeg)"
-                            elif 'permission' in error_str or 'denied' in error_str:
-                                category = 'permission'
-                                user_message = "Permission denied"
-                            else:
-                                category = 'unsupported'
-                                user_message = str(exif_error)
-
-                            # Track rejection count (duplicate vs error)
-                            if category == 'duplicate':
-                                duplicate_count += 1
-                            else:
-                                error_count += 1
-
-                            # Yield rejection event (special type of error with extra metadata)
-                            if not (yield from emit_event('rejected', {
-                                'file': filename,
-                                'source_path': source_path,
-                                'reason': user_message,
-                                'category': category,
-                                'technical_error': str(exif_error)
-                            })):
-                                break
-
-                            # Continue to next file (don't increment imported_count)
-                            continue
-                    
-                    # SUCCESS - file imported with EXIF
-                    imported_count += 1
-                    
-                    if not (yield from emit_event('progress', {
-                        'imported': imported_count,
-                        'duplicates': duplicate_count,
-                        'errors': error_count,
-                        'current': file_index,
-                        'total': total_files,
-                        'photo_id': photo_id
-                    })):
-                        break
-                    
-                except Exception as e:
-                    error_msg = str(e)
-                    print(f"   ❌ Error: {error_msg}")
-                    import traceback
-                    traceback.print_exc()
-                    error_count += 1
-                    if not (yield from emit_event('progress', {
-                        'imported': imported_count,
-                        'duplicates': duplicate_count,
-                        'errors': error_count,
-                        'current': file_index,
-                        'total': total_files,
-                        'error': error_msg,
-                        'error_file': filename
-                    })):
-                        break
-
             if client_disconnected:
-                print(f"\n🛑 IMPORT STOPPED BY CLIENT")
-                print(f"  Imported: {imported_count}")
-                print(f"  Duplicates: {duplicate_count}")
-                print(f"  Errors: {error_count}\n")
+                print("\n🛑 IMPORT STOPPED BY CLIENT\n")
                 return
-            
-            print(f"\n{'='*60}")
-            print(f"IMPORT COMPLETE:")
-            print(f"  Imported: {imported_count}")
-            print(f"  Duplicates: {duplicate_count}")
-            print(f"  Errors: {error_count}")
-            print(f"{'='*60}\n")
-            
-            yield from emit_event('complete', {
-                'imported': imported_count,
-                'duplicates': duplicate_count,
-                'errors': error_count
-            })
             
         except GeneratorExit:
             print("🛑 Import stream disconnected")
@@ -3147,7 +2852,15 @@ def import_from_paths():
             if conn is not None:
                 conn.close()
     
-    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'close',
+        },
+    )
 
 
 @app.route('/api/import/copy-rejected-files', methods=['POST'])
@@ -3888,7 +3601,8 @@ def probe_library_path():
         if not os.path.isdir(library_path):
             return jsonify({'error': 'Path is not a directory'}), 400
 
-        return jsonify(inspect_library_path(library_path))
+        fast = bool(data.get('fast'))
+        return jsonify(inspect_library_path(library_path, fast=fast))
     except Exception as e:
         error_logger.error(f"Library path probe failed: {e}")
         return jsonify({'error': str(e)}), 500
@@ -4325,23 +4039,27 @@ def quarantine_recovery_db(existing_db_path, library_path):
     return quarantined_paths
 
 
-def analyze_general_purpose_folder(library_path, media_count):
-    """Cheap, explainable warning heuristic for desktop/workspace folders."""
+def _empty_folder_warning():
+    return {
+        'show': False,
+        'non_media_count': 0,
+        'visible_root_items': 0,
+        'visible_folder_count': 0,
+        'visible_file_count': 0,
+        'obvious_signals_present': False,
+        'reasons': [],
+    }
+
+
+def _scan_folder_root_warning_signals(library_path):
+    """Shared root scan for folder suitability heuristics."""
     try:
         root_entries = [
             entry for entry in os.listdir(library_path)
             if entry and not entry.startswith('.')
         ]
     except (PermissionError, OSError):
-        return {
-            'show': False,
-            'non_media_count': 0,
-            'visible_root_items': 0,
-            'visible_folder_count': 0,
-            'visible_file_count': 0,
-            'obvious_signals_present': False,
-            'reasons': [],
-        }
+        return None
 
     visible_file_count = 0
     visible_folder_count = 0
@@ -4368,48 +4086,121 @@ def analyze_general_purpose_folder(library_path, media_count):
             if ext in DESKTOP_WARNING_FILE_EXTENSIONS:
                 obvious_signals_present = True
 
-    visible_root_items = visible_file_count + visible_folder_count
-    mixed_file_types_and_folders = visible_root_items >= 15 and visible_file_count > 0 and visible_folder_count > 0
-
-    reasons = []
-    if non_media_count >= 20:
-        reasons.append('many_non_media_files')
-    if media_count >= 0 and non_media_count > media_count * 2:
-        reasons.append('non_media_outnumbers_media')
-    if mixed_file_types_and_folders:
-        reasons.append('busy_mixed_root')
-    if obvious_signals_present:
-        reasons.append('desktop_like_contents')
-
     return {
-        'show': bool(reasons),
         'non_media_count': non_media_count,
-        'visible_root_items': visible_root_items,
+        'visible_root_items': visible_file_count + visible_folder_count,
         'visible_folder_count': visible_folder_count,
         'visible_file_count': visible_file_count,
         'obvious_signals_present': obvious_signals_present,
+    }
+
+
+def _folder_warning_from_scan(scan, reasons):
+    return {
+        'show': bool(reasons),
+        'non_media_count': scan['non_media_count'],
+        'visible_root_items': scan['visible_root_items'],
+        'visible_folder_count': scan['visible_folder_count'],
+        'visible_file_count': scan['visible_file_count'],
+        'obvious_signals_present': scan['obvious_signals_present'],
         'reasons': reasons,
     }
 
 
-def inspect_library_path(library_path):
+def analyze_general_purpose_folder(library_path, media_count):
+    """Cheap, explainable warning heuristic for desktop/workspace folders."""
+    scan = _scan_folder_root_warning_signals(library_path)
+    if scan is None:
+        return _empty_folder_warning()
+
+    mixed_file_types_and_folders = (
+        scan['visible_root_items'] >= 15
+        and scan['visible_file_count'] > 0
+        and scan['visible_folder_count'] > 0
+    )
+
+    reasons = []
+    if scan['non_media_count'] >= 20:
+        reasons.append('many_non_media_files')
+    if media_count >= 0 and scan['non_media_count'] > media_count * 2:
+        reasons.append('non_media_outnumbers_media')
+    if mixed_file_types_and_folders:
+        reasons.append('busy_mixed_root')
+    if scan['obvious_signals_present']:
+        reasons.append('desktop_like_contents')
+
+    return _folder_warning_from_scan(scan, reasons)
+
+
+def analyze_convert_to_library_folder(library_path, media_count):
+    """Stricter convert-specific heuristic; avoids photo-dump false positives."""
+    scan = _scan_folder_root_warning_signals(library_path)
+    if scan is None:
+        return _empty_folder_warning()
+
+    busy_mixed_workspace_root = (
+        scan['visible_root_items'] >= 15
+        and scan['visible_file_count'] > 0
+        and scan['visible_folder_count'] > 0
+        and scan['non_media_count'] > 0
+    )
+
+    reasons = []
+    if scan['non_media_count'] >= 20:
+        reasons.append('many_non_media_files')
+    if media_count >= 0 and scan['non_media_count'] > media_count * 2:
+        reasons.append('non_media_outnumbers_media')
+    if busy_mixed_workspace_root:
+        reasons.append('busy_mixed_workspace_root')
+    if scan['obvious_signals_present']:
+        reasons.append('desktop_like_contents')
+
+    return _folder_warning_from_scan(scan, reasons)
+
+
+def inspect_library_path(library_path, *, fast=False):
     """Shared open-library probe used by both picker UX and recovery flow."""
     abs_library_path = os.path.abspath(library_path)
     existing_db_path = detect_existing_db_path(abs_library_path)
     db_path = existing_db_path or canonical_db_path(abs_library_path)
     db_report = check_database_health(db_path)
+    has_openable_db = library_has_openable_db(abs_library_path)
 
-    try:
-        counts = count_media_files_by_type(abs_library_path)
-    except Exception as e:
-        print(f"  ⚠️  Error counting media files: {e}")
-        counts = {'photo_count': 0, 'video_count': 0, 'total_count': 0}
+    if fast and has_openable_db and os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+            cursor = conn.cursor()
+            total_count = cursor.execute('SELECT COUNT(*) FROM photos').fetchone()[0]
+            photo_count = cursor.execute(
+                "SELECT COUNT(*) FROM photos WHERE file_type = 'photo'"
+            ).fetchone()[0]
+            video_count = cursor.execute(
+                "SELECT COUNT(*) FROM photos WHERE file_type = 'video'"
+            ).fetchone()[0]
+            conn.close()
+            counts = {
+                'photo_count': photo_count,
+                'video_count': video_count,
+                'total_count': total_count,
+            }
+        except Exception as e:
+            print(f"  ⚠️  Fast inventory failed, falling back to filesystem walk: {e}")
+            counts = None
+    else:
+        counts = None
+
+    if counts is None:
+        try:
+            counts = count_media_files_by_type(abs_library_path)
+        except Exception as e:
+            print(f"  ⚠️  Error counting media files: {e}")
+            counts = {'photo_count': 0, 'video_count': 0, 'total_count': 0}
 
     media_count = counts['total_count']
     _, media_eta = estimate_duration(media_count)
     folder_warning = analyze_general_purpose_folder(abs_library_path, media_count)
+    convert_folder_warning = analyze_convert_to_library_folder(abs_library_path, media_count)
 
-    has_openable_db = library_has_openable_db(abs_library_path)
     return {
         'exists': has_openable_db,
         'has_db': existing_db_path is not None,
@@ -4423,6 +4214,7 @@ def inspect_library_path(library_path):
         'video_count': counts['video_count'],
         'media_eta': media_eta,
         'folder_warning': folder_warning,
+        'convert_folder_warning': convert_folder_warning,
         'library_path': abs_library_path,
     }
 
@@ -4450,18 +4242,12 @@ def check_library():
                 'db_status': DBStatus.MISSING.value,
                 'db_message': 'No library database found.',
                 'media_eta': 'less than a minute',
-                'folder_warning': {
-                    'show': False,
-                    'non_media_count': 0,
-                    'visible_root_items': 0,
-                    'visible_folder_count': 0,
-                    'visible_file_count': 0,
-                    'obvious_signals_present': False,
-                    'reasons': [],
-                },
+                'folder_warning': _empty_folder_warning(),
+                'convert_folder_warning': _empty_folder_warning(),
             })
 
-        return jsonify(inspect_library_path(library_path))
+        fast = bool(data.get('fast'))
+        return jsonify(inspect_library_path(library_path, fast=fast))
         
     except Exception as e:
         app.logger.error(f"Error checking library: {e}")
@@ -4593,13 +4379,21 @@ def switch_library():
             }), 400
         
         if report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
-            return jsonify({
-                'status': 'needs_migration',
-                'action': 'migrate',
-                'message': report.get_user_message(),
-                'missing_columns': report.missing_columns,
-                'can_continue': report.can_use_anyway
-            }), 400
+            print(f"  🔧 Migrating database schema: {', '.join(report.missing_columns or [])}")
+            from migrate_db import check_and_migrate_schema
+
+            migrated = check_and_migrate_schema(db_path)
+            report = check_database_health(db_path)
+            print(f"  🏥 Post-migration health check: {report.status.value}")
+
+            if not migrated or report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
+                return jsonify({
+                    'status': 'needs_migration',
+                    'action': 'migrate',
+                    'message': report.get_user_message(),
+                    'missing_columns': report.missing_columns,
+                    'can_continue': report.can_use_anyway
+                }), 400
         
         if report.status == DBStatus.EXTRA_COLUMNS:
             # Extra columns are harmless - warn but allow

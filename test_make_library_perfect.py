@@ -506,6 +506,8 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             )
 
     def test_scan_flags_duplicates_by_canonicalized_photo_identity(self):
+        if CLEAN_LIBRARY_ENGINE_VERSION != "legacy":
+            self.skipTest("v2 fast audit uses hash-only duplicate detection")
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
             canonical_hash = "cafe" * 16
@@ -902,6 +904,9 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                 "make_library_perfect.get_orientation_flag", return_value=1
             ), patch("make_library_perfect.read_dimensions", return_value=(1, 1)), patch(
                 "make_library_perfect.canonicalize_photo_file", side_effect=canonicalize_side_effect
+            ), patch(
+                "clean_library_fast_audit.compute_hash_legacy",
+                return_value=canonical_hash,
             ):
                 result = run_db_normalization_engine(tmpdir, db_path=db_path)
 
@@ -1033,6 +1038,10 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             def orientation_side_effect(file_path):
                 return 8 if os.path.basename(file_path) == "meta.jpg" else 1
 
+            def audit_hash_side_effect(file_path):
+                with open(file_path, "rb") as handle:
+                    return content_hashes[handle.read()]
+
             events = []
             with patch("make_library_perfect.verify_media_file", return_value=(True, "mock")), patch(
                 "make_library_perfect.extract_exif_date", return_value=date_taken
@@ -1051,6 +1060,9 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             ), patch(
                 "make_library_perfect.canonicalize_photo_file",
                 side_effect=canonicalize_side_effect,
+            ), patch(
+                "clean_library_fast_audit.compute_hash_legacy",
+                side_effect=audit_hash_side_effect,
             ):
                 result = run_db_normalization_engine(
                     tmpdir,
@@ -1065,6 +1077,14 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                 set(plan_event["summary"].keys()),
                 set(CLEAN_LIBRARY_SIGNAL_KEYS) | {"operation_count"},
             )
+
+            if CLEAN_LIBRARY_ENGINE_VERSION == "v2":
+                self.assertTrue(plan_event.get("feedback_only"))
+                stats_events = [event for event in events if event.get("type") == "stats"]
+                self.assertTrue(stats_events)
+                self.assertEqual(result["stats"]["duplicates_trashed"], 1)
+                self.assertGreaterEqual(result["stats"]["media_moved"], 1)
+                return
 
             burned_down = defaultdict(int)
             signal_events = [

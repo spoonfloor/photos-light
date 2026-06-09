@@ -13,8 +13,11 @@ All functions handle errors gracefully and return None on failure.
 import os
 import subprocess
 import json
-from PIL import Image
+from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 from library_cleanliness import VIDEO_MEDIA_EXTENSIONS
+
+register_heif_opener()
 
 
 def extract_exif_date(file_path):
@@ -97,15 +100,9 @@ def get_dimensions(file_path):
             return None, None
         
         with Image.open(file_path) as img:
-            # Get dimensions AFTER applying EXIF orientation
-            # This matches what the user will see
-            try:
-                # exif_transpose applies orientation and strips orientation tag
-                img = img._getexif() and Image.Transpose.EXIF(img) or img
-                return img.size  # (width, height)
-            except:
-                # Fallback if EXIF orientation fails
-                return img.size
+            # Get dimensions AFTER applying EXIF orientation (matches display).
+            img_oriented = ImageOps.exif_transpose(img)
+            return img_oriented.size  # (width, height)
     
     except Exception as e:
         print(f"⚠️  Error extracting dimensions from {file_path}: {e}")

@@ -12,7 +12,7 @@ scan cost, full-run phase timing, and 60k extrapolation.
 From the repo root:
 
 ```bash
-# Non-destructive: zero-preflight check (instant SKIPPED — product default)
+# Non-destructive: cheap inventory preflight (product default)
 python3 tools/benchmark_clean_library.py scan \
   --library /Volumes/public/clean-lib-speed-test \
   --label nas-wifi
@@ -41,9 +41,9 @@ Reports are written to `tools/results/*.json`.
 
 | Step | Engine | Product equivalent |
 |------|--------|-------------------|
-| `preflight_skip` | `scan_library_cleanliness()` (no verify) | Clean library overlay (instant, no gate) |
-| `run_full` | `run_db_normalization_engine()` | Clean library stream run |
-| `verify_clean` | `verify_library_cleanliness()` | Post-run yardstick (`?verify=1`) |
+| `preflight_inventory` | `inventory_media_library()` via scan (no verify) | Clean library overlay preflight (counts + duration) |
+| `run_full` | `run_db_normalization_engine()` | Clean library stream run (includes blocking `audit` phase) |
+| `verify_clean` | `verify_library_cleanliness()` | Standalone yardstick (`?verify=1` scan; same engine as run's final audit) |
 | `verify_clean_warm` | Immediate repeat | OS / SMB cache effect |
 
 See `tech-docs/CLEAN_LIBRARY_V2_HANDOFF.md` for full context.
@@ -52,7 +52,7 @@ See `tech-docs/CLEAN_LIBRARY_V2_HANDOFF.md` for full context.
 
 - **sec/file** — wall time ÷ supported media files
 - **60k est** — linear extrapolation to 60,000 files (directional, not exact)
-- **phases** (full run) — `setup`, `scan`, `dedupe`, `canonicalize`, `folders`, `rebuild_db`
+- **phases** (full run) — `setup`, `scan`, `dedupe`, `canonicalize`, `folders`, `rebuild_db`, `audit`
 
 If `verify_clean` is slow with `issue_count: 0`, verify re-hashes every file even when nothing is dirty.
 

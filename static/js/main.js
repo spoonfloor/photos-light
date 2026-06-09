@@ -161,6 +161,44 @@ const ROTATABLE_IMAGE_EXTENSIONS = new Set([
 
 const HEIC_IMAGE_EXTENSIONS = new Set(['.heic', '.heif']);
 
+const IMPORT_PHOTO_EXTENSIONS = new Set([
+  '.jpg',
+  '.jpeg',
+  '.heic',
+  '.heif',
+  '.png',
+  '.gif',
+  '.tiff',
+  '.tif',
+  '.webp',
+  '.avif',
+  '.jp2',
+  '.raw',
+  '.cr2',
+  '.nef',
+  '.arw',
+  '.dng',
+]);
+
+const IMPORT_VIDEO_EXTENSIONS = new Set([
+  '.mov',
+  '.mp4',
+  '.m4v',
+  '.mkv',
+  '.wmv',
+  '.webm',
+  '.flv',
+  '.3gp',
+  '.mpg',
+  '.mpeg',
+  '.vob',
+  '.ts',
+  '.mts',
+  '.avi',
+]);
+
+const IMPORT_OVERLAY_TITLE = 'Add photos';
+
 // ============================================================================
 // DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
 // ============================================================================
@@ -3676,7 +3714,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
       logOpenLibraryAccessPoint('critical-error-db-missing');
-      void browseSwitchLibrary();
+      void openExistingLibrary();
     };
 
     const rebuildBtn = document.createElement('button');
@@ -3700,7 +3738,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
       logOpenLibraryAccessPoint('critical-error-db-needs-migration');
-      void browseSwitchLibrary();
+      void openExistingLibrary();
     };
 
     const reloadBtn = document.createElement('button');
@@ -3728,7 +3766,7 @@ function showCriticalErrorModal(type, path = '') {
     switchBtn.onclick = async () => {
       hideCriticalErrorModal();
       logOpenLibraryAccessPoint('critical-error-library-not-found');
-      void browseSwitchLibrary();
+      void openExistingLibrary();
     };
 
     const retryBtn = document.createElement('button');
@@ -5333,6 +5371,14 @@ function getPhotoLibraryIndex(photoId) {
   return state.photos.findIndex((photo) => photo.id === photoId);
 }
 
+function buildPhotoLibraryIndexMap() {
+  const indexById = new Map();
+  state.photos.forEach((photo, index) => {
+    indexById.set(photo.id, index);
+  });
+  return indexById;
+}
+
 function getLightboxNavPhotoIds() {
   return getFilteredPhotos(state.photos).map((photo) => photo.id);
 }
@@ -5453,7 +5499,7 @@ function renderFirstRunEmptyState() {
         <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
       </div>
       <div style="display: flex; gap: 12px;">
-        <button class="btn" onclick="logOpenLibraryAccessPoint('first-run-empty-state'); void browseSwitchLibrary();" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
+        <button class="btn" onclick="logOpenLibraryAccessPoint('first-run-empty-state'); void openExistingLibrary();" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
           <span>Open library</span>
         </button>
@@ -5554,17 +5600,18 @@ function renderPhotoGrid(photos, append = false) {
     return;
   }
 
-  // Group photos by month
+  // Group photos by month (O(n) index map — avoid findIndex per photo on large libraries)
+  const libraryIndexById = buildPhotoLibraryIndexMap();
   const photosByMonth = {};
   photos.forEach((photo) => {
     const monthKey = photo.month || 'undated';
     if (!photosByMonth[monthKey]) {
       photosByMonth[monthKey] = [];
     }
-    const libraryIndex = getPhotoLibraryIndex(photo.id);
+    const libraryIndex = libraryIndexById.get(photo.id);
     photosByMonth[monthKey].push({
       ...photo,
-      globalIndex: libraryIndex === -1 ? 0 : libraryIndex,
+      globalIndex: libraryIndex === undefined ? 0 : libraryIndex,
     });
   });
 
@@ -6037,6 +6084,8 @@ let importState = {
   results: [],
   abortController: null,
   cancelRequested: false,
+  preflight: null,
+  preflightResolve: null,
 };
 
 // Toggle this on if cancelling an import should require confirmation.
@@ -6044,14 +6093,17 @@ const IMPORT_CANCEL_CONFIRMATION_ENABLED = false;
 
 function setImportActionButtons({
   showCancel = false,
+  showContinue = false,
   showDone = false,
   showUndo = false,
 } = {}) {
   const cancelBtn = document.getElementById('importCancelBtn');
+  const continueBtn = document.getElementById('importContinueBtn');
   const doneBtn = document.getElementById('importDoneBtn');
   const undoBtn = document.getElementById('importUndoBtn');
 
   if (cancelBtn) cancelBtn.style.display = showCancel ? 'block' : 'none';
+  if (continueBtn) continueBtn.style.display = showContinue ? 'block' : 'none';
   if (doneBtn) doneBtn.style.display = showDone ? 'block' : 'none';
   if (undoBtn) undoBtn.style.display = showUndo ? 'block' : 'none';
 }
@@ -6071,6 +6123,7 @@ function resetImportSession(totalFiles) {
   window.importedPhotoIds = [];
 
   const statusText = document.getElementById('importStatusText');
+  const preflightStats = document.getElementById('importPreflightStats');
   const stats = document.getElementById('importStats');
   const detailsSection = document.getElementById('importDetailsSection');
   const detailsList = document.getElementById('importDetailsList');
@@ -6079,11 +6132,14 @@ function resetImportSession(totalFiles) {
   const duplicateCount = document.getElementById('duplicateCount');
   const errorCount = document.getElementById('errorCount');
 
+  setImportOverlayTitle();
+
   if (statusText) {
     statusText.textContent = `Preparing import of ${totalFiles} file${
       totalFiles === 1 ? '' : 's'
     }...`;
   }
+  if (preflightStats) preflightStats.style.display = 'none';
   if (stats) stats.style.display = 'none';
   if (detailsSection) detailsSection.style.display = 'none';
   if (detailsList) {
@@ -6133,7 +6189,7 @@ async function loadImportOverlay() {
   }
 
   try {
-    const response = await fetch('fragments/importOverlay.html?v=2');
+    const response = await fetch('fragments/importOverlay.html?v=4');
     if (!response.ok)
       throw new Error(`Failed to load import overlay (${response.status})`);
 
@@ -6151,6 +6207,7 @@ async function loadImportOverlay() {
 function wireImportOverlay() {
   const closeBtn = document.getElementById('importCloseBtn');
   const cancelBtn = document.getElementById('importCancelBtn');
+  const continueBtn = document.getElementById('importContinueBtn');
   const doneBtn = document.getElementById('importDoneBtn');
   const undoBtn = document.getElementById('importUndoBtn');
   const detailsToggle = document.getElementById('importDetailsToggle');
@@ -6164,6 +6221,12 @@ function wireImportOverlay() {
   if (cancelBtn) {
     cancelBtn.addEventListener('click', () => {
       cancelImport();
+    });
+  }
+
+  if (continueBtn) {
+    continueBtn.addEventListener('click', () => {
+      resolveImportPreflight(true);
     });
   }
 
@@ -6214,7 +6277,7 @@ function updateImportUI(statusText, showSpinner = false) {
     }
   }
   if (statusText.startsWith('Processing') && importStatsEl) {
-    importStatsEl.style.display = 'flex';
+    importStatsEl.style.display = 'grid';
   }
 
   // Hide actions section during "Preparing" and "Processing" states
@@ -6250,6 +6313,16 @@ function showImportOverlay() {
   }
 }
 
+function resolveImportPreflight(shouldContinue) {
+  if (!importState.preflightResolve) {
+    return;
+  }
+
+  const resolve = importState.preflightResolve;
+  importState.preflightResolve = null;
+  resolve(shouldContinue);
+}
+
 async function hideImportOverlay(reloadPhotos = true) {
   const overlay = document.getElementById('importOverlay');
   if (overlay) {
@@ -6265,6 +6338,12 @@ async function hideImportOverlay(reloadPhotos = true) {
  * Close import overlay
  */
 async function closeImportOverlay() {
+  if (importState.preflightResolve) {
+    resolveImportPreflight(false);
+    await hideImportOverlay(false);
+    return;
+  }
+
   if (importState.isImporting) {
     await cancelImport();
     return;
@@ -6401,6 +6480,12 @@ function populateImportDetails() {
  * Cancel import in progress
  */
 async function cancelImport() {
+  if (importState.preflightResolve) {
+    resolveImportPreflight(false);
+    await hideImportOverlay(false);
+    return;
+  }
+
   if (!importState.isImporting || !importState.abortController) {
     await hideImportOverlay();
     return;
@@ -6488,7 +6573,7 @@ async function loadUtilitiesMenu() {
   if (utilitiesMenuLoaded) return;
 
   try {
-    const response = await fetch('fragments/utilitiesMenu.html?v=4');
+    const response = await fetch('fragments/utilitiesMenu.html?v=7');
     if (!response.ok) throw new Error('Failed to load utilities menu');
 
     const html = await response.text();
@@ -6496,6 +6581,7 @@ async function loadUtilitiesMenu() {
 
     // Wire up menu items
     const switchLibraryBtn = document.getElementById('switchLibraryBtn');
+    const convertToLibraryBtn = document.getElementById('convertToLibraryBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
     const closeLibraryBtn = document.getElementById('closeLibraryBtn');
 
@@ -6503,7 +6589,14 @@ async function loadUtilitiesMenu() {
       switchLibraryBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
         logOpenLibraryAccessPoint('utilities-menu');
-        void browseSwitchLibrary();
+        void openExistingLibrary();
+      });
+    }
+
+    if (convertToLibraryBtn) {
+      convertToLibraryBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        void convertToLibrary();
       });
     }
 
@@ -6795,6 +6888,7 @@ let cleanLibraryWorkingStepState = null;
 
 let cleanLibraryActivityFeedState = {
   lastMilestoneByPhase: {},
+  lastEmittedAtMsByPhase: {},
 };
 
 const cleanLibraryPreviewState = {
@@ -6960,16 +7054,23 @@ function setCleanLibrarySecondaryStatus(text, visible = true) {
 }
 
 function resetCleanLibraryActivityFeedState() {
-  cleanLibraryActivityFeedState = { lastMilestoneByPhase: {} };
+  cleanLibraryActivityFeedState = {
+    lastMilestoneByPhase: {},
+    lastEmittedAtMsByPhase: {},
+  };
 }
+
+const CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_MS = 5000;
+const CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT = 5;
 
 function cleanLibraryProgressMilestoneInterval(total) {
   const cap = Math.max(1, Number(total) || 1);
-  if (cap <= 20) return 1;
-  if (cap <= 100) return 10;
-  if (cap <= 1000) return 100;
-  if (cap <= 10000) return 500;
-  return 1000;
+  if (cap <= 25) return 1;
+  if (cap <= 100) return 5;
+  if (cap <= 500) return 10;
+  if (cap <= 2500) return 25;
+  if (cap < 50000) return 50;
+  return 100;
 }
 
 function formatCleanLibraryLogEntry(entry) {
@@ -7218,6 +7319,9 @@ function maybeAppendCleanLibraryProgressMilestone(phase, processed, total) {
 
   const interval = cleanLibraryProgressMilestoneInterval(cap);
   const lastMarker = cleanLibraryActivityFeedState.lastMilestoneByPhase[phase] ?? 0;
+  const lastEmittedAtMs =
+    cleanLibraryActivityFeedState.lastEmittedAtMsByPhase[phase] ?? null;
+  const now = Date.now();
   let marker = null;
 
   if (done >= cap) {
@@ -7226,6 +7330,17 @@ function maybeAppendCleanLibraryProgressMilestone(phase, processed, total) {
     const bucket = Math.floor(done / interval) * interval;
     if (bucket > 0 && bucket > lastMarker) {
       marker = bucket;
+    } else if (lastEmittedAtMs === null) {
+      cleanLibraryActivityFeedState.lastEmittedAtMsByPhase[phase] = now;
+    } else if (
+      now - lastEmittedAtMs >= CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_MS
+    ) {
+      const timeBucket =
+        Math.floor(done / CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT) *
+        CLEAN_LIBRARY_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT;
+      if (timeBucket > 0 && timeBucket > lastMarker) {
+        marker = timeBucket;
+      }
     }
   }
 
@@ -7234,6 +7349,7 @@ function maybeAppendCleanLibraryProgressMilestone(phase, processed, total) {
   }
 
   cleanLibraryActivityFeedState.lastMilestoneByPhase[phase] = marker;
+  cleanLibraryActivityFeedState.lastEmittedAtMsByPhase[phase] = now;
   const verb = CLEAN_LIBRARY_FEED_PROGRESS_VERBS[phase];
   appendCleanLibraryActivityLine(
     `${verb} ${Math.min(marker, cap).toLocaleString()} of ${cap.toLocaleString()}`,
@@ -7288,9 +7404,23 @@ function showCleanLibraryDetailsSection(visible) {
   }
 }
 
-function setPreviewPreflightCounts(photoCount, videoCount) {
+function getCleanLibraryPreflightTotal(scanResult, photos, videos) {
+  return (
+    scanResult?.summary?.media_count ??
+    scanResult?.inventory?.media_count ??
+    scanResult?.supported_media_files ??
+    photos + videos
+  );
+}
+
+function setPreviewPreflightCounts(photoCount, videoCount, totalCount = null) {
+  const total = totalCount ?? photoCount + videoCount;
   showUpdateIndexPreflightStats({
-    summary: { photo_count: photoCount, video_count: videoCount },
+    summary: {
+      photo_count: photoCount,
+      video_count: videoCount,
+      media_count: total,
+    },
   });
 }
 
@@ -7321,8 +7451,9 @@ function animatePreflightScoreboardCounts(
   photoTarget,
   videoTarget,
   durationMs,
-  { runId = null, previewOnly = false } = {},
+  { runId = null, previewOnly = false, totalTarget = null } = {},
 ) {
+  const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
 
@@ -7337,9 +7468,10 @@ function animatePreflightScoreboardCounts(
       setPreviewPreflightCounts(
         Math.round(photoTarget * eased),
         Math.round(videoTarget * eased),
+        Math.round(resolvedTotalTarget * eased),
       );
       if (ratio >= 1) {
-        setPreviewPreflightCounts(photoTarget, videoTarget);
+        setPreviewPreflightCounts(photoTarget, videoTarget, resolvedTotalTarget);
         resolve();
         return;
       }
@@ -8290,6 +8422,7 @@ function showUpdateIndexPreflightStats(scanResult = null) {
   const runStatsEl = document.getElementById('updateIndexStats');
   const photoEl = document.getElementById('updateIndexPhotoCount');
   const videoEl = document.getElementById('updateIndexVideoCount');
+  const totalEl = document.getElementById('updateIndexTotalCount');
 
   if (runStatsEl) runStatsEl.style.display = 'none';
   if (!scanResult) {
@@ -8301,9 +8434,11 @@ function showUpdateIndexPreflightStats(scanResult = null) {
     scanResult.summary?.photo_count ?? scanResult.inventory?.photo_count ?? 0;
   const videos =
     scanResult.summary?.video_count ?? scanResult.inventory?.video_count ?? 0;
+  const total = getCleanLibraryPreflightTotal(scanResult, photos, videos);
   if (photoEl) photoEl.textContent = Number(photos).toLocaleString();
   if (videoEl) videoEl.textContent = Number(videos).toLocaleString();
-  if (preflightEl) preflightEl.style.display = 'flex';
+  if (totalEl) totalEl.textContent = Number(total).toLocaleString();
+  if (preflightEl) preflightEl.style.display = 'grid';
 }
 
 function showPreflightScoreboardZeros() {
@@ -8311,10 +8446,12 @@ function showPreflightScoreboardZeros() {
   const runStatsEl = document.getElementById('updateIndexStats');
   const photoEl = document.getElementById('updateIndexPhotoCount');
   const videoEl = document.getElementById('updateIndexVideoCount');
+  const totalEl = document.getElementById('updateIndexTotalCount');
   if (runStatsEl) runStatsEl.style.display = 'none';
   if (photoEl) photoEl.textContent = '0';
   if (videoEl) videoEl.textContent = '0';
-  if (preflightEl) preflightEl.style.display = 'flex';
+  if (totalEl) totalEl.textContent = '0';
+  if (preflightEl) preflightEl.style.display = 'grid';
 }
 
 async function runUpdateIndexPreflightScan() {
@@ -8339,10 +8476,12 @@ async function runUpdateIndexPreflightScan() {
     scanResult.summary?.photo_count ?? scanResult.inventory?.photo_count ?? 0;
   const videos =
     scanResult.summary?.video_count ?? scanResult.inventory?.video_count ?? 0;
+  const total = getCleanLibraryPreflightTotal(scanResult, photos, videos);
   await animatePreflightScoreboardCounts(
     photos,
     videos,
     CLEAN_LIBRARY_PREFLIGHT_COUNT_ANIMATION_MS,
+    { totalTarget: total },
   );
 
   return scanResult;
@@ -8557,7 +8696,7 @@ function showUpdateIndexStats() {
   const metadataEl = document.getElementById('metadataCleanupCount');
   const dbRepairsEl = document.getElementById('databaseRepairsCount');
 
-  if (statsEl) statsEl.style.display = 'flex';
+  if (statsEl) statsEl.style.display = 'grid';
   if (misfiledEl) misfiledEl.textContent = updateIndexState.misfiledMedia;
   if (duplicatesEl) duplicatesEl.textContent = updateIndexState.duplicates;
   if (unsupportedEl)
@@ -9101,7 +9240,7 @@ async function loadSwitchLibraryOverlay() {
       ?.addEventListener('click', closeSwitchLibraryOverlay);
     document
       .getElementById('switchLibraryBrowseBtn')
-      ?.addEventListener('click', browseSwitchLibrary);
+      ?.addEventListener('click', openExistingLibrary);
     document
       .getElementById('switchLibraryResetBtn')
       ?.addEventListener('click', resetLibraryConfig);
@@ -10896,9 +11035,9 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
 // =============================================================================
 // LEGACY open-library flow (dialogs + recovery dock + streaming rebuild)
 // -----------------------------------------------------------------------------
-// Do not call from product UI or from `browseSwitchLibrary`. For DevTools / manual
-// comparison only (`window.__browseSwitchLibraryLegacyAfterCheck`). Production:
-// `browseSwitchLibrary` → `openLibraryFromBrowseUnified` only.
+// Do not call from product UI. For DevTools / manual comparison only
+// (`window.__browseSwitchLibraryLegacyAfterCheck`). Production open-library:
+// `openExistingLibrary`. Legacy recover picker: `browseSwitchLibraryLegacy`.
 // Delete with `runLibraryRecoveryJourney` when unified path is fully verified.
 //
 // DevTools: `await __browseSwitchLibraryLegacyAfterCheck(selectedPath, checkResult)`
@@ -10958,14 +11097,158 @@ async function runSwitchDeferReloadNormalizeAndLoad(libraryPath, dbPath) {
 }
 
 // -----------------------------------------------------------------------------
-// INVARIANT — Product “Open library” (More menu, first-run, overlay Browse, etc.)
+// INVARIANT — Product library actions
 //
-// • `browseSwitchLibrary` must call only `openLibraryFromBrowseUnified` after check.
-// • No UI path may call `browseSwitchLibraryLegacyAfterCheck` (legacy is DevTools-only:
-//   `window.__browseSwitchLibraryLegacyAfterCheck`).
-// • Pipeline: picker → /api/library/check → [recover-database if needed] → switch →
-//   blocking POST /api/library/make-perfect → load grid.
+// • Open: `openExistingLibrary` only (readable DB required).
+// • Convert: `convertToLibrary` (media folder → library; destructive).
+// • Legacy recover picker: `browseSwitchLibraryLegacy` (DevTools only).
 // -----------------------------------------------------------------------------
+
+const CONVERT_TO_LIBRARY_PICKER_SUBTITLE =
+  'Select a folder containing media files to convert into a new library.\n⚠️ Warning! This process makes permanent changes to your files, including renaming, reorganizing, and moving incompatible files to a Trash folder for review.';
+
+async function loadConvertToLibraryCompleteOverlay() {
+  if (document.getElementById('convertToLibraryCompleteOverlay')) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/fragments/convertToLibraryCompleteOverlay.html');
+    const html = await response.text();
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (error) {
+    console.error('❌ Failed to load convert-to-library complete overlay:', error);
+    throw error;
+  }
+}
+
+/**
+ * Stub completion screen shown after convert (real conversion not wired yet).
+ */
+async function showConvertToLibraryCompleteDialog(options = {}) {
+  return new Promise(async (resolve) => {
+    await loadConvertToLibraryCompleteOverlay();
+
+    const overlay = document.getElementById('convertToLibraryCompleteOverlay');
+    const pathEl = document.getElementById('convertToLibraryCompletePath');
+    if (!overlay || !pathEl) {
+      resolve(false);
+      return;
+    }
+
+    pathEl.textContent = options.path || '';
+
+    const closeBtn = document.getElementById('convertToLibraryCompleteCloseBtn');
+    const doneBtn = document.getElementById('convertToLibraryCompleteDoneBtn');
+
+    const handleDone = () => {
+      overlay.style.display = 'none';
+      resolve(true);
+    };
+
+    if (closeBtn) closeBtn.onclick = handleDone;
+    if (doneBtn) doneBtn.onclick = handleDone;
+
+    overlay.style.display = 'flex';
+  });
+}
+
+/**
+ * Convert a folder of media files into a photo library (destructive).
+ * Product entry point — currently stubs through to the completion screen.
+ */
+async function convertToLibrary() {
+  try {
+    const selectedPath = await FolderPicker.show({
+      intent: FolderPicker.INTENT.CONVERT_TO_LIBRARY,
+      title: 'Convert to library',
+      subtitle: CONVERT_TO_LIBRARY_PICKER_SUBTITLE,
+    });
+
+    if (!selectedPath) {
+      return false;
+    }
+
+    await showConvertToLibraryCompleteDialog({ path: selectedPath });
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to convert to library:', error);
+    showToast(`Error: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Open an existing library folder that already has a readable database.
+ * Product entry point for More menu, first-run, error recovery, etc.
+ */
+async function openExistingLibrary() {
+  try {
+    closeSwitchLibraryOverlay();
+
+    const selectedPath = await FolderPicker.show({
+      intent: FolderPicker.INTENT.OPEN_EXISTING_LIBRARY,
+      title: 'Open library',
+      subtitle: 'Select a photo library folder to open.',
+    });
+
+    if (!selectedPath) {
+      return false;
+    }
+
+    await showLibraryTransitionOverlay({
+      title: 'Opening library',
+      message: 'Checking your library and preparing to load photos.',
+    });
+
+    let checkResult;
+    try {
+      const checkResponse = await fetch('/api/library/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ library_path: selectedPath, fast: true }),
+      });
+      checkResult = await checkResponse.json();
+
+      if (!checkResponse.ok) {
+        throw new Error(checkResult.error || 'Failed to inspect selected folder');
+      }
+
+      if (checkResult.has_openable_db) {
+        const opened = await switchToLibrary(selectedPath, checkResult.db_path, {
+          skipTransitionOverlay: true,
+        });
+        if (opened) {
+          hideLibraryTransitionOverlay();
+        }
+        return opened;
+      }
+
+      if (checkResult.has_db) {
+        showToast(
+          checkResult.db_message ||
+            "Can't open library: database is damaged or incompatible.",
+        );
+      } else {
+        showToast('No photo library found in this folder.');
+      }
+      return false;
+    } catch (error) {
+      console.error('❌ Failed to open library:', error);
+      showToast(`Error: ${error.message}`);
+      return false;
+    } finally {
+      if (!state.libraryTransitionActive) {
+        hideLibraryTransitionOverlay();
+      }
+    }
+  } catch (error) {
+    console.error('❌ Failed to open library:', error);
+    showToast(`Error: ${error.message}`);
+    hideLibraryTransitionOverlay();
+    return false;
+  }
+}
 
 /**
  * Unified open-library path: optional recover-database, then switch + blocking
@@ -11310,16 +11593,16 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
 }
 
 /**
- * Browse for library (custom folder picker). After `/api/library/check`,
- * open usable libraries directly; otherwise run the no-DB recovery flow.
+ * LEGACY — Open library with recover/create fallback when no readable DB exists.
+ * Disconnected from product UI. DevTools: `await browseSwitchLibraryLegacy()`
  */
-async function browseSwitchLibrary() {
+async function browseSwitchLibraryLegacy() {
   try {
     closeSwitchLibraryOverlay();
 
     const selectedPath = await FolderPicker.show({
-      intent: FolderPicker.INTENT.OPEN_EXISTING_LIBRARY,
-      title: 'Open library',
+      intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
+      title: 'Open library (legacy)',
       subtitle:
         'Select an existing library folder (or choose where to create one).',
     });
@@ -11343,14 +11626,17 @@ async function browseSwitchLibrary() {
 
     setOpenLibraryModalHandoffShellHidden(false);
 
-    // Product path: usable DB opens directly; no-DB folders use unified recovery.
     return await openLibraryFromBrowseUnified(selectedPath, checkResult);
   } catch (error) {
-    console.error('❌ Failed to browse library:', error);
+    console.error('❌ Failed to browse library (legacy):', error);
     setOpenLibraryModalHandoffShellHidden(false);
     showToast(`Error: ${error.message}`);
     return false;
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.__browseSwitchLibraryLegacy = browseSwitchLibraryLegacy;
 }
 
 /**
@@ -11887,34 +12173,161 @@ async function importFolders() {
   }
 }
 
+function getImportEstimateDisplay(scanResult) {
+  if (scanResult?.estimated_display) {
+    return scanResult.estimated_display;
+  }
+  if (Number.isFinite(Number(scanResult?.estimated_seconds))) {
+    return formatAboutDurationFromSeconds(scanResult.estimated_seconds);
+  }
+  return 'less than a minute';
+}
+
+function getImportMediaKindFromPath(filePath) {
+  if (!filePath) {
+    return null;
+  }
+  const dot = filePath.lastIndexOf('.');
+  if (dot < 0) {
+    return null;
+  }
+  const ext = filePath.slice(dot).toLowerCase();
+  if (IMPORT_VIDEO_EXTENSIONS.has(ext)) {
+    return 'video';
+  }
+  if (IMPORT_PHOTO_EXTENSIONS.has(ext)) {
+    return 'photo';
+  }
+  return null;
+}
+
+function countImportMediaFromPaths(filePaths) {
+  let photos = 0;
+  let videos = 0;
+  for (const filePath of filePaths) {
+    const kind = getImportMediaKindFromPath(filePath);
+    if (kind === 'photo') {
+      photos += 1;
+    } else if (kind === 'video') {
+      videos += 1;
+    }
+  }
+  return { photos, videos };
+}
+
+function getImportPreflightCounts(scanResult) {
+  const files = Array.isArray(scanResult?.files) ? scanResult.files : [];
+  const total = Number(scanResult?.total_count ?? files.length ?? 0);
+  let photos = Number(scanResult?.photo_count);
+  let videos = Number(scanResult?.video_count);
+
+  const countsMissing = !Number.isFinite(photos) || !Number.isFinite(videos);
+  const countsZeroWithFiles = photos === 0 && videos === 0 && total > 0;
+
+  if ((countsMissing || countsZeroWithFiles) && files.length > 0) {
+    const derived = countImportMediaFromPaths(files);
+    photos = derived.photos;
+    videos = derived.videos;
+  }
+
+  return {
+    photos: Number.isFinite(photos) ? photos : 0,
+    videos: Number.isFinite(videos) ? videos : 0,
+    total,
+  };
+}
+
+function setImportOverlayTitle(title = IMPORT_OVERLAY_TITLE) {
+  const titleEl = document.querySelector('#importOverlay .import-title');
+  if (titleEl) {
+    titleEl.textContent = title;
+  }
+}
+
+async function scanImportPaths(paths) {
+  const response = await fetch('/api/import/scan-paths', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || 'Failed to scan paths');
+  }
+
+  return result;
+}
+
+async function showImportPreflight(scanResult) {
+  await loadImportOverlay();
+
+  const overlay = document.getElementById('importOverlay');
+  if (!overlay) {
+    throw new Error('Import overlay unavailable');
+  }
+
+  importState.preflight = scanResult;
+  const statusText = document.getElementById('importStatusText');
+  const preflightStats = document.getElementById('importPreflightStats');
+  const runtimeStats = document.getElementById('importStats');
+  const detailsSection = document.getElementById('importDetailsSection');
+  const photoCount = document.getElementById('importPhotoCount');
+  const videoCount = document.getElementById('importVideoCount');
+  const totalCount = document.getElementById('importTotalCount');
+
+  const { photos, videos, total } = getImportPreflightCounts(scanResult);
+  const estimate = getImportEstimateDisplay(scanResult);
+
+  setImportOverlayTitle();
+
+  if (statusText) {
+    statusText.textContent = `Time required: ${estimate}`;
+  }
+  if (photoCount) photoCount.textContent = photos.toLocaleString();
+  if (videoCount) videoCount.textContent = videos.toLocaleString();
+  if (totalCount) totalCount.textContent = total.toLocaleString();
+  if (preflightStats) preflightStats.style.display = 'grid';
+  if (runtimeStats) runtimeStats.style.display = 'none';
+  if (detailsSection) detailsSection.style.display = 'none';
+
+  setImportActionButtons({ showCancel: true, showContinue: true });
+  showImportOverlay();
+
+  const confirmed = await new Promise((resolve) => {
+    importState.preflightResolve = resolve;
+  });
+
+  importState.preflight = null;
+  return confirmed;
+}
+
+async function confirmAndStartImport(scanResult) {
+  const { files, total_count } = scanResult;
+
+  if (total_count === 0) {
+    showToast('No media files found', null);
+    return;
+  }
+
+  const confirmed = await showImportPreflight(scanResult);
+  if (!confirmed) {
+    return;
+  }
+
+  await startImportFromPaths(files);
+}
+
 /**
- * Scan paths and import directly (no confirmation dialog)
+ * Scan paths, show cheap preflight, then import on Continue.
  */
 async function scanAndImport(paths) {
   try {
     showToast('Scanning...', null, 0);
 
-    const response = await fetch('/api/import/scan-paths', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths }),
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to scan paths');
-    }
-
-    const { files, total_count } = result;
-
-    if (total_count === 0) {
-      showToast('No media files found', null);
-      return;
-    }
-
-    // Start import directly (no confirmation dialog)
-    await startImportFromPaths(files);
+    const result = await scanImportPaths(paths);
+    await confirmAndStartImport(result);
   } catch (error) {
     console.error('❌ Failed to scan paths:', error);
     showToast(`Error: ${error.message}`, 'error');
@@ -11928,39 +12341,8 @@ async function scanAndConfirmImport(paths) {
   try {
     showToast('Scanning...', null, 0);
 
-    const response = await fetch('/api/import/scan-paths', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths }),
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to scan paths');
-    }
-
-    const { files, total_count, files_selected, folders_scanned } = result;
-
-    if (total_count === 0) {
-      showToast('No media files found', null);
-      return;
-    }
-
-    // Show confirmation
-    const message = `Found ${total_count} total file${total_count > 1 ? 's' : ''}. Start import?`;
-
-    const confirmed = await showDialog('Import media', message, [
-      { text: 'Cancel', value: false, secondary: true },
-      { text: 'Import', value: true, primary: true },
-    ]);
-
-    if (!confirmed) {
-      return;
-    }
-
-    // Start import with file list
-    await startImportFromPaths(files);
+    const result = await scanImportPaths(paths);
+    await confirmAndStartImport(result);
   } catch (error) {
     console.error('❌ Failed to scan paths:', error);
     showToast(`Error: ${error.message}`, 'error');
@@ -11971,6 +12353,10 @@ async function scanAndConfirmImport(paths) {
  * Start import process from file paths (SSE streaming version)
  */
 async function startImportFromPaths(filePaths) {
+  let reader = null;
+  let internalAbort = null;
+  let callerAbortListener = null;
+
   try {
     if (importState.isImporting) {
       console.warn('⚠️ Import already in progress');
@@ -11990,54 +12376,119 @@ async function startImportFromPaths(filePaths) {
     // Show overlay
     showImportOverlay();
 
+    internalAbort = new AbortController();
+    if (controller.signal.aborted) {
+      internalAbort.abort();
+    } else {
+      callerAbortListener = () => internalAbort.abort();
+      controller.signal.addEventListener('abort', callerAbortListener, {
+        once: true,
+      });
+    }
+
+    const cleanupCallerSignal = () => {
+      if (callerAbortListener) {
+        controller.signal.removeEventListener('abort', callerAbortListener);
+        callerAbortListener = null;
+      }
+    };
+
     // Start SSE stream
     const response = await fetch('/api/photos/import-from-paths', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paths: filePaths }),
-      signal: controller.signal,
+      signal: internalAbort.signal,
     });
 
     if (!response.ok) {
+      cleanupCallerSignal();
       throw new Error('Import request failed');
     }
 
     if (!response.body) {
+      cleanupCallerSignal();
       throw new Error('Import stream unavailable');
     }
 
     // Handle SSE stream
-    const reader = response.body.getReader();
+    reader = response.body.getReader();
     const decoder = new TextDecoder();
-
     let buffer = '';
 
+    const teardown = async () => {
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+      try {
+        internalAbort.abort();
+      } catch {
+        /* ignore */
+      }
+      cleanupCallerSignal();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    const consumeImportChunk = async (chunk) => {
+      const eventMatch = chunk.match(/^event: (.+)$/m);
+      const dataMatch = chunk.match(/^data: (.+)$/m);
+
+      if (!eventMatch || !dataMatch) {
+        return false;
+      }
+
+      const event = eventMatch[1];
+      const data = JSON.parse(dataMatch[1]);
+      handleImportEvent(event, data);
+
+      if (event === 'complete' || event === 'error') {
+        await teardown();
+        return true;
+      }
+
+      return false;
+    };
+
     while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-
-        const eventMatch = line.match(/^event: (.+)$/m);
-        const dataMatch = line.match(/^data: (.+)$/m);
-
-        if (eventMatch && dataMatch) {
-          const event = eventMatch[1];
-          const data = JSON.parse(dataMatch[1]);
-
-          handleImportEvent(event, data);
+      let done;
+      let value;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (readError) {
+        if (
+          controller.signal.aborted ||
+          internalAbort.signal.aborted ||
+          readError?.name === 'AbortError'
+        ) {
+          throw new DOMException('The operation was aborted.', 'AbortError');
         }
+        throw readError;
+      }
+
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+      }
+
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        if (chunk.trim() && (await consumeImportChunk(chunk))) {
+          return;
+        }
+      }
+
+      if (done) {
+        if (buffer.trim() && (await consumeImportChunk(buffer))) {
+          return;
+        }
+        break;
       }
     }
   } catch (error) {
-    if (error.name === 'AbortError') {
+    if (error.name === 'AbortError' || importState.cancelRequested) {
       return;
     }
 
@@ -12045,6 +12496,26 @@ async function startImportFromPaths(filePaths) {
     showToast(`Import failed: ${error.message}`, null);
     await hideImportOverlay(false);
   } finally {
+    if (internalAbort) {
+      try {
+        internalAbort.abort();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (reader) {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (callerAbortListener && importState.abortController?.signal) {
+      importState.abortController.signal.removeEventListener(
+        'abort',
+        callerAbortListener,
+      );
+    }
     finishImportSession();
   }
 }
@@ -12066,11 +12537,17 @@ function handleImportEvent(event, data) {
     importState.errorCount = 0;
     importState.importedPhotoIds = [];
 
+    setImportOverlayTitle();
+
     if (statusText) {
-      statusText.textContent = `Importing ${data.total} files...`;
+      statusText.textContent = `Importing (0 of ${importState.totalFiles.toLocaleString()})`;
+    }
+    const preflightStats = document.getElementById('importPreflightStats');
+    if (preflightStats) {
+      preflightStats.style.display = 'none';
     }
     if (stats) {
-      stats.style.display = 'flex';
+      stats.style.display = 'grid';
     }
 
     const detailsSection = document.getElementById('importDetailsSection');
@@ -12085,6 +12562,12 @@ function handleImportEvent(event, data) {
     importState.importedCount = data.imported || 0;
     importState.duplicateCount = data.duplicates || 0;
     importState.errorCount = data.errors || 0;
+    const current = Number(data.current || 0);
+    const total = Number(data.total || importState.totalFiles || 0);
+
+    if (statusText && total > 0) {
+      statusText.textContent = `Importing (${Math.min(current, total).toLocaleString()} of ${total.toLocaleString()})`;
+    }
 
     if (importedCount) {
       importedCount.textContent = importState.importedCount;
@@ -12116,6 +12599,31 @@ function handleImportEvent(event, data) {
 
   // Handle rejection events
   if (event === 'rejected') {
+    if (Number.isFinite(Number(data.imported))) {
+      importState.importedCount = data.imported || 0;
+    }
+    if (Number.isFinite(Number(data.duplicates))) {
+      importState.duplicateCount = data.duplicates || 0;
+    }
+    if (Number.isFinite(Number(data.errors))) {
+      importState.errorCount = data.errors || 0;
+    }
+
+    const current = Number(data.current || 0);
+    const total = Number(data.total || importState.totalFiles || 0);
+    if (statusText && total > 0) {
+      statusText.textContent = `Importing (${Math.min(current, total).toLocaleString()} of ${total.toLocaleString()})`;
+    }
+    if (importedCount) {
+      importedCount.textContent = importState.importedCount;
+    }
+    if (duplicateCount) {
+      duplicateCount.textContent = importState.duplicateCount;
+    }
+    if (errorCount) {
+      errorCount.textContent = importState.errorCount;
+    }
+
     if (!window.importRejections) {
       window.importRejections = [];
     }

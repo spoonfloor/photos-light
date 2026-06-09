@@ -1,8 +1,9 @@
 # Clean Library v2 — Handoff
 
-**Status:** v2 is the default engine. Cheap inventory preflight + resume + live ETA are implemented.  
-**Test library:** `/Volumes/public/clean-lib-speed-test` (~400 media files on NAS/WiFi)  
-**Last full clean (R7):** 2026-06-07 — 847.2s wall, SUCCESS, 371 survivors  
+**Status:** v2 is the default engine. Cheap inventory preflight, resume, live ETA, **blocking final verification**, and **skip-unchanged** re-runs are implemented.
+**Last doc sync:** 2026-06-08 (aligned with `make_library_clean_v2.py`, `main.js`, tests).
+**Test library:** `/Volumes/public/clean-lib-speed-test` (~400 media files on NAS/WiFi)
+**Last full clean (R7):** 2026-06-07 — 847.2s wall, SUCCESS, 371 survivors
 **Last profile:** `tools/results/scan-profile_2026-06-07T16-40-35+00-00.json`
 
 ---
@@ -17,7 +18,7 @@ Clean library was too slow on NAS-scale libraries (~60k photos). We:
 4. **Implemented resume** — checkpoint files on NAS; manual restart after disconnect (auto-reconnect deferred).
 5. **Profiled** the NAS fixture and ran an **end-to-end clean** on `/Volumes/public/clean-lib-speed-test`.
 
-**Bottom line:** First full clean @ 60k extrapolates to **~30–35h** on good WiFi (down from legacy ~55h). Preflight is seconds–low minutes, not hours. Confidence is still **~88% run-only** / **~95% with optional verify** — blocking verify and skip-unchanged remain the main gaps.
+**Bottom line:** First full clean @ 60k extrapolates to **~30–35h** on good WiFi (down from legacy ~55h). Preflight is seconds–low minutes, not hours. Every successful run ends with a **blocking final verification** (UI step 6); re-runs skip already-clean files. Remaining gaps are mostly **first-pass wall time**, **audit rulebook depth** (regex vs computed canonical path), and **auto NAS reconnect**.
 
 > **Note:** “v3” in older docs (`RESUME_NECESSITY_ANALYSIS.md`, `V3_MIGRATION_COMPLETE.md`) refers to **DB schema v3** or “no checkpoints” — not a third clean engine. Only **legacy** and **v2** exist in code.
 
@@ -36,8 +37,9 @@ Clean library was too slow on NAS-scale libraries (~60k photos). We:
 | Safe failure (trash not delete, DB backup, idempotent re-run) | ✓ |
 | Live **about X left** during run | ✓ rolling ETA (after ~25 files) |
 | Reasonable time @ 60k on good WiFi | ✗ still ~30–35h first clean |
-| Very high confidence without verify | ✗ — verify not blocking yet |
-| Skip unchanged / maintenance-scale re-runs | ✗ deferred |
+| **Blocking final verification** (fail if not CLEAN) | ✓ `audit` phase; `CleanLibraryError` on issues |
+| Skip unchanged / maintenance-scale re-runs | ✓ `_try_skip_unchanged_media_record()` |
+| UI **Start fresh** on interrupted run | ✓ interrupted gate + RESUME preflight buttons |
 | Automatic NAS reconnect mid-run | ✗ deferred (nice-to-have) |
 
 ---
@@ -56,9 +58,9 @@ make_library_perfect.py          # Router (default v2, PHOTOS_CLEAN_LIBRARY_ENGI
 | Piece | Role |
 |-------|------|
 | `make_library_perfect_legacy.py` | Frozen pre-v2: full audit preflight, pixel dupes, blocking final audit |
-| `make_library_clean_v2.py` | v2: inventory preflight, resume checkpoints, hash-only dupes, `purge_zip_artifacts()` |
+| `make_library_clean_v2.py` | v2: inventory preflight, resume checkpoints, hash-only dupes, skip-unchanged, blocking `final_audit()` |
 | `clean_library_inventory.py` | `inventory_media_library()` — photo/video counts, bytes, `about X hours` estimate |
-| `clean_library_fast_audit.py` | Full yardstick audit for `verify=True` only |
+| `clean_library_fast_audit.py` | Read-only yardstick audit — blocking at end of every run + optional `?verify=1` preflight scan |
 | `tools/benchmark_clean_library.py` | Scan / run / suite harness |
 | `tools/profile_clean_library_scan.py` | Per-file scan cost breakdown (dev/diagnostic) |
 
@@ -86,13 +88,17 @@ make_library_perfect.py          # Router (default v2, PHOTOS_CLEAN_LIBRARY_ENGI
 
 ### Clean library (Utilities → Clean)
 
-1. Overlay opens → **cheap inventory preflight** (`GET /api/library/make-perfect/scan`).
-2. Shows **N photos, P videos — about X hours** (or **Resume — about X remaining** if interrupted run exists).
-3. User clicks **Continue** → streaming clean (`POST /api/library/make-perfect/stream`).
-4. Status shows phase + **about X left** after ~25 files (rolling throughput); **estimating…** before that.
-5. Run completes → grid reloads.
+1. Overlay opens → checkpoint probe (`GET /api/library/make-perfect/checkpoint`). If resumable, user picks **Continue**, **Start over**, or **Cancel**.
+2. **Cheap inventory preflight** (`GET /api/library/make-perfect/scan`).
+3. Shows **N photos, P videos — about X hours** (or **Resume — about X remaining** if interrupted run exists).
+4. User clicks **Continue** → streaming clean (`POST /api/library/make-perfect/stream`).
+5. Working UI shows **6 steps** with file progress on scan, organize, rebuild, and final verification. Secondary line: **Total time remaining** (preflight estimate minus elapsed).
+6. Engine runs repair phases, then **blocking final verification** (step 6). Run succeeds only if audit returns zero issues.
+7. Finished UI → grid reloads.
 
 Implementation: `static/js/main.js` → `openUpdateIndexOverlay()` (preflight) → `executeUpdateIndex()` → `streamMakeLibraryPerfect()`.
+
+**Cancel** during run = pause (checkpoint preserved; toast: "Cleanup paused. You can continue it later.").
 
 **Legacy engine:** preflight still runs **full audit** (`DIRTY`/`CLEAN` + issue counts). No inventory duration. Resume stubs are no-ops.
 
@@ -106,9 +112,20 @@ Implementation: `static/js/main.js` → `openUpdateIndexOverlay()` (preflight) �
 
 ### v2 `run()` phases
 
-`setup` → `scan` → `dedupe` → `canonicalize` → `folders` → `rebuild_db`
+`setup` → `scan` → `dedupe` → `canonicalize` → `folders` → `rebuild_db` → **`audit`** → `complete`
 
-No blocking final audit at end of run. Scan/normalize is ~95% of wall time on first clean.
+| UI step | Engine phase | Notes |
+|---------|--------------|-------|
+| 1 | `scan` | Normalize, hash, metadata; skip-unchanged when DB + path prove clean |
+| 2 | `dedupe` | Hash duplicates → trash losers |
+| 3 | `canonicalize` | Move to canonical layout |
+| 4 | `folders` | Remove empty / non-canonical dirs |
+| 5 | `rebuild_db` | Rebuild photos table from disk |
+| 6 | `audit` | `run_fast_library_audit()` — **blocking**; `CleanLibraryError` if any issues |
+
+Scan/normalize is ~95% of wall time on first clean; audit adds a read-only pass (hashes every file). On audit failure, checkpoint stays at `audit` phase for resume.
+
+Tests: `CleanLibraryBlockingVerifyTest`, `test_second_clean_skips_unchanged_without_rehashing`, `test_resume_after_cancel_during_final_audit`.
 
 ---
 
@@ -257,7 +274,7 @@ End-to-end validation on restored dirty fixture via `run_db_normalization_engine
 
 **Stats:** `media_moved: 370`, `duplicates_trashed: 29`, `moved_to_trash: 49`, `metadata_fixed: 314`, `folders_removed: 86`, `db_rows_rebuilt: 371`
 
-**Phases (approx):** scan ~12m · dedupe · canonicalize · folders · rebuild_db · total 14.1m
+**Phases (approx):** scan ~12m · dedupe · canonicalize · folders · rebuild_db · audit · total 14.1m
 
 **Aftermath:** `terraform-master/` removed; media under year folders (`1900`, `2012`, `2022`–`2026`, …); `.logs/clean_library_20260607_105708.*` written; checkpoint `status: complete`.
 
@@ -279,8 +296,8 @@ End-to-end validation on restored dirty fixture via `run_db_normalization_engine
 | **Pixel dupes** | Yes | No |
 | **Full clean @ 60k** | ~55h | ~30–35h |
 | **Resume** | No | Yes (manual restart) |
-| **Confidence (run only)** | — | ~88% |
-| **Confidence (+ verify)** | ~99% | ~95% |
+| **Blocking final audit** | Yes (preflight + end) | Yes (end of every run) |
+| **Skip unchanged on re-run** | No | Yes |
 
 Legacy remains on disk and is selectable: `PHOTOS_CLEAN_LIBRARY_ENGINE=legacy`.
 
@@ -290,41 +307,46 @@ Legacy remains on disk and is selectable: `PHOTOS_CLEAN_LIBRARY_ENGINE=legacy`.
 
 Illustrative — not statistically proven.
 
-| Version | Confidence |
-|---------|------------|
-| Legacy full clean | ~99% |
-| v2 + verify | ~95% |
-| v2 run only (no verify) | ~88% |
-| Inventory preflight alone | 0% (duration/count only; not cleanliness) |
+| Outcome | Meaning |
+|---------|---------|
+| **v2 SUCCESS** | Repairs completed **and** blocking `audit` phase returned zero issues |
+| **v2 audit failure** | `CleanLibraryError`; checkpoint at `audit` for resume; UI shows generic failure today |
+| **Legacy SUCCESS** | Full clean + blocking final audit (legacy rulebook includes pixel dupes) |
+| **Inventory preflight alone** | 0% cleanliness (duration/count only; not a cleanliness gate) |
+
+**Known audit limitation:** fast audit checks canonical basename with a regex (`CANONICAL_BASENAME_RE`). Skip-unchanged uses computed `canonical_relative_path()`. These can theoretically disagree on edge cases — see deferred work below.
 
 ---
 
-## Shipped in this phase (Jun 2026)
+## Shipped (Jun 2026)
 
 - **`clean_library_inventory.py`** — cheap preflight + type/size-weighted estimate
 - **Inventory preflight API** — `INVENTORY` / `RESUME` scan responses
 - **UI preflight flow** — photos/videos + about X hours → Continue
-- **Rolling live ETA** — phase + “about X left” / “estimating…” during stream
+- **Checkpoint probe + interrupted gate** — Continue / Start over / Cancel before preflight
+- **6-step working UI** — scan → dedupe → organize → folders → rebuild → **Final verification**
+- **Blocking final audit** — `audit` phase; SUCCESS only when `run_fast_library_audit()` returns no issues
+- **Skip unchanged** — `_try_skip_unchanged_media_record()` on re-runs (no re-hash when DB + path prove clean)
 - **Resume checkpoints** — `.logs/clean_library_<ts>.*` artifact set
 - **`find_resumable_clean_library_checkpoint` / `abandon_clean_library_checkpoint`**
 - **Stream `resume` param** — auto-resume default; `false` = start fresh
+- **Cancel = pause** — cooperative cancel preserves checkpoint
+- **Manifest tail API** — `GET /api/library/make-perfect/manifest-tail`
 - **`tools/profile_clean_library_scan.py`** — per-file cost breakdown
-- **Router fix** — `make_library_perfect.py` syntax + legacy resume stubs
-- **Tests** — `test_clean_library_inventory.py`, `CleanLibraryResumeTest`, `test_scan_inventory_preflight_by_default`
+- **Tests** — `test_clean_library_inventory.py`, `CleanLibraryResumeTest`, `CleanLibraryBlockingVerifyTest`, skip-unchanged tests
 - **R7 live NAS clean** — full dirty fixture, SUCCESS, logs verified
 
 ---
 
-## What we did NOT do (deferred)
+## Deferred / not done
 
-- Skip unchanged / already-canonical files during run
-- Incremental diff vs DB (maintenance mode)
-- **Automatic** NAS reconnect mid-run
-- Blocking verify at end of run (fail if not CLEAN)
-- Canonical path proof in fast audit (legacy does dry-run canonicalize)
-- Parallel hashing
-- UI “Start fresh” button on resume preflight (API supports `resume: false`; no dedicated UI yet)
-- Post-run verify in Clean overlay
+- **Automatic** NAS reconnect mid-run (manual resume is the locked model)
+- **Canonical path proof in fast audit** — use `expected_rel` from hash + date instead of regex-only basename check
+- **Targeted repair loop** — audit fails → fix reported paths only → verify again
+- **Incremental diff vs DB** (maintenance mode beyond skip-unchanged)
+- **Parallel hashing** (careful on NAS)
+- **Audit failure UX** — surface issue kinds in overlay; guide user to resume at `audit` phase
+- **Phase-adaptive “time remaining”** during working UI (today: preflight estimate minus wall elapsed)
 
 ---
 
@@ -332,27 +354,26 @@ Illustrative — not statistically proven.
 
 Priority order:
 
-### 1. Skip unchanged files (biggest speed win on re-runs)
+### 1. Canonical path check in audit
 
-Skip when path + hash + DB + metadata already prove clean. **Deferred** until 2nd+ cleans matter; does little on first dirty pass.
+`expected_rel` from hash + date vs regex-only today. Align with skip-unchanged logic.
 
-### 2. Make verify mandatory and blocking
+### 2. Targeted repair loop
 
-End every run with `verify_library_cleanliness()`. Fail run if not `CLEAN`.
+Audit fails → fix reported paths only → verify again.
 
-### 3. Canonical path check in verify (no temp copy)
+### 3. Audit failure UX
 
-`expected_rel` from hash + date vs regex-only today.
+Clear failed state in overlay (not just “Failed to clean library” toast).
 
-### 4. Targeted repair loop
+### 4. Maintenance-run target @ 60k
 
-Verify fails → fix reported paths only → verify again.
+Measure skip-unchanged re-runs; goal: minutes, not hours.
 
 ### 5. Later extras
 
 - Parallel hash workers (careful on NAS)
 - Automatic NAS reconnect
-- UI “Start fresh” on resume screen
 
 ---
 
@@ -430,7 +451,6 @@ PHOTOS_CLEAN_LIBRARY_ENGINE=legacy python3 app.py
 
 ## Open questions
 
-1. Should verify be **automatic** at end of every clean, with a clear failed state?
-2. Is **~4.5h verify @ 60k** acceptable bundled, or must verify also be incremental?
-3. When skip-unchanged ships, what is the **maintenance run** target @ 60k (goal: minutes)?
-4. Should UI expose **Start fresh** when `RESUME` preflight is shown?
+1. Is bundled audit @ 60k (~4.5h directional) acceptable, or must audit also be incremental?
+2. What is the **maintenance re-run** target @ 60k with skip-unchanged (goal: minutes)?
+3. Should audit failure offer **retry verification only** (resume at `audit` without re-running scan)?

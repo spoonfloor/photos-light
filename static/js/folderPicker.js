@@ -8,6 +8,7 @@ const FolderPicker = (() => {
   const VIRTUAL_ROOT = '__LOCATIONS__';
   const PICKER_INTENT = {
     OPEN_EXISTING_LIBRARY: 'open_existing_library',
+    CONVERT_TO_LIBRARY: 'convert_to_library',
     CHOOSE_LIBRARY_LOCATION: 'choose_library_location',
     GENERIC_FOLDER_SELECTION: 'generic_folder_selection',
   };
@@ -16,6 +17,9 @@ const FolderPicker = (() => {
   let currentHasDb = false; // Track if current selected folder has database
   let currentHasOpenableDb = false; // Track if current folder's DB looks openable
   let selectedHasOpenableDb = false; // Track if the resolved picker action should read as "Open"
+  let selectedHasDb = false; // Track if selected folder has any database file
+  let selectedHasMedia = false; // Track if selected folder has media to convert
+  let selectedConvertFolderWarningShow = null; // null until probed; convert intent only
   let pickerIntent = PICKER_INTENT.GENERIC_FOLDER_SELECTION;
   let topLevelLocations = [];
   let resolveCallback = null; // Store resolve callback for database click handler
@@ -117,11 +121,11 @@ const FolderPicker = (() => {
     };
   }
 
-  async function probeLibraryPath(path) {
+  async function probeLibraryPath(path, { fast = false } = {}) {
     const response = await fetch('/api/library/probe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_path: path }),
+      body: JSON.stringify({ library_path: path, fast }),
     });
 
     if (!response.ok) {
@@ -135,6 +139,9 @@ const FolderPicker = (() => {
     return {
       has_db: data.has_db || false,
       has_openable_db: data.has_openable_db || false,
+      has_media: data.has_media || false,
+      media_count: data.media_count || 0,
+      convert_folder_warning: data.convert_folder_warning || null,
     };
   }
 
@@ -174,12 +181,36 @@ const FolderPicker = (() => {
     return pickerIntent === PICKER_INTENT.OPEN_EXISTING_LIBRARY;
   }
 
+  function shouldUseConvertLibraryCta() {
+    return pickerIntent === PICKER_INTENT.CONVERT_TO_LIBRARY;
+  }
+
+  function usesStrictFolderValidation() {
+    return shouldUseOpenLibraryCta() || shouldUseConvertLibraryCta();
+  }
+
+  function isChooseActionBlocked() {
+    if (selectedPath === VIRTUAL_ROOT) {
+      return true;
+    }
+    if (shouldUseOpenLibraryCta()) {
+      return !selectedHasOpenableDb;
+    }
+    if (shouldUseConvertLibraryCta()) {
+      return !selectedHasMedia || selectedHasOpenableDb;
+    }
+    return false;
+  }
+
   function getPrimaryActionLabel() {
-    if (!shouldUseOpenLibraryCta()) {
-      return 'Continue';
+    if (shouldUseOpenLibraryCta()) {
+      return 'Open';
+    }
+    if (shouldUseConvertLibraryCta()) {
+      return 'Convert';
     }
 
-    return selectedHasOpenableDb ? 'Open' : 'Continue';
+    return 'Continue';
   }
 
   // ===========================================================================
@@ -342,8 +373,11 @@ const FolderPicker = (() => {
       currentHasDb = false;
       currentHasOpenableDb = false;
       selectedHasOpenableDb = false;
+      selectedHasDb = false;
+      selectedHasMedia = false;
+      selectedConvertFolderWarningShow = null;
       updateButtonText();
-      
+
       folderList.innerHTML = topLevelLocations
         .map(
           (loc) => `
@@ -384,8 +418,11 @@ const FolderPicker = (() => {
       currentHasOpenableDb = result.has_openable_db;
       if (shouldUseOpenLibraryCta() && selectedPath === currentPath) {
         selectedHasOpenableDb = currentHasOpenableDb;
-      } else if (!shouldUseOpenLibraryCta()) {
+        selectedHasDb = currentHasDb;
+      } else if (!usesStrictFolderValidation()) {
         selectedHasOpenableDb = false;
+        selectedHasDb = false;
+        selectedHasMedia = false;
       }
       
       // Update button based on database presence
@@ -450,8 +487,14 @@ const FolderPicker = (() => {
           // Check if database file was clicked
           const dbItem = e.target.closest('.folder-item[data-is-db]');
           if (dbItem) {
-            // Same action as clicking "Choose" button
+            // Same action as clicking "Open" when the library is readable.
             if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
+            if (shouldUseConvertLibraryCta()) {
+              return;
+            }
+            if (shouldUseOpenLibraryCta() && !currentHasOpenableDb) {
+              return;
+            }
               activeItemKey = dbItem.dataset.itemKey || null;
               selectedPath = currentPath;
               updateSelectedPath();
@@ -498,8 +541,12 @@ const FolderPicker = (() => {
       currentHasOpenableDb = false;
       if (shouldUseOpenLibraryCta() && selectedPath === currentPath) {
         selectedHasOpenableDb = false;
-      } else if (!shouldUseOpenLibraryCta()) {
+        selectedHasDb = false;
+        selectedHasMedia = false;
+      } else if (!usesStrictFolderValidation()) {
         selectedHasOpenableDb = false;
+        selectedHasDb = false;
+        selectedHasMedia = false;
       }
       updateButtonText();
     }
@@ -522,46 +569,167 @@ const FolderPicker = (() => {
     const chooseBtn = pickerEl('chooseBtn');
     if (chooseBtn) {
       chooseBtn.textContent = getPrimaryActionLabel();
+      chooseBtn.disabled = isChooseActionBlocked();
+    }
+    updateSelectionHint();
+    updateConvertVerdict();
+  }
+
+  function updateConvertVerdict() {
+    const verdictEl = document.getElementById('folderPickerConvertVerdict');
+    if (!verdictEl) {
+      return;
+    }
+
+    if (!shouldUseConvertLibraryCta() || selectedPath === VIRTUAL_ROOT) {
+      verdictEl.hidden = true;
+      verdictEl.textContent = '';
+      verdictEl.classList.remove(
+        'picker-convert-verdict--good',
+        'picker-convert-verdict--bad',
+      );
+      return;
+    }
+
+    if (selectedHasOpenableDb || !selectedHasMedia) {
+      verdictEl.hidden = true;
+      verdictEl.textContent = '';
+      verdictEl.classList.remove(
+        'picker-convert-verdict--good',
+        'picker-convert-verdict--bad',
+      );
+      return;
+    }
+
+    if (selectedConvertFolderWarningShow === null) {
+      verdictEl.hidden = true;
+      verdictEl.textContent = '';
+      verdictEl.classList.remove(
+        'picker-convert-verdict--good',
+        'picker-convert-verdict--bad',
+      );
+      return;
+    }
+
+    verdictEl.hidden = false;
+    if (selectedConvertFolderWarningShow) {
+      verdictEl.textContent = 'This may not be a good folder for conversion';
+      verdictEl.classList.add('picker-convert-verdict--bad');
+      verdictEl.classList.remove('picker-convert-verdict--good');
+      return;
+    }
+
+    verdictEl.textContent = 'Yes, looks good for conversion';
+    verdictEl.classList.add('picker-convert-verdict--good');
+    verdictEl.classList.remove('picker-convert-verdict--bad');
+  }
+
+  function updateSelectionHint() {
+    const hintEl = document.getElementById('folderPickerSelectionHint');
+    if (!hintEl) {
+      return;
+    }
+
+    if (!usesStrictFolderValidation() || selectedPath === VIRTUAL_ROOT) {
+      hintEl.hidden = true;
+      hintEl.textContent = '';
+      return;
+    }
+
+    if (shouldUseOpenLibraryCta()) {
+      if (selectedHasOpenableDb) {
+        hintEl.hidden = true;
+        hintEl.textContent = '';
+        return;
+      }
+
+      hintEl.hidden = false;
+      hintEl.textContent = selectedHasDb
+        ? "Library database found here but it can't be opened."
+        : 'No photo library found in this folder.';
+      return;
+    }
+
+    if (shouldUseConvertLibraryCta()) {
+      if (selectedHasOpenableDb) {
+        hintEl.hidden = false;
+        hintEl.textContent =
+          'This folder already contains a library. Use Open library instead.';
+        return;
+      }
+
+      if (selectedHasMedia) {
+        hintEl.hidden = true;
+        hintEl.textContent = '';
+        return;
+      }
+
+      hintEl.hidden = false;
+      hintEl.textContent = 'No media files found in this folder.';
     }
   }
 
   async function syncSelectedPathProbe() {
     const requestId = ++selectionProbeRequestId;
 
-    if (!shouldUseOpenLibraryCta()) {
+    if (!usesStrictFolderValidation()) {
       selectedHasOpenableDb = false;
+      selectedHasDb = false;
+      selectedHasMedia = false;
+      selectedConvertFolderWarningShow = null;
       updateButtonText();
       return;
     }
 
     if (selectedPath === VIRTUAL_ROOT) {
       selectedHasOpenableDb = false;
+      selectedHasDb = false;
+      selectedHasMedia = false;
+      selectedConvertFolderWarningShow = null;
       updateButtonText();
       return;
     }
 
-    if (selectedPath === currentPath) {
-      selectedHasOpenableDb = currentHasOpenableDb;
-      updateButtonText();
-      return;
-    }
-
-    // While probing an explicitly selected sibling folder, fall back to the safe CTA.
     selectedHasOpenableDb = false;
+    selectedHasDb = false;
+    selectedHasMedia = false;
+    selectedConvertFolderWarningShow = null;
     updateButtonText();
 
     try {
-      const result = await probeLibraryPath(selectedPath);
+      if (shouldUseOpenLibraryCta()) {
+        if (selectedPath === currentPath) {
+          selectedHasOpenableDb = currentHasOpenableDb;
+          selectedHasDb = currentHasDb;
+        } else {
+          const result = await listDirectory(selectedPath);
+          if (requestId !== selectionProbeRequestId) {
+            return;
+          }
+          selectedHasOpenableDb = result.has_openable_db;
+          selectedHasDb = result.has_db;
+        }
+        updateButtonText();
+        return;
+      }
+
+      const result = await probeLibraryPath(selectedPath, { fast: true });
       if (requestId !== selectionProbeRequestId) {
         return;
       }
       selectedHasOpenableDb = result.has_openable_db;
+      selectedHasDb = result.has_db;
+      selectedHasMedia = result.has_media;
+      selectedConvertFolderWarningShow = result.convert_folder_warning?.show ?? false;
       updateButtonText();
     } catch (_) {
       if (requestId !== selectionProbeRequestId) {
         return;
       }
       selectedHasOpenableDb = false;
+      selectedHasDb = false;
+      selectedHasMedia = false;
+      selectedConvertFolderWarningShow = null;
       updateButtonText();
     }
   }
@@ -577,11 +745,11 @@ const FolderPicker = (() => {
       activeItemKey = getFolderItemKey('folder', path);
       
     }
-    
+
+    updateSelectedPath();
     // Re-render folder list to update checkbox states
     await updateFolderList();
     await syncSelectedPathProbe();
-    updateSelectedPath();
     notifyEmbeddedPathChange();
   }
 
@@ -648,6 +816,56 @@ const FolderPicker = (() => {
         console.warn('⚠️ Home directory not found in topLevelLocations');
       }
     }
+  }
+
+  function appendPickerWarningText(container, warning) {
+    const label = 'Warning!';
+    const labelIndex = warning.indexOf(label);
+    if (labelIndex === -1) {
+      container.textContent = warning;
+      return;
+    }
+
+    const before = warning.slice(0, labelIndex);
+    const after = warning.slice(labelIndex + label.length);
+    if (before) {
+      container.append(document.createTextNode(before));
+    }
+    const labelEl = document.createElement('span');
+    labelEl.className = 'picker-subtitle-warning-label';
+    labelEl.textContent = label;
+    container.append(labelEl);
+    if (after) {
+      container.append(document.createTextNode(after));
+    }
+  }
+
+  function setPickerSubtitle(subtitle) {
+    const subtitleEl = document.getElementById('folderPickerSubtitle');
+    if (!subtitleEl) {
+      return;
+    }
+
+    if (shouldUseConvertLibraryCta() && subtitle.includes('\n')) {
+      const breakIndex = subtitle.indexOf('\n');
+      const intro = subtitle.slice(0, breakIndex);
+      const warning = subtitle.slice(breakIndex + 1);
+
+      subtitleEl.replaceChildren();
+      subtitleEl.classList.add('picker-subtitle--stacked');
+
+      const introEl = document.createElement('span');
+      introEl.textContent = intro;
+      const warningEl = document.createElement('span');
+      warningEl.className = 'picker-subtitle-warning';
+      appendPickerWarningText(warningEl, warning);
+
+      subtitleEl.append(introEl, warningEl);
+      return;
+    }
+
+    subtitleEl.classList.remove('picker-subtitle--stacked');
+    subtitleEl.textContent = subtitle;
   }
 
   // ===========================================================================
@@ -721,6 +939,9 @@ const FolderPicker = (() => {
     currentHasDb = false;
     currentHasOpenableDb = false;
     selectedHasOpenableDb = false;
+    selectedHasDb = false;
+    selectedHasMedia = false;
+    selectedConvertFolderWarningShow = null;
     activeItemKey = null;
 
     updateBreadcrumb();
@@ -784,10 +1005,16 @@ const FolderPicker = (() => {
 
         // Configure picker
         const title = options.title || 'Open library';
-        const subtitle = options.subtitle || 'Select an existing library folder (or choose where to create one).';
+        const subtitle =
+          options.subtitle ||
+          (pickerIntent === PICKER_INTENT.OPEN_EXISTING_LIBRARY
+            ? 'Select a photo library folder to open.'
+            : pickerIntent === PICKER_INTENT.CONVERT_TO_LIBRARY
+              ? 'Select a folder containing media files to convert into a new library.\n⚠️ Warning! This process makes permanent changes to your files, including renaming, reorganizing, and moving incompatible files to a Trash folder for review.'
+              : 'Select an existing library folder (or choose where to create one).');
 
         document.getElementById('folderPickerTitle').textContent = title;
-        document.getElementById('folderPickerSubtitle').textContent = subtitle;
+        setPickerSubtitle(subtitle);
 
         const showGoBack = wizardActions && !!options.showGoBack;
         const goBackBtn = document.getElementById('folderPickerGoBackBtn');
@@ -806,6 +1033,9 @@ const FolderPicker = (() => {
         currentHasDb = false;
         currentHasOpenableDb = false;
         selectedHasOpenableDb = false;
+        selectedHasDb = false;
+        selectedHasMedia = false;
+        selectedConvertFolderWarningShow = null;
         activeItemKey = null;
 
         // Initialize UI
@@ -850,8 +1080,7 @@ const FolderPicker = (() => {
         };
 
         const handleChoose = async () => {
-          if (selectedPath === VIRTUAL_ROOT) {
-            // No path selected
+          if (isChooseActionBlocked()) {
             return;
           }
 
@@ -900,6 +1129,9 @@ const FolderPicker = (() => {
             actionBtn === closeBtn ||
             (showGoBack && goBackBtn && actionBtn === goBackBtn)
           ) {
+            return;
+          }
+          if (chooseBtn?.disabled) {
             return;
           }
           e.preventDefault();

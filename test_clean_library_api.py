@@ -135,6 +135,36 @@ class CleanLibraryApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Invalid manifest path", response.get_json()["error"])
 
+    def test_import_scan_paths_returns_preflight_counts_and_estimate(self):
+        source_dir = os.path.join(self.tmpdir.name, "import-source")
+        os.makedirs(source_dir, exist_ok=True)
+        photo_path = os.path.join(source_dir, "photo.jpg")
+        video_path = os.path.join(source_dir, "clip.mov")
+        note_path = os.path.join(source_dir, "notes.txt")
+
+        with open(photo_path, "wb") as handle:
+            handle.write(b"photo-bytes")
+        with open(video_path, "wb") as handle:
+            handle.write(b"video-bytes-video-bytes")
+        with open(note_path, "wb") as handle:
+            handle.write(b"not media")
+
+        response = self.client.post(
+            "/api/import/scan-paths",
+            json={"paths": [source_dir]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["total_count"], 2)
+        self.assertEqual(payload["photo_count"], 1)
+        self.assertEqual(payload["video_count"], 1)
+        self.assertEqual(payload["photo_bytes"], os.path.getsize(photo_path))
+        self.assertEqual(payload["video_bytes"], os.path.getsize(video_path))
+        self.assertGreater(payload["estimated_seconds"], 0)
+        self.assertTrue(payload["estimated_display"])
+
 
 if __name__ == "__main__":
     unittest.main()

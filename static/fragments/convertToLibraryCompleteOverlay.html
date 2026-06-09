@@ -1,0 +1,37 @@
+<!-- Convert to Library Complete Overlay (stub completion screen) -->
+<div class="import-overlay" id="convertToLibraryCompleteOverlay" style="display: none">
+  <div class="import-card">
+    <div class="import-header">
+      <span class="import-title">Conversion complete</span>
+      <button
+        class="import-close-btn"
+        id="convertToLibraryCompleteCloseBtn"
+        aria-label="Close"
+      >
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <p style="margin: 0 0 12px 0; font-size: 14px">
+          Your folder has been converted into a photo library.
+        </p>
+        <p
+          id="convertToLibraryCompletePath"
+          style="
+            font-family: monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin: 0;
+            word-break: break-all;
+          "
+        ></p>
+      </div>
+    </div>
+    <div class="import-actions">
+      <button class="btn btn-primary" id="convertToLibraryCompleteDoneBtn">
+        Done
+      </button>
+    </div>
+  </div>
+</div>
