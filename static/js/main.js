@@ -1,6 +1,12 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v390';
+const MAIN_JS_VERSION = 'v404';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
+
+/** Photos fetched per viewport window (initial open + each scroll load). */
+const PHOTO_PAGE_SIZE = 400;
+
+let gridScrollObserver = null;
+let gridInteractionsWired = false;
 
 // =====================
 // STATE MANAGEMENT
@@ -25,6 +31,8 @@ const state = {
   deleteInProgress: false,
   hasMore: true, // For infinite scroll
   currentOffset: 0, // Current pagination offset
+  photoTotalCount: 0, // Total rows in DB (windowed load)
+  loadingMore: false, // Scroll-triggered page in flight
   navigateToMonth: null, // Month to navigate to after closing lightbox (e.g., '2025-12')
   hasDatabase: false, // Track whether database exists and is healthy
   libraryPath: null, // Current library folder path (set on switch)
@@ -1241,6 +1249,7 @@ function wireDatePicker() {
           const targetY = actualSection.offsetTop - appBarHeight - 20; // 20px padding
           window.scrollTo({ top: targetY, behavior: 'smooth' });
         } else {
+          await hydrateGridForMonthJump(actualMonth);
         }
       } catch (error) {
         console.error('❌ Error finding nearest month:', error);
@@ -5842,7 +5851,11 @@ function updateLightboxArrowStates() {
 
   // Dim right arrow if at last photo
   if (currentIndex >= totalPhotos - 1) {
-    nextBtn.classList.add('inactive');
+    if (state.hasMore && !hasActivePhotoFilters()) {
+      nextBtn.classList.remove('inactive');
+    } else {
+      nextBtn.classList.add('inactive');
+    }
   } else {
     nextBtn.classList.remove('inactive');
   }
@@ -5851,7 +5864,7 @@ function updateLightboxArrowStates() {
 /**
  * Navigate to next/prev photo in lightbox
  */
-function navigateLightbox(direction) {
+async function navigateLightbox(direction) {
   if (state.lightboxPhotoIndex === null) return;
 
   let newIndex;
@@ -5862,7 +5875,16 @@ function navigateLightbox(direction) {
     }
   } else {
     newIndex = state.lightboxPhotoIndex + direction;
-    if (newIndex < 0 || newIndex >= state.photos.length) {
+    if (newIndex < 0) {
+      return;
+    }
+    if (newIndex >= state.photos.length) {
+      if (direction > 0 && state.hasMore) {
+        const loaded = await loadMorePhotos();
+        if (loaded && newIndex < state.photos.length) {
+          openLightbox(newIndex);
+        }
+      }
       return;
     }
   }
@@ -5874,28 +5896,196 @@ function navigateLightbox(direction) {
 // DATA LOADING
 // =====================
 
-/**
- * Fetch photos from the API
- */
-async function fetchPhotos(offset = 0, limit = 100) {
-  const sort = state.currentSortOrder;
-  const url = `/api/photos?offset=${offset}&limit=${limit}&sort=${sort}`;
+function comparePhotosForLibrarySort(a, b, sortOrder = state.currentSortOrder) {
+  const aDated = Boolean(a.date);
+  const bDated = Boolean(b.date);
+  if (aDated !== bDated) {
+    return aDated ? -1 : 1;
+  }
+  if (aDated && bDated && a.date !== b.date) {
+    const cmp = a.date.localeCompare(b.date);
+    return sortOrder === 'newest' ? -cmp : cmp;
+  }
+  return (a.path || '').localeCompare(b.path || '');
+}
 
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    const data = await response.json();
-    return data.photos || [];
-  } catch (error) {
-    console.error('Error fetching photos:', error);
+function sortPhotosInLibraryOrder(photos, sortOrder = state.currentSortOrder) {
+  photos.sort((a, b) => comparePhotosForLibrarySort(a, b, sortOrder));
+}
+
+function mergePhotosIntoLibrary(incomingPhotos) {
+  if (!incomingPhotos?.length) {
     return [];
+  }
+
+  const knownIds = new Set(state.photos.map((photo) => photo.id));
+  const newPhotos = incomingPhotos.filter((photo) => !knownIds.has(photo.id));
+  if (!newPhotos.length) {
+    return [];
+  }
+
+  state.photos = state.photos.concat(newPhotos);
+  sortPhotosInLibraryOrder(state.photos);
+  return newPhotos;
+}
+
+/**
+ * Fetch one page of photos from the API.
+ */
+async function fetchPhotosPage(offset = 0, limit = PHOTO_PAGE_SIZE, options = {}) {
+  const {
+    sortOrder = state.currentSortOrder,
+    signal,
+  } = options;
+  const url = `/api/photos?offset=${offset}&limit=${limit}&sort=${sortOrder}`;
+
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  const data = await response.json();
+  if (checkForDatabaseCorruption(data)) {
+    throw new Error(data.error || data.message || 'Database appears corrupted');
+  }
+  return data;
+}
+
+function resetPhotoWindowState() {
+  state.photos = [];
+  state.currentOffset = 0;
+  state.photoTotalCount = 0;
+  state.hasMore = false;
+  state.loadingMore = false;
+}
+
+function updatePhotoWindowFromPage(data, { append = false } = {}) {
+  const pagePhotos = data.photos || [];
+  const total =
+    typeof data.total === 'number' ? data.total : pagePhotos.length;
+
+  if (append) {
+    state.photos = state.photos.concat(pagePhotos);
+  } else {
+    state.photos = pagePhotos;
+  }
+
+  state.photoTotalCount = total;
+  state.currentOffset = state.photos.length;
+  state.hasMore = state.currentOffset < total;
+  state.hasDatabase = true;
+  return pagePhotos;
+}
+
+function ensureScrollSentinel(container = document.getElementById('photoContainer')) {
+  if (!container) {
+    return null;
+  }
+
+  let sentinel = document.getElementById('scroll-sentinel');
+  if (state.hasMore) {
+    if (!sentinel) {
+      sentinel = document.createElement('div');
+      sentinel.id = 'scroll-sentinel';
+      sentinel.className = 'scroll-sentinel';
+      sentinel.setAttribute('aria-hidden', 'true');
+      container.appendChild(sentinel);
+    } else if (sentinel.parentElement !== container) {
+      container.appendChild(sentinel);
+    }
+  } else if (sentinel) {
+    sentinel.remove();
+  }
+
+  return sentinel;
+}
+
+function setupGridScrollObserver() {
+  const sentinel = ensureScrollSentinel();
+  if (!sentinel) {
+    if (gridScrollObserver) {
+      gridScrollObserver.disconnect();
+      gridScrollObserver = null;
+    }
+    return;
+  }
+
+  if (gridScrollObserver) {
+    gridScrollObserver.disconnect();
+  }
+
+  gridScrollObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          void loadMorePhotos();
+        }
+      });
+    },
+    { rootMargin: '1200px 0px 1200px 0px' },
+  );
+
+  gridScrollObserver.observe(sentinel);
+}
+
+async function loadMorePhotos() {
+  if (!state.hasMore || state.loadingMore || state.loading) {
+    return false;
+  }
+
+  state.loadingMore = true;
+  try {
+    const data = await fetchPhotosPage(state.currentOffset, PHOTO_PAGE_SIZE);
+    const pagePhotos = updatePhotoWindowFromPage(data, { append: true });
+    if (!pagePhotos.length) {
+      state.hasMore = false;
+      ensureScrollSentinel();
+      return false;
+    }
+
+    renderPhotoGrid(getFilteredPhotos(pagePhotos), true);
+    setupThumbnailLazyLoading();
+    ensureScrollSentinel();
+    setupGridScrollObserver();
+    return true;
+  } catch (error) {
+    console.error('❌ Error loading more photos:', error);
+    return false;
+  } finally {
+    state.loadingMore = false;
+  }
+}
+
+async function hydrateGridForMonthJump(targetMonth) {
+  try {
+    const response = await fetch(
+      `/api/photos/jump?month=${encodeURIComponent(targetMonth)}&limit=${PHOTO_PAGE_SIZE}&sort=${state.currentSortOrder}`,
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to load photos for that date');
+    }
+
+    const newPhotos = mergePhotosIntoLibrary(data.photos || []);
+    if (newPhotos.length) {
+      renderPhotoGrid(getFilteredPhotos(newPhotos), true);
+      setupThumbnailLazyLoading();
+      ensureScrollSentinel();
+      setupGridScrollObserver();
+    }
+
+    const monthSection = document.getElementById(`month-${targetMonth}`);
+    if (monthSection) {
+      const appBarHeight = 60;
+      const targetY = monthSection.offsetTop - appBarHeight - 20;
+      window.scrollTo({ top: targetY, behavior: 'smooth' });
+    }
+  } catch (error) {
+    console.error('❌ Error jumping to month:', error);
   }
 }
 
 /**
- * Load ALL photos metadata at once (lightweight)
+ * Load the first viewport window of photos, then stream more on scroll.
  */
 async function loadAndRenderPhotos(append = false, options = {}) {
   const {
@@ -5903,6 +6093,10 @@ async function loadAndRenderPhotos(append = false, options = {}) {
     generation = state.libraryGeneration,
     sortOrder = state.currentSortOrder,
   } = options;
+
+  if (append) {
+    return loadMorePhotos();
+  }
 
   if (currentPhotoLoadAbortController) {
     currentPhotoLoadAbortController.abort();
@@ -5915,10 +6109,10 @@ async function loadAndRenderPhotos(append = false, options = {}) {
 
   const loadPromise = (async () => {
     try {
-      const response = await fetch(`/api/photos?sort=${sortOrder}`, {
+      const data = await fetchPhotosPage(0, PHOTO_PAGE_SIZE, {
+        sortOrder,
         signal: abortController.signal,
       });
-      const data = await response.json();
 
       const isStaleLoad =
         abortController.signal.aborted ||
@@ -5930,46 +6124,22 @@ async function loadAndRenderPhotos(append = false, options = {}) {
         return false;
       }
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to load photos');
-      }
+      resetPhotoWindowState();
+      const pagePhotos = updatePhotoWindowFromPage(data, { append: false });
 
-      // Check for database corruption
-      if (checkForDatabaseCorruption(data)) {
-        throw new Error(
-          data.error || data.message || 'Database appears corrupted',
-        );
-      }
-
-      state.photos = data.photos;
-      state.hasDatabase = true; // Database exists if we successfully loaded photos
-
-      // Reset shift-select anchor when reloading (indices may have changed)
-      if (!append) {
-        state.lastClickedIndex = null;
-      }
+      state.lastClickedIndex = null;
 
       renderPhotoGrid(getFilteredPhotos(state.photos), false);
-
       setupThumbnailLazyLoading();
+      ensureScrollSentinel();
+      setupGridScrollObserver();
 
       updateUtilityMenuAvailability();
       updateFilterChipRailVisibility();
-
-      await populateDatePicker();
-
-      const isStaleAfterPicker =
-        abortController.signal.aborted ||
-        loadId !== photoLoadRequestId ||
-        !isCurrentLibraryGeneration(generation) ||
-        sortOrder !== state.currentSortOrder;
-
-      if (isStaleAfterPicker) {
-        return false;
-      }
-
-      // Re-enable app bar buttons after transition
       enableAppBarButtons();
+
+      void populateDatePicker();
+
       return true;
     } catch (error) {
       const isExpectedAbort =
@@ -5981,7 +6151,7 @@ async function loadAndRenderPhotos(append = false, options = {}) {
         return false;
       }
       console.error('❌ Error loading photos:', error);
-      state.hasDatabase = false; // Mark database as unavailable on error
+      state.hasDatabase = false;
       throw error;
     } finally {
       if (currentPhotoLoad?.id === loadId) {
@@ -5996,7 +6166,7 @@ async function loadAndRenderPhotos(append = false, options = {}) {
 
   currentPhotoLoad = {
     id: loadId,
-    append,
+    append: false,
     generation,
     sortOrder,
     promise: loadPromise,
@@ -6465,16 +6635,16 @@ function renderPhotoGrid(photos, append = false) {
     const sentinel = document.getElementById('scroll-sentinel');
     if (sentinel && html) {
       sentinel.insertAdjacentHTML('beforebegin', html);
+    } else if (html) {
+      container.insertAdjacentHTML('beforeend', html);
+      ensureScrollSentinel(container);
     }
   } else {
     container.innerHTML = html;
+    ensureScrollSentinel(container);
   }
 
-  // Wire up photo card clicks
-  wirePhotoCards();
-
-  // Wire up month selection circles
-  wireMonthSelectors();
+  ensureGridInteractionsWired();
 
   // Notify date picker to observe new month sections
   if (state.onMonthsRendered) {
@@ -6482,53 +6652,114 @@ function renderPhotoGrid(photos, append = false) {
   }
 }
 
+function ensureGridInteractionsWired() {
+  if (gridInteractionsWired) {
+    return;
+  }
+
+  const container = document.getElementById('photoContainer');
+  if (!container) {
+    return;
+  }
+
+  container.addEventListener('click', (event) => {
+    const monthCircle = event.target.closest('.month-select-circle');
+    if (monthCircle && container.contains(monthCircle)) {
+      handleMonthCircleClick(monthCircle, event);
+      return;
+    }
+
+    const card = event.target.closest('.photo-card');
+    if (card && container.contains(card)) {
+      handlePhotoCardClick(card, event);
+    }
+  });
+
+  gridInteractionsWired = true;
+}
+
+function handlePhotoCardClick(card, event) {
+  const index = parseInt(card.dataset.index, 10);
+
+  if (state.selectedPhotos.size > 0) {
+    togglePhotoSelection(card, event);
+    return;
+  }
+
+  if (event.shiftKey) {
+    event.stopPropagation();
+    togglePhotoSelection(card, event);
+    return;
+  }
+
+  const selectCircle = card.querySelector('.select-circle');
+  if (
+    selectCircle &&
+    (event.target === selectCircle || selectCircle.contains(event.target))
+  ) {
+    event.stopPropagation();
+    togglePhotoSelection(card, event);
+    return;
+  }
+
+  const photoId = parseInt(card.dataset.id, 10);
+  const libraryIndex = getPhotoLibraryIndex(photoId);
+  if (libraryIndex >= 0) {
+    openLightbox(libraryIndex);
+  }
+}
+
+function handleMonthCircleClick(circle, event) {
+  event.stopPropagation();
+  event.preventDefault();
+
+  const monthSection = circle.closest('.month-section');
+  if (!monthSection) {
+    return;
+  }
+
+  const month = monthSection.dataset.month;
+  const monthPhotoCards = monthSection.querySelectorAll('.photo-card');
+  if (monthPhotoCards.length === 0) {
+    return;
+  }
+
+  const firstPhotoIndex = parseInt(monthPhotoCards[0].dataset.index, 10);
+  const lastPhotoIndex = parseInt(
+    monthPhotoCards[monthPhotoCards.length - 1].dataset.index,
+    10,
+  );
+
+  if (event.shiftKey && state.lastClickedIndex !== null) {
+    const start = Math.min(state.lastClickedIndex, lastPhotoIndex);
+    const end = Math.max(state.lastClickedIndex, lastPhotoIndex);
+    const allCards = Array.from(document.querySelectorAll('.photo-card'));
+    const cardsInRange = allCards.filter((card) => {
+      const cardIndex = parseInt(card.dataset.index, 10);
+      return cardIndex >= start && cardIndex <= end;
+    });
+
+    cardsInRange.forEach((rangeCard) => {
+      const rangeId = parseInt(rangeCard.dataset.id, 10);
+      rangeCard.classList.add('selected');
+      state.selectedPhotos.add(rangeId);
+    });
+
+    state.lastClickedIndex = lastPhotoIndex;
+    updateDeleteButtonVisibility();
+    updateMonthCircleStates();
+    return;
+  }
+
+  toggleMonthSelection(month);
+  state.lastClickedIndex = lastPhotoIndex;
+}
+
 /**
- * Wire up photo card interactions
+ * @deprecated Per-card wiring replaced by ensureGridInteractionsWired delegation.
  */
 function wirePhotoCards() {
-  const cards = document.querySelectorAll('.photo-card');
-
-  cards.forEach((card) => {
-    const selectCircle = card.querySelector('.select-circle');
-    const photoArea = card.querySelector('.placeholder');
-
-    // Click on card: handle selection or open lightbox
-    card.addEventListener('click', (e) => {
-      const index = parseInt(card.dataset.index);
-
-      // If there's an active selection, ALL clicks toggle selection
-      if (state.selectedPhotos.size > 0) {
-        togglePhotoSelection(card, e);
-        return;
-      }
-
-      // If shift is held, always select (for shift-select range)
-      if (e.shiftKey) {
-        e.stopPropagation();
-        togglePhotoSelection(card, e);
-        return;
-      }
-
-      // If clicking the select circle, toggle selection
-      // Query for it at click time since it's dynamically created
-      const selectCircle = card.querySelector('.select-circle');
-      if (
-        selectCircle &&
-        (e.target === selectCircle || selectCircle.contains(e.target))
-      ) {
-        e.stopPropagation();
-        togglePhotoSelection(card, e);
-        return;
-      }
-
-      // Otherwise, open lightbox
-      const photoId = parseInt(card.dataset.id, 10);
-      const libraryIndex = getPhotoLibraryIndex(photoId);
-      if (libraryIndex >= 0) {
-        openLightbox(libraryIndex);
-      }
-    });
-  });
+  ensureGridInteractionsWired();
 }
 
 /**
@@ -6598,60 +6829,10 @@ function togglePhotoSelection(card, e) {
 }
 
 /**
- * Wire up month selection circles
+ * @deprecated Month circle wiring replaced by ensureGridInteractionsWired delegation.
  */
 function wireMonthSelectors() {
-  const monthCircles = document.querySelectorAll('.month-select-circle');
-
-  monthCircles.forEach((circle) => {
-    const monthSection = circle.closest('.month-section');
-    const month = monthSection.dataset.month;
-
-    circle.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault(); // Prevent text selection on shift-click
-
-      // Get all photos in this month
-      const monthPhotoCards = monthSection.querySelectorAll('.photo-card');
-      if (monthPhotoCards.length === 0) return;
-
-      // Use first photo as anchor for normal clicks, last photo for shift-clicks
-      const firstPhotoIndex = parseInt(monthPhotoCards[0].dataset.index);
-      const lastPhotoIndex = parseInt(
-        monthPhotoCards[monthPhotoCards.length - 1].dataset.index,
-      );
-
-      if (e.shiftKey && state.lastClickedIndex !== null) {
-        // SHIFT-SELECT: Select range from last clicked to this month's LAST photo
-        const start = Math.min(state.lastClickedIndex, lastPhotoIndex);
-        const end = Math.max(state.lastClickedIndex, lastPhotoIndex);
-
-        // Get all photo cards and select those in range
-        const allCards = Array.from(document.querySelectorAll('.photo-card'));
-        const cardsInRange = allCards.filter((c) => {
-          const cardIndex = parseInt(c.dataset.index);
-          return cardIndex >= start && cardIndex <= end;
-        });
-
-        cardsInRange.forEach((card) => {
-          const cardId = parseInt(card.dataset.id);
-          card.classList.add('selected');
-          state.selectedPhotos.add(cardId);
-        });
-
-        // Update anchor to this month's last photo
-        state.lastClickedIndex = lastPhotoIndex;
-        updateDeleteButtonVisibility();
-        updateMonthCircleStates();
-      } else {
-        // NORMAL CLICK: Toggle entire month
-        toggleMonthSelection(month);
-
-        // Update anchor to this month's last photo for next shift-select
-        state.lastClickedIndex = lastPhotoIndex;
-      }
-    });
-  });
+  ensureGridInteractionsWired();
 }
 
 /**
@@ -13266,39 +13447,16 @@ async function openExistingLibrary() {
 
     await showLibraryTransitionOverlay({
       title: 'Opening library',
-      message: 'Checking your library and preparing to load photos.',
+      message: 'Loading your photos.',
     });
 
-    let checkResult;
     try {
-      const checkResponse = await fetch('/api/library/check', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ library_path: selectedPath, fast: true }),
+      const opened = await switchToLibrary(selectedPath, null, {
+        skipTransitionOverlay: true,
       });
-      checkResult = await checkResponse.json();
-
-      if (!checkResponse.ok) {
-        throw new Error(checkResult.error || 'Failed to inspect selected folder');
-      }
-
-      if (checkResult.has_openable_db) {
-        const opened = await switchToLibrary(selectedPath, checkResult.db_path, {
-          skipTransitionOverlay: true,
-        });
-        if (opened) {
-          hideLibraryTransitionOverlay();
-        }
-        return opened;
-      }
-
-      if (checkResult.has_db) {
-        showToast(
-          checkResult.db_message ||
-            "Can't open library: database is damaged or incompatible.",
-        );
-      } else {
-        showToast('No photo library found in this folder.');
+      if (opened) {
+        hideLibraryTransitionOverlay();
+        return true;
       }
       return false;
     } catch (error) {
@@ -13835,7 +13993,7 @@ async function createNewLibraryWithName(dialogOptions = {}) {
 }
 
 /**
- * Reset library configuration to first-run state (debug)
+ * Reset library configuration to first-run state
  */
 async function resetLibraryConfig() {
   try {
@@ -13846,10 +14004,17 @@ async function resetLibraryConfig() {
     const data = await response.json();
 
     if (data.status === 'success') {
-      window.location.reload();
-    } else {
-      throw new Error(data.error || 'Reset failed');
+      if (currentPhotoLoadAbortController) {
+        currentPhotoLoadAbortController.abort();
+        currentPhotoLoadAbortController = null;
+      }
+      currentPhotoLoad = null;
+      state.loading = false;
+      renderSafeLibraryFallback();
+      return;
     }
+
+    throw new Error(data.error || 'Reset failed');
   } catch (error) {
     console.error('❌ Failed to reset configuration:', error);
     showToast(`Reset failed: ${error.message}`, 'error');
@@ -13955,7 +14120,7 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     if (!skipTransitionOverlay && !state.libraryTransitionActive) {
       await showLibraryTransitionOverlay({
         title: 'Opening library',
-        message: 'Loading photos and preparing your library.',
+        message: 'Loading your photos.',
       });
     }
 

@@ -1,0 +1,43 @@
+{
+  "name": "photos-light",
+  "productName": "Photos Light",
+  "version": "1.0.0",
+  "description": "Photos Light desktop shell",
+  "main": "main.js",
+  "author": "Eric Henry",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac dmg"
+  },
+  "build": {
+    "appId": "com.erichenry.photoslight",
+    "directories": {
+      "output": "../dist"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/photos-light-server",
+        "to": "backend",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.photography",
+      "icon": "../packaging/AppIcon.icns",
+      "target": ["dmg"],
+      "darkModeSupport": true
+    },
+    "dmg": {
+      "title": "Photos Light"
+    }
+  },
+  "devDependencies": {
+    "electron": "^35.1.5",
+    "electron-builder": "^25.1.8"
+  }
+}

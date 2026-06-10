@@ -16,6 +16,9 @@ venv/
 dist/
 build/
 
+# Electron
+electron/node_modules/
+
 # IDE
 .vscode/
 .idea/

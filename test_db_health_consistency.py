@@ -142,9 +142,9 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         conn.close()
         return db_path
 
-    def test_library_status_missing_db_becomes_not_configured_and_clears_config(self):
-        library_path = self._make_library("missing-db-library")
-        db_path = canonical_db_path(library_path)
+    def test_library_status_without_active_library_returns_not_configured(self):
+        library_path = self._make_library("saved-but-not-loaded")
+        db_path = self._create_healthy_db(library_path)
         self._write_config(library_path, db_path)
 
         response = self.client.get("/api/library/status")
@@ -154,13 +154,45 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertEqual(payload["status"], "not_configured")
         self.assertFalse(payload["valid"])
         self.assertIsNone(payload["library_path"])
+        self.assertTrue(os.path.exists(self.config_path))
+
+    def test_library_reset_clears_active_session_and_config(self):
+        library_path = self._make_library("active-library")
+        db_path = self._create_healthy_db(library_path)
+        self._write_config(library_path, db_path)
+        photo_app.update_app_paths(library_path, db_path)
+
+        response = self.client.delete("/api/library/reset")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "success")
         self.assertFalse(os.path.exists(self.config_path))
+        self.assertIsNone(photo_app.LIBRARY_PATH)
+        self.assertIsNone(photo_app.DB_PATH)
+
+        status_response = self.client.get("/api/library/status")
+        status_payload = status_response.get_json()
+        self.assertEqual(status_payload["status"], "not_configured")
+        self.assertIsNone(status_payload["library_path"])
+
+    def test_library_status_missing_db_reports_db_missing(self):
+        library_path = self._make_library("missing-db-library")
+        db_path = canonical_db_path(library_path)
+        photo_app.update_app_paths(library_path, db_path)
+
+        response = self.client.get("/api/library/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "db_missing")
+        self.assertFalse(payload["valid"])
+        self.assertEqual(payload["library_path"], library_path)
 
     def test_library_status_missing_columns_becomes_needs_migration(self):
         library_path = self._make_library("missing-columns-library")
         db_path = canonical_db_path(library_path)
         create_photos_only_db(db_path, include_rating=False)
-        self._write_config(library_path, db_path)
+        photo_app.update_app_paths(library_path, db_path)
 
         response = self.client.get("/api/library/status")
 
@@ -171,12 +203,12 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertTrue(payload["can_continue"])
         self.assertEqual(payload["library_path"], library_path)
 
-    def test_library_status_resolves_stale_legacy_config_to_canonical_db(self):
+    def test_library_status_resolves_stale_legacy_db_to_canonical_db(self):
         library_path = self._make_library("stale-legacy-config")
         legacy_db_path = os.path.join(library_path, "photo_library.db")
         sqlite3.connect(legacy_db_path).close()
         canonical_path = self._create_healthy_db(library_path)
-        self._write_config(library_path, legacy_db_path)
+        photo_app.update_app_paths(library_path, legacy_db_path)
 
         response = self.client.get("/api/library/status")
 
@@ -189,22 +221,33 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
             saved = json.load(fh)
         self.assertEqual(saved["db_path"], canonical_path)
 
-    def test_startup_resolves_stale_legacy_config_to_canonical_db(self):
-        library_path = self._make_library("startup-stale-legacy-config")
+    def test_library_last_used_returns_saved_library_path(self):
+        library_path = self._make_library("last-used-library")
+        db_path = self._create_healthy_db(library_path)
+        self._write_config(library_path, db_path)
+
+        response = self.client.get("/api/library/last-used")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["library_path"], library_path)
+
+    def test_library_last_used_returns_null_without_config(self):
+        response = self.client.get("/api/library/last-used")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertIsNone(payload["library_path"])
+
+    def test_startup_does_not_auto_load_saved_library(self):
+        library_path = self._make_library("startup-saved-library")
         legacy_db_path = os.path.join(library_path, "photo_library.db")
         sqlite3.connect(legacy_db_path).close()
         canonical_path = self._create_healthy_db(library_path)
+        self._write_config(library_path, legacy_db_path)
 
-        photo_app.load_configured_library_on_startup({
-            "library_path": library_path,
-            "db_path": legacy_db_path,
-        })
-
-        self.assertEqual(photo_app.LIBRARY_PATH, library_path)
-        self.assertEqual(photo_app.DB_PATH, canonical_path)
-        with open(self.config_path, "r", encoding="utf-8") as fh:
-            saved = json.load(fh)
-        self.assertEqual(saved["db_path"], canonical_path)
+        self.assertIsNone(photo_app.LIBRARY_PATH)
+        self.assertIsNone(photo_app.DB_PATH)
 
     def test_switch_library_missing_db_requires_create_new(self):
         library_path = self._make_library("switch-missing-db")

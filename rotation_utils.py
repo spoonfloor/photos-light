@@ -209,8 +209,11 @@ def _rotate_heic_to_tiff(file_path: str, degrees_ccw: int) -> RotationResult:
             f"🛠️ Rotation helper: converting HEIC to rotated TIFF "
             f"({normalized}° CCW) for {os.path.basename(file_path)}"
         )
-        with Image.open(file_path) as image:
-            normalized_image = ImageOps.exif_transpose(image)
+        from image_pixels import open_still_image
+
+        image = open_still_image(file_path)
+        try:
+            normalized_image = image
             rotated = normalized_image.rotate(normalized, expand=True)
             icc_profile = image.info.get("icc_profile") or normalized_image.info.get(
                 "icc_profile"
@@ -223,6 +226,8 @@ def _rotate_heic_to_tiff(file_path: str, degrees_ccw: int) -> RotationResult:
             if exif_bytes:
                 save_kwargs["exif"] = exif_bytes
             rotated.save(temp_output, **save_kwargs)
+        finally:
+            image.close()
 
         copied, copy_message = _copy_metadata_with_exiftool(file_path, temp_output)
         if not copied:
@@ -456,6 +461,15 @@ def bake_orientation(file_path: str) -> Tuple[bool, str, Optional[int]]:
                     save_kwargs["exif"] = exif_bytes
                 rotated.save(file_path, **save_kwargs)
             return True, f"Baked orientation {orientation}", orientation
+
+        if ext in HEIC_ROTATION_EXTENSIONS:
+            from image_pixels import bake_heic_orientation_in_place
+
+            return bake_heic_orientation_in_place(
+                file_path,
+                orientation=orientation,
+                strip_orientation_tag=strip_orientation_tag,
+            )
 
         return False, f"Unsupported rotation format {ext}", orientation
     except subprocess.TimeoutExpired:

@@ -1,0 +1,37 @@
+---
+description: Rebuild Photos Light.app before verifying packaged/prod behavior
+alwaysApply: true
+---
+
+# Rebuild .app for production testing
+
+When verifying behavior in **packaged / production conditions** (Electron shell, PyInstaller backend, bundled static assets), **always rebuild** before testing. Do not rely on `python3 app.py`, `launcher.py`, or a stale `dist/` or `/Applications` install.
+
+## Build command
+
+From repo root:
+
+```bash
+./packaging/build.sh
+```
+
+Output: `dist/mac-arm64/Photos Light.app` (and `dist/Photos Light.dmg`).
+
+## When to rebuild
+
+- After backend changes (`app.py`, `image_pixels.py`, Python modules in `packaging/Backend.spec` hiddenimports)
+- After static asset changes (`static/`) — bundled into the backend via PyInstaller
+- After Electron changes (`electron/`)
+- Before confirming a fix "works in the packaged app"
+
+## How to test
+
+1. Quit any running Photos Light instance (frees port 5001).
+2. Run the build.
+3. Launch `dist/mac-arm64/Photos Light.app` (or copy to `/Applications` if the user tests from there).
+4. Verify against the rebuilt binary, not an older install.
+
+## Dev vs prod
+
+- **Dev** (`cd electron && npm start` with repo `launcher.py`): fine for iteration; not a substitute for prod verification.
+- **Prod**: rebuilt `.app` only.

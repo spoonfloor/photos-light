@@ -88,12 +88,9 @@ class UpdatePhotoDateRouteTest(unittest.TestCase):
         return photo_id, rel_path, full_path, content_hash
 
     def _create_thumbnail(self, content_hash):
-        thumb_path = os.path.join(
-            photo_app.THUMBNAIL_CACHE_DIR,
-            content_hash[:2],
-            content_hash[2:4],
-            f"{content_hash}.jpg",
-        )
+        from image_pixels import thumbnail_cache_path
+
+        thumb_path = thumbnail_cache_path(photo_app.THUMBNAIL_CACHE_DIR, content_hash)
         os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
         with open(thumb_path, "wb") as fh:
             fh.write(b"thumb")

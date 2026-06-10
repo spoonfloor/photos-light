@@ -9,6 +9,7 @@ import sqlite3
 import traceback
 from functools import wraps
 from hash_cache import HashCache
+from runtime_paths import get_base_dir, get_config_file, get_static_dir
 
 def handle_db_corruption(f):
     """
@@ -56,6 +57,7 @@ from db_schema import create_database_schema
 from file_operations import (
     extract_exif_date as shared_extract_exif_date,
     extract_exif_rating,
+    get_dimensions as shared_get_dimensions,
     strip_exif_rating,
 )
 from library_cleanliness import (
@@ -115,20 +117,28 @@ from rotation_utils import (
     normalize_rotation_degrees,
     rotate_file_in_place,
 )
+from image_pixels import (
+    BROWSER_CONVERT_EXTENSIONS,
+    generate_preview_jpeg_buffer,
+    generate_still_square_thumbnail,
+    generate_video_square_thumbnail,
+    still_image_to_jpeg_buffer,
+    thumbnail_cache_path,
+)
 
 # Register HEIF/HEIC support for PIL
 register_heif_opener()
 
-app = Flask(__name__, static_folder='static')
+# Paths (resolved before Flask init so bundled static assets work)
+BASE_DIR = get_base_dir()
+STATIC_DIR = get_static_dir()
+
+app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='/static')
 
 # Feature flags
 app.config['DRY_RUN_DATE_EDIT'] = False  # REAL UPDATES - using test library
 
-# Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(BASE_DIR, 'static')
-
-# Library paths - initialized from .config.json on startup
+# Library paths - set when the user opens or creates a library this session
 DB_PATH = None
 LIBRARY_PATH = None
 THUMBNAIL_CACHE_DIR = None
@@ -195,13 +205,9 @@ def get_image_dimensions(file_path):
                         if width and height:
                             return (width, height)
         else:
-            # Use PIL for images
-            with Image.open(file_path) as img:
-                # Apply EXIF orientation transpose to get display dimensions
-                # (EXIF orientation values 5, 6, 7, 8 swap width/height)
-                from PIL import ImageOps
-                img_oriented = ImageOps.exif_transpose(img)
-                return img_oriented.size  # (width, height) as displayed
+            width, height = shared_get_dimensions(file_path)
+            if width and height:
+                return (width, height)
     except Exception as e:
         print(f"Error reading dimensions for {file_path}: {e}")
         return None
@@ -351,12 +357,7 @@ def delete_thumbnail_for_hash(content_hash):
     if not content_hash:
         return
 
-    thumbnail_path = os.path.join(
-        THUMBNAIL_CACHE_DIR,
-        content_hash[:2],
-        content_hash[2:4],
-        f"{content_hash}.jpg",
-    )
+    thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
     if os.path.exists(thumbnail_path):
         os.remove(thumbnail_path)
         cleanup_empty_thumbnail_folders(thumbnail_path)
@@ -898,103 +899,29 @@ def update_photo_date_with_files(photo_id, new_date, conn):
 def generate_thumbnail_for_file(file_path, content_hash, file_type):
     """Generate thumbnail for a file using hash-based sharding"""
     try:
-        # Hash-based sharding: ab/cd/abcd1234....jpg
-        shard_dir = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4])
-        thumbnail_path = os.path.join(shard_dir, f"{content_hash}.jpg")
-        
+        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash, mkdir=True)
+
         # Skip if already exists
         if os.path.exists(thumbnail_path):
             return True
-        
-        os.makedirs(shard_dir, exist_ok=True)
-        
+
         if file_type == 'video':
-            # Create temp directory on-demand for video frame extraction
             os.makedirs(IMPORT_TEMP_DIR, exist_ok=True)
-            
-            # Extract video frame - get larger size first for better quality
             temp_frame = os.path.join(IMPORT_TEMP_DIR, f"temp_frame_{content_hash[:16]}.jpg")
-            cmd = [
-                'ffmpeg',
-                '-i', file_path,
-                '-vframes', '1',
-                '-vf', 'scale=800:-1',  # Get 800px width first
-                '-y',
-                temp_frame
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0 and os.path.exists(temp_frame):
-                with Image.open(temp_frame) as img:
-                    # Capture ICC profile before any conversions
-                    icc_profile = img.info.get('icc_profile')
-                    
-                    # Convert to RGB with proper color space handling
-                    img = convert_to_rgb_properly(img)
-                    
-                    # Center-crop to 400x400 square
-                    target_size = 400
-                    
-                    # Resize so smallest dimension is 400px
-                    width, height = img.size
-                    if width < height:
-                        new_width = target_size
-                        new_height = int(height * (target_size / width))
-                    else:
-                        new_height = target_size
-                        new_width = int(width * (target_size / height))
-                    
-                    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    
-                    # Center crop to square
-                    left = (img.width - target_size) // 2
-                    top = (img.height - target_size) // 2
-                    img = img.crop((left, top, left + target_size, top + target_size))
-                    
-                    # Save with ICC profile preserved
-                    save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
-                    if icc_profile:
-                        save_kwargs['icc_profile'] = icc_profile
-                    img.save(thumbnail_path, **save_kwargs)
-                os.remove(temp_frame)
-                return True
-            return False
-        else:
-            # Generate image thumbnail - center-crop to 400x400 square
-            with Image.open(file_path) as img:
-                from PIL import ImageOps
-                img = ImageOps.exif_transpose(img)
-                
-                # Capture ICC profile before any conversions (prevents washed-out thumbnails)
-                icc_profile = img.info.get('icc_profile')
-                
-                # Convert to RGB with proper color space handling
-                img = convert_to_rgb_properly(img)
-                
-                target_size = 400
-                
-                # Resize so smallest dimension is 400px
-                width, height = img.size
-                if width < height:
-                    new_width = target_size
-                    new_height = int(height * (target_size / width))
-                else:
-                    new_height = target_size
-                    new_width = int(width * (target_size / height))
-                
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                
-                # Center crop to square
-                left = (img.width - target_size) // 2
-                top = (img.height - target_size) // 2
-                img = img.crop((left, top, left + target_size, top + target_size))
-                
-                # Save with ICC profile preserved (critical for color accuracy)
-                save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
-                if icc_profile:
-                    save_kwargs['icc_profile'] = icc_profile
-                img.save(thumbnail_path, **save_kwargs)
-                return True
+            generate_video_square_thumbnail(
+                file_path,
+                thumbnail_path,
+                temp_frame_path=temp_frame,
+                to_rgb=convert_to_rgb_properly,
+            )
+            return True
+
+        generate_still_square_thumbnail(
+            file_path,
+            thumbnail_path,
+            to_rgb=convert_to_rgb_properly,
+        )
+        return True
     except Exception as e:
         print(f"❌ Error generating thumbnail: {e}")
         return False
@@ -1072,6 +999,10 @@ def get_photos():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        total_count = None
+        if limit is not None:
+            total_count = cursor.execute('SELECT COUNT(*) FROM photos').fetchone()[0]
         
         # Lightweight query - just id, date, month, file_type, current_path, width, height, rating for grid structure
         query = f"""
@@ -1114,21 +1045,14 @@ def get_photos():
             })
         
         conn.close()
-        return jsonify({'photos': photos, 'count': len(photos)})
+        payload = {'photos': photos, 'count': len(photos)}
+        if total_count is not None:
+            payload['total'] = total_count
+            payload['offset'] = offset
+            payload['limit'] = limit
+        return jsonify(payload)
     except Exception as e:
         app.logger.error(f"Error fetching photos: {e}")
-        return jsonify({'error': str(e)}), 500
-        
-        conn.close()
-        
-        return jsonify({
-            'photos': photos,
-            'count': len(photos),
-            'offset': offset,
-            'limit': limit
-        })
-        
-    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photo/<int:photo_id>/dimensions')
@@ -1170,7 +1094,7 @@ def get_photo_thumbnail(photo_id):
     Serve thumbnail for a photo (lazy generation + caching)
     - First request: generate 400px height thumbnail, cache to disk
     - Subsequent requests: serve cached version
-    - Uses hash-based sharding: .thumbnails/{hash[:2]}/{hash[2:4]}/{hash}.jpg
+    - Uses hash-based sharding: .thumbnails/{hash[:2]}/{hash[2:4]}/{hash}.v2.jpg
     """
     try:
         conn = get_db_connection()
@@ -1187,126 +1111,38 @@ def get_photo_thumbnail(photo_id):
         relative_path = row['current_path']
         content_hash = row['content_hash']
         
-        # Hash-based sharding: ab/cd/abcd1234....jpg
-        shard_dir = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4])
-        thumbnail_path = os.path.join(shard_dir, f"{content_hash}.jpg")
-        
+        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
+
         # Serve cached thumbnail if it exists
         if os.path.exists(thumbnail_path):
             return send_file(thumbnail_path, mimetype='image/jpeg')
-        
-        # Generate thumbnail
+
         full_path = os.path.join(LIBRARY_PATH, relative_path)
-        
+
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
-        
-        # Ensure shard directory exists
-        os.makedirs(shard_dir, exist_ok=True)
-        
-        # Only generate thumbnails for images (not videos for now)
+
+        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash, mkdir=True)
+
         if row['file_type'] == 'video':
-            # Generate video thumbnail using ffmpeg
-            import subprocess
-            
-            # Create temp path for extracted frame
-            temp_frame = os.path.join(shard_dir, f"temp_{photo_id}.jpg")
-            
-            # Extract first frame using ffmpeg - get larger size first
-            cmd = [
-                'ffmpeg',
-                '-i', full_path,
-                '-vframes', '1',
-                '-vf', 'scale=800:-1',  # Get 800px width
-                '-y',
-                temp_frame
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode != 0 or not os.path.exists(temp_frame):
-                return jsonify({'error': 'Failed to extract video frame'}), 500
-            
-            # Center-crop to 400x400 square
-            with Image.open(temp_frame) as img:
-                # Capture ICC profile before any conversions
-                icc_profile = img.info.get('icc_profile')
-                
-                # Convert to RGB with proper color space handling
-                img = convert_to_rgb_properly(img)
-                
-                target_size = 400
-                
-                # Resize so smallest dimension is 400px
-                width, height = img.size
-                if width < height:
-                    new_width = target_size
-                    new_height = int(height * (target_size / width))
-                else:
-                    new_height = target_size
-                    new_width = int(width * (target_size / height))
-                
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                
-                # Center crop to square
-                left = (img.width - target_size) // 2
-                top = (img.height - target_size) // 2
-                img = img.crop((left, top, left + target_size, top + target_size))
-                
-                # Save with ICC profile preserved
-                save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
-                if icc_profile:
-                    save_kwargs['icc_profile'] = icc_profile
-                img.save(thumbnail_path, **save_kwargs)
-            
-            # Clean up temp file
-            os.remove(temp_frame)
-            
-            return send_file(thumbnail_path, mimetype='image/jpeg')
-        
-        # Generate thumbnail for images - center-crop to 400x400 square
-        with Image.open(full_path) as img:
-            # Apply EXIF orientation (fixes rotation issues)
-            img = img.copy()  # Make a copy to avoid modifying original
+            temp_frame = os.path.join(os.path.dirname(thumbnail_path), f"temp_{photo_id}.jpg")
             try:
-                # ImageOps.exif_transpose handles all EXIF orientation cases
-                from PIL import ImageOps
-                img = ImageOps.exif_transpose(img)
-            except Exception:
-                pass  # If no EXIF or error, continue without rotation fix
-            
-            # Capture ICC profile BEFORE any conversions (prevents washed-out thumbnails)
-            icc_profile = img.info.get('icc_profile')
-            
-            # Convert to RGB with proper color space handling
-            img = convert_to_rgb_properly(img)
-            
-            target_size = 400
-            
-            # Resize so smallest dimension is 400px
-            width, height = img.size
-            if width < height:
-                new_width = target_size
-                new_height = int(height * (target_size / width))
-            else:
-                new_height = target_size
-                new_width = int(width * (target_size / height))
-            
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            
-            # Center crop to square
-            left = (img.width - target_size) // 2
-            top = (img.height - target_size) // 2
-            img = img.crop((left, top, left + target_size, top + target_size))
-            
-            # Save to cache WITH ICC profile preserved (critical for color accuracy)
-            save_kwargs = {'format': 'JPEG', 'quality': 85, 'optimize': True}
-            if icc_profile:
-                save_kwargs['icc_profile'] = icc_profile
-            img.save(thumbnail_path, **save_kwargs)
-            
-            # Serve the newly generated thumbnail
+                generate_video_square_thumbnail(
+                    full_path,
+                    thumbnail_path,
+                    temp_frame_path=temp_frame,
+                    to_rgb=convert_to_rgb_properly,
+                )
+            except Exception as video_error:
+                return jsonify({'error': str(video_error)}), 500
             return send_file(thumbnail_path, mimetype='image/jpeg')
+
+        generate_still_square_thumbnail(
+            full_path,
+            thumbnail_path,
+            to_rgb=convert_to_rgb_properly,
+        )
+        return send_file(thumbnail_path, mimetype='image/jpeg')
             
     except Exception as e:
         print(f"❌ Error generating thumbnail for photo {photo_id}: {e}")
@@ -1334,23 +1170,11 @@ def get_photo_file(photo_id):
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
         
-        # Check if HEIC or TIF - convert to JPEG
+        # HEIC/TIF and similar — convert to JPEG for browser display
         ext = os.path.splitext(full_path)[1].lower()
-        if ext in ['.heic', '.heif', '.tif', '.tiff']:
-            from io import BytesIO
-            from flask import send_file
-            
-            # Open and convert to JPEG for browser display
-            with Image.open(full_path) as img:
-                img = ImageOps.exif_transpose(img)
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-
-                buffer = BytesIO()
-                img.save(buffer, format='JPEG', quality=95)
-                buffer.seek(0)
-
-                return send_file(buffer, mimetype='image/jpeg')
+        if ext in BROWSER_CONVERT_EXTENSIONS:
+            buffer = still_image_to_jpeg_buffer(full_path, quality=95)
+            return send_file(buffer, mimetype='image/jpeg')
         
         # For other formats, serve directly
         directory = os.path.dirname(full_path)
@@ -1789,7 +1613,7 @@ def delete_photos():
                 content_hash = photo_data.get('content_hash')
                 if content_hash:
                     shard_dir = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4])
-                    thumbnail_path = os.path.join(shard_dir, f"{content_hash}.jpg")
+                    thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
                     
                     if os.path.exists(thumbnail_path):
                         os.remove(thumbnail_path)
@@ -2779,6 +2603,9 @@ def import_from_paths():
     """
     Import photos from file paths (SSE streaming version with fixes)
     """
+    data = request.get_json(silent=True) or {}
+    file_paths = data.get('paths', [])
+
     def generate():
         conn = None
         client_disconnected = False
@@ -2797,11 +2624,12 @@ def import_from_paths():
                 return False
 
         try:
-            data = request.json
-            file_paths = data.get('paths', [])
-            
             if not file_paths:
                 yield from emit_event('error', {'error': 'No paths provided'})
+                return
+
+            if not LIBRARY_PATH or not DB_PATH:
+                yield from emit_event('error', {'error': 'No library configured'})
                 return
             
             total_files = len(file_paths)
@@ -2895,7 +2723,6 @@ def import_from_paths():
         headers={
             'Cache-Control': 'no-cache',
             'X-Accel-Buffering': 'no',
-            'Connection': 'close',
         },
     )
 
@@ -3354,7 +3181,7 @@ def check_thumbnails():
 # LIBRARY SWITCHING
 # ============================================================================
 
-CONFIG_FILE = os.path.join(BASE_DIR, '.config.json')
+CONFIG_FILE = get_config_file()
 
 def load_config():
     """Load library configuration from .config.json"""
@@ -3382,6 +3209,18 @@ def delete_config():
         print(f"🗑️  Deleted config file: {CONFIG_FILE}")
         return True
     return False
+
+def clear_library_session():
+    """Drop in-memory library paths so status returns not_configured."""
+    global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR
+
+    LIBRARY_PATH = None
+    DB_PATH = None
+    THUMBNAIL_CACHE_DIR = None
+    TRASH_DIR = None
+    DB_BACKUP_DIR = None
+    IMPORT_TEMP_DIR = None
+    LOG_DIR = None
 
 def update_app_paths(library_path, db_path):
     """Update all global path variables"""
@@ -3473,6 +3312,26 @@ def get_current_library():
         'db_path': DB_PATH
     })
 
+
+@app.route('/api/library/last-used', methods=['GET'])
+def library_last_used():
+    """Return the last library path from saved config (picker default only)."""
+    config = load_config()
+    if not config:
+        return jsonify({'library_path': None})
+
+    library_path = config.get('library_path')
+    if not library_path:
+        return jsonify({'library_path': None})
+
+    try:
+        if os.path.isdir(library_path):
+            return jsonify({'library_path': library_path})
+    except (OSError, PermissionError):
+        pass
+
+    return jsonify({'library_path': None})
+
 @app.route('/api/library/status', methods=['GET'])
 def library_status():
     """
@@ -3480,9 +3339,7 @@ def library_status():
     Returns status, message, and paths for frontend decision-making.
     """
     try:
-        # Check if config file exists and is valid
-        config = load_config()
-        if not config:
+        if not LIBRARY_PATH or not DB_PATH:
             return jsonify({
                 'status': 'not_configured',
                 'message': 'No library configured. Please select a library.',
@@ -3490,19 +3347,10 @@ def library_status():
                 'db_path': None,
                 'valid': False
             })
-        
-        library_path = config.get('library_path')
-        db_path = config.get('db_path')
-        
-        if not library_path or not db_path:
-            return jsonify({
-                'status': 'not_configured',
-                'message': 'Library configuration is incomplete.',
-                'library_path': library_path,
-                'db_path': db_path,
-                'valid': False
-            })
-        
+
+        library_path = LIBRARY_PATH
+        db_path = DB_PATH
+
         # Check filesystem access
         try:
             library_exists = os.path.exists(library_path)
@@ -3514,17 +3362,16 @@ def library_status():
                 'db_path': db_path,
                 'valid': False
             })
-        
+
         if not library_exists:
-            delete_config()  # Clean up stale config
             return jsonify({
-                'status': 'not_configured',
-                'message': 'Library not found. Please select or create a library.',
-                'library_path': None,
-                'db_path': None,
+                'status': 'library_missing',
+                'message': 'Library folder not found. It may have been moved or deleted.',
+                'library_path': library_path,
+                'db_path': db_path,
                 'valid': False
             })
-        
+
         try:
             resolved_db_path = resolve_db_path(library_path, db_path)
         except (OSError, PermissionError) as e:
@@ -3538,15 +3385,6 @@ def library_status():
 
         report = check_database_health(resolved_db_path)
         payload = build_library_status_payload(library_path, resolved_db_path, report)
-        if payload['status'] == 'db_missing':
-            delete_config()
-            return jsonify({
-                'status': 'not_configured',
-                'message': 'Library not found. Please select or create a library.',
-                'library_path': None,
-                'db_path': None,
-                'valid': False
-            })
 
         if payload['valid'] and resolved_db_path != db_path:
             update_app_paths(library_path, resolved_db_path)
@@ -3797,26 +3635,8 @@ def preview_thumbnail():
 def generate_photo_preview(file_path):
     """Generate photo thumbnail (80x80px for 2x retina display at 40x40)"""
     try:
-        with Image.open(file_path) as img:
-            # Apply EXIF orientation
-            from PIL import ImageOps
-            img = ImageOps.exif_transpose(img)
-            
-            # Convert to RGB if needed
-            if img.mode != 'RGB':
-                img = img.convert('RGB')
-            
-            # Create thumbnail (maintains aspect ratio)
-            img.thumbnail((80, 80), Image.Resampling.LANCZOS)
-            
-            # Save to memory buffer
-            from io import BytesIO
-            buffer = BytesIO()
-            img.save(buffer, format='JPEG', quality=75)
-            buffer.seek(0)
-            
-            return send_file(buffer, mimetype='image/jpeg')
-            
+        buffer = generate_preview_jpeg_buffer(file_path)
+        return send_file(buffer, mimetype='image/jpeg')
     except Exception as e:
         print(f"❌ Photo preview error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -4529,7 +4349,8 @@ def reset_library():
     """Reset library configuration to first-run state (debug feature)"""
     try:
         deleted = delete_config()
-        
+        clear_library_session()
+
         if deleted:
             print("\n🔄 Library configuration reset - returning to first-run state")
             return jsonify({
@@ -5467,11 +5288,6 @@ def api_make_library_perfect_stream():
         mimetype='text/event-stream',
         headers={
             'Cache-Control': 'no-cache',
-            # Force the browser to close this TCP socket when the SSE stream
-            # ends instead of keeping it alive for reuse. Keeping it alive
-            # caused subsequent same-origin fetches (e.g. /api/photos) to stall
-            # forever in the browser's network queue after the stream completed.
-            'Connection': 'close',
             'X-Accel-Buffering': 'no',
         },
     )
@@ -5720,59 +5536,10 @@ def bulk_favorite():
         return jsonify({'error': str(e)}), 500
 
 
-def load_configured_library_on_startup(config):
-    """Load saved library config after resolving stale legacy DB paths."""
-    library_path = config.get('library_path')
-    db_path = config.get('db_path')
-
-    if not library_path or not db_path or not os.path.exists(library_path):
-        print(f"⚠️  Saved library not found - user will be prompted")
-        delete_config()
-        return
-
-    try:
-        resolved_db_path = resolve_db_path(library_path, db_path)
-    except (OSError, PermissionError) as e:
-        print(f"⚠️  Saved library database is inaccessible: {e}")
-        delete_config()
-        return
-
-    if not os.path.exists(resolved_db_path):
-        print(f"⚠️  Saved library database not found - user will be prompted")
-        delete_config()
-        return
-
-    print(f"✅ Loading library: {library_path}")
-    update_app_paths(library_path, resolved_db_path)
-
-    if resolved_db_path != db_path:
-        print(f"🔁 Resolved database path: {resolved_db_path}")
-        save_config(library_path, resolved_db_path)
-
-    # Auto-migrate database to latest schema.
-    print(f"🔍 Checking database schema...")
-    try:
-        from migrate_db import check_and_migrate_schema
-        migrated = check_and_migrate_schema(resolved_db_path)
-        if not migrated:
-            report = check_database_health(resolved_db_path)
-            if report.status == DBStatus.CORRUPTED:
-                print(f"⚠️  Database health check failed: {report.get_user_message()}")
-    except Exception as e:
-        print(f"⚠️  Migration check failed: {e}")
-        print(f"   Database may need manual migration")
-
-
 if __name__ == '__main__':
     print("\n🖼️  Photos Light Starting...")
     print(f"📁 Static files: {STATIC_DIR}")
-    
-    # Load config on startup
-    config = load_config()
-    if config:
-        load_configured_library_on_startup(config)
-    else:
-        print(f"⚠️  No library configured - user will be prompted")
+    print("📚 No library loaded — choose one from the welcome screen.")
     
     print(f"🌐 Open: http://localhost:5001\n")
     

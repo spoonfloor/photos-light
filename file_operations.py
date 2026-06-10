@@ -20,6 +20,46 @@ from library_cleanliness import VIDEO_MEDIA_EXTENSIONS
 register_heif_opener()
 
 
+def _dimensions_from_exiftool(file_path):
+    """Read display dimensions via exiftool when Pillow cannot decode the file."""
+    try:
+        result = subprocess.run(
+            [
+                'exiftool',
+                '-j',
+                '-ImageWidth',
+                '-ImageHeight',
+                '-Orientation',
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None, None
+
+        payload = json.loads(result.stdout)
+        if not payload:
+            return None, None
+
+        data = payload[0]
+        width = data.get('ImageWidth')
+        height = data.get('ImageHeight')
+        if width is None or height is None:
+            return None, None
+
+        width = int(width)
+        height = int(height)
+        orientation = data.get('Orientation')
+        if orientation in (5, 6, 7, 8):
+            width, height = height, width
+        return width, height
+    except Exception as e:
+        print(f"⚠️  Error extracting dimensions via exiftool from {file_path}: {e}")
+        return None, None
+
+
 def extract_exif_date(file_path):
     """
     Extract EXIF/metadata date using exiftool (photos) or ffprobe (videos).
@@ -104,9 +144,15 @@ def get_dimensions(file_path):
             img_oriented = ImageOps.exif_transpose(img)
             return img_oriented.size  # (width, height)
     
-    except Exception as e:
-        print(f"⚠️  Error extracting dimensions from {file_path}: {e}")
-        return None, None
+    except Exception:
+        pass
+
+    width, height = _dimensions_from_exiftool(file_path)
+    if width and height:
+        return width, height
+
+    print(f"⚠️  Error extracting dimensions from {file_path}")
+    return None, None
 
 
 def extract_exif_rating(file_path):

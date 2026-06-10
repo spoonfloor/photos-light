@@ -918,6 +918,19 @@ const FolderPicker = (() => {
   // Public API
   // ===========================================================================
 
+  async function getLastUsedLibraryPath() {
+    try {
+      const response = await fetch('/api/library/last-used');
+      if (!response.ok) {
+        return null;
+      }
+      const data = await response.json();
+      return data.library_path || null;
+    } catch {
+      return null;
+    }
+  }
+
   async function resolveInitialPath(options = {}) {
     let initialPath = options.initialPath || VIRTUAL_ROOT;
 
@@ -930,6 +943,18 @@ const FolderPicker = (() => {
         initialPath = VIRTUAL_ROOT;
       }
     } else if (initialPath === VIRTUAL_ROOT) {
+      if (pickerIntent === PICKER_INTENT.OPEN_EXISTING_LIBRARY) {
+        const lastUsedPath = await getLastUsedLibraryPath();
+        if (lastUsedPath) {
+          try {
+            await listDirectory(lastUsedPath);
+            initialPath = lastUsedPath;
+          } catch {
+            // Fall through to localStorage / Desktop default
+          }
+        }
+      }
+
       const savedPath = localStorage.getItem('picker.lastPath');
       if (savedPath) {
         try {
