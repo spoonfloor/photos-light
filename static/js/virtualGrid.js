@@ -72,15 +72,7 @@ const VirtualGrid = (() => {
     }
   }
 
-  function applyGridColumnsToElement(grid) {
-    if (!layout?.columnLayout) {
-      return;
-    }
-    grid.style.gridTemplateColumns = layout.cssGridTemplate;
-  }
-
   function buildPlaceholderCells(section, grid) {
-    applyGridColumnsToElement(grid);
     grid.replaceChildren();
     for (let i = 0; i < section.count; i += 1) {
       const card = document.createElement('div');
@@ -166,7 +158,6 @@ const VirtualGrid = (() => {
   function buildHydratedGrid(section, photos, filterPhoto) {
     const grid = document.createElement('div');
     grid.className = 'photo-grid';
-    applyGridColumnsToElement(grid);
 
     const visiblePhotos = filterPhoto ? photos.filter(filterPhoto) : photos;
     visiblePhotos.forEach((photo, localIndex) => {
@@ -734,8 +725,9 @@ const VirtualGrid = (() => {
         const nextLayout = GridLayout.toLayoutSnapshot(
           GridLayout.buildVirtualLayout(monthIndex.months || [], columnLayout),
         );
-        const geometryChanged = GridLayout.layoutGeometryChanged(layout, nextLayout);
-        rebuildLayoutFromIndex(monthIndex, width, { remount: geometryChanged });
+        rebuildLayoutFromIndex(monthIndex, width, {
+          remount: GridLayout.layoutGeometryChanged(layout, nextLayout),
+        });
         return;
       }
       if (layout?.provisional && layout.totalPhotos > 0) {

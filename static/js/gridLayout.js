@@ -14,7 +14,7 @@ const GridLayout = (() => {
       1,
       Math.floor((width + GRID_GAP) / (GRID_MIN_COL + GRID_GAP)),
     );
-    const trackWidth = (width - (columns - 1) * GRID_GAP) / columns;
+    const trackWidth = Math.floor((width - (columns - 1) * GRID_GAP) / columns);
     return {
       containerWidth: width,
       columns,
@@ -233,7 +233,6 @@ const GridLayout = (() => {
       columns,
       cellSize,
       gap,
-      cssGridTemplate: `repeat(${columns}, ${cellSize}px)`,
     };
   }
 
@@ -261,7 +260,7 @@ const GridLayout = (() => {
     const prevCell =
       previousLayout.cellSize ?? previousLayout.columnLayout?.trackWidth;
     const nextCell = nextLayout.cellSize ?? nextLayout.columnLayout?.trackWidth;
-    return prevCols !== nextCols || Math.abs(prevCell - nextCell) > 0.5;
+    return prevCols !== nextCols || prevCell !== nextCell;
   }
 
   function compareMonthKeys(a, b, sortOrder = 'newest') {

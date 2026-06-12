@@ -517,9 +517,9 @@ body.filter-chip-rail-visible {
 }
 
 .grid-root .photo-card {
-  width: var(--grid-cell-px, 200px);
-  height: var(--grid-cell-px, 200px);
-  aspect-ratio: unset;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
 }
 
 /* Legacy aliases — remove after full migration */
