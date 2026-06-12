@@ -1,11 +1,12 @@
 const { app, BrowserWindow, Menu, dialog } = require("electron");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 const net = require("net");
 
 const HOST = "127.0.0.1";
 const PORT = 5001;
 const APP_URL = `http://${HOST}:${PORT}`;
+const LIBRARY_STATUS_URL = `${APP_URL}/api/library/status`;
 
 /** @type {import('child_process').ChildProcess | null} */
 let backendProcess = null;
@@ -24,6 +25,10 @@ if (!gotSingleInstanceLock) {
 
 function repoRoot() {
   return path.join(__dirname, "..");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function backendLaunchConfig() {
@@ -70,6 +75,121 @@ function isServerReachable(timeoutMs = 500) {
   });
 }
 
+function getListeningPids(port) {
+  try {
+    const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+    }).trim();
+    if (!output) {
+      return [];
+    }
+    return output
+      .split("\n")
+      .map((value) => Number.parseInt(value, 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return [];
+  }
+}
+
+function getProcessCommand(pid) {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function isOurBackendCommand(command) {
+  if (!command) {
+    return false;
+  }
+
+  if (command.includes("photos-light-server")) {
+    return true;
+  }
+
+  if (!/python/i.test(command)) {
+    return false;
+  }
+
+  const root = repoRoot();
+  if (!command.includes(root)) {
+    return false;
+  }
+
+  return command.includes("launcher.py") || command.includes("app.py");
+}
+
+async function killProcess(pid, signal) {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Process may already be gone.
+  }
+}
+
+async function stopOurBackendOnPort(port) {
+  for (const pid of getListeningPids(port)) {
+    if (pid === process.pid) {
+      continue;
+    }
+
+    const command = getProcessCommand(pid);
+    if (!isOurBackendCommand(command)) {
+      continue;
+    }
+
+    await killProcess(pid, "SIGTERM");
+  }
+
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const remaining = getListeningPids(port).filter((pid) => {
+      if (pid === process.pid) {
+        return false;
+      }
+      return isOurBackendCommand(getProcessCommand(pid));
+    });
+
+    if (remaining.length === 0) {
+      return;
+    }
+
+    if (Date.now() + 1500 >= deadline) {
+      for (const pid of remaining) {
+        await killProcess(pid, "SIGKILL");
+      }
+    }
+
+    await sleep(100);
+  }
+}
+
+async function assertPortAvailableForLaunch() {
+  await stopOurBackendOnPort(PORT);
+
+  const foreignPids = getListeningPids(PORT).filter((pid) => {
+    if (pid === process.pid) {
+      return false;
+    }
+    return !isOurBackendCommand(getProcessCommand(pid));
+  });
+
+  if (foreignPids.length > 0) {
+    const foreignCommand = getProcessCommand(foreignPids[0]) || "unknown process";
+    throw new Error(
+      `Port ${PORT} is already in use by another application:\n\n${foreignCommand}\n\nQuit that process and try again.`,
+    );
+  }
+
+  if (await isServerReachable()) {
+    throw new Error(`Port ${PORT} is still in use. Quit the other process and try again.`);
+  }
+}
+
 function waitForServer(timeoutMs = 45000) {
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
@@ -94,6 +214,41 @@ function waitForServer(timeoutMs = 45000) {
   });
 }
 
+async function waitForEmptyLibrarySession(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = null;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(LIBRARY_STATUS_URL);
+      const payload = await response.json();
+      lastStatus = payload?.status || null;
+
+      if (payload?.status === "not_configured") {
+        return;
+      }
+
+      if (payload?.status === "healthy") {
+        throw new Error(
+          "Photos Light started with a library already loaded. This usually means an old backend was reused.",
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("already loaded")) {
+        throw error;
+      }
+    }
+
+    await sleep(200);
+  }
+
+  throw new Error(
+    lastStatus
+      ? `Photos Light did not reach the welcome state (last status: ${lastStatus}).`
+      : "Photos Light did not reach the welcome state.",
+  );
+}
+
 function stopBackend() {
   if (!backendProcess || !ownsBackend) {
     backendProcess = null;
@@ -113,37 +268,22 @@ function stopBackend() {
   }, 2000);
 }
 
-async function ensureBackend() {
-  if (await isServerReachable()) {
-    ownsBackend = false;
-    return;
-  }
-
-  const { command, args, cwd, env } = backendLaunchConfig();
-  backendLogs = [];
-
-  backendProcess = spawn(command, args, {
-    cwd,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  ownsBackend = true;
-
-  backendProcess.stdout?.on("data", (chunk) => {
+function attachBackendProcessHandlers(proc) {
+  proc.stdout?.on("data", (chunk) => {
     backendLogs.push(String(chunk));
     if (backendLogs.length > 40) {
       backendLogs.shift();
     }
   });
 
-  backendProcess.stderr?.on("data", (chunk) => {
+  proc.stderr?.on("data", (chunk) => {
     backendLogs.push(String(chunk));
     if (backendLogs.length > 40) {
       backendLogs.shift();
     }
   });
 
-  backendProcess.on("error", (error) => {
+  proc.on("error", (error) => {
     dialog.showErrorBox(
       "Photos Light",
       `Could not start the backend server:\n\n${error.message}`,
@@ -151,16 +291,13 @@ async function ensureBackend() {
     app.quit();
   });
 
-  backendProcess.on("exit", async (code, signal) => {
-    backendProcess = null;
-    ownsBackend = false;
-
-    if (isQuitting || !code) {
-      return;
+  proc.on("exit", (code, signal) => {
+    if (backendProcess === proc) {
+      backendProcess = null;
+      ownsBackend = false;
     }
 
-    if (await isServerReachable()) {
-      // Port was already in use but another server is responding — keep going.
+    if (isQuitting || !code) {
       return;
     }
 
@@ -174,6 +311,28 @@ async function ensureBackend() {
   });
 }
 
+function spawnOwnedBackend() {
+  const { command, args, cwd, env } = backendLaunchConfig();
+  backendLogs = [];
+
+  backendProcess = spawn(command, args, {
+    cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  ownsBackend = true;
+  attachBackendProcessHandlers(backendProcess);
+}
+
+async function ensureBackend() {
+  if (backendProcess && ownsBackend && (await isServerReachable())) {
+    return;
+  }
+
+  await assertPortAvailableForLaunch();
+  spawnOwnedBackend();
+}
+
 function createWindow() {
   if (mainWindow) {
     mainWindow.focus();
@@ -183,8 +342,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
-    minWidth: 960,
-    minHeight: 640,
+    minWidth: 720,
+    minHeight: 560,
     title: "Photos Light",
     backgroundColor: "#121212",
     show: false,
@@ -260,10 +419,11 @@ function buildMenu() {
 
 async function bootstrapOnce() {
   buildMenu();
-  await ensureBackend();
 
   try {
+    await ensureBackend();
     await waitForServer();
+    await waitForEmptyLibrarySession();
   } catch (error) {
     dialog.showErrorBox("Photos Light", error.message);
     stopBackend();
