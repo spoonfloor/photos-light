@@ -29,8 +29,8 @@
   --filter-chip-rail-bg: transparent;
   --filter-chip-bg: rgba(30, 30, 30, 0.85);
   --filter-chip-text: var(--text-secondary);
-  --filter-chip-bg-hover: rgba(255, 255, 255, 0.12);
-  --filter-chip-text-hover: var(--text-primary);
+  --filter-chip-bg-hover: #000000;
+  --filter-chip-text-hover: #ffffff;
   --filter-chip-bg-active: #e8e8e8;
   --filter-chip-text-active: #121212;
   --filter-chip-bg-active-hover: #ffffff;

@@ -17,11 +17,15 @@ const VirtualGrid = (() => {
   let tileRaf = null;
   let mountedMonths = new Set();
   let committedMonths = new Set();
+  /** Months fully hydrated this session — survives virtual unmount for warm revisit. */
+  let hydratedMonths = new Set();
   let provisionalYears = [];
   let hooks = {};
   let comfortAnchorY = 0;
   let anchorMonthKey = null;
   let anchorSectionEl = null;
+  /** Grid DOM mount deferred while library transition overlay is up (keeps empty state visible). */
+  let pendingContainerMount = null;
 
   function getContainer() {
     return document.getElementById('photoContainer');
@@ -91,6 +95,45 @@ const VirtualGrid = (() => {
     if (tileLayer) {
       tileLayer.classList.remove('grid-comfort-off');
     }
+  }
+
+  function publishGridThumbSync(source, detail = {}) {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (!window.__gridThumbSync) {
+      window.__gridThumbSync = { events: [] };
+    }
+    window.__gridThumbSync.events.push({
+      t: Date.now(),
+      source,
+      ...detail,
+    });
+    if (window.__gridThumbSync.events.length > 80) {
+      window.__gridThumbSync.events.shift();
+    }
+    window.__gridThumbSync.last = source;
+    if (typeof ThumbnailQueue !== 'undefined') {
+      window.__gridThumbSync.queue = ThumbnailQueue.getDebugSnapshot();
+    }
+  }
+
+  function applyThumbnailsToGrid(grid) {
+    if (!grid || typeof ThumbnailQueue === 'undefined') {
+      return;
+    }
+    publishGridThumbSync('syncGridAfterLayout', {
+      month: grid.closest('[data-month]')?.dataset?.month || null,
+    });
+    ThumbnailQueue.syncGridAfterLayout(grid);
+  }
+
+  function syncStrictThumbnails() {
+    if (typeof ThumbnailQueue === 'undefined') {
+      return;
+    }
+    publishGridThumbSync('syncStrictViewport');
+    ThumbnailQueue.syncStrictViewport();
   }
 
   function buildPlaceholderMonthSection(section, { pending = false } = {}) {
@@ -165,6 +208,55 @@ const VirtualGrid = (() => {
     } else {
       wrapper.appendChild(grid);
     }
+    hydratedMonths.add(monthKey);
+    publishGridThumbSync('hydrateMonthSection', { month: monthKey });
+    applyThumbnailsToGrid(grid);
+  }
+
+  function mountHydratedMonthSection(section) {
+    const monthKey = section.month;
+    const existing = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+    if (existing) {
+      mountedMonths.add(monthKey);
+      committedMonths.add(monthKey);
+      if (existing.classList.contains('virtual-month-placeholder')) {
+        const photos = monthCache.get(monthKey);
+        if (photos) {
+          hydrateMonthSection(monthKey, section, photos);
+        }
+      }
+      return true;
+    }
+
+    const photos = monthCache.get(monthKey);
+    if (!photos) {
+      return false;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'month-section virtual-month-section';
+    wrapper.id = `month-${monthKey}`;
+    wrapper.dataset.month = monthKey;
+    wrapper.style.top = `${section.yStart}px`;
+
+    const header = document.createElement('div');
+    header.className = 'month-header';
+    header.innerHTML = `
+      <span class="month-label">${GridLayout.monthLabel(monthKey)}</span>
+      <div class="month-select-circle"></div>
+    `;
+    wrapper.appendChild(header);
+    wrapper.appendChild(buildHydratedGrid(section, photos, hooks.filterPhoto));
+
+    contentLayer.appendChild(wrapper);
+    mountedMonths.add(monthKey);
+    committedMonths.add(monthKey);
+    hydratedMonths.add(monthKey);
+    applyThumbnailsToGrid(wrapper.querySelector('.photo-grid'));
+    if (hooks.onMonthMounted) {
+      hooks.onMonthMounted(monthKey);
+    }
+    return true;
   }
 
   function unmountMonth(monthKey) {
@@ -267,6 +359,7 @@ const VirtualGrid = (() => {
 
     const liveSection = GridLayout.findSectionForMonth(layout, monthKey) || section;
     hydrateMonthSection(monthKey, liveSection, photos);
+    syncStrictThumbnails();
     if (hooks.onMonthMounted) {
       hooks.onMonthMounted(monthKey);
     }
@@ -347,6 +440,13 @@ const VirtualGrid = (() => {
         }
       });
       mountBuffer.forEach((section) => {
+        if (
+          hydratedMonths.has(section.month) &&
+          monthCache.has(section.month) &&
+          mountHydratedMonthSection(section)
+        ) {
+          return;
+        }
         mountPlaceholderSection(section, { pending: true });
       });
       setSectionsPending(strictKeys, true);
@@ -364,11 +464,20 @@ const VirtualGrid = (() => {
     mountedMonths.forEach((monthKey) => {
       if (!mountKeys.has(monthKey)) {
         unmountMonth(monthKey);
-        committedMonths.delete(monthKey);
+        if (!hydratedMonths.has(monthKey)) {
+          committedMonths.delete(monthKey);
+        }
       }
     });
 
     mountBuffer.forEach((section) => {
+      if (
+        hydratedMonths.has(section.month) &&
+        monthCache.has(section.month) &&
+        mountHydratedMonthSection(section)
+      ) {
+        return;
+      }
       mountPlaceholderSection(section, {
         pending: !committedMonths.has(section.month),
       });
@@ -390,6 +499,7 @@ const VirtualGrid = (() => {
         }
         void hydrateMonthIfNeeded(section);
       });
+      syncStrictThumbnails();
       return;
     }
 
@@ -404,6 +514,7 @@ const VirtualGrid = (() => {
     strictVisible.forEach((section) => {
       void hydrateMonthIfNeeded(section);
     });
+    syncStrictThumbnails();
   }
 
   function buildTileRow(cellsInRow) {
@@ -654,13 +765,88 @@ const VirtualGrid = (() => {
     window.removeEventListener('scroll', scheduleSync);
   }
 
+  function applyContainerMount(plan) {
+    const container = getContainer();
+    if (!container || !ensureDom()) {
+      return false;
+    }
+
+    sortOrder = plan.sort;
+
+    if (plan.hasProvisional) {
+      provisionalYears = plan.provisionalYears;
+      anchorMonthKey = plan.anchorMonth;
+
+      const columnLayout = GridLayout.computeColumnLayout(container.clientWidth);
+      GridLayout.publishCssVars(
+        container,
+        GridLayout.toLayoutSnapshot({ columnLayout, sections: [], totalHeight: 0 }),
+      );
+
+      setSnapshot(
+        GridLayout.buildProvisionalLayout(
+          plan.provisionalTotal,
+          plan.provisionalYears,
+          columnLayout,
+          plan.sort,
+        ),
+      );
+
+      if (anchorMonthKey) {
+        void fetchMonthPhotos(anchorMonthKey);
+      }
+
+      bindResize(container);
+      bindScroll();
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      syncComfortAndContent();
+      syncTileLayer();
+      publishPhaseATestState('phase-a-ready');
+
+      if (hooks.onProvisionalReady) {
+        hooks.onProvisionalReady(plan.provisionalMeta);
+      }
+    }
+
+    monthIndex = plan.indexPayload;
+    rebuildLayoutFromIndex(plan.indexPayload, container.clientWidth);
+    if (!plan.provisionalTotal) {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      bindResize(container);
+      bindScroll();
+    }
+    scheduleSync();
+
+    if (hooks.onReady) {
+      hooks.onReady(plan.indexPayload, layout);
+    }
+    return true;
+  }
+
+  function commitContainerMount() {
+    if (!pendingContainerMount) {
+      return false;
+    }
+    const plan = pendingContainerMount;
+    pendingContainerMount = null;
+    return applyContainerMount(plan);
+  }
+
+  function cancelPendingContainerMount() {
+    pendingContainerMount = null;
+  }
+
   async function init(options = {}) {
     destroy();
     hooks = options;
     generation = hooks.getGeneration?.() ?? 0;
+    const deferContainerMount = !!options.deferContainerMount;
 
     const container = getContainer();
-    if (!container || !ensureDom()) {
+    if (!container) {
+      return false;
+    }
+    if (!deferContainerMount && !ensureDom()) {
       return false;
     }
 
@@ -707,56 +893,20 @@ const VirtualGrid = (() => {
       return false;
     }
 
-    sortOrder = sort;
     const yearsForProvisional =
       provisionalYears.length > 0
         ? provisionalYears
         : provisionalTotal > 0
           ? GridLayout.defaultProvisionalYears()
           : [];
+    const hasProvisional =
+      provisionalTotal > 0 && yearsForProvisional.length > 0;
 
-    if (provisionalTotal > 0 && yearsForProvisional.length > 0) {
-      provisionalYears = yearsForProvisional;
-      anchorMonthKey = anchorMonth;
-
+    if (hasProvisional) {
       if (options.onPhaseAAnchor) {
         options.onPhaseAAnchor({
           total: provisionalTotal,
-          years: provisionalYears,
-          anchorMonth,
-        });
-      }
-
-      const columnLayout = GridLayout.computeColumnLayout(container.clientWidth);
-      GridLayout.publishCssVars(
-        container,
-        GridLayout.toLayoutSnapshot({ columnLayout, sections: [], totalHeight: 0 }),
-      );
-
-      setSnapshot(
-        GridLayout.buildProvisionalLayout(
-          provisionalTotal,
-          provisionalYears,
-          columnLayout,
-          sort,
-        ),
-      );
-
-      if (anchorMonthKey) {
-        void fetchMonthPhotos(anchorMonthKey);
-      }
-
-      bindResize(container);
-      bindScroll();
-      window.scrollTo({ top: 0, behavior: 'instant' });
-      syncComfortAndContent();
-      syncTileLayer();
-      publishPhaseATestState('phase-a-ready');
-
-      if (options.onProvisionalReady) {
-        options.onProvisionalReady({
-          total: provisionalTotal,
-          years: provisionalYears,
+          years: yearsForProvisional,
           anchorMonth,
         });
       }
@@ -775,27 +925,34 @@ const VirtualGrid = (() => {
       return false;
     }
 
-    monthIndex = indexPayload;
-    sortOrder = sort;
     if (options.onIndexReady) {
       options.onIndexReady(indexPayload);
     }
 
-    rebuildLayoutFromIndex(indexPayload, container.clientWidth);
-    if (!provisionalTotal) {
-      window.scrollTo({ top: 0, behavior: 'instant' });
-      bindResize(container);
-      bindScroll();
-    }
-    scheduleSync();
+    const mountPlan = {
+      sort,
+      provisionalTotal,
+      anchorMonth,
+      provisionalYears: hasProvisional ? yearsForProvisional : [],
+      hasProvisional,
+      indexPayload,
+      provisionalMeta: {
+        total: provisionalTotal,
+        years: yearsForProvisional,
+        anchorMonth,
+      },
+    };
 
-    if (options.onReady) {
-      options.onReady(indexPayload, layout);
+    if (deferContainerMount) {
+      pendingContainerMount = mountPlan;
+      return true;
     }
-    return true;
+
+    return applyContainerMount(mountPlan);
   }
 
   function destroy() {
+    cancelPendingContainerMount();
     if (scrollRaf) {
       window.cancelAnimationFrame(scrollRaf);
       scrollRaf = null;
@@ -830,7 +987,11 @@ const VirtualGrid = (() => {
     provisionalYears = [];
     mountedMonths = new Set();
     committedMonths = new Set();
+    hydratedMonths = new Set();
     monthCache.clear();
+    if (typeof ThumbnailQueue !== 'undefined') {
+      ThumbnailQueue.clear();
+    }
     monthInflight.clear();
     hooks = {};
   }
@@ -845,12 +1006,14 @@ const VirtualGrid = (() => {
     }
     window.scrollTo({ top, behavior });
     scheduleSync();
+    publishGridThumbSync('scrollToMonth', { month: monthKey, behavior });
     return true;
   }
 
   function invalidateMonth(monthKey) {
     monthCache.delete(monthKey);
     committedMonths.delete(monthKey);
+    hydratedMonths.delete(monthKey);
     if (mountedMonths.has(monthKey)) {
       unmountMonth(monthKey);
       const section = GridLayout.findSectionForMonth(layout, monthKey);
@@ -864,6 +1027,7 @@ const VirtualGrid = (() => {
   function invalidateAllMonths() {
     monthCache.clear();
     monthInflight.clear();
+    hydratedMonths = new Set();
     clearMountedMonths();
     scheduleSync();
   }
@@ -879,6 +1043,7 @@ const VirtualGrid = (() => {
     }
     affectedMonths.forEach((monthKey) => {
       monthCache.delete(monthKey);
+      hydratedMonths.delete(monthKey);
     });
     clearMountedMonths();
     rebuildLayoutFromIndex(nextIndex, container.clientWidth, { keepMounted: true });
@@ -939,6 +1104,7 @@ const VirtualGrid = (() => {
     sortOrder = sortOrderNext;
     monthCache.clear();
     monthInflight.clear();
+    hydratedMonths = new Set();
     clearMountedMonths();
     rebuildLayoutFromIndex(indexPayload, container.clientWidth, { remount: true });
     if (hooks.onIndexReady) {
@@ -964,6 +1130,8 @@ const VirtualGrid = (() => {
   return {
     init,
     destroy,
+    commitContainerMount,
+    cancelPendingContainerMount,
     scrollToMonth,
     invalidateMonth,
     invalidateAllMonths,

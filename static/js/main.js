@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v412';
+const MAIN_JS_VERSION = 'v416';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
@@ -157,6 +157,8 @@ const DEBUG_FILE_COUNT_LOG_STEP_MS = 200;
 let currentPhotoLoad = null;
 let currentPhotoLoadAbortController = null;
 let photoLoadRequestId = 0;
+/** Paged grid render held until library transition overlay closes. */
+let pendingPagedPhotoRender = null;
 
 const ROTATABLE_IMAGE_EXTENSIONS = new Set([
   '.jpg',
@@ -5059,14 +5061,12 @@ function updateLightboxRotateButtonState(
 }
 
 function refreshGridPhotoThumbnail(photoId) {
+  ThumbnailQueue.invalidate(photoId);
   const thumb = document.querySelector(
     `.photo-thumb[data-photo-id="${photoId}"]`,
   );
   if (!thumb) return;
-
-  if (thumb.getAttribute('src')) {
-    thumb.src = getPhotoThumbnailUrl(photoId);
-  }
+  ThumbnailQueue.refreshImg(thumb);
 }
 
 function scheduleGridPhotoThumbnailRefresh(photoId, delayMs = 1200) {
@@ -6173,6 +6173,7 @@ async function loadAndRenderPhotosVirtual(options = {}) {
       signal,
       getGeneration: () => generation,
       mergePhotos: mergePhotosIntoVirtualState,
+      deferContainerMount: state.libraryTransitionActive,
       onPhaseAAnchor: (preview) => {
         state.photoTotalCount = preview.total;
         state.hasDatabase = true;
@@ -6181,9 +6182,6 @@ async function loadAndRenderPhotosVirtual(options = {}) {
         enableAppBarButtons();
       },
       onProvisionalReady: () => {
-        if (state.libraryTransitionActive) {
-          hideLibraryTransitionOverlay();
-        }
         updateUtilityMenuAvailability();
         updateFilterChipRailVisibility();
       },
@@ -6417,16 +6415,23 @@ async function loadAndRenderPhotosPaged(options = {}) {
   updatePhotoWindowFromPage(data, { append: false });
   state.lastClickedIndex = null;
 
-  renderPhotoGrid(getFilteredPhotos(state.photos), false);
-  setupThumbnailLazyLoading();
-  ensureScrollSentinel();
-  setupGridScrollObserver();
+  const renderPagedGrid = () => {
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+    ensureScrollSentinel();
+    setupGridScrollObserver();
+    updateUtilityMenuAvailability();
+    updateFilterChipRailVisibility();
+    enableAppBarButtons();
+    void populateDatePicker();
+  };
 
-  updateUtilityMenuAvailability();
-  updateFilterChipRailVisibility();
-  enableAppBarButtons();
-  void populateDatePicker();
+  if (state.libraryTransitionActive) {
+    pendingPagedPhotoRender = renderPagedGrid;
+    return true;
+  }
 
+  renderPagedGrid();
   return true;
 }
 
@@ -6560,60 +6565,18 @@ async function loadAndRenderPhotosCommitted(generation) {
 }
 
 /**
- * Setup lazy loading for thumbnails (only load when visible)
+ * Viewport-first thumbnail loading (timeline uses ThumbnailQueue.prioritize*).
  */
-let thumbnailObserver = null;
-
 function setupThumbnailLazyLoading() {
-  // Disconnect existing observer to clear stale references
-  if (thumbnailObserver) {
-    thumbnailObserver.disconnect();
+  if (typeof ThumbnailQueue === 'undefined') {
+    return;
   }
-
-  // Create fresh observer
-  thumbnailObserver = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          const img = entry.target;
-          const photoId = img.dataset.photoId;
-
-          if (photoId && !img.src) {
-            // Load thumbnail
-            img.src = getPhotoThumbnailUrl(photoId);
-            img.classList.add('loading');
-
-            img.onload = () => {
-              img.classList.remove('loading');
-              // Inject select circle now that image is loaded
-              const photoCard = img.closest('.photo-card');
-              if (photoCard && !photoCard.querySelector('.select-circle')) {
-                const circle = document.createElement('div');
-                circle.className = 'select-circle';
-                photoCard.insertBefore(circle, photoCard.firstChild);
-                photoCard.classList.add('loaded');
-              }
-            };
-
-            img.onerror = () => {
-              img.classList.remove('loading');
-              img.classList.add('error');
-            };
-
-            // Stop observing once loaded
-            thumbnailObserver.unobserve(img);
-          }
-        }
-      });
-    },
-    {
-      rootMargin: '1000px', // Load 1000px before entering viewport for smoother experience
-    },
-  );
-
-  // Observe all thumbnail images that don't have src yet
-  const thumbnails = document.querySelectorAll('.photo-thumb:not([src])');
-  thumbnails.forEach((thumb) => thumbnailObserver.observe(thumb));
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    ThumbnailQueue.syncStrictViewport();
+    return;
+  }
+  const root = document.getElementById('photoContainer') || document;
+  ThumbnailQueue.scheduleScan(root);
 }
 
 // =====================
@@ -11284,16 +11247,12 @@ async function loadRebuildThumbnailsOverlay() {
       .getElementById('rebuildThumbnailsDoneBtn')
       ?.addEventListener('click', async () => {
         closeRebuildThumbnailsOverlay();
-        // Force thumbnail reload by adding cache-buster (only to loaded images)
-        const thumbnails = document.querySelectorAll('.photo-thumb');
-        const cacheBuster = Date.now();
-        thumbnails.forEach((img) => {
-          // Only add cachebuster to images that have valid thumbnail URLs
-          if (img.src && img.src.includes('/api/photo/')) {
-            const src = img.src.split('?')[0];
-            img.src = `${src}?t=${cacheBuster}`;
-          }
+        ThumbnailQueue.clear();
+        document.querySelectorAll('.photo-thumb').forEach((img) => {
+          img.removeAttribute('src');
+          img.classList.remove('loading', 'error');
         });
+        setupThumbnailLazyLoading();
       });
   } catch (error) {
     console.error('❌ Failed to load rebuild thumbnails overlay:', error);
@@ -13107,6 +13066,23 @@ async function loadLibraryTransitionOverlay() {
   }
 }
 
+function flushPendingPhotoContainerMount() {
+  if (typeof VirtualGrid !== 'undefined') {
+    VirtualGrid.commitContainerMount();
+  }
+  if (pendingPagedPhotoRender) {
+    pendingPagedPhotoRender();
+    pendingPagedPhotoRender = null;
+  }
+}
+
+function cancelPendingPhotoContainerMount() {
+  if (typeof VirtualGrid !== 'undefined') {
+    VirtualGrid.cancelPendingContainerMount();
+  }
+  pendingPagedPhotoRender = null;
+}
+
 async function showLibraryTransitionOverlay(options = {}) {
   let overlay = document.getElementById('libraryTransitionOverlay');
   if (!overlay) {
@@ -13144,6 +13120,7 @@ async function showLibraryTransitionOverlay(options = {}) {
 }
 
 function hideLibraryTransitionOverlay() {
+  flushPendingPhotoContainerMount();
   const overlay = document.getElementById('libraryTransitionOverlay');
   if (overlay) {
     overlay.style.display = 'none';
@@ -13193,6 +13170,7 @@ function isCurrentLibraryGeneration(generation) {
 }
 
 function renderSafeLibraryFallback() {
+  cancelPendingPhotoContainerMount();
   advanceLibraryGeneration();
   state.photos = [];
   state.hasDatabase = false;
@@ -15374,6 +15352,13 @@ async function checkLibraryHealthAndInit() {
  * Initialize app
  */
 async function init() {
+  if (typeof ThumbnailQueue !== 'undefined') {
+    ThumbnailQueue.configure({
+      getUrl: (photoId) => getPhotoThumbnailUrl(photoId),
+      getVersion: (photoId) => state.lightboxMediaVersions[photoId],
+    });
+  }
+
   // Wait for fonts to load to prevent layout shift
   await document.fonts.ready;
 

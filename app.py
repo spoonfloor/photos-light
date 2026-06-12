@@ -1535,6 +1535,9 @@ def get_photo_thumbnail(photo_id):
     - Subsequent requests: serve cached version
     - Uses hash-based sharding: .thumbnails/{hash[:2]}/{hash[2:4]}/{hash}.v2.jpg
     """
+    if not LIBRARY_PATH or not THUMBNAIL_CACHE_DIR or not DB_PATH:
+        return jsonify({'error': 'Library not configured'}), 503
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1549,6 +1552,12 @@ def get_photo_thumbnail(photo_id):
         
         relative_path = row['current_path']
         content_hash = row['content_hash']
+
+        if not relative_path:
+            return jsonify({'error': 'Photo missing file path'}), 404
+
+        if not content_hash:
+            return jsonify({'error': 'Photo missing content hash'}), 404
         
         thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
 
@@ -3641,6 +3650,39 @@ def update_app_paths(library_path, db_path):
         except (PermissionError, OSError) as e:
             print(f"⚠️  Warning: Could not create directory {directory}: {e}")
             print(f"   This may indicate the library is not accessible.")
+
+
+def restore_library_session_from_config():
+    """Rehydrate in-memory library paths after a process restart."""
+    if LIBRARY_PATH and DB_PATH and THUMBNAIL_CACHE_DIR:
+        return True
+
+    config = load_config()
+    if not config:
+        return False
+
+    library_path = config.get('library_path')
+    db_path = config.get('db_path')
+    if not library_path or not db_path:
+        return False
+
+    if not os.path.isdir(library_path):
+        print(f"⚠️  Saved library path is missing: {library_path}")
+        return False
+
+    try:
+        resolved_db_path = resolve_db_path(library_path, db_path)
+    except (OSError, PermissionError) as exc:
+        print(f"⚠️  Cannot access saved database: {exc}")
+        return False
+
+    if not os.path.isfile(resolved_db_path):
+        print(f"⚠️  Saved database not found: {resolved_db_path}")
+        return False
+
+    update_app_paths(library_path, resolved_db_path)
+    print(f"📚 Restored library session: {library_path}")
+    return True
 
 
 def build_library_status_payload(library_path, db_path, report):
@@ -5939,7 +5981,8 @@ def bulk_favorite():
 if __name__ == '__main__':
     print("\n🖼️  Photos Light Starting...")
     print(f"📁 Static files: {STATIC_DIR}")
-    print("📚 No library loaded — choose one from the welcome screen.")
+    if not restore_library_session_from_config():
+        print("📚 No library loaded — choose one from the welcome screen.")
     
     print(f"🌐 Open: http://localhost:5001\n")
     
