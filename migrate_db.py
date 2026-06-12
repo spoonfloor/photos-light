@@ -129,7 +129,10 @@ def check_and_migrate_schema(db_path):
         'idx_content_hash': 'CREATE INDEX IF NOT EXISTS idx_content_hash ON photos(content_hash)',
         'idx_date_taken': 'CREATE INDEX IF NOT EXISTS idx_date_taken ON photos(date_taken)',
         'idx_file_type': 'CREATE INDEX IF NOT EXISTS idx_file_type ON photos(file_type)',
-        'idx_rating': 'CREATE INDEX IF NOT EXISTS idx_rating ON photos(rating)'
+        'idx_rating': 'CREATE INDEX IF NOT EXISTS idx_rating ON photos(rating)',
+        'idx_grid_newest': 'CREATE INDEX IF NOT EXISTS idx_grid_newest ON photos(date_taken DESC, current_path ASC, id ASC)',
+        'idx_grid_oldest': 'CREATE INDEX IF NOT EXISTS idx_grid_oldest ON photos(date_taken ASC, current_path ASC, id ASC)',
+        'idx_undated_path': 'CREATE INDEX IF NOT EXISTS idx_undated_path ON photos(current_path ASC, id ASC) WHERE date_taken IS NULL',
     }
     
     for idx_name, idx_sql in expected_indices.items():

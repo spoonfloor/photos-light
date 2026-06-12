@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v404';
+const MAIN_JS_VERSION = 'v412';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
@@ -30,7 +30,8 @@ const state = {
   lightboxUIHovered: false, // True while pointer is over the lightbox overlay
   deleteInProgress: false,
   hasMore: true, // For infinite scroll
-  currentOffset: 0, // Current pagination offset
+  currentOffset: 0, // Loaded row count in the current window
+  photosNextCursor: null, // Keyset cursor for the next scroll page
   photoTotalCount: 0, // Total rows in DB (windowed load)
   loadingMore: false, // Scroll-triggered page in flight
   navigateToMonth: null, // Month to navigate to after closing lightbox (e.g., '2025-12')
@@ -1110,59 +1111,75 @@ function wireAppBar() {
 }
 
 /**
- * Populate year picker with years from DB
+ * Sync date picker from known years + optional anchor month (limit=1 truth).
+ * Must run before overlay dismiss / comfort grid reveal at Phase A.
  */
-async function populateDatePicker() {
+function applyDatePickerFromYears(years, anchorMonth = null) {
+  if (!Array.isArray(years) || years.length === 0) {
+    return false;
+  }
+
+  const yearPicker = document.getElementById('yearPicker');
+  if (!yearPicker) {
+    return false;
+  }
+
+  yearPicker.innerHTML = '';
+  years.forEach((year) => {
+    const option = document.createElement('option');
+    option.value = String(year);
+    option.textContent = String(year);
+    yearPicker.appendChild(option);
+  });
+
+  if (anchorMonth && isCalendarMonthKey(anchorMonth)) {
+    setDatePickerMonthValue(anchorMonth);
+  } else {
+    const defaultYear =
+      state.currentSortOrder === 'oldest' ? years[0] : years[years.length - 1];
+    yearPicker.value = String(defaultYear);
+  }
+
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'visible';
+  }
+  enablePhotoRelatedActions();
+  return true;
+}
+
+/**
+ * Populate year picker with years from DB.
+ * @param {{ anchorMonth?: string|null, years?: number[]|null }} [options]
+ *   anchorMonth — truth from GET /api/photos?limit=1 (Phase A); not provisional layout.
+ */
+async function populateDatePicker(options = {}) {
+  const { anchorMonth = null, years: prefetchedYears = null } = options;
   try {
-    const response = await fetch('/api/years');
+    let years = prefetchedYears;
+    if (!Array.isArray(years)) {
+      const response = await fetch('/api/years');
 
-    // If the database is missing or API fails, bail gracefully
-    if (!response.ok) {
-      console.warn('⚠️  Date picker disabled (database not available)');
-      return;
-    }
-
-    const data = await response.json();
-
-    // Check for database corruption
-    if (checkForDatabaseCorruption(data)) {
-      return;
-    }
-
-    // Validate response data
-    if (!data || !Array.isArray(data.years)) {
-      console.warn('⚠️  Date picker disabled (invalid data)');
-      return;
-    }
-
-    const yearPicker = document.getElementById('yearPicker');
-    if (!yearPicker) return;
-
-    // Clear existing options before populating (prevents duplicates)
-    yearPicker.innerHTML = '';
-
-    // Populate years
-    data.years.forEach((year) => {
-      const option = document.createElement('option');
-      option.value = year;
-      option.textContent = year;
-      yearPicker.appendChild(option);
-    });
-
-    // Set to most recent year by default
-    if (data.years.length > 0) {
-      yearPicker.value = data.years[0];
-
-      // Show the date picker now that we have dates
-      const datePickerContainer = document.querySelector('.date-picker');
-      if (datePickerContainer) {
-        datePickerContainer.style.visibility = 'visible';
+      if (!response.ok) {
+        console.warn('⚠️  Date picker disabled (database not available)');
+        return;
       }
 
-      // Enable photo-related actions
-      enablePhotoRelatedActions();
-    } else {
-      // Hide the date picker when there are no photos
+      const data = await response.json();
+
+      if (checkForDatabaseCorruption(data)) {
+        return;
+      }
+
+      if (!data || !Array.isArray(data.years)) {
+        console.warn('⚠️  Date picker disabled (invalid data)');
+        return;
+      }
+
+      years = data.years;
+    }
+
+    if (!applyDatePickerFromYears(years, anchorMonth)) {
       const datePickerContainer = document.querySelector('.date-picker');
       if (datePickerContainer) {
         datePickerContainer.style.visibility = 'hidden';
@@ -1197,6 +1214,117 @@ function enablePhotoRelatedActions() {
   });
 }
 
+const DATE_PICKER_APP_BAR_OFFSET = 80;
+let datePickerSyncRaf = null;
+let datePickerUpdatingFromScroll = false;
+let datePickerLastSyncedMonth = null;
+let datePickerScrollListenerBound = false;
+
+function setDatePickerMonthValue(monthKey) {
+  const monthPicker = document.getElementById('monthPicker');
+  const yearPicker = document.getElementById('yearPicker');
+  if (!monthPicker || !yearPicker || !isCalendarMonthKey(monthKey)) {
+    return;
+  }
+
+  const [year, month] = monthKey.split('-');
+  datePickerUpdatingFromScroll = true;
+  yearPicker.value = year;
+  monthPicker.value = parseInt(month, 10).toString();
+  datePickerLastSyncedMonth = monthKey;
+  requestAnimationFrame(() => {
+    datePickerUpdatingFromScroll = false;
+  });
+}
+
+function monthFromPagedDom(appBarOffset = DATE_PICKER_APP_BAR_OFFSET) {
+  let bestMonth = null;
+  let bestTop = -Infinity;
+
+  document.querySelectorAll('.month-section').forEach((section) => {
+    const monthKey = section.dataset.month;
+    if (!isCalendarMonthKey(monthKey)) {
+      return;
+    }
+    const top = section.getBoundingClientRect().top;
+    if (top <= appBarOffset && top > bestTop) {
+      bestTop = top;
+      bestMonth = monthKey;
+    }
+  });
+
+  if (bestMonth) {
+    return bestMonth;
+  }
+
+  let firstBelow = null;
+  let firstBelowTop = Infinity;
+  document.querySelectorAll('.month-section').forEach((section) => {
+    const monthKey = section.dataset.month;
+    if (!isCalendarMonthKey(monthKey)) {
+      return;
+    }
+    const top = section.getBoundingClientRect().top;
+    if (top > appBarOffset && top < firstBelowTop) {
+      firstBelowTop = top;
+      firstBelow = monthKey;
+    }
+  });
+
+  return firstBelow;
+}
+
+function syncDatePickerFromScroll() {
+  const monthPicker = document.getElementById('monthPicker');
+  const yearPicker = document.getElementById('yearPicker');
+  if (!monthPicker || !yearPicker || monthPicker.disabled) {
+    return;
+  }
+
+  const scrollTop = window.scrollY || document.documentElement.scrollTop;
+  let monthKey = null;
+
+  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    const layout = VirtualGrid.getLayout();
+    if (layout?.provisional) {
+      return;
+    }
+    monthKey = GridLayout.findMonthAtScrollTop(
+      layout,
+      scrollTop,
+      DATE_PICKER_APP_BAR_OFFSET,
+    );
+  } else {
+    monthKey = monthFromPagedDom();
+  }
+
+  if (!monthKey || monthKey === datePickerLastSyncedMonth) {
+    return;
+  }
+
+  setDatePickerMonthValue(monthKey);
+}
+
+function scheduleDatePickerFromScrollSync() {
+  if (datePickerSyncRaf) {
+    return;
+  }
+  datePickerSyncRaf = window.requestAnimationFrame(() => {
+    datePickerSyncRaf = null;
+    syncDatePickerFromScroll();
+  });
+}
+
+function ensureDatePickerScrollListener() {
+  if (datePickerScrollListenerBound) {
+    return;
+  }
+  datePickerScrollListenerBound = true;
+  window.addEventListener('scroll', scheduleDatePickerFromScrollSync, {
+    passive: true,
+  });
+}
+
 /**
  * Wire up date picker change handlers
  */
@@ -1206,26 +1334,27 @@ function wireDatePicker() {
 
   if (!monthPicker || !yearPicker) return;
 
-  // Flag to prevent feedback loop when updating picker from scroll
-  let updatingFromScroll = false;
+  ensureDatePickerScrollListener();
 
   const handleDateChange = async () => {
-    // Don't jump if we're updating from scroll
-    if (updatingFromScroll) return;
+    if (datePickerUpdatingFromScroll) return;
 
     const month = monthPicker.value.padStart(2, '0');
     const year = yearPicker.value;
     const targetMonth = `${year}-${month}`;
 
+    if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+      if (VirtualGrid.scrollToMonth(targetMonth)) {
+        VirtualGrid.scheduleSync();
+        return;
+      }
+    }
+
     // Check if month section already exists in DOM
     const monthSection = document.getElementById(`month-${targetMonth}`);
 
     if (monthSection) {
-      // Already rendered, just scroll to it
-      // Position month label near top with small offset for app bar
-      const appBarHeight = 60;
-      const targetY = monthSection.offsetTop - appBarHeight - 20; // 20px padding
-      window.scrollTo({ top: targetY, behavior: 'smooth' });
+      scrollToMonthSection(targetMonth);
     } else {
       // Not rendered - need to find nearest valid month
 
@@ -1242,12 +1371,16 @@ function wireDatePicker() {
         const actualMonth = nearestData.nearest_month;
 
         // Check if that section exists
+        if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+          if (VirtualGrid.scrollToMonth(actualMonth)) {
+            VirtualGrid.scheduleSync();
+            return;
+          }
+        }
+
         const actualSection = document.getElementById(`month-${actualMonth}`);
         if (actualSection) {
-          // Position month label near top with small offset for app bar
-          const appBarHeight = 60;
-          const targetY = actualSection.offsetTop - appBarHeight - 20; // 20px padding
-          window.scrollTo({ top: targetY, behavior: 'smooth' });
+          scrollToMonthSection(actualMonth);
         } else {
           await hydrateGridForMonthJump(actualMonth);
         }
@@ -1260,70 +1393,10 @@ function wireDatePicker() {
   monthPicker.addEventListener('change', handleDateChange);
   yearPicker.addEventListener('change', handleDateChange);
 
-  // Track visibility of all sections
-  const sectionVisibility = new Map();
-
-  // Setup IntersectionObserver to update picker based on scroll position
-  const observer = new IntersectionObserver(
-    (entries) => {
-      // Update visibility state for sections that changed
-      entries.forEach((entry) => {
-        const monthId = entry.target.dataset.month;
-        if (monthId) {
-          if (entry.intersectionRatio > 0) {
-            // Section is visible - store it
-            sectionVisibility.set(monthId, entry.target);
-          } else {
-            // Section is not visible - remove it
-            sectionVisibility.delete(monthId);
-          }
-        }
-      });
-
-      // Get all month sections in DOM order, find first visible one
-      const allSections = document.querySelectorAll('.month-section');
-      const topmostVisibleSection = Array.from(allSections).find((section) => {
-        const monthKey = section.dataset.month;
-        return isCalendarMonthKey(monthKey) && sectionVisibility.has(monthKey);
-      });
-
-      if (!topmostVisibleSection) return;
-
-      const monthId = topmostVisibleSection.dataset.month;
-
-      if (isCalendarMonthKey(monthId)) {
-        const [year, month] = monthId.split('-');
-
-        // Set flag to prevent triggering jump
-        updatingFromScroll = true;
-
-        // Update pickers
-        yearPicker.value = year;
-        monthPicker.value = parseInt(month, 10).toString(); // Remove leading zero
-
-        // Reset flag after a brief delay
-        setTimeout(() => {
-          updatingFromScroll = false;
-        }, 100);
-      }
-    },
-    {
-      threshold: [0], // Just detect ANY visibility (entering or leaving viewport)
-      rootMargin: '-60px 0px 0px 0px', // Offset for app bar height
-    },
-  );
-
-  // Observe all month sections
-  const observeMonthSections = () => {
-    const monthSections = document.querySelectorAll('.month-section');
-    monthSections.forEach((section) => observer.observe(section));
+  state.onMonthsRendered = () => {
+    datePickerLastSyncedMonth = null;
+    scheduleDatePickerFromScrollSync();
   };
-
-  // Initial observation
-  observeMonthSections();
-
-  // Re-observe when new sections are added
-  state.onMonthsRendered = observeMonthSections;
 }
 
 /**
@@ -4123,14 +4196,83 @@ function updateDateChangeProgress(current, total) {
   // Status text stays static (no updates during progress)
 }
 
-function finalizeDateChangeSuccess({ message, originalDates, clearSelection }) {
+async function applyDateEditPatch(data) {
+  const photoId = data.photo_id;
+  if (!photoId) {
+    return;
+  }
+
+  const index = state.photos.findIndex((entry) => entry.id === photoId);
+  const oldMonth = index !== -1 ? state.photos[index].month : null;
+
+  if (data.duplicate_removed) {
+    if (VirtualGrid.isActive() && !hasActivePhotoFilters() && oldMonth) {
+      VirtualGrid.applyMutationPatch({ oldMonth });
+      removePhotosFromState([photoId]);
+      return;
+    }
+    if (removePhotosFromState([photoId]) && state.photoTotalCount > 0) {
+      state.photoTotalCount -= 1;
+      state.hasMore = state.photos.length < state.photoTotalCount;
+    }
+    return;
+  }
+
+  const photo = data.photo;
+  if (!photo) {
+    return;
+  }
+
+  if (index !== -1) {
+    state.photos[index] = { ...state.photos[index], ...photo };
+  }
+
+  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    if (oldMonth && oldMonth !== photo.month) {
+      VirtualGrid.applyMutationPatch({ oldMonth, newMonth: photo.month });
+    } else {
+      VirtualGrid.invalidateMonth(photo.month);
+    }
+    if (oldMonth !== photo.month) {
+      VirtualGrid.scrollToMonth(photo.month);
+    }
+    refreshGridPhotoThumbnail(photoId);
+    return;
+  }
+
+  if (index !== -1) {
+    sortPhotosInLibraryOrder(state.photos);
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+    ensureScrollSentinel();
+    setupGridScrollObserver();
+    if (oldMonth !== photo.month) {
+      scrollToMonthSection(photo.month);
+    }
+    refreshGridPhotoThumbnail(photoId);
+    return;
+  }
+
+  await replaceGridAtMonth(photo.month);
+  scrollToMonthSection(photo.month);
+}
+
+async function finalizeDateChangeSuccess({
+  message,
+  originalDates,
+  clearSelection,
+  patchResults = [],
+}) {
+  for (const patch of patchResults) {
+    await applyDateEditPatch(patch);
+  }
+
   hideDateChangeProgressOverlay();
 
   if (clearSelection) {
     deselectAllPhotos();
   }
 
-  loadAndRenderPhotos(false);
   showToast(message, () => undoDateEdit(originalDates));
 }
 
@@ -4247,9 +4389,13 @@ async function saveDateEdit() {
         const data = JSON.parse(e.data);
 
         updateDateChangeProgress(data.current, data.total);
+
+        if (data.duplicate_removed || data.photo) {
+          void applyDateEditPatch(data);
+        }
       });
 
-      eventSource.addEventListener('complete', (e) => {
+      eventSource.addEventListener('complete', async (e) => {
         const data = JSON.parse(e.data);
 
         eventSource.close();
@@ -4259,7 +4405,7 @@ async function saveDateEdit() {
           message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
         }
 
-        finalizeDateChangeSuccess({
+        await finalizeDateChangeSuccess({
           message,
           originalDates,
           clearSelection: true,
@@ -4296,15 +4442,16 @@ async function saveDateEdit() {
         updateDateChangeProgress(data.current || 0, data.total || 1);
       });
 
-      eventSource.addEventListener('complete', (e) => {
-        JSON.parse(e.data);
+      eventSource.addEventListener('complete', async (e) => {
+        const data = JSON.parse(e.data);
 
         eventSource.close();
 
-        finalizeDateChangeSuccess({
+        await finalizeDateChangeSuccess({
           message: 'Date updated',
           originalDates,
           clearSelection: false,
+          patchResults: [data],
         });
       });
 
@@ -5879,6 +6026,35 @@ async function navigateLightbox(direction) {
       return;
     }
     if (newIndex >= state.photos.length) {
+      if (direction > 0 && VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+        const currentPhoto = state.photos[state.lightboxPhotoIndex];
+        const currentCard = currentPhoto
+          ? document.querySelector(`[data-id="${currentPhoto.id}"]`)
+          : null;
+        const globalIndex = currentCard
+          ? parseInt(currentCard.dataset.index, 10)
+          : null;
+        if (globalIndex !== null && !Number.isNaN(globalIndex)) {
+          const layout = VirtualGrid.getLayout();
+          const section = GridLayout.findSectionForGlobalIndex(
+            layout,
+            globalIndex + 1,
+          );
+          if (section) {
+            await VirtualGrid.fetchMonthPhotos(section.month);
+            const nextPhoto = state.photos.find(
+              (photo) => photo.month === section.month,
+            );
+            if (nextPhoto) {
+              const nextIndex = getPhotoLibraryIndex(nextPhoto.id);
+              if (nextIndex >= 0) {
+                openLightbox(nextIndex);
+                return;
+              }
+            }
+          }
+        }
+      }
       if (direction > 0 && state.hasMore) {
         const loaded = await loadMorePhotos();
         if (loaded && newIndex < state.photos.length) {
@@ -5930,14 +6106,19 @@ function mergePhotosIntoLibrary(incomingPhotos) {
 }
 
 /**
- * Fetch one page of photos from the API.
+ * Fetch one page of photos from the API (keyset cursor pagination).
  */
-async function fetchPhotosPage(offset = 0, limit = PHOTO_PAGE_SIZE, options = {}) {
+async function fetchPhotosPage(options = {}) {
   const {
+    cursor = null,
+    limit = PHOTO_PAGE_SIZE,
     sortOrder = state.currentSortOrder,
     signal,
   } = options;
-  const url = `/api/photos?offset=${offset}&limit=${limit}&sort=${sortOrder}`;
+  let url = `/api/photos?limit=${limit}&sort=${sortOrder}`;
+  if (cursor) {
+    url += `&cursor=${encodeURIComponent(cursor)}`;
+  }
 
   const response = await fetch(url, { signal });
   if (!response.ok) {
@@ -5953,15 +6134,112 @@ async function fetchPhotosPage(offset = 0, limit = PHOTO_PAGE_SIZE, options = {}
 function resetPhotoWindowState() {
   state.photos = [];
   state.currentOffset = 0;
+  state.photosNextCursor = null;
   state.photoTotalCount = 0;
   state.hasMore = false;
   state.loadingMore = false;
 }
 
+function shouldUseVirtualGrid() {
+  return Boolean(state.libraryPath) && !hasActivePhotoFilters();
+}
+
+function mergePhotosIntoVirtualState(incomingPhotos) {
+  if (!incomingPhotos?.length) {
+    return;
+  }
+  const knownIds = new Set(state.photos.map((photo) => photo.id));
+  const fresh = incomingPhotos.filter((photo) => !knownIds.has(photo.id));
+  if (fresh.length) {
+    state.photos = state.photos.concat(fresh);
+  }
+}
+
+async function loadAndRenderPhotosVirtual(options = {}) {
+  const {
+    throwOnError = false,
+    generation = state.libraryGeneration,
+    sortOrder = state.currentSortOrder,
+    signal,
+  } = options;
+
+  VirtualGrid.destroy();
+  resetPhotoWindowState();
+  state.lastClickedIndex = null;
+
+  try {
+    const ok = await VirtualGrid.init({
+      sortOrder,
+      signal,
+      getGeneration: () => generation,
+      mergePhotos: mergePhotosIntoVirtualState,
+      onPhaseAAnchor: (preview) => {
+        state.photoTotalCount = preview.total;
+        state.hasDatabase = true;
+        state.hasMore = false;
+        applyDatePickerFromYears(preview.years, preview.anchorMonth);
+        enableAppBarButtons();
+      },
+      onProvisionalReady: () => {
+        if (state.libraryTransitionActive) {
+          hideLibraryTransitionOverlay();
+        }
+        updateUtilityMenuAvailability();
+        updateFilterChipRailVisibility();
+      },
+      onLayoutApplied: (appliedLayout) => {
+        if (appliedLayout?.provisional) {
+          return;
+        }
+        datePickerLastSyncedMonth = null;
+        scheduleDatePickerFromScrollSync();
+      },
+      onIndexReady: (index) => {
+        state.photoTotalCount = index.total;
+        state.hasDatabase = true;
+        state.hasMore = false;
+      },
+      onMonthMounted: () => {
+        setupThumbnailLazyLoading();
+        ensureGridInteractionsWired();
+        if (state.onMonthsRendered) {
+          state.onMonthsRendered();
+        }
+      },
+      onReady: () => {
+        updateUtilityMenuAvailability();
+        updateFilterChipRailVisibility();
+        enableAppBarButtons();
+        datePickerLastSyncedMonth = null;
+        scheduleDatePickerFromScrollSync();
+      },
+    });
+
+    const isStale =
+      (signal && signal.aborted) || !isCurrentLibraryGeneration(generation);
+    if (isStale) {
+      return false;
+    }
+    return ok;
+  } catch (error) {
+    if (signal && (error.name === 'AbortError' || signal.aborted)) {
+      return false;
+    }
+    console.error('❌ Error loading virtual grid:', error);
+    state.hasDatabase = false;
+    if (throwOnError) {
+      throw error;
+    }
+    return false;
+  }
+}
+
 function updatePhotoWindowFromPage(data, { append = false } = {}) {
   const pagePhotos = data.photos || [];
   const total =
-    typeof data.total === 'number' ? data.total : pagePhotos.length;
+    typeof data.total === 'number'
+      ? data.total
+      : state.photoTotalCount || pagePhotos.length;
 
   if (append) {
     state.photos = state.photos.concat(pagePhotos);
@@ -5971,9 +6249,25 @@ function updatePhotoWindowFromPage(data, { append = false } = {}) {
 
   state.photoTotalCount = total;
   state.currentOffset = state.photos.length;
-  state.hasMore = state.currentOffset < total;
+  state.photosNextCursor = data.next_cursor || null;
+  if (typeof data.has_more === 'boolean') {
+    state.hasMore = data.has_more;
+  } else {
+    state.hasMore =
+      Boolean(data.next_cursor) || state.photos.length < total;
+  }
   state.hasDatabase = true;
   return pagePhotos;
+}
+
+function scrollToMonthSection(targetMonth) {
+  const monthSection = document.getElementById(`month-${targetMonth}`);
+  if (!monthSection) {
+    return;
+  }
+  const appBarHeight = 60;
+  const targetY = monthSection.offsetTop - appBarHeight - 20;
+  window.scrollTo({ top: targetY, behavior: 'smooth' });
 }
 
 function ensureScrollSentinel(container = document.getElementById('photoContainer')) {
@@ -6034,7 +6328,7 @@ async function loadMorePhotos() {
 
   state.loadingMore = true;
   try {
-    const data = await fetchPhotosPage(state.currentOffset, PHOTO_PAGE_SIZE);
+    const data = await fetchPhotosPage({ cursor: state.photosNextCursor });
     const pagePhotos = updatePhotoWindowFromPage(data, { append: true });
     if (!pagePhotos.length) {
       state.hasMore = false;
@@ -6055,46 +6349,103 @@ async function loadMorePhotos() {
   }
 }
 
+async function replaceGridAtMonth(targetMonth) {
+  const response = await fetch(
+    `/api/photos/jump?month=${encodeURIComponent(targetMonth)}&limit=${PHOTO_PAGE_SIZE}&sort=${state.currentSortOrder}`,
+  );
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to load photos for that date');
+  }
+
+  state.photos = [];
+  state.photosNextCursor = null;
+  updatePhotoWindowFromPage(data, { append: false });
+  state.lastClickedIndex = null;
+
+  renderPhotoGrid(getFilteredPhotos(state.photos), false);
+  setupThumbnailLazyLoading();
+  ensureScrollSentinel();
+  setupGridScrollObserver();
+  return data;
+}
+
 async function hydrateGridForMonthJump(targetMonth) {
   try {
-    const response = await fetch(
-      `/api/photos/jump?month=${encodeURIComponent(targetMonth)}&limit=${PHOTO_PAGE_SIZE}&sort=${state.currentSortOrder}`,
-    );
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to load photos for that date');
+    if (VirtualGrid.isActive()) {
+      if (VirtualGrid.scrollToMonth(targetMonth)) {
+        VirtualGrid.scheduleSync();
+        return;
+      }
     }
-
-    const newPhotos = mergePhotosIntoLibrary(data.photos || []);
-    if (newPhotos.length) {
-      renderPhotoGrid(getFilteredPhotos(newPhotos), true);
-      setupThumbnailLazyLoading();
-      ensureScrollSentinel();
-      setupGridScrollObserver();
-    }
-
-    const monthSection = document.getElementById(`month-${targetMonth}`);
-    if (monthSection) {
-      const appBarHeight = 60;
-      const targetY = monthSection.offsetTop - appBarHeight - 20;
-      window.scrollTo({ top: targetY, behavior: 'smooth' });
-    }
+    await replaceGridAtMonth(targetMonth);
+    scrollToMonthSection(targetMonth);
   } catch (error) {
     console.error('❌ Error jumping to month:', error);
   }
 }
 
 /**
- * Load the first viewport window of photos, then stream more on scroll.
+ * Legacy windowed load (filters, import preview, fallback).
+ */
+async function loadAndRenderPhotosPaged(options = {}) {
+  const {
+    throwOnError = false,
+    generation = state.libraryGeneration,
+    sortOrder = state.currentSortOrder,
+    signal,
+  } = options;
+
+  VirtualGrid.destroy();
+
+  const data = await fetchPhotosPage({
+    limit: PHOTO_PAGE_SIZE,
+    sortOrder,
+    signal,
+  });
+
+  const isStaleLoad =
+    (signal && signal.aborted) ||
+    !isCurrentLibraryGeneration(generation) ||
+    sortOrder !== state.currentSortOrder;
+
+  if (isStaleLoad) {
+    return false;
+  }
+
+  resetPhotoWindowState();
+  updatePhotoWindowFromPage(data, { append: false });
+  state.lastClickedIndex = null;
+
+  renderPhotoGrid(getFilteredPhotos(state.photos), false);
+  setupThumbnailLazyLoading();
+  ensureScrollSentinel();
+  setupGridScrollObserver();
+
+  updateUtilityMenuAvailability();
+  updateFilterChipRailVisibility();
+  enableAppBarButtons();
+  void populateDatePicker();
+
+  return true;
+}
+
+/**
+ * Load photos — virtual timeline by default; paged fallback when filters are active.
  */
 async function loadAndRenderPhotos(append = false, options = {}) {
   const {
     throwOnError = false,
     generation = state.libraryGeneration,
     sortOrder = state.currentSortOrder,
+    forcePaged = false,
   } = options;
 
   if (append) {
+    if (VirtualGrid.isActive()) {
+      VirtualGrid.scheduleSync();
+      return true;
+    }
     return loadMorePhotos();
   }
 
@@ -6107,40 +6458,37 @@ async function loadAndRenderPhotos(append = false, options = {}) {
   currentPhotoLoadAbortController = abortController;
   state.loading = true;
 
+  const useVirtual = shouldUseVirtualGrid() && !forcePaged;
+
   const loadPromise = (async () => {
     try {
-      const data = await fetchPhotosPage(0, PHOTO_PAGE_SIZE, {
+      if (useVirtual) {
+        const ok = await loadAndRenderPhotosVirtual({
+          throwOnError: true,
+          generation,
+          sortOrder,
+          signal: abortController.signal,
+        });
+        const isStaleLoad =
+          abortController.signal.aborted ||
+          loadId !== photoLoadRequestId ||
+          !isCurrentLibraryGeneration(generation) ||
+          sortOrder !== state.currentSortOrder;
+        return isStaleLoad ? false : ok;
+      }
+
+      const ok = await loadAndRenderPhotosPaged({
+        throwOnError: true,
+        generation,
         sortOrder,
         signal: abortController.signal,
       });
-
       const isStaleLoad =
         abortController.signal.aborted ||
         loadId !== photoLoadRequestId ||
         !isCurrentLibraryGeneration(generation) ||
         sortOrder !== state.currentSortOrder;
-
-      if (isStaleLoad) {
-        return false;
-      }
-
-      resetPhotoWindowState();
-      const pagePhotos = updatePhotoWindowFromPage(data, { append: false });
-
-      state.lastClickedIndex = null;
-
-      renderPhotoGrid(getFilteredPhotos(state.photos), false);
-      setupThumbnailLazyLoading();
-      ensureScrollSentinel();
-      setupGridScrollObserver();
-
-      updateUtilityMenuAvailability();
-      updateFilterChipRailVisibility();
-      enableAppBarButtons();
-
-      void populateDatePicker();
-
-      return true;
+      return isStaleLoad ? false : ok;
     } catch (error) {
       const isExpectedAbort =
         error.name === 'AbortError' || abortController.signal.aborted;
@@ -6344,7 +6692,9 @@ function updateFilterChipUI() {
 
 function updateFilterChipRailVisibility() {
   const rail = document.getElementById('filterChipRailMount');
-  const shouldShow = state.hasDatabase && state.photos.length > 0;
+  const shouldShow =
+    state.hasDatabase &&
+    (state.photoTotalCount > 0 || state.photos.length > 0);
   if (!rail) {
     document.body.classList.toggle('filter-chip-rail-visible', shouldShow);
     return;
@@ -6359,13 +6709,9 @@ function updateFilterChipRailVisibility() {
 }
 
 function applyPhotoFilters() {
-  const filteredPhotos = getFilteredPhotos(state.photos);
-  renderPhotoGrid(filteredPhotos, false);
-  if (filteredPhotos.length > 0) {
-    setupThumbnailLazyLoading();
-  }
   updateFilterChipUI();
   updateFilterChipRailVisibility();
+  void loadAndRenderPhotos(false, { forcePaged: hasActivePhotoFilters() });
 }
 
 function togglePhotoFilter(filterKey) {
@@ -6901,6 +7247,20 @@ function updateMonthCircleStates() {
 // =====================
 
 /**
+ * Count photos per month before removing from client state.
+ */
+function monthCountsForPhotoIds(photoIds) {
+  const idSet = new Set(photoIds.map((id) => Number(id)));
+  const counts = new Map();
+  state.photos.forEach((photo) => {
+    if (idSet.has(photo.id) && photo.month) {
+      counts.set(photo.month, (counts.get(photo.month) || 0) + 1);
+    }
+  });
+  return counts;
+}
+
+/**
  * Drop photos from in-memory grid state and re-render immediately.
  */
 function removePhotosFromState(photoIds) {
@@ -6914,8 +7274,12 @@ function removePhotosFromState(photoIds) {
   idSet.forEach((id) => state.selectedPhotos.delete(id));
   state.lastClickedIndex = null;
 
-  renderPhotoGrid(getFilteredPhotos(state.photos), false);
-  setupThumbnailLazyLoading();
+  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    VirtualGrid.scheduleSync();
+  } else {
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+  }
   updateDeleteButtonVisibility();
   return true;
 }
@@ -6936,8 +7300,11 @@ async function handleStalePhoto(photoId, { closeLightbox = true } = {}) {
     await closeLightbox({ commitRotations: false });
   }
 
+  if (state.photoTotalCount > 0) {
+    state.photoTotalCount -= 1;
+  }
+  state.hasMore = state.photos.length < state.photoTotalCount;
   showToast('Photo is no longer in the library', null);
-  loadAndRenderPhotos(false);
   return true;
 }
 
@@ -6979,13 +7346,19 @@ async function deletePhotos(photoIds) {
     );
 
     if (deletedCount > 0) {
+      const monthCounts = monthCountsForPhotoIds(photoIds);
       removePhotosFromState(photoIds);
+      if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+        VirtualGrid.applyMutationPatch({ monthCounts });
+      } else if (state.photoTotalCount > 0) {
+        state.photoTotalCount = Math.max(0, state.photoTotalCount - deletedCount);
+        state.hasMore = state.photos.length < state.photoTotalCount;
+        ensureScrollSentinel();
+        setupGridScrollObserver();
+      }
     } else if (notFoundIds.length > 0) {
       removePhotosFromState(notFoundIds);
     }
-
-    // Full reload can take a long time on large libraries; run in background.
-    loadAndRenderPhotos(false);
 
     if (deletedCount > 0) {
       showToast(
@@ -12747,13 +13120,23 @@ async function showLibraryTransitionOverlay(options = {}) {
 
   const titleEl = document.getElementById('libraryTransitionTitle');
   const statusEl = document.getElementById('libraryTransitionStatusLabel');
+  const pathEl = document.getElementById('libraryTransitionPath');
 
   if (titleEl) {
     titleEl.textContent = options.title || 'Opening library';
   }
   if (statusEl) {
-    statusEl.textContent =
-      options.message || 'Loading photos and preparing your library.';
+    statusEl.textContent = options.message || 'Loading your media.';
+  }
+  if (pathEl) {
+    const libraryPath = options.libraryPath || '';
+    if (libraryPath) {
+      pathEl.textContent = libraryPath;
+      pathEl.style.display = '';
+    } else {
+      pathEl.textContent = '';
+      pathEl.style.display = 'none';
+    }
   }
 
   overlay.style.display = 'flex';
@@ -12831,7 +13214,8 @@ function renderSafeLibraryFallback() {
  */
 function enableAppBarButtons() {
   const hasPhotos = state.photos && state.photos.length > 0;
-  const canUseDatePicker = state.hasDatabase && hasPhotos;
+  const canUseDatePicker =
+    state.hasDatabase && (state.photoTotalCount > 0 || hasPhotos);
 
   // Re-enable add photo button (always available)
   const addPhotoBtn = document.getElementById('addPhotoBtn');
@@ -13447,7 +13831,8 @@ async function openExistingLibrary() {
 
     await showLibraryTransitionOverlay({
       title: 'Opening library',
-      message: 'Loading your photos.',
+      message: 'Loading your media.',
+      libraryPath: selectedPath,
     });
 
     try {
@@ -13780,6 +14165,7 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
         title: 'Cleaning library',
         message:
           'Normalizing your library. Please keep this window open until it finishes.',
+        libraryPath: selectedPath,
       });
       await requestMakeLibraryPerfect();
     }
@@ -14120,7 +14506,8 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     if (!skipTransitionOverlay && !state.libraryTransitionActive) {
       await showLibraryTransitionOverlay({
         title: 'Opening library',
-        message: 'Loading your photos.',
+        message: 'Loading your media.',
+        libraryPath,
       });
     }
 
@@ -14139,6 +14526,7 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     switchedLibrary = true;
     const switchedGeneration = advanceLibraryGeneration();
     state.libraryPath = libraryPath;
+    state.hasDatabase = true;
     resetPhotoFilters();
 
     // Close overlays
@@ -14177,6 +14565,7 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
           title: 'Restoring previous library',
           message:
             'Returning to your previous library after the switch failed.',
+          libraryPath: previousLibrary?.library_path || '',
         });
       }
       restoredPreviousLibrary =
@@ -14213,6 +14602,7 @@ async function switchToLibraryWithBlockingNormalize(libraryPath, dbPath) {
     title: 'Cleaning library',
     message:
       'Normalizing your library. Please keep this window open until it finishes.',
+    libraryPath,
   });
 
   try {
@@ -14937,6 +15327,7 @@ async function checkLibraryHealthAndInit() {
 
         state.hasDatabase = false;
         state.libraryPath = null;
+        FolderPicker.preloadOverlay();
         renderFirstRunEmptyState();
         return;
 

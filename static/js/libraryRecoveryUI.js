@@ -88,7 +88,7 @@
       },
       openingLibrary: {
         title: 'Opening library',
-        body: 'Loading your photos into the app.',
+        body: 'Loading your media.',
         statusText: 'Almost done',
         statusSpinner: true,
         showCloseButton: false,

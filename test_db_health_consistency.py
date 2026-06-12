@@ -472,6 +472,130 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertIsNone(payload["photos"][1]["date"])
         self.assertEqual(payload["photos"][1]["month"], "2025-04")
 
+    def test_get_photos_keyset_pagination_preserves_sort_order(self):
+        library_path = self._make_library("photos-keyset")
+        db_path = self._create_healthy_db(library_path)
+
+        conn = sqlite3.connect(db_path)
+        rows = [
+            ("a.jpg", "2024/2024-01-03/a.jpg", "2024:01:03 10:00:00", "hashaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ("b.jpg", "2024/2024-01-02/b.jpg", "2024:01:02 10:00:00", "hashbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            ("c.jpg", "2024/2024-01-01/c.jpg", "2024:01:01 10:00:00", "hashcccccccccccccccccccccccccccc"),
+            ("d.jpg", "2025/2025-04-15/d.jpg", None, "hashdddddddddddddddddddddddddddd"),
+        ]
+        for filename, path, date_taken, content_hash in rows:
+            conn.execute(
+                """
+                INSERT INTO photos (
+                    original_filename, current_path, date_taken, content_hash,
+                    file_size, file_type, width, height, rating
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (filename, path, date_taken, content_hash, 100, "photo", 1, 1, None),
+            )
+        conn.commit()
+        conn.close()
+
+        photo_app.LIBRARY_PATH = library_path
+        photo_app.DB_PATH = db_path
+        photo_app.invalidate_photo_total_count_cache()
+
+        first = self.client.get("/api/photos?sort=newest&limit=2").get_json()
+        self.assertEqual(first["count"], 2)
+        self.assertEqual([p["path"] for p in first["photos"]], [
+            "2024/2024-01-03/a.jpg",
+            "2024/2024-01-02/b.jpg",
+        ])
+        self.assertTrue(first.get("next_cursor"))
+
+        second = self.client.get(
+            f"/api/photos?sort=newest&limit=2&cursor={first['next_cursor']}"
+        ).get_json()
+        self.assertEqual([p["path"] for p in second["photos"]], [
+            "2024/2024-01-01/c.jpg",
+            "2025/2025-04-15/d.jpg",
+        ])
+
+    def test_month_index_returns_sorted_month_buckets(self):
+        library_path = self._make_library("photos-month-index")
+        db_path = self._create_healthy_db(library_path)
+
+        conn = sqlite3.connect(db_path)
+        rows = [
+            ("a.jpg", "2024/2024-01-03/a.jpg", "2024:01:03 10:00:00", "hashaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ("b.jpg", "2024/2024-02-01/b.jpg", "2024:02:01 10:00:00", "hashbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            ("c.jpg", "2025/2025-04-15/c.jpg", None, "hashcccccccccccccccccccccccccccc"),
+        ]
+        for filename, path, date_taken, content_hash in rows:
+            conn.execute(
+                """
+                INSERT INTO photos (
+                    original_filename, current_path, date_taken, content_hash,
+                    file_size, file_type, width, height, rating
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (filename, path, date_taken, content_hash, 100, "photo", 1, 1, None),
+            )
+        conn.commit()
+        conn.close()
+
+        photo_app.LIBRARY_PATH = library_path
+        photo_app.DB_PATH = db_path
+        photo_app.invalidate_photo_total_count_cache()
+        photo_app.invalidate_month_index_cache()
+
+        response = self.client.get("/api/photos/month_index?sort=newest")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["total"], 3)
+        self.assertEqual([entry["month"] for entry in payload["months"]], [
+            "2025-04",
+            "2024-02",
+            "2024-01",
+        ])
+
+        month_response = self.client.get("/api/photos/month?month=2024-01&sort=newest")
+        month_payload = month_response.get_json()
+        self.assertEqual(month_payload["count"], 1)
+        self.assertEqual(month_payload["photos"][0]["month"], "2024-01")
+
+    def test_photos_jump_uses_colon_month_format(self):
+        library_path = self._make_library("photos-jump")
+        db_path = self._create_healthy_db(library_path)
+
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename, current_path, date_taken, content_hash,
+                file_size, file_type, width, height, rating
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "old.jpg",
+                "1900/1900-01-01/old.jpg",
+                "1900:01:01 00:00:00",
+                "hash1900hash1900hash1900hash1900",
+                100,
+                "photo",
+                1,
+                1,
+                None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        photo_app.LIBRARY_PATH = library_path
+        photo_app.DB_PATH = db_path
+        photo_app.invalidate_photo_total_count_cache()
+
+        response = self.client.get("/api/photos/jump?month=1900-01&sort=newest&limit=50")
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["photos"][0]["month"], "1900-01")
+
     def test_recover_database_quarantines_corrupt_db_and_creates_usable_canonical_db(self):
         library_path = self._make_library("recover-corrupt")
         db_path = canonical_db_path(library_path)

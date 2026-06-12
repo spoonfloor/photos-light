@@ -5,6 +5,7 @@ Photo Viewer - Flask Server with Database API
 
 from flask import Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
 from collections import defaultdict
+import base64
 import sqlite3
 import traceback
 from functools import wraps
@@ -979,6 +980,352 @@ def month_key_for_photo_grid(date_taken, current_path):
     return 'undated'
 
 
+PHOTO_GRID_SELECT = """
+    SELECT id, date_taken, file_type, current_path, width, height, rating
+    FROM photos
+"""
+
+PHOTO_TOTAL_COUNT_CACHE = None
+MONTH_INDEX_CACHE = {}
+
+
+def invalidate_photo_total_count_cache():
+    """Drop cached library row count after mutations or library switch."""
+    global PHOTO_TOTAL_COUNT_CACHE
+    PHOTO_TOTAL_COUNT_CACHE = None
+
+
+def invalidate_month_index_cache():
+    """Drop cached per-sort month histogram used by the virtual grid."""
+    global MONTH_INDEX_CACHE
+    MONTH_INDEX_CACHE = {}
+
+
+def ensure_photo_grid_indices(db_path=None):
+    """Create keyset pagination indices if missing (idempotent)."""
+    target_db = db_path or DB_PATH
+    if not target_db or not os.path.exists(target_db):
+        return
+    from db_schema import PHOTOS_INDICES
+
+    conn = sqlite3.connect(target_db)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")
+    existing = {row[0] for row in cursor.fetchall()}
+    for index_sql in PHOTOS_INDICES:
+        index_name = index_sql.split("INDEX IF NOT EXISTS ")[1].split(" ")[0]
+        if index_name not in existing:
+            cursor.execute(index_sql)
+    conn.commit()
+    conn.close()
+
+
+def get_photo_total_count(cursor):
+    """Return total photos row count; cached per session until invalidated."""
+    global PHOTO_TOTAL_COUNT_CACHE
+    if PHOTO_TOTAL_COUNT_CACHE is None:
+        PHOTO_TOTAL_COUNT_CACHE = cursor.execute('SELECT COUNT(*) FROM photos').fetchone()[0]
+    return PHOTO_TOTAL_COUNT_CACHE
+
+
+def normalize_month_for_sql(month_str):
+    """Map UI month YYYY-MM to DB substr(date_taken,1,7) form YYYY:MM."""
+    if not month_str or len(month_str) < 7:
+        return month_str
+    return f"{month_str[:4]}:{month_str[5:7]}"
+
+
+def month_bounds_for_sql(month_str):
+    """Return inclusive lower and exclusive upper date_taken bounds for a YYYY-MM month."""
+    month_sql = normalize_month_for_sql(month_str)
+    year = int(month_sql[:4])
+    month = int(month_sql[5:7])
+    lower = f"{year}:{month:02d}:01 00:00:00"
+    if month == 12:
+        upper = f"{year + 1}:01:01 00:00:00"
+    else:
+        upper = f"{year}:{month + 1:02d}:01 00:00:00"
+    return lower, upper
+
+
+def photo_row_to_grid_dict(row):
+    """Serialize a photos table row for the main grid API."""
+    date_str = row['date_taken']
+    return {
+        'id': row['id'],
+        'date': date_str,
+        'month': month_key_for_photo_grid(date_str, row['current_path']),
+        'file_type': row['file_type'],
+        'path': row['current_path'],
+        'width': row['width'],
+        'height': row['height'],
+        'rating': row['rating'],
+    }
+
+
+def encode_photos_cursor(section, *, date_taken=None, current_path=None, photo_id=None):
+    """Opaque cursor for keyset pagination (dated or undated section)."""
+    if section == 'dated':
+        raw = f"dated|{date_taken or ''}|{current_path or ''}|{photo_id or ''}"
+    else:
+        raw = f"undated|{current_path or ''}|{photo_id or ''}"
+    return base64.urlsafe_b64encode(raw.encode('utf-8')).decode('ascii')
+
+
+def decode_photos_cursor(cursor_str):
+    """Parse cursor from query param; returns dict or None."""
+    if not cursor_str:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cursor_str.encode('ascii')).decode('utf-8')
+        parts = raw.split('|')
+        if parts[0] == 'dated' and len(parts) >= 4:
+            return {
+                'section': 'dated',
+                'date_taken': parts[1] or None,
+                'current_path': parts[2] or None,
+                'photo_id': int(parts[3]) if parts[3] else None,
+            }
+        if parts[0] == 'undated' and len(parts) >= 3:
+            return {
+                'section': 'undated',
+                'current_path': parts[1] or None,
+                'photo_id': int(parts[2]) if parts[2] else None,
+            }
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return None
+
+
+def cursor_from_row(row, section):
+    """Build next_cursor from the last row in a page."""
+    if section == 'dated':
+        return encode_photos_cursor(
+            'dated',
+            date_taken=row['date_taken'],
+            current_path=row['current_path'],
+            photo_id=row['id'],
+        )
+    return encode_photos_cursor(
+        'undated',
+        current_path=row['current_path'],
+        photo_id=row['id'],
+    )
+
+
+def fetch_photo_grid_row_by_id(cursor, photo_id):
+    """Load one grid row after a mutation."""
+    row = cursor.execute(
+        f"{PHOTO_GRID_SELECT} WHERE id = ?",
+        (photo_id,),
+    ).fetchone()
+    return photo_row_to_grid_dict(row) if row else None
+
+
+def _hydrate_photo_rows_by_id(cursor, id_rows):
+    """Load full grid columns for id rows, preserving keyset order."""
+    if not id_rows:
+        return []
+    ids = [row['id'] if hasattr(row, 'keys') else row[0] for row in id_rows]
+    placeholders = ','.join('?' * len(ids))
+    rows = cursor.execute(
+        f"{PHOTO_GRID_SELECT} WHERE id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    by_id = {row['id']: row for row in rows}
+    return [by_id[photo_id] for photo_id in ids if photo_id in by_id]
+
+
+def _fetch_dated_photo_page(cursor, limit, sort_order, after=None):
+    """Index-friendly dated page using keyset pagination."""
+    if sort_order == 'newest':
+        order_clause = 'ORDER BY date_taken DESC, current_path ASC, id ASC'
+        if after:
+            where = """
+                WHERE date_taken IS NOT NULL
+                  AND (
+                    date_taken < ? OR
+                    (date_taken = ? AND current_path > ?) OR
+                    (date_taken = ? AND current_path = ? AND id > ?)
+                  )
+            """
+            params = (
+                after['date_taken'], after['date_taken'], after['current_path'],
+                after['date_taken'], after['current_path'], after['photo_id'],
+                limit,
+            )
+        else:
+            where = 'WHERE date_taken IS NOT NULL'
+            params = (limit,)
+    else:
+        order_clause = 'ORDER BY date_taken ASC, current_path ASC, id ASC'
+        if after:
+            where = """
+                WHERE date_taken IS NOT NULL
+                  AND (
+                    date_taken > ? OR
+                    (date_taken = ? AND current_path > ?) OR
+                    (date_taken = ? AND current_path = ? AND id > ?)
+                  )
+            """
+            params = (
+                after['date_taken'], after['date_taken'], after['current_path'],
+                after['date_taken'], after['current_path'], after['photo_id'],
+                limit,
+            )
+        else:
+            where = 'WHERE date_taken IS NOT NULL'
+            params = (limit,)
+
+    id_rows = cursor.execute(
+        f"SELECT id FROM photos {where} {order_clause} LIMIT ?",
+        params,
+    ).fetchall()
+    return _hydrate_photo_rows_by_id(cursor, id_rows)
+
+
+def _fetch_undated_photo_page(cursor, limit, after=None):
+    """Undated rows always sort after dated rows, ordered by path then id."""
+    if after:
+        where = """
+            WHERE date_taken IS NULL
+              AND (
+                current_path > ? OR
+                (current_path = ? AND id > ?)
+              )
+        """
+        params = (after['current_path'], after['current_path'], after['photo_id'], limit)
+    else:
+        where = 'WHERE date_taken IS NULL'
+        params = (limit,)
+
+    id_rows = cursor.execute(
+        f"SELECT id FROM photos {where} ORDER BY current_path ASC, id ASC LIMIT ?",
+        params,
+    ).fetchall()
+    return _hydrate_photo_rows_by_id(cursor, id_rows)
+
+
+def fetch_all_photos_for_grid(cursor, sort_order):
+    """Return full library in grid order without a global sort temp table."""
+    dated_rows = _fetch_dated_photo_page(cursor, limit=10**9, sort_order=sort_order)
+    undated_rows = _fetch_undated_photo_page(cursor, limit=10**9)
+    return list(dated_rows) + list(undated_rows)
+
+
+def fetch_photos_page(cursor, limit, sort_order, cursor_str=None):
+    """
+    Paginate photos in grid order: dated rows first, undated last.
+    Uses keyset cursors instead of OFFSET.
+    """
+    parsed = decode_photos_cursor(cursor_str)
+    photos = []
+    section = parsed['section'] if parsed else 'dated'
+    after = parsed
+
+    if section == 'dated':
+        dated_rows = _fetch_dated_photo_page(
+            cursor, limit, sort_order, after=after if parsed else None,
+        )
+        photos.extend(dated_rows)
+        remaining = limit - len(photos)
+        if remaining > 0:
+            undated_rows = _fetch_undated_photo_page(cursor, remaining)
+            photos.extend(undated_rows)
+            if undated_rows:
+                section = 'undated'
+                after = {
+                    'section': 'undated',
+                    'current_path': undated_rows[-1]['current_path'],
+                    'photo_id': undated_rows[-1]['id'],
+                }
+            elif dated_rows:
+                section = 'dated'
+                after = {
+                    'section': 'dated',
+                    'date_taken': dated_rows[-1]['date_taken'],
+                    'current_path': dated_rows[-1]['current_path'],
+                    'photo_id': dated_rows[-1]['id'],
+                }
+        elif dated_rows:
+            section = 'dated'
+            after = {
+                'section': 'dated',
+                'date_taken': dated_rows[-1]['date_taken'],
+                'current_path': dated_rows[-1]['current_path'],
+                'photo_id': dated_rows[-1]['id'],
+            }
+    else:
+        undated_rows = _fetch_undated_photo_page(
+            cursor, limit, after=after if parsed else None,
+        )
+        photos.extend(undated_rows)
+        if undated_rows:
+            section = 'undated'
+            after = {
+                'section': 'undated',
+                'current_path': undated_rows[-1]['current_path'],
+                'photo_id': undated_rows[-1]['id'],
+            }
+
+    next_cursor = None
+    if photos:
+        next_cursor = cursor_from_row(photos[-1], section)
+
+    total = get_photo_total_count(cursor)
+    has_more = len(photos) == limit
+
+    return {
+        'photos': [photo_row_to_grid_dict(row) for row in photos],
+        'count': len(photos),
+        'total': total,
+        'limit': limit,
+        'next_cursor': next_cursor,
+        'has_more': has_more,
+    }
+
+
+def fetch_photos_anchored_at_month(cursor, target_month, limit, sort_order):
+    """Load a viewport window anchored at a year-month (date picker jump)."""
+    lower, upper = month_bounds_for_sql(target_month)
+    if sort_order == 'newest':
+        id_rows = cursor.execute(
+            """
+            SELECT id FROM photos
+            WHERE date_taken IS NOT NULL
+              AND date_taken < ?
+            ORDER BY date_taken DESC, current_path ASC, id ASC
+            LIMIT ?
+            """,
+            (upper, limit),
+        ).fetchall()
+    else:
+        id_rows = cursor.execute(
+            """
+            SELECT id FROM photos
+            WHERE date_taken IS NOT NULL
+              AND date_taken >= ?
+            ORDER BY date_taken ASC, current_path ASC, id ASC
+            LIMIT ?
+            """,
+            (lower, limit),
+        ).fetchall()
+    rows = _hydrate_photo_rows_by_id(cursor, id_rows)
+
+    section = 'dated' if rows else None
+    next_cursor = cursor_from_row(rows[-1], section) if rows else None
+    total = get_photo_total_count(cursor)
+    return {
+        'photos': [photo_row_to_grid_dict(row) for row in rows],
+        'count': len(rows),
+        'total': total,
+        'limit': limit,
+        'next_cursor': next_cursor,
+        'has_more': len(rows) == limit,
+        'anchor_month': target_month,
+    }
+
+
 @app.route('/api/photos')
 @handle_db_corruption
 def get_photos():
@@ -986,74 +1333,166 @@ def get_photos():
     Get photos from database
     Query params:
     - limit: number of photos to return (optional - if omitted, returns ALL)
-    - offset: pagination offset (default 0)
+    - cursor: keyset pagination cursor from prior response next_cursor
+    - offset: legacy pagination offset (avoid on large libraries)
     - sort: 'newest' or 'oldest' (default 'newest')
     """
-    limit = request.args.get('limit', type=int)  # No default - None means ALL
+    limit = request.args.get('limit', type=int)
+    cursor_str = request.args.get('cursor')
     offset = request.args.get('offset', 0, type=int)
     sort_order = request.args.get('sort', 'newest')
-    
-    # Sort direction for dated rows; undated rows sort last
-    date_sort = 'DESC' if sort_order == 'newest' else 'ASC'
-    
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        total_count = None
-        if limit is not None:
-            total_count = cursor.execute('SELECT COUNT(*) FROM photos').fetchone()[0]
-        
-        # Lightweight query - just id, date, month, file_type, current_path, width, height, rating for grid structure
-        query = f"""
-            SELECT 
-                id,
-                date_taken,
-                file_type,
-                current_path,
-                width,
-                height,
-                rating
-            FROM photos
-            ORDER BY (date_taken IS NOT NULL) DESC, date_taken {date_sort}, current_path ASC
-        """
-        
-        # Only add LIMIT if specified
-        if limit:
-            query += f" LIMIT ? OFFSET ?"
-            cursor.execute(query, (limit, offset))
+        if limit is None:
+            rows = fetch_all_photos_for_grid(cursor, sort_order)
+            photos = [photo_row_to_grid_dict(row) for row in rows]
+            conn.close()
+            return jsonify({'photos': photos, 'count': len(photos)})
+
+        if cursor_str:
+            payload = fetch_photos_page(cursor, limit, sort_order, cursor_str=cursor_str)
         else:
-            cursor.execute(query)
-        
-        rows = cursor.fetchall()
-        
-        # Convert to list of dicts
-        photos = []
-        for row in rows:
-            date_str = row['date_taken']
-            month = month_key_for_photo_grid(date_str, row['current_path'])
-            
-            photos.append({
-                'id': row['id'],
-                'date': date_str,
-                'month': month,
-                'file_type': row['file_type'],
-                'path': row['current_path'],
-                'width': row['width'],
-                'height': row['height'],
-                'rating': row['rating'],  # NULL or 1-5
-            })
-        
+            payload = fetch_photos_page(cursor, limit, sort_order)
+
         conn.close()
-        payload = {'photos': photos, 'count': len(photos)}
-        if total_count is not None:
-            payload['total'] = total_count
-            payload['offset'] = offset
-            payload['limit'] = limit
+        payload['offset'] = offset
         return jsonify(payload)
     except Exception as e:
         app.logger.error(f"Error fetching photos: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+def _sort_grid_month_keys(month_counts, sort_order):
+    """Order month buckets for the main grid (undated always last)."""
+    dated = [month for month in month_counts.keys() if month != 'undated']
+    dated.sort(reverse=(sort_order == 'newest'))
+    ordered = dated
+    if 'undated' in month_counts:
+        ordered = ordered + ['undated']
+    return ordered
+
+
+def build_month_index(cursor, sort_order='newest'):
+    """Aggregate photo counts per grid month bucket."""
+    rows = cursor.execute(
+        'SELECT date_taken, current_path FROM photos',
+    ).fetchall()
+    month_counts = defaultdict(int)
+    for row in rows:
+        month = month_key_for_photo_grid(row['date_taken'], row['current_path'])
+        month_counts[month] += 1
+
+    ordered = _sort_grid_month_keys(month_counts, sort_order)
+    months = [{'month': month, 'count': month_counts[month]} for month in ordered]
+    total = sum(month_counts.values())
+    undated_count = month_counts.get('undated', 0)
+    return {
+        'months': months,
+        'total': total,
+        'undated_count': undated_count,
+        'sort': sort_order,
+    }
+
+
+def get_cached_month_index(cursor, sort_order='newest'):
+    """Return month histogram; cached per sort order until invalidated."""
+    if sort_order not in MONTH_INDEX_CACHE:
+        MONTH_INDEX_CACHE[sort_order] = build_month_index(cursor, sort_order)
+    return MONTH_INDEX_CACHE[sort_order]
+
+
+def fetch_photos_for_grid_month(cursor, month_key, sort_order='newest'):
+    """Load all photos belonging to one grid month bucket."""
+    if month_key == 'undated':
+        rows = cursor.execute(
+            f"{PHOTO_GRID_SELECT} WHERE date_taken IS NULL ORDER BY current_path ASC, id ASC",
+        ).fetchall()
+        rows = [
+            row for row in rows
+            if month_key_for_photo_grid(row['date_taken'], row['current_path']) == 'undated'
+        ]
+    else:
+        lower, upper = month_bounds_for_sql(month_key)
+        year = month_key[:4]
+        month_num = month_key[5:7]
+        path_prefix = f"{year}/{year}-{month_num}-%"
+        dated_rows = cursor.execute(
+            f"""
+            {PHOTO_GRID_SELECT}
+            WHERE date_taken IS NOT NULL
+              AND date_taken >= ?
+              AND date_taken < ?
+            """,
+            (lower, upper),
+        ).fetchall()
+        path_rows = cursor.execute(
+            f"""
+            {PHOTO_GRID_SELECT}
+            WHERE date_taken IS NULL
+              AND current_path LIKE ?
+            """,
+            (path_prefix + '%',),
+        ).fetchall()
+        rows = list(dated_rows) + list(path_rows)
+
+    dated = [row for row in rows if row['date_taken']]
+    undated = [row for row in rows if not row['date_taken']]
+    if sort_order == 'newest':
+        dated.sort(
+            key=lambda row: (row['date_taken'], row['current_path'], row['id']),
+            reverse=True,
+        )
+    else:
+        dated.sort(key=lambda row: (row['date_taken'], row['current_path'], row['id']))
+    undated.sort(key=lambda row: (row['current_path'], row['id']))
+    rows = dated + undated
+
+    return [photo_row_to_grid_dict(row) for row in rows]
+
+
+@app.route('/api/photos/month_index')
+@handle_db_corruption
+def get_photos_month_index():
+    """Month histogram for virtual grid layout (counts per YYYY-MM bucket)."""
+    try:
+        sort_order = request.args.get('sort', 'newest')
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        payload = get_cached_month_index(cursor, sort_order)
+        conn.close()
+        return jsonify(payload)
+    except Exception as e:
+        app.logger.error(f"Error fetching month index: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/photos/month')
+@handle_db_corruption
+def get_photos_for_month():
+    """All photos in one grid month bucket."""
+    try:
+        month_key = request.args.get('month')
+        sort_order = request.args.get('sort', 'newest')
+        if not month_key:
+            return jsonify({'error': 'month parameter required (format: YYYY-MM or undated)'}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        photos = fetch_photos_for_grid_month(cursor, month_key, sort_order)
+        conn.close()
+        return jsonify({
+            'month': month_key,
+            'photos': photos,
+            'count': len(photos),
+            'sort': sort_order,
+        })
+    except Exception as e:
+        app.logger.error(f"Error fetching month photos: {e}")
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/photo/<int:photo_id>/dimensions')
 @handle_db_corruption
@@ -1638,10 +2077,12 @@ def delete_photos():
                 error_logger.error(f"Delete failed for photo {photo_id}: {e}")
         
         conn.commit()
+        invalidate_photo_total_count_cache()
+        invalidate_month_index_cache()
         conn.close()
-        
+
         print(f"✅ Deleted {deleted_count} photos\n", flush=True)
-        
+
         response = {
             'deleted': deleted_count,
             'total': len(photo_ids),
@@ -1907,18 +2348,32 @@ def update_photo_date_execute():
             
             # Update with full file operations
             conn = get_db_connection()
+            db_cursor = conn.cursor()
             success, result, transaction = update_photo_date_with_files(photo_id, new_date, conn)
-            
+
             if success:
                 conn.commit()
-                conn.close()
+                invalidate_photo_total_count_cache()
+                invalidate_month_index_cache()
                 print(f"✅ Updated photo {photo_id} with file operations")
-                
-                # Send completion
+
                 if result['status'] == 'duplicate_removed':
-                    yield f"event: complete\ndata: {json.dumps({'updated_count': 0, 'duplicate_count': 1, 'photo_id': photo_id, 'duplicate_removed': True})}\n\n"
+                    complete_payload = {
+                        'updated_count': 0,
+                        'duplicate_count': 1,
+                        'photo_id': photo_id,
+                        'duplicate_removed': True,
+                    }
                 else:
-                    yield f"event: complete\ndata: {json.dumps({'updated_count': 1, 'duplicate_count': 0, 'photo_id': photo_id})}\n\n"
+                    photo_row = fetch_photo_grid_row_by_id(db_cursor, photo_id)
+                    complete_payload = {
+                        'updated_count': 1,
+                        'duplicate_count': 0,
+                        'photo_id': photo_id,
+                        'photo': photo_row,
+                    }
+                conn.close()
+                yield f"event: complete\ndata: {json.dumps(complete_payload)}\n\n"
             else:
                 # Rollback transaction
                 transaction.rollback(LIBRARY_PATH)
@@ -2036,21 +2491,18 @@ def bulk_update_photo_dates_execute():
             for idx, (photo_id, target_date) in enumerate(photo_date_map.items(), 1):
                 print(f"🔍 Processing photo_id: {photo_id} (type: {type(photo_id)}), target_date: {target_date}")
                 
-                # Send progress update
-                yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'photo_id': photo_id})}\n\n"
-                
                 success, result, transaction = update_photo_date_with_files(photo_id, target_date, conn)
                 
                 if success:
                     if result['status'] == 'duplicate_removed':
-                        # Photo became a duplicate during date change
                         duplicate_count += 1
                         print(f"  ⏭️  Photo {photo_id} is now a duplicate (moved to trash)")
+                        yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'photo_id': photo_id, 'duplicate_removed': True})}\n\n"
                     else:
-                        # Normal success
                         success_count += 1
-                        # Merge this transaction into master
                         master_transaction.operations.extend(transaction.operations)
+                        photo_row = fetch_photo_grid_row_by_id(cursor, photo_id)
+                        yield f"event: progress\ndata: {json.dumps({'current': idx, 'total': total, 'photo_id': photo_id, 'photo': photo_row})}\n\n"
                 else:
                     # Log failure
                     cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
@@ -2086,18 +2538,22 @@ def bulk_update_photo_dates_execute():
                         print(f"  Item {i}: type={type(f)}, value={f}")
                     raise
             else:
-                # All succeeded - commit
                 conn.commit()
+                invalidate_photo_total_count_cache()
+                invalidate_month_index_cache()
                 conn.close()
-                
+
                 if duplicate_count > 0:
                     print(f"✅ Updated {success_count} photos, {duplicate_count} duplicates moved to trash")
                 else:
                     print(f"✅ Updated {success_count} photos with file operations")
-                
-                # Send completion - debug the response data
+
                 try:
-                    response_data = {'updated_count': success_count, 'duplicate_count': duplicate_count, 'total': total}
+                    response_data = {
+                        'updated_count': success_count,
+                        'duplicate_count': duplicate_count,
+                        'total': total,
+                    }
                     response_json = json.dumps(response_data)
                     yield f"event: complete\ndata: {response_json}\n\n"
                 except TypeError as te:
@@ -2311,82 +2767,23 @@ def get_nearest_month():
 @app.route('/api/photos/jump')
 @handle_db_corruption
 def jump_to_date():
-    """Get photos starting from a specific year-month"""
+    """Replace the grid window with photos anchored at a year-month."""
     try:
         target_month = request.args.get('month')  # Format: YYYY-MM
         limit = request.args.get('limit', 500, type=int)
         sort_order = request.args.get('sort', 'newest')
-        
+
         if not target_month:
             return jsonify({'error': 'month parameter required (format: YYYY-MM)'}), 400
-        
-        order_by = "DESC" if sort_order == 'newest' else "ASC"
-        
+
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Fetch photos starting from target month
-        # For newest first: get photos <= target month
-        # For oldest first: get photos >= target month
-        if sort_order == 'newest':
-            query = f"""
-                SELECT 
-                    id,
-                    current_path,
-                    original_filename,
-                    date_taken,
-                    file_type,
-                    width,
-                    height
-                FROM photos
-                WHERE date_taken IS NOT NULL 
-                  AND substr(date_taken, 1, 7) <= ?
-                ORDER BY date_taken DESC, current_path ASC
-                LIMIT ?
-            """
-        else:
-            query = f"""
-                SELECT 
-                    id,
-                    current_path,
-                    original_filename,
-                    date_taken,
-                    file_type,
-                    width,
-                    height
-                FROM photos
-                WHERE date_taken IS NOT NULL 
-                  AND substr(date_taken, 1, 7) >= ?
-                ORDER BY date_taken ASC, current_path ASC
-                LIMIT ?
-            """
-        
-        cursor.execute(query, (target_month, limit))
-        rows = cursor.fetchall()
-        
-        photos = []
-        for row in rows:
-            date_str = row['date_taken']
-            if date_str:
-                date_normalized = date_str.replace(':', '-', 2)
-                month = date_normalized[:7]
-            else:
-                month = None
-            
-            photos.append({
-                'id': row['id'],
-                'path': row['current_path'],
-                'filename': row['original_filename'],
-                'date': date_str,
-                'month': month,
-                'file_type': row['file_type'],
-                'width': row['width'],
-                'height': row['height']
-            })
-        
+        payload = fetch_photos_anchored_at_month(
+            cursor, target_month, limit, sort_order,
+        )
         conn.close()
-        return jsonify({'photos': photos, 'count': len(photos)})
-        
+        return jsonify(payload)
+
     except Exception as e:
         app.logger.error(f"Error jumping to date: {e}")
         return jsonify({'error': str(e)}), 500
@@ -3225,9 +3622,12 @@ def clear_library_session():
 def update_app_paths(library_path, db_path):
     """Update all global path variables"""
     global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR
-    
+
+    invalidate_photo_total_count_cache()
+    invalidate_month_index_cache()
     LIBRARY_PATH = library_path
     DB_PATH = db_path
+    ensure_photo_grid_indices(db_path)
     THUMBNAIL_CACHE_DIR = os.path.join(LIBRARY_PATH, '.thumbnails')
     TRASH_DIR = os.path.join(LIBRARY_PATH, '.trash')
     DB_BACKUP_DIR = os.path.join(LIBRARY_PATH, '.db_backups')

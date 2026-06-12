@@ -413,6 +413,141 @@ body.filter-chip-rail-visible {
 }
 
 /* --- Photo Grid --- */
+.grid-root {
+  position: relative;
+  width: 100%;
+}
+
+.grid-spacer {
+  width: 100%;
+  pointer-events: none;
+}
+
+.grid-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+}
+
+.grid-tile-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.grid-tile-layer.grid-comfort-off {
+  visibility: hidden;
+}
+
+.grid-content-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+}
+
+.grid-content-layer .month-section.grid-section-pending {
+  visibility: hidden;
+}
+
+/* Provisional section headers stay hidden; anchor truth section (limit=1) stays visible. */
+.grid-root.grid-labels-gated .grid-content-layer .virtual-month-section .month-header {
+  visibility: hidden;
+}
+
+.grid-anchor-month-section {
+  pointer-events: none;
+  z-index: 2;
+}
+
+.grid-anchor-month-section .month-header {
+  visibility: visible;
+}
+
+.grid-tile-chunk {
+  position: absolute;
+  left: 0;
+  width: max-content;
+  max-width: 100%;
+}
+
+.grid-tile-header-gap {
+  width: 100%;
+}
+
+.grid-tile-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--grid-gap-px, 4px);
+}
+
+.grid-tile-row {
+  display: grid;
+  grid-template-columns: repeat(var(--grid-cols, 3), var(--grid-cell-px, 200px));
+  gap: var(--grid-gap-px, 4px);
+  height: var(--grid-cell-px, 200px);
+}
+
+.grid-tile-cell {
+  width: var(--grid-cell-px, 200px);
+  height: var(--grid-cell-px, 200px);
+  background: var(--placeholder-bg);
+}
+
+.grid-content-layer .month-section,
+.grid-root .virtual-month-section {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.grid-root .photo-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--grid-cols, 3), var(--grid-cell-px, 200px));
+  gap: var(--grid-gap-px, 4px);
+}
+
+.grid-root .photo-card {
+  width: var(--grid-cell-px, 200px);
+  height: var(--grid-cell-px, 200px);
+  aspect-ratio: unset;
+}
+
+/* Legacy aliases — remove after full migration */
+.virtual-grid-root {
+  position: relative;
+  width: 100%;
+}
+
+.virtual-grid-spacer {
+  width: 100%;
+  pointer-events: none;
+}
+
+.virtual-grid-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.virtual-grid-viewport .month-section,
+.virtual-month-section {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-bottom: 0;
+}
+
 .month-section {
   margin-bottom: 48px; /* Reduced from 60px (20% less spacing) */
 }
@@ -481,6 +616,15 @@ body.filter-chip-rail-visible {
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.photo-card.virtual-placeholder-card {
+  pointer-events: none;
+}
+
+.virtual-month-placeholder .month-select-circle {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .photo-card:hover {
@@ -1769,6 +1913,19 @@ body.library-recovery-active .library-recovery-dock {
   font-size: 12px;
   color: var(--text-secondary);
   margin: 0 0 16px;
+  word-break: break-all;
+}
+
+#libraryTransitionOverlay .import-progress-section {
+  padding-bottom: 16px;
+}
+
+#libraryTransitionOverlay .library-transition-path {
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
   word-break: break-all;
 }
 
