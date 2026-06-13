@@ -3,7 +3,6 @@ import os
 import shutil
 import sqlite3
 import unittest
-from collections import defaultdict
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -30,7 +29,6 @@ from library_cleanliness import (
     root_entry_allowed,
 )
 from make_library_perfect import (
-    CLEAN_LIBRARY_ENGINE_VERSION,
     CLEAN_LIBRARY_SIGNAL_KEYS,
     CleanLibraryError,
     DBNormalizationEngine,
@@ -506,166 +504,6 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                 ],
             )
 
-    def test_scan_flags_duplicates_by_canonicalized_photo_identity(self):
-        if CLEAN_LIBRARY_ENGINE_VERSION != "legacy":
-            self.skipTest("v2 fast audit uses hash-only duplicate detection")
-        with TemporaryDirectory() as tmpdir:
-            db_path, conn = self._create_library_db(tmpdir)
-            canonical_hash = "cafe" * 16
-            canonical_date = "1900:01:01 00:00:00"
-            canonical_obj = datetime(1900, 1, 1, 0, 0, 0)
-            canonical_rel = canonical_relative_path(canonical_obj, canonical_hash, ".jpg")
-            canonical_full = os.path.join(tmpdir, canonical_rel)
-            stray_duplicate = os.path.join(tmpdir, "root_b.jpg")
-
-            os.makedirs(os.path.dirname(canonical_full), exist_ok=True)
-            with open(canonical_full, "wb") as handle:
-                handle.write(b"photo-a")
-            with open(stray_duplicate, "wb") as handle:
-                handle.write(b"photo-b")
-
-            conn.execute(
-                """
-                INSERT INTO photos (
-                    original_filename,
-                    current_path,
-                    date_taken,
-                    content_hash,
-                    file_size,
-                    file_type,
-                    width,
-                    height
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    os.path.basename(canonical_full),
-                    canonical_rel,
-                    canonical_date,
-                    canonical_hash,
-                    os.path.getsize(canonical_full),
-                    "photo",
-                    1,
-                    1,
-                ),
-            )
-            conn.commit()
-            conn.close()
-
-            def canonicalize_side_effect(file_path, **_kwargs):
-                basename = os.path.basename(file_path)
-                if basename in {os.path.basename(canonical_full), os.path.basename(stray_duplicate)}:
-                    return type(
-                        "CanonicalPhoto",
-                        (),
-                        {
-                            "content_hash": canonical_hash,
-                            "date_taken": canonical_date,
-                            "date_obj": canonical_obj,
-                        },
-                    )()
-                raise AssertionError(f"Unexpected staged file: {basename}")
-
-            with patch("make_library_perfect.verify_media_file", return_value=(True, "mock")), patch(
-                "make_library_perfect.extract_exif_rating", return_value=None
-            ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
-                "make_library_perfect.can_bake_losslessly", return_value=False
-            ), patch(
-                "make_library_perfect.extract_exif_date", return_value=None
-            ), patch(
-                "make_library_perfect.canonicalize_photo_file",
-                side_effect=canonicalize_side_effect,
-            ):
-                result = scan_library_cleanliness(
-                    tmpdir, db_path=db_path, verify=True
-                )
-
-            self.assertEqual(result["status"], "DIRTY")
-            self.assertEqual(result["supported_media_files"], 2)
-            self.assertEqual(result["summary"]["duplicates"], 1)
-            self.assertEqual(result["summary"]["misfiled_media"], 0)
-            self.assertEqual(result["summary"]["database_repairs"], 0)
-            self.assertEqual(result["operations"]["summary"]["duplicates"], 1)
-            self.assertEqual(result["operations"]["summary"]["operation_count"], 1)
-            self.assertEqual(
-                result["details"]["duplicates"],
-                [
-                    {
-                        "kind": "duplicate_media",
-                        "path": "root_b.jpg",
-                        "message": f"root_b.jpg duplicates {canonical_rel}",
-                    }
-                ],
-            )
-
-    def test_normalize_media_file_uses_pixel_duplicate_key_for_photos(self):
-        if CLEAN_LIBRARY_ENGINE_VERSION != "legacy":
-            self.skipTest("v2 uses hash-only duplicate detection")
-        with TemporaryDirectory() as tmpdir:
-            db_path, conn = self._create_library_db(tmpdir)
-            keep_path = os.path.join(tmpdir, "keep.png")
-            dup_path = os.path.join(tmpdir, "dup.png")
-
-            pixels = Image.new("RGB", (4, 4), (12, 34, 56))
-            pixels.save(keep_path, format="PNG", compress_level=0)
-            pixels.save(dup_path, format="PNG", compress_level=9)
-
-            cleaner = LibraryCleaner(tmpdir, db_path=db_path)
-            cleaner.db_conn = conn
-            cleaner.db_conn.row_factory = sqlite3.Row
-            cleaner.hash_cache = HashCache(conn)
-
-            with patch("make_library_perfect.extract_exif_date", return_value=None), patch(
-                "make_library_perfect.extract_exif_rating", return_value=None
-            ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
-                "make_library_perfect.write_photo_date_metadata", return_value=None
-            ):
-                keep_record = cleaner.normalize_media_file(keep_path)
-                dup_record = cleaner.normalize_media_file(dup_path)
-
-            self.assertIsNotNone(keep_record)
-            self.assertIsNotNone(dup_record)
-            self.assertNotEqual(keep_record.content_hash, dup_record.content_hash)
-            self.assertEqual(keep_record.duplicate_key, dup_record.duplicate_key)
-            conn.close()
-
-    def test_scan_flags_pixel_duplicates_across_different_png_encodings(self):
-        if CLEAN_LIBRARY_ENGINE_VERSION != "legacy":
-            self.skipTest("v2 uses hash-only duplicate detection")
-        with TemporaryDirectory() as tmpdir:
-            db_path, conn = self._create_library_db(tmpdir)
-            conn.close()
-
-            keep_path = os.path.join(tmpdir, "keep.png")
-            dup_path = os.path.join(tmpdir, "dup.png")
-
-            pixels = Image.new("RGB", (4, 4), (12, 34, 56))
-            pixels.save(keep_path, format="PNG", compress_level=0)
-            pixels.save(dup_path, format="PNG", compress_level=9)
-
-            with patch("make_library_perfect.extract_exif_date", return_value=None), patch(
-                "make_library_perfect.extract_exif_rating", return_value=None
-            ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
-                "make_library_perfect.write_photo_date_metadata", return_value=None
-            ):
-                result = scan_library_cleanliness(
-                    tmpdir, db_path=db_path, verify=True
-                )
-
-            self.assertEqual(result["status"], "DIRTY")
-            self.assertEqual(result["summary"]["duplicates"], 1)
-            self.assertEqual(result["summary"]["database_repairs"], 1)
-            self.assertEqual(
-                result["details"]["duplicates"],
-                [
-                    {
-                        "kind": "duplicate_media",
-                        "path": "keep.png",
-                        "message": "keep.png duplicates dup.png",
-                    }
-                ],
-            )
-
     def test_scan_skips_read_only_hash_cache_for_photo_audits(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -699,14 +537,11 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             with open(photo_path, "wb") as handle:
                 handle.write(b"photo")
             result = scan_library_cleanliness(tmpdir, db_path=db_path)
-            if CLEAN_LIBRARY_ENGINE_VERSION == "v2":
-                self.assertEqual(result["status"], "INVENTORY")
-                self.assertTrue(result.get("preflight"))
-                self.assertEqual(result["summary"]["photo_count"], 1)
-                self.assertEqual(result["summary"]["video_count"], 0)
-                self.assertIn("estimated_display", result)
-            else:
-                self.assertIn(result["status"], {"DIRTY", "CLEAN"})
+            self.assertEqual(result["status"], "INVENTORY")
+            self.assertTrue(result.get("preflight"))
+            self.assertEqual(result["summary"]["photo_count"], 1)
+            self.assertEqual(result["summary"]["video_count"], 0)
+            self.assertIn("estimated_display", result)
 
     def test_scan_emits_audit_progress_when_callback_provided(self):
         with TemporaryDirectory() as tmpdir:
@@ -1079,39 +914,11 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
                 set(CLEAN_LIBRARY_SIGNAL_KEYS) | {"operation_count"},
             )
 
-            if CLEAN_LIBRARY_ENGINE_VERSION == "v2":
-                self.assertTrue(plan_event.get("feedback_only"))
-                stats_events = [event for event in events if event.get("type") == "stats"]
-                self.assertTrue(stats_events)
-                self.assertEqual(result["stats"]["duplicates_trashed"], 1)
-                self.assertGreaterEqual(result["stats"]["media_moved"], 1)
-                return
-
-            burned_down = defaultdict(int)
-            signal_events = [
-                event for event in events if event.get("type") == "signal_delta"
-            ]
-            self.assertTrue(signal_events)
-            for event in signal_events:
-                for key, value in (event.get("deltas") or {}).items():
-                    burned_down[key] += int(value)
-
-            self.assertEqual(
-                {key: burned_down.get(key, 0) for key in CLEAN_LIBRARY_SIGNAL_KEYS},
-                {key: plan_event["summary"][key] for key in CLEAN_LIBRARY_SIGNAL_KEYS},
-            )
-            self.assertEqual(
-                signal_events[-1]["remaining"],
-                {
-                    "misfiled_media": 0,
-                    "unsupported_files": 0,
-                    "duplicates": 0,
-                    "metadata_cleanup": 0,
-                    "folder_cleanup": 0,
-                    "database_repairs": 0,
-                    "operation_count": 0,
-                },
-            )
+            self.assertTrue(plan_event.get("feedback_only"))
+            stats_events = [event for event in events if event.get("type") == "stats"]
+            self.assertTrue(stats_events)
+            self.assertEqual(result["stats"]["duplicates_trashed"], 1)
+            self.assertGreaterEqual(result["stats"]["media_moved"], 1)
 
 
 class CleanLibrarySkipUnchangedTest(unittest.TestCase):
@@ -1178,7 +985,6 @@ class CleanLibrarySkipUnchangedTest(unittest.TestCase):
         ):
             return run_db_normalization_engine(tmpdir, db_path=db_path, resume=False)
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "skip unchanged is v2 only")
     def test_second_clean_skips_unchanged_without_rehashing(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1198,7 +1004,6 @@ class CleanLibrarySkipUnchangedTest(unittest.TestCase):
             self.assertEqual(result["stats"]["scan_unchanged_skipped"], 1)
             self.assertEqual(result["stats"]["media_moved"], 0)
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "skip unchanged is v2 only")
     def test_does_not_skip_misfiled_media(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1214,7 +1019,6 @@ class CleanLibrarySkipUnchangedTest(unittest.TestCase):
             self.assertGreaterEqual(result["stats"]["duplicates_trashed"], 1)
             self.assertFalse(os.path.exists(misfiled_path))
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "skip unchanged is v2 only")
     def test_does_not_skip_when_db_file_size_mismatch(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1253,7 +1057,6 @@ class CleanLibraryBlockingVerifyTest(unittest.TestCase):
         with open(path, "rb") as handle:
             return hashlib.sha256(handle.read()).hexdigest()
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "blocking verify is v2 only")
     def test_run_emits_audit_phase_before_success(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1295,7 +1098,6 @@ class CleanLibraryBlockingVerifyTest(unittest.TestCase):
             self.assertEqual(audit_phases[0]["status"], "starting")
             self.assertEqual(audit_phases[-1]["status"], "complete")
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "blocking verify is v2 only")
     def test_run_fails_when_final_audit_finds_issues(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1333,7 +1135,6 @@ class CleanLibraryResumeTest(unittest.TestCase):
         conn.commit()
         return db_path, conn
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "resume is implemented in v2 only")
     def test_resume_after_interrupted_scan(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1407,7 +1208,6 @@ class CleanLibraryCancelTest(unittest.TestCase):
         conn.commit()
         return db_path, conn
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "cancel is implemented in v2 only")
     def test_cooperative_cancel_preserves_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1458,7 +1258,6 @@ class CleanLibraryCancelTest(unittest.TestCase):
                 for item in patchers:
                     item.stop()
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "cancel is implemented in v2 only")
     def test_cancel_during_final_audit_preserves_checkpoint(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)
@@ -1515,7 +1314,6 @@ class CleanLibraryCancelTest(unittest.TestCase):
                 for item in patchers:
                     item.stop()
 
-    @unittest.skipUnless(CLEAN_LIBRARY_ENGINE_VERSION == "v2", "cancel is implemented in v2 only")
     def test_resume_after_cancel_during_final_audit(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)

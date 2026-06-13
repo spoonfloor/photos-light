@@ -7,7 +7,7 @@ scan cost, full-run phase timing, and 60k extrapolation.
 
 ## Quick start
 
-**Engine:** v2 by default (`PHOTOS_CLEAN_LIBRARY_ENGINE=legacy` for archived behavior).
+**Engine:** v2 (`make_library_clean_v2.py` via `make_library_perfect.py`).
 
 From the repo root:
 

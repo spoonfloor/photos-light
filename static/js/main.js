@@ -220,9 +220,9 @@ const FLOW_ACTIVITY_LOG_REGISTRY = {
     activityModeLabel: true,
   },
   clean: {
-    toggleId: 'updateIndexDetailsToggle',
-    logFeedId: 'updateIndexLogFeed',
-    detailsListId: 'updateIndexDetailsList',
+    toggleId: 'cleanLibraryDetailsToggle',
+    logFeedId: 'cleanLibraryLogFeed',
+    detailsListId: 'cleanLibraryDetailsList',
     maxLines: CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES,
     activityModeLabel: true,
   },
@@ -474,9 +474,9 @@ function shouldUseFlowActivityFeed(flowKey) {
   }
   if (flowKey === 'clean') {
     return Boolean(
-      updateIndexState?.workingPhaseActive ||
-        updateIndexState?.overlayPhase === 'working' ||
-        updateIndexState?.overlayPhase === 'finished',
+      cleanLibraryState?.workingPhaseActive ||
+        cleanLibraryState?.overlayPhase === 'working' ||
+        cleanLibraryState?.overlayPhase === 'finished',
     );
   }
   if (flowKey === 'convert' || flowKey === 'convertComplete') {
@@ -3710,28 +3710,27 @@ function updateDateChangeProgress(current, total) {
 async function applyDateEditPatch(data) {
   const photoId = data.photo_id;
   if (!photoId) {
-    return;
+    return null;
   }
 
   const index = state.photos.findIndex((entry) => entry.id === photoId);
   const oldMonth = index !== -1 ? state.photos[index].month : null;
 
   if (data.duplicate_removed) {
-    if (VirtualGrid.isActive() && !hasActivePhotoFilters() && oldMonth) {
-      VirtualGrid.applyMutationPatch({ oldMonth });
+    if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
       removePhotosFromState([photoId]);
-      return;
+      return { duplicateRemoved: true, oldMonth };
     }
     if (removePhotosFromState([photoId]) && state.photoTotalCount > 0) {
       state.photoTotalCount -= 1;
       state.hasMore = state.photos.length < state.photoTotalCount;
     }
-    return;
+    return { duplicateRemoved: true, oldMonth };
   }
 
   const photo = data.photo;
   if (!photo) {
-    return;
+    return null;
   }
 
   if (index !== -1) {
@@ -3739,16 +3738,12 @@ async function applyDateEditPatch(data) {
   }
 
   if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
-    if (oldMonth && oldMonth !== photo.month) {
-      VirtualGrid.applyMutationPatch({ oldMonth, newMonth: photo.month });
-    } else {
-      VirtualGrid.invalidateMonth(photo.month);
-    }
-    if (oldMonth !== photo.month) {
-      VirtualGrid.scrollToMonth(photo.month);
-    }
-    refreshGridPhotoThumbnail(photoId);
-    return;
+    return {
+      photoId,
+      oldMonth,
+      newMonth: photo.month,
+      monthChanged: oldMonth !== photo.month,
+    };
   }
 
   if (index !== -1) {
@@ -3761,11 +3756,51 @@ async function applyDateEditPatch(data) {
       scrollToMonthSection(photo.month);
     }
     refreshGridPhotoThumbnail(photoId);
-    return;
+    return {
+      photoId,
+      oldMonth,
+      newMonth: photo.month,
+      monthChanged: oldMonth !== photo.month,
+    };
   }
 
   await replaceGridAtMonth(photo.month);
   scrollToMonthSection(photo.month);
+  return {
+    photoId,
+    oldMonth,
+    newMonth: photo.month,
+    monthChanged: true,
+  };
+}
+
+async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
+  if (currentPhotoLoad?.promise) {
+    try {
+      await currentPhotoLoad.promise;
+    } catch {
+      /* in-flight load aborted or failed — continue with sync */
+    }
+  }
+
+  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    try {
+      await VirtualGrid.refreshMonthIndex(state.currentSortOrder, {
+        scrollTargetMonth,
+        preserveScroll: !scrollTargetMonth,
+      });
+      setupThumbnailLazyLoading();
+      ensureGridInteractionsWired();
+    } catch (error) {
+      console.error('❌ Failed to sync grid after histogram change:', error);
+    }
+    return;
+  }
+
+  await loadAndRenderPhotos(false, { forcePaged: hasActivePhotoFilters() });
+  if (scrollTargetMonth && VirtualGrid.isActive()) {
+    VirtualGrid.scrollToMonth(scrollTargetMonth);
+  }
 }
 
 async function finalizeDateChangeSuccess({
@@ -3774,9 +3809,15 @@ async function finalizeDateChangeSuccess({
   clearSelection,
   patchResults = [],
 }) {
+  let scrollTargetMonth = null;
   for (const patch of patchResults) {
-    await applyDateEditPatch(patch);
+    const result = await applyDateEditPatch(patch);
+    if (result?.monthChanged && result.newMonth) {
+      scrollTargetMonth = result.newMonth;
+    }
   }
+
+  await syncGridAfterHistogramChange(scrollTargetMonth);
 
   hideDateChangeProgressOverlay();
 
@@ -6025,13 +6066,21 @@ async function loadAndRenderPhotos(append = false, options = {}) {
   }
 }
 
+function hasCommittedPhotoRender() {
+  if (!shouldUseVirtualGrid()) {
+    return state.hasDatabase;
+  }
+  if (typeof VirtualGrid === 'undefined' || !VirtualGrid.isActive()) {
+    return false;
+  }
+  return !VirtualGrid.getLayout()?.provisional;
+}
+
 /**
  * Hydrate the grid for a library generation after switch (e.g. deferPhotoReload).
  * Retries once if the first load was superseded (stale), which avoids an empty grid.
  *
- * If the inner load returns false but still applied data (e.g. stale check after
- * populateDatePicker) or a second load aborted the first, we accept the result when
- * generation matches and the session has a usable DB snapshot.
+ * Success means the visible renderer committed, not merely that a DB exists.
  */
 async function loadAndRenderPhotosCommitted(generation) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -6039,14 +6088,14 @@ async function loadAndRenderPhotosCommitted(generation) {
       throwOnError: true,
       generation,
     });
-    if (ok === true) {
+    if (ok === true && hasCommittedPhotoRender()) {
       return true;
     }
     if (!isCurrentLibraryGeneration(generation)) {
       throw new Error('Library changed while loading photos.');
     }
   }
-  if (isCurrentLibraryGeneration(generation) && state.hasDatabase) {
+  if (isCurrentLibraryGeneration(generation) && hasCommittedPhotoRender()) {
     enableAppBarButtons();
     return true;
   }
@@ -6073,7 +6122,7 @@ async function syncServerCatalogRevision() {
 /**
  * Catalog reset — full timeline re-init after structural library changes
  * (Clean photos_table_rebuilt, DB rebuild, library switch). Row mutations
- * use applyMutationPatch instead; do not call this for single/bulk date edit.
+ * Row mutations update state during SSE; timeline sync is refreshMonthIndex on complete.
  */
 async function rehydrateLibraryCatalog(options = {}) {
   const {
@@ -6736,20 +6785,6 @@ function updateMonthCircleStates() {
 // =====================
 
 /**
- * Count photos per month before removing from client state.
- */
-function monthCountsForPhotoIds(photoIds) {
-  const idSet = new Set(photoIds.map((id) => Number(id)));
-  const counts = new Map();
-  state.photos.forEach((photo) => {
-    if (idSet.has(photo.id) && photo.month) {
-      counts.set(photo.month, (counts.get(photo.month) || 0) + 1);
-    }
-  });
-  return counts;
-}
-
-/**
  * Drop photos from in-memory grid state and re-render immediately.
  */
 function removePhotosFromState(photoIds) {
@@ -6835,16 +6870,8 @@ async function deletePhotos(photoIds) {
     );
 
     if (deletedCount > 0) {
-      const monthCounts = monthCountsForPhotoIds(photoIds);
       removePhotosFromState(photoIds);
-      if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
-        VirtualGrid.applyMutationPatch({ monthCounts });
-      } else if (state.photoTotalCount > 0) {
-        state.photoTotalCount = Math.max(0, state.photoTotalCount - deletedCount);
-        state.hasMore = state.photos.length < state.photoTotalCount;
-        ensureScrollSentinel();
-        setupGridScrollObserver();
-      }
+      await syncGridAfterHistogramChange();
     } else if (notFoundIds.length > 0) {
       removePhotosFromState(notFoundIds);
     }
@@ -6889,8 +6916,7 @@ async function undoDateEdit(originalDates) {
     const allSucceeded = responses.every((r) => r.ok);
 
     if (allSucceeded) {
-      // Reload grid to reflect restored dates
-      await loadAndRenderPhotos(false);
+      await syncGridAfterHistogramChange();
 
       showToast('Date change undone', null);
     } else {
@@ -6920,7 +6946,7 @@ async function undoDelete(photoIds) {
     const result = await response.json();
 
     // Reload grid to show restored photos
-    await loadAndRenderPhotos(false);
+    await syncGridAfterHistogramChange();
 
     const count = result.restored;
     showToast(`Restored ${count} photo${count > 1 ? 's' : ''}`, null);
@@ -7260,8 +7286,8 @@ function animateImportPreflightCounts(photoTarget, videoTarget, totalTarget, dur
 
 function scheduleImportRefresh(delayMs = 1500) {
   window.setTimeout(() => {
-    loadAndRenderPhotos(false).catch((error) => {
-      console.error('❌ Follow-up import refresh failed:', error);
+    syncGridAfterHistogramChange().catch((error) => {
+      console.error('❌ Follow-up import grid sync failed:', error);
     });
   }, delayMs);
 }
@@ -7325,11 +7351,10 @@ function wireImportOverlay() {
 
   if (doneBtn) {
     doneBtn.addEventListener('click', async () => {
-      // Scroll to first imported photo if we have any
       if (window.importedPhotoIds && window.importedPhotoIds.length > 0) {
         scrollToImportedPhoto(window.importedPhotoIds);
       }
-      await closeImportOverlay();
+      await hideImportOverlay(false);
     });
   }
 
@@ -7411,7 +7436,7 @@ async function hideImportOverlay(reloadPhotos = true) {
   }
 
   if (reloadPhotos) {
-    await loadAndRenderPhotos(false);
+    await syncGridAfterHistogramChange();
   }
 }
 
@@ -7439,26 +7464,34 @@ async function closeImportOverlay() {
 function scrollToImportedPhoto(photoIds) {
   if (!photoIds || photoIds.length === 0) return;
 
-  // Find the first imported photo ID that exists in current view
-  // (respects current sort order - newest/oldest)
   const firstVisibleId = photoIds.find((id) => {
-    const element = document.querySelector(`[data-photo-id="${id}"]`);
-    return element !== null;
+    return (
+      document.querySelector(`[data-id="${id}"]`) ||
+      document.querySelector(`[data-photo-id="${id}"]`)
+    );
   });
 
-  if (firstVisibleId) {
-    const element = document.querySelector(
-      `[data-photo-id="${firstVisibleId}"]`,
-    );
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!firstVisibleId) {
+    return;
+  }
 
-      // Optional: briefly highlight the photo
-      element.style.outline = '3px solid #6366f1';
-      setTimeout(() => {
-        element.style.outline = '';
-      }, 2000);
+  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    const card = document.querySelector(`[data-id="${firstVisibleId}"]`);
+    const monthKey = card?.closest('[data-month]')?.dataset?.month;
+    if (monthKey && VirtualGrid.scrollToMonth(monthKey)) {
+      return;
     }
+  }
+
+  const element = document.querySelector(
+    `[data-id="${firstVisibleId}"]`,
+  ) || document.querySelector(`[data-photo-id="${firstVisibleId}"]`);
+  if (element) {
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    element.style.outline = '3px solid #6366f1';
+    setTimeout(() => {
+      element.style.outline = '';
+    }, 2000);
   }
 }
 
@@ -7483,8 +7516,8 @@ async function showImportComplete() {
   // Populate details list
   populateImportDetails();
 
-  // Reload grid immediately to show new photos
-  await loadAndRenderPhotos(false);
+  // Sync grid to show new photos
+  await syncGridAfterHistogramChange();
 
   // Scroll to first imported photo based on sort order
   if (
@@ -7633,8 +7666,8 @@ async function undoImport() {
     showToast(`Undid import of ${result.deleted} photos`, null);
     closeImportOverlay();
 
-    // Reload grid
-    await loadAndRenderPhotos(false);
+    // Sync grid after undo
+    await syncGridAfterHistogramChange();
   } catch (error) {
     console.error('❌ Undo error:', error);
     showToast('Undo failed', null);
@@ -7684,7 +7717,7 @@ async function loadUtilitiesMenu() {
     if (cleanOrganizeBtn) {
       cleanOrganizeBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
-        openUpdateIndexOverlay();
+        openCleanLibraryOverlay();
       });
     }
 
@@ -7809,10 +7842,75 @@ function enableMenuItem(buttonId, enabled) {
 // =====================
 
 // ==========================
-// UPDATE DATABASE OVERLAY
+// CLEAN LIBRARY OVERLAY
 // ==========================
 
-let updateIndexState = {
+const CLEAN_LIBRARY_LOG_PREFIX = '[Clean Library]';
+
+const CLEAN_LIBRARY_REQUIRED_ELEMENT_IDS = [
+  'cleanLibraryOverlay',
+  'cleanLibraryCloseBtn',
+  'cleanLibraryCancelBtn',
+  'cleanLibraryProceedBtn',
+  'cleanLibraryDoneBtn',
+  'cleanLibraryStartOverBtn',
+  'cleanLibraryDetailsToggle',
+  'cleanLibraryStatusText',
+  'cleanLibraryPreflightStats',
+  'cleanLibraryInflightStats',
+  'cleanLibraryStats',
+];
+
+function requireCleanLibraryElement(id, context = 'Clean Library overlay') {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.error(
+      `${CLEAN_LIBRARY_LOG_PREFIX} Missing required element #${id} (${context})`,
+    );
+  }
+  return el;
+}
+
+function validateCleanLibraryOverlayWiring(context = 'overlay load') {
+  const missing = CLEAN_LIBRARY_REQUIRED_ELEMENT_IDS.filter(
+    (id) => !document.getElementById(id),
+  );
+  if (missing.length) {
+    console.error(
+      `${CLEAN_LIBRARY_LOG_PREFIX} Missing required elements during ${context}:`,
+      missing.map((id) => `#${id}`).join(', '),
+    );
+  }
+  return missing.length === 0;
+}
+
+function assertCleanLibraryPhaseUi(phase) {
+  const expectedScoreboardId =
+    phase === 'scanning' || phase === 'eta'
+      ? 'cleanLibraryPreflightStats'
+      : phase === 'working' || phase === 'finished'
+        ? 'cleanLibraryInflightStats'
+        : phase === 'legacy-audit'
+          ? 'cleanLibraryStats'
+          : null;
+  if (!expectedScoreboardId) {
+    return;
+  }
+  const scoreboard = document.getElementById(expectedScoreboardId);
+  if (!scoreboard) {
+    console.error(
+      `${CLEAN_LIBRARY_LOG_PREFIX} Missing scoreboard #${expectedScoreboardId} for phase "${phase}"`,
+    );
+    return;
+  }
+  if (scoreboard.style.display === 'none') {
+    console.warn(
+      `${CLEAN_LIBRARY_LOG_PREFIX} Scoreboard #${expectedScoreboardId} hidden for phase "${phase}"`,
+    );
+  }
+}
+
+let cleanLibraryState = {
   misfiledMedia: 0,
   duplicates: 0,
   unsupportedFiles: 0,
@@ -7835,41 +7933,57 @@ let updateIndexState = {
 };
 
 /**
- * Load Update Database overlay fragment
+ * Load Clean Library overlay fragment
  */
-async function loadUpdateIndexOverlay() {
+async function loadCleanLibraryOverlay() {
   // Check if already loaded
-  if (document.getElementById('updateIndexOverlay')) {
+  if (document.getElementById('cleanLibraryOverlay')) {
     return;
   }
 
   try {
-    const response = await fetch('fragments/updateIndexOverlay.html?v=2');
-    if (!response.ok) throw new Error('Failed to load Update Database overlay');
+    const response = await fetch('fragments/cleanLibraryOverlay.html?v=3');
+    if (!response.ok) throw new Error('Failed to load Clean Library overlay');
 
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
+    validateCleanLibraryOverlayWiring('overlay load');
 
     // Wire up buttons
-    const closeBtn = document.getElementById('updateIndexCloseBtn');
-    const cancelBtn = document.getElementById('updateIndexCancelBtn');
-    const proceedBtn = document.getElementById('updateIndexProceedBtn');
-    const doneBtn = document.getElementById('updateIndexDoneBtn');
-    const startOverBtn = document.getElementById('updateIndexStartOverBtn');
-    const detailsToggle = document.getElementById('updateIndexDetailsToggle');
+    const closeBtn = requireCleanLibraryElement(
+      'cleanLibraryCloseBtn',
+      'overlay wiring',
+    );
+    const cancelBtn = requireCleanLibraryElement(
+      'cleanLibraryCancelBtn',
+      'overlay wiring',
+    );
+    const proceedBtn = requireCleanLibraryElement(
+      'cleanLibraryProceedBtn',
+      'overlay wiring',
+    );
+    const doneBtn = requireCleanLibraryElement(
+      'cleanLibraryDoneBtn',
+      'overlay wiring',
+    );
+    const startOverBtn = requireCleanLibraryElement(
+      'cleanLibraryStartOverBtn',
+      'overlay wiring',
+    );
+    requireCleanLibraryElement('cleanLibraryDetailsToggle', 'overlay wiring');
 
-    if (closeBtn) closeBtn.addEventListener('click', handleUpdateIndexCancelClick);
-    if (cancelBtn) cancelBtn.addEventListener('click', handleUpdateIndexCancelClick);
-    if (proceedBtn) proceedBtn.addEventListener('click', handleUpdateIndexProceedClick);
+    if (closeBtn) closeBtn.addEventListener('click', handleCleanLibraryCancelClick);
+    if (cancelBtn) cancelBtn.addEventListener('click', handleCleanLibraryCancelClick);
+    if (proceedBtn) proceedBtn.addEventListener('click', handleCleanLibraryProceedClick);
     if (startOverBtn) {
-      startOverBtn.addEventListener('click', handleUpdateIndexStartOverClick);
+      startOverBtn.addEventListener('click', handleCleanLibraryStartOverClick);
     }
-    if (doneBtn) doneBtn.addEventListener('click', closeUpdateIndexOverlay);
+    if (doneBtn) doneBtn.addEventListener('click', closeCleanLibraryOverlay);
 
     wireFlowDetailsToggle('clean');
-    hideFlowOverlay(document.getElementById('updateIndexOverlay'));
+    hideFlowOverlay(document.getElementById('cleanLibraryOverlay'));
   } catch (error) {
-    console.error('❌ Failed to load Update Database overlay:', error);
+    console.error(`${CLEAN_LIBRARY_LOG_PREFIX} Failed to load overlay:`, error);
   }
 }
 
@@ -7980,12 +8094,21 @@ const CLEAN_LIBRARY_STEP_PROGRESS_PHASES = new Set([
   'audit',
 ]);
 
-/** Which scoreboard row is visible — derived from updateIndexState.overlayPhase only. */
+/** Which scoreboard row is visible — derived from cleanLibraryState.overlayPhase only. */
 function syncCleanLibraryScoreboards() {
-  const phase = updateIndexState?.overlayPhase ?? null;
-  const preflightEl = document.getElementById('updateIndexPreflightStats');
-  const inflightEl = document.getElementById('updateIndexInflightStats');
-  const legacyEl = document.getElementById('updateIndexStats');
+  const phase = cleanLibraryState?.overlayPhase ?? null;
+  const preflightEl = requireCleanLibraryElement(
+    'cleanLibraryPreflightStats',
+    'scoreboard sync',
+  );
+  const inflightEl = requireCleanLibraryElement(
+    'cleanLibraryInflightStats',
+    'scoreboard sync',
+  );
+  const legacyEl = requireCleanLibraryElement(
+    'cleanLibraryStats',
+    'scoreboard sync',
+  );
 
   const showPreflight = phase === 'scanning' || phase === 'eta';
   const showInflight = phase === 'working' || phase === 'finished';
@@ -8003,23 +8126,24 @@ function syncCleanLibraryScoreboards() {
 }
 
 function setCleanLibraryOverlayPhase(phase) {
-  if (updateIndexState) {
-    updateIndexState.overlayPhase = phase;
+  if (cleanLibraryState) {
+    cleanLibraryState.overlayPhase = phase;
   }
   syncCleanLibraryScoreboards();
+  assertCleanLibraryPhaseUi(phase);
 }
 
 let cleanLibraryWorkingStepState = null;
 
 function setCleanLibraryExplainerVisible(visible) {
-  const explainerEl = document.getElementById('updateIndexExplainer');
+  const explainerEl = document.getElementById('cleanLibraryExplainer');
   if (explainerEl) {
     explainerEl.style.display = visible ? 'block' : 'none';
   }
 }
 
 function setCleanLibraryExplainerText(text) {
-  const explainerEl = document.getElementById('updateIndexExplainer');
+  const explainerEl = document.getElementById('cleanLibraryExplainer');
   if (explainerEl) {
     explainerEl.textContent = text;
   }
@@ -8035,24 +8159,24 @@ function showCleanLibraryWorkingBody() {
   setCleanLibraryExplainerVisible(true);
 }
 
-function setUpdateIndexOverlayTitle(title) {
-  const overlay = document.getElementById('updateIndexOverlay');
+function setCleanLibraryOverlayTitle(title) {
+  const overlay = document.getElementById('cleanLibraryOverlay');
   const titleEl = overlay?.querySelector('.import-title');
   if (titleEl) {
     titleEl.textContent = title;
   }
 }
 
-function resetUpdateIndexOverlayTitle() {
-  setUpdateIndexOverlayTitle(CLEAN_LIBRARY_OVERLAY_TITLE);
+function resetCleanLibraryOverlayTitle() {
+  setCleanLibraryOverlayTitle(CLEAN_LIBRARY_OVERLAY_TITLE);
 }
 
 function showContinueLibraryCleanupTitle() {
-  setUpdateIndexOverlayTitle(CLEAN_LIBRARY_CONTINUE_TITLE);
+  setCleanLibraryOverlayTitle(CLEAN_LIBRARY_CONTINUE_TITLE);
 }
 
 function setCleanLibraryOverlayInert(inert) {
-  const overlay = document.getElementById('updateIndexOverlay');
+  const overlay = document.getElementById('cleanLibraryOverlay');
   if (!overlay || overlay.style.display !== 'flex') {
     return;
   }
@@ -8065,7 +8189,7 @@ function setCleanLibraryOverlayInert(inert) {
 }
 
 function setCleanLibrarySecondaryStatus(text, visible = true) {
-  const secondaryEl = document.getElementById('updateIndexSecondaryStatus');
+  const secondaryEl = document.getElementById('cleanLibrarySecondaryStatus');
   if (!secondaryEl) return;
   if (!visible || !text) {
     secondaryEl.style.display = 'none';
@@ -8120,7 +8244,7 @@ function resetTerraformProgressDetailsExpanded() {
 }
 
 function updateCleanLibraryDetailsToggleLabel(expanded, { activityMode = false } = {}) {
-  updateFlowDetailsToggleLabel('updateIndexDetailsToggle', expanded, {
+  updateFlowDetailsToggleLabel('cleanLibraryDetailsToggle', expanded, {
     activityMode,
   });
 }
@@ -8180,7 +8304,7 @@ function appendCleanLibraryLogLine(line) {
 }
 
 function showCleanLibraryDetailsSection(visible) {
-  const detailsSection = document.getElementById('updateIndexDetailsSection');
+  const detailsSection = document.getElementById('cleanLibraryDetailsSection');
   if (detailsSection) {
     detailsSection.style.display = visible ? 'block' : 'none';
   }
@@ -8197,7 +8321,7 @@ function getCleanLibraryPreflightTotal(scanResult, photos, videos) {
 
 function setCleanLibraryPreflightCounts(photoCount, videoCount, totalCount = null) {
   const total = totalCount ?? photoCount + videoCount;
-  showUpdateIndexPreflightStats({
+  showCleanLibraryPreflightStats({
     summary: {
       photo_count: photoCount,
       video_count: videoCount,
@@ -8332,14 +8456,14 @@ function estimateCleanRunRemainingSeconds(processed, total, elapsedSec, phase) {
 
 function storeCleanLibraryPreflightEstimate(scanResult) {
   if (scanResult.status === 'RESUME') {
-    updateIndexState.estimatedSeconds =
+    cleanLibraryState.estimatedSeconds =
       Number(scanResult.estimated_remaining_seconds) || 0;
-    updateIndexState.estimatedDisplay = scanResult.estimated_remaining_display || '';
+    cleanLibraryState.estimatedDisplay = scanResult.estimated_remaining_display || '';
   } else {
-    updateIndexState.estimatedSeconds =
+    cleanLibraryState.estimatedSeconds =
       Number(scanResult.estimated_seconds ?? scanResult.inventory?.estimated_seconds) ||
       0;
-    updateIndexState.estimatedDisplay =
+    cleanLibraryState.estimatedDisplay =
       scanResult.estimated_display ||
       scanResult.inventory?.estimated_display ||
       '';
@@ -8406,7 +8530,7 @@ function renderCleanLibraryWorkingStepDisplay() {
   if (!state || state.stepNumber === null) {
     return;
   }
-  updateUpdateIndexUI(
+  updateCleanLibraryUI(
     buildCleanLibraryWorkingStepText(state.stepNumber, state.phase),
   );
   syncCleanLibraryWorkingRemainingDisplay();
@@ -8466,7 +8590,7 @@ function requestCleanLibraryWorkingStep(phase) {
   const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[phase] || 1;
   const state = cleanLibraryWorkingStepState;
   if (!state) {
-    updateUpdateIndexUI(buildCleanLibraryWorkingStepText(stepNumber, phase));
+    updateCleanLibraryUI(buildCleanLibraryWorkingStepText(stepNumber, phase));
     syncCleanLibraryWorkingRemainingDisplay();
     return;
   }
@@ -8534,48 +8658,48 @@ function handleCleanLibraryWorkingProgressEvent(event = {}) {
 }
 
 function beginCleanLibraryWorkingUi() {
-  updateIndexState.workingPhaseActive = true;
-  updateIndexState.runStartedAtMs = Date.now();
+  cleanLibraryState.workingPhaseActive = true;
+  cleanLibraryState.runStartedAtMs = Date.now();
   resetCleanLibraryWorkingStepState();
-  resetUpdateIndexOverlayTitle();
+  resetCleanLibraryOverlayTitle();
   showCleanLibraryWorkingBody();
   setCleanLibraryOverlayPhase('working');
   initCleanLibraryInflightStats();
   showCleanLibraryDetailsSection(true);
-  beginFlowInflightFeed('clean', updateIndexState.runStartedAtMs, {
+  beginFlowInflightFeed('clean', cleanLibraryState.runStartedAtMs, {
     allowInactive: true,
   });
-  showUpdateIndexButtons('cancel');
+  showCleanLibraryButtons('cancel');
   requestCleanLibraryWorkingStep('setup');
 }
 
 function endCleanLibraryWorkingUi() {
-  updateIndexState.workingPhaseActive = false;
+  cleanLibraryState.workingPhaseActive = false;
   clearCleanLibraryWorkingStepState();
   setCleanLibraryExplainerVisible(false);
   setCleanLibrarySecondaryStatus(null, false);
 }
 
 function syncCleanLibraryWorkingRemainingDisplay() {
-  const totalSec = Number(updateIndexState.estimatedSeconds) || 0;
-  if (!updateIndexState.runStartedAtMs || totalSec <= 0) {
+  const totalSec = Number(cleanLibraryState.estimatedSeconds) || 0;
+  if (!cleanLibraryState.runStartedAtMs || totalSec <= 0) {
     setCleanLibrarySecondaryStatus('Total time remaining: estimating…');
     return;
   }
-  const elapsed = (Date.now() - updateIndexState.runStartedAtMs) / 1000;
+  const elapsed = (Date.now() - cleanLibraryState.runStartedAtMs) / 1000;
   setCleanLibrarySecondaryStatus(
     `Total time remaining: ${formatAboutDurationFromSeconds(Math.max(5, totalSec - elapsed))}`,
   );
 }
 
 function trackCleanLibraryRunManifest(event = {}) {
-  if (!updateIndexState) {
+  if (!cleanLibraryState) {
     return;
   }
   const manifestPath =
     event.manifest_path || event.resumed_from?.manifest_path || null;
   if (manifestPath) {
-    updateIndexState.runManifestPath = manifestPath;
+    cleanLibraryState.runManifestPath = manifestPath;
   }
 }
 
@@ -8584,47 +8708,47 @@ function resolveCleanLibraryLogPath(result) {
   if (fromResult) {
     return fromResult;
   }
-  if (updateIndexState?.runManifestPath) {
-    return updateIndexState.runManifestPath;
+  if (cleanLibraryState?.runManifestPath) {
+    return cleanLibraryState.runManifestPath;
   }
-  return updateIndexState?.preflight?.resume?.manifest_path || null;
+  return cleanLibraryState?.preflight?.resume?.manifest_path || null;
 }
 
 function showCleanLibraryFinishedUi() {
   const finishedAt = new Date();
-  const elapsedSec = updateIndexState.runStartedAtMs
-    ? (finishedAt.getTime() - updateIndexState.runStartedAtMs) / 1000
-    : Number(updateIndexState.estimatedSeconds) || 0;
+  const elapsedSec = cleanLibraryState.runStartedAtMs
+    ? (finishedAt.getTime() - cleanLibraryState.runStartedAtMs) / 1000
+    : Number(cleanLibraryState.estimatedSeconds) || 0;
   const totalDisplay = formatPreciseDurationFromSeconds(elapsedSec);
 
-  syncCleanLibraryInflightFromResultStats(updateIndexState.resultStats);
+  syncCleanLibraryInflightFromResultStats(cleanLibraryState.resultStats);
   completeFlowActivityFeed('clean', {
     finishedAt,
     elapsedSec,
-    logPath: updateIndexState.logPath,
+    logPath: cleanLibraryState.logPath,
     preserveExpanded: true,
   });
 
   endCleanLibraryWorkingUi();
   setCleanLibraryOverlayPhase('finished');
   setCleanLibrarySecondaryStatus(`Total time: ${totalDisplay}`, true);
-  updateUpdateIndexUI(
+  updateCleanLibraryUI(
     'Library check complete. Your library is clean and organized.',
   );
   showCleanLibraryDetailsSection(true);
-  showUpdateIndexButtons('done');
+  showCleanLibraryButtons('done');
 
-  const detailsList = document.getElementById('updateIndexDetailsList');
+  const detailsList = document.getElementById('cleanLibraryDetailsList');
   if (detailsList) {
     detailsList.style.display = 'none';
   }
 }
 
 function resolveCleanLibraryStreamResume() {
-  if (updateIndexState.resumeIntent === false) {
+  if (cleanLibraryState.resumeIntent === false) {
     return false;
   }
-  if (updateIndexState.resumeIntent === true) {
+  if (cleanLibraryState.resumeIntent === true) {
     return true;
   }
   return undefined;
@@ -8640,11 +8764,11 @@ async function reconcileCleanLibraryStreamResume() {
     if (checkpoint?.resumable) {
       return true;
     }
-    updateIndexState.resumeIntent = false;
+    cleanLibraryState.resumeIntent = false;
     return false;
   } catch (error) {
     console.warn('Checkpoint probe failed before run:', error);
-    updateIndexState.resumeIntent = false;
+    cleanLibraryState.resumeIntent = false;
     return false;
   }
 }
@@ -8699,10 +8823,10 @@ async function loadCleanLibraryManifestTail(manifestPath, lines = 40) {
 }
 
 async function prefetchCleanLibraryManifestTail() {
-  if (updateIndexState.resumeIntent !== true) {
+  if (cleanLibraryState.resumeIntent !== true) {
     return;
   }
-  const manifestPath = updateIndexState.preflight?.resume?.manifest_path;
+  const manifestPath = cleanLibraryState.preflight?.resume?.manifest_path;
   if (!manifestPath) {
     return;
   }
@@ -8720,56 +8844,56 @@ function showCleanLibraryInterruptedGate() {
   setCleanLibrarySecondaryStatus(null, false);
   showCleanLibraryDetailsSection(false);
   resetCleanLibraryLogFeed();
-  updateUpdateIndexUI(
+  updateCleanLibraryUI(
     'It looks like a previous library cleanup was not completed. You can continue it, start a new cleanup, or cancel.',
     false,
   );
-  showUpdateIndexButtons('cancel', 'start-over', 'proceed');
+  showCleanLibraryButtons('cancel', 'start-over', 'proceed');
   return new Promise((resolve) => {
-    updateIndexState.onInterruptedChoice = (choice) => {
-      updateIndexState.onInterruptedChoice = null;
+    cleanLibraryState.onInterruptedChoice = (choice) => {
+      cleanLibraryState.onInterruptedChoice = null;
       resolve(choice);
     };
   });
 }
 
-function applyCleanerStreamToUpdateIndex(event = {}) {
+function applyCleanerStreamToCleanLibrary(event = {}) {
   if (event.type === 'log' && event.entry) {
-    if (updateIndexState.workingPhaseActive) {
+    if (cleanLibraryState.workingPhaseActive) {
       appendCleanLibraryEngineLogEntry(event.entry);
     }
     return;
   }
-  if (updateIndexState.workingPhaseActive) {
+  if (cleanLibraryState.workingPhaseActive) {
     return;
   }
   if (event.type === 'stats') {
     const summary = event.summary || {};
-    updateIndexState.misfiledMedia = summary.misfiled_media || 0;
-    updateIndexState.duplicates = summary.duplicates || 0;
-    updateIndexState.unsupportedFiles = summary.unsupported_files || 0;
-    updateIndexState.metadataCleanup = summary.metadata_cleanup || 0;
-    updateIndexState.databaseRepairs = summary.database_repairs || 0;
-    showUpdateIndexStats();
+    cleanLibraryState.misfiledMedia = summary.misfiled_media || 0;
+    cleanLibraryState.duplicates = summary.duplicates || 0;
+    cleanLibraryState.unsupportedFiles = summary.unsupported_files || 0;
+    cleanLibraryState.metadataCleanup = summary.metadata_cleanup || 0;
+    cleanLibraryState.databaseRepairs = summary.database_repairs || 0;
+    showCleanLibraryStats();
     return;
   }
   if (event.type === 'signal_plan' && event.feedback_only) {
-    showUpdateIndexStats();
+    showCleanLibraryStats();
     return;
   }
   if (event.type === 'signal_delta' && event.remaining) {
     const remaining = event.remaining;
-    updateIndexState.misfiledMedia = remaining.misfiled_media || 0;
-    updateIndexState.duplicates = remaining.duplicates || 0;
-    updateIndexState.unsupportedFiles = remaining.unsupported_files || 0;
-    updateIndexState.metadataCleanup = remaining.metadata_cleanup || 0;
-    updateIndexState.databaseRepairs = remaining.database_repairs || 0;
-    showUpdateIndexStats();
+    cleanLibraryState.misfiledMedia = remaining.misfiled_media || 0;
+    cleanLibraryState.duplicates = remaining.duplicates || 0;
+    cleanLibraryState.unsupportedFiles = remaining.unsupported_files || 0;
+    cleanLibraryState.metadataCleanup = remaining.metadata_cleanup || 0;
+    cleanLibraryState.databaseRepairs = remaining.database_repairs || 0;
+    showCleanLibraryStats();
   }
 }
 
-function updateIndexStatusForCleanerPhase(event = {}) {
-  if (updateIndexState.workingPhaseActive) {
+function updateCleanLibraryStatusForPhase(event = {}) {
+  if (cleanLibraryState.workingPhaseActive) {
     if (event.type === 'resume') {
       const phase = event.resumed_from?.phase || 'scan';
       requestCleanLibraryWorkingStep(phase);
@@ -8800,7 +8924,7 @@ function updateIndexStatusForCleanerPhase(event = {}) {
   if (event.type === 'resume') {
     const doneCount = event.resumed_from?.scan_completed_count ?? 0;
     const phase = event.resumed_from?.phase || 'scan';
-    updateUpdateIndexUI(
+    updateCleanLibraryUI(
       `Resuming clean (${doneCount.toLocaleString()} files already processed, phase ${phase})…`,
       true,
     );
@@ -8813,7 +8937,7 @@ function updateIndexStatusForCleanerPhase(event = {}) {
       if (cleanLibraryRunEtaState) {
         cleanLibraryRunEtaState.lastPhase = phase;
       }
-      updateUpdateIndexUI(CLEAN_LIBRARY_PHASE_LABELS[phase], true);
+      updateCleanLibraryUI(CLEAN_LIBRARY_PHASE_LABELS[phase], true);
     }
     return;
   }
@@ -8839,20 +8963,20 @@ function updateIndexStatusForCleanerPhase(event = {}) {
   );
 
   if (remainingSec === null) {
-    updateUpdateIndexUI(`${label} — estimating…`, true);
+    updateCleanLibraryUI(`${label} — estimating…`, true);
     return;
   }
 
-  updateUpdateIndexUI(
+  updateCleanLibraryUI(
     `${label} — ${formatAboutDurationFromSeconds(remainingSec)} left`,
     true,
   );
 }
 
 function updateCleanLibraryPreflightScoreboardValues(scanResult) {
-  const photoEl = document.getElementById('updateIndexPhotoCount');
-  const videoEl = document.getElementById('updateIndexVideoCount');
-  const totalEl = document.getElementById('updateIndexTotalCount');
+  const photoEl = document.getElementById('cleanLibraryPhotoCount');
+  const videoEl = document.getElementById('cleanLibraryVideoCount');
+  const totalEl = document.getElementById('cleanLibraryTotalCount');
   if (!scanResult) {
     return;
   }
@@ -8867,7 +8991,7 @@ function updateCleanLibraryPreflightScoreboardValues(scanResult) {
   if (totalEl) totalEl.textContent = Number(total).toLocaleString();
 }
 
-function showUpdateIndexPreflightStats(scanResult = null) {
+function showCleanLibraryPreflightStats(scanResult = null) {
   updateCleanLibraryPreflightScoreboardValues(scanResult);
   syncCleanLibraryScoreboards();
 }
@@ -8879,11 +9003,11 @@ function showPreflightScoreboardZeros() {
   syncCleanLibraryScoreboards();
 }
 
-async function runUpdateIndexPreflightScan() {
+async function runCleanLibraryPreflightScan() {
   setCleanLibraryOverlayPhase('scanning');
   resetCleanLibraryLogFeed();
-  updateUpdateIndexUI('Scanning library…', true);
-  showUpdateIndexButtons('cancel', 'proceed-disabled');
+  updateCleanLibraryUI('Scanning library…', true);
+  showCleanLibraryButtons('cancel', 'proceed-disabled');
   showCleanLibraryPreflightExplainer();
   showPreflightScoreboardZeros();
 
@@ -8912,23 +9036,23 @@ async function runUpdateIndexPreflightScan() {
   return scanResult;
 }
 
-function renderUpdateIndexPreflightResult(scanResult) {
-  updateIndexState.preflight = scanResult;
+function renderCleanLibraryPreflightResult(scanResult) {
+  cleanLibraryState.preflight = scanResult;
   storeCleanLibraryPreflightEstimate(scanResult);
 
   if (scanResult.status === 'INVENTORY' || scanResult.status === 'RESUME') {
     setCleanLibraryOverlayPhase('eta');
     if (scanResult.status === 'RESUME') {
-      updateIndexState.resumeIntent = true;
+      cleanLibraryState.resumeIntent = true;
       if (scanResult.resume?.manifest_path) {
-        updateIndexState.runManifestPath = scanResult.resume.manifest_path;
+        cleanLibraryState.runManifestPath = scanResult.resume.manifest_path;
       }
       showContinueLibraryCleanupTitle();
-    } else if (updateIndexState.resumeIntent === true) {
-      updateIndexState.resumeIntent = false;
-      resetUpdateIndexOverlayTitle();
+    } else if (cleanLibraryState.resumeIntent === true) {
+      cleanLibraryState.resumeIntent = false;
+      resetCleanLibraryOverlayTitle();
     }
-    showUpdateIndexPreflightStats(scanResult);
+    showCleanLibraryPreflightStats(scanResult);
     const photos =
       scanResult.summary?.photo_count ?? scanResult.inventory?.photo_count ?? 0;
     const videos =
@@ -8937,32 +9061,32 @@ function renderUpdateIndexPreflightResult(scanResult) {
       scanResult.status === 'RESUME'
         ? scanResult.estimated_remaining_display
         : scanResult.estimated_display;
-    updateUpdateIndexUI(`Time required: ${timeLabel}`, false);
+    updateCleanLibraryUI(`Time required: ${timeLabel}`, false);
     if (scanResult.status === 'RESUME') {
-      showUpdateIndexButtons('cancel', 'start-over', 'proceed');
+      showCleanLibraryButtons('cancel', 'start-over', 'proceed');
     } else {
-      showUpdateIndexButtons('cancel', 'proceed');
+      showCleanLibraryButtons('cancel', 'proceed');
     }
     return;
   }
 
   if (scanResult.status === 'DIRTY' || scanResult.status === 'CLEAN') {
     const summary = scanResult.summary || {};
-    updateIndexState.misfiledMedia = summary.misfiled_media || 0;
-    updateIndexState.duplicates = summary.duplicates || 0;
-    updateIndexState.unsupportedFiles = summary.unsupported_files || 0;
-    updateIndexState.metadataCleanup = summary.metadata_cleanup || 0;
-    updateIndexState.databaseRepairs = summary.database_repairs || 0;
+    cleanLibraryState.misfiledMedia = summary.misfiled_media || 0;
+    cleanLibraryState.duplicates = summary.duplicates || 0;
+    cleanLibraryState.unsupportedFiles = summary.unsupported_files || 0;
+    cleanLibraryState.metadataCleanup = summary.metadata_cleanup || 0;
+    cleanLibraryState.databaseRepairs = summary.database_repairs || 0;
     setCleanLibraryOverlayPhase('legacy-audit');
-    showUpdateIndexStats();
+    showCleanLibraryStats();
     const issueCount = summary.issue_count ?? summary.operation_count ?? 0;
-    updateUpdateIndexUI(
+    updateCleanLibraryUI(
       scanResult.status === 'CLEAN'
         ? 'Library looks clean. Continue anyway?'
         : `Found ${Number(issueCount).toLocaleString()} issues. Continue to clean?`,
       false,
     );
-    showUpdateIndexButtons('cancel', 'proceed');
+    showCleanLibraryButtons('cancel', 'proceed');
     return;
   }
 
@@ -8972,18 +9096,23 @@ function renderUpdateIndexPreflightResult(scanResult) {
 /**
  * Clean library overlay — cheap inventory preflight, then Continue to run.
  */
-async function openUpdateIndexOverlay() {
-  const existingOverlay = document.getElementById('updateIndexOverlay');
+async function openCleanLibraryOverlay() {
+  const existingOverlay = document.getElementById('cleanLibraryOverlay');
   if (existingOverlay && existingOverlay.style.display === 'flex') {
     return;
   }
 
-  await loadUpdateIndexOverlay();
+  await loadCleanLibraryOverlay();
 
-  const overlay = document.getElementById('updateIndexOverlay');
-  if (!overlay) return;
+  const overlay = document.getElementById('cleanLibraryOverlay');
+  if (!overlay) {
+    console.error(
+      `${CLEAN_LIBRARY_LOG_PREFIX} Overlay root missing after load (#cleanLibraryOverlay)`,
+    );
+    return;
+  }
 
-  updateIndexState = {
+  cleanLibraryState = {
     misfiledMedia: 0,
     duplicates: 0,
     unsupportedFiles: 0,
@@ -9006,12 +9135,12 @@ async function openUpdateIndexOverlay() {
     onInterruptedChoice: null,
   };
 
-  const detailsSection = document.getElementById('updateIndexDetailsSection');
+  const detailsSection = document.getElementById('cleanLibraryDetailsSection');
   if (detailsSection) detailsSection.style.display = 'none';
   resetCleanLibraryLogFeed();
 
   showFlowOverlay(overlay);
-  resetUpdateIndexOverlayTitle();
+  resetCleanLibraryOverlayTitle();
   syncCleanLibraryScoreboards();
 
   try {
@@ -9019,40 +9148,40 @@ async function openUpdateIndexOverlay() {
     if (checkpoint?.resumable) {
       const choice = await showCleanLibraryInterruptedGate();
       if (choice === 'cancel') {
-        closeUpdateIndexOverlayImmediate();
+        closeCleanLibraryOverlayImmediate();
         return;
       }
       if (choice === 'start-over') {
         await abandonCleanLibraryCheckpoint();
-        updateIndexState.resumeIntent = false;
-        resetUpdateIndexOverlayTitle();
+        cleanLibraryState.resumeIntent = false;
+        resetCleanLibraryOverlayTitle();
       } else {
-        updateIndexState.resumeIntent = true;
+        cleanLibraryState.resumeIntent = true;
       }
     }
 
-    const scanResult = await runUpdateIndexPreflightScan();
-    renderUpdateIndexPreflightResult(scanResult);
+    const scanResult = await runCleanLibraryPreflightScan();
+    renderCleanLibraryPreflightResult(scanResult);
   } catch (error) {
     console.error('❌ Clean library preflight failed:', error);
-    updateUpdateIndexUI('Failed to scan library', false);
+    updateCleanLibraryUI('Failed to scan library', false);
     showToast(`Scan failed: ${error.message}`, 'error');
-    showUpdateIndexButtons('cancel');
+    showCleanLibraryButtons('cancel');
   }
 }
 
-async function executeUpdateIndex() {
-  const overlay = document.getElementById('updateIndexOverlay');
+async function executeCleanLibrary() {
+  const overlay = document.getElementById('cleanLibraryOverlay');
   if (!overlay || overlay.style.display !== 'flex') {
     return;
   }
-  if (updateIndexState?.isRunning) {
+  if (cleanLibraryState?.isRunning) {
     return;
   }
 
-  updateIndexState.isRunning = true;
-  updateIndexState.cancelRequested = false;
-  updateIndexState.abortController = new AbortController();
+  cleanLibraryState.isRunning = true;
+  cleanLibraryState.cancelRequested = false;
+  cleanLibraryState.abortController = new AbortController();
   resetCleanLibraryRunEtaState();
   beginCleanLibraryWorkingUi();
   await prefetchCleanLibraryManifestTail();
@@ -9060,48 +9189,48 @@ async function executeUpdateIndex() {
   try {
     const resume = await reconcileCleanLibraryStreamResume();
     const result = await streamMakeLibraryPerfect({
-      signal: updateIndexState.abortController.signal,
+      signal: cleanLibraryState.abortController.signal,
       resume,
       onProgress: (event) => {
         if (cleanLibraryRunUiPaused) {
           return;
         }
         trackCleanLibraryRunManifest(event);
-        applyCleanerStreamToUpdateIndex(event);
-        updateIndexStatusForCleanerPhase(event);
+        applyCleanerStreamToCleanLibrary(event);
+        updateCleanLibraryStatusForPhase(event);
       },
     });
 
     if (result?.status === 'CANCELLED') {
-      updateIndexState.resumeIntent = null;
+      cleanLibraryState.resumeIntent = null;
       showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
-      closeUpdateIndexOverlayImmediate();
+      closeCleanLibraryOverlayImmediate();
       return;
     }
 
-    updateIndexState.resumeIntent = null;
-    updateIndexState.resultStats = result?.stats || null;
-    updateIndexState.logPath = resolveCleanLibraryLogPath(result);
+    cleanLibraryState.resumeIntent = null;
+    cleanLibraryState.resultStats = result?.stats || null;
+    cleanLibraryState.logPath = resolveCleanLibraryLogPath(result);
+    await rehydrateLibraryCatalog({ throwOnError: true });
     showCleanLibraryFinishedUi();
-    await rehydrateLibraryCatalog();
   } catch (error) {
-    if (error?.name === 'AbortError' || updateIndexState?.cancelRequested) {
-      updateIndexState.resumeIntent = null;
+    if (error?.name === 'AbortError' || cleanLibraryState?.cancelRequested) {
+      cleanLibraryState.resumeIntent = null;
       showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
-      closeUpdateIndexOverlayImmediate();
+      closeCleanLibraryOverlayImmediate();
       return;
     }
     console.error('❌ Failed to clean library:', error);
     endCleanLibraryWorkingUi();
-    updateUpdateIndexUI('Failed to clean library', false);
+    updateCleanLibraryUI('Failed to clean library', false);
     showToast('Failed to clean library', null);
-    showUpdateIndexButtons('cancel');
+    showCleanLibraryButtons('cancel');
   } finally {
-    if (updateIndexState) {
-      updateIndexState.isRunning = false;
-      updateIndexState.abortController = null;
-      updateIndexState.cancelRequested = false;
-      updateIndexState.workingPhaseActive = false;
+    if (cleanLibraryState) {
+      cleanLibraryState.isRunning = false;
+      cleanLibraryState.abortController = null;
+      cleanLibraryState.cancelRequested = false;
+      cleanLibraryState.workingPhaseActive = false;
     }
     cleanLibraryRunEtaState = null;
     clearCleanLibraryWorkingStepState();
@@ -9111,8 +9240,11 @@ async function executeUpdateIndex() {
 /**
  * Update Clean library overlay status text (no spinner — use n/m counts instead).
  */
-function updateUpdateIndexUI(statusText, showSpinner = false) {
-  const statusTextEl = document.getElementById('updateIndexStatusText');
+function updateCleanLibraryUI(statusText, showSpinner = false) {
+  const statusTextEl = requireCleanLibraryElement(
+    'cleanLibraryStatusText',
+    'status update',
+  );
   if (!statusTextEl) {
     return;
   }
@@ -9124,9 +9256,9 @@ function updateUpdateIndexUI(statusText, showSpinner = false) {
 }
 
 function setCleanLibraryInflightCounts(processed, duplicates, skipped) {
-  const processedEl = document.getElementById('updateIndexInflightProcessed');
-  const duplicateEl = document.getElementById('updateIndexInflightDuplicates');
-  const skippedEl = document.getElementById('updateIndexInflightSkipped');
+  const processedEl = document.getElementById('cleanLibraryInflightProcessed');
+  const duplicateEl = document.getElementById('cleanLibraryInflightDuplicates');
+  const skippedEl = document.getElementById('cleanLibraryInflightSkipped');
   if (processedEl) {
     processedEl.textContent = Number(processed).toLocaleString();
   }
@@ -9140,25 +9272,25 @@ function setCleanLibraryInflightCounts(processed, duplicates, skipped) {
 }
 
 function initCleanLibraryInflightStats() {
-  updateIndexState.inflightStats = { processed: 0, duplicates: 0, skipped: 0 };
+  cleanLibraryState.inflightStats = { processed: 0, duplicates: 0, skipped: 0 };
   setCleanLibraryInflightCounts(0, 0, 0);
 }
 
 function syncCleanLibraryInflightFromProgress(event = {}) {
-  if (!updateIndexState.inflightStats) {
+  if (!cleanLibraryState.inflightStats) {
     return;
   }
   const processed = Number(event.processed);
   if (Number.isFinite(processed)) {
-    updateIndexState.inflightStats.processed = Math.max(
-      updateIndexState.inflightStats.processed,
+    cleanLibraryState.inflightStats.processed = Math.max(
+      cleanLibraryState.inflightStats.processed,
       processed,
     );
   }
   setCleanLibraryInflightCounts(
-    updateIndexState.inflightStats.processed,
-    updateIndexState.inflightStats.duplicates,
-    updateIndexState.inflightStats.skipped,
+    cleanLibraryState.inflightStats.processed,
+    cleanLibraryState.inflightStats.duplicates,
+    cleanLibraryState.inflightStats.skipped,
   );
 }
 
@@ -9171,10 +9303,10 @@ function syncCleanLibraryInflightFromResultStats(resultStats) {
     0,
     (Number(resultStats.moved_to_trash) || 0) - duplicates,
   );
-  const processed = updateIndexState.inflightStats?.processed || 0;
-  if (updateIndexState.inflightStats) {
-    updateIndexState.inflightStats.duplicates = duplicates;
-    updateIndexState.inflightStats.skipped = skipped;
+  const processed = cleanLibraryState.inflightStats?.processed || 0;
+  if (cleanLibraryState.inflightStats) {
+    cleanLibraryState.inflightStats.duplicates = duplicates;
+    cleanLibraryState.inflightStats.skipped = skipped;
   }
   setCleanLibraryInflightCounts(processed, duplicates, skipped);
 }
@@ -9182,22 +9314,22 @@ function syncCleanLibraryInflightFromResultStats(resultStats) {
 /**
  * Show statistics
  */
-function showUpdateIndexStats() {
+function showCleanLibraryStats() {
   const misfiledEl = document.getElementById('misfiledMediaCount');
   const duplicatesEl = document.getElementById('duplicatesCount');
   const unsupportedEl = document.getElementById('unsupportedFilesCount');
   const metadataEl = document.getElementById('metadataCleanupCount');
   const dbRepairsEl = document.getElementById('databaseRepairsCount');
 
-  if (misfiledEl) misfiledEl.textContent = updateIndexState.misfiledMedia;
-  if (duplicatesEl) duplicatesEl.textContent = updateIndexState.duplicates;
+  if (misfiledEl) misfiledEl.textContent = cleanLibraryState.misfiledMedia;
+  if (duplicatesEl) duplicatesEl.textContent = cleanLibraryState.duplicates;
   if (unsupportedEl)
-    unsupportedEl.textContent = updateIndexState.unsupportedFiles;
-  if (metadataEl) metadataEl.textContent = updateIndexState.metadataCleanup;
-  if (dbRepairsEl) dbRepairsEl.textContent = updateIndexState.databaseRepairs;
+    unsupportedEl.textContent = cleanLibraryState.unsupportedFiles;
+  if (metadataEl) metadataEl.textContent = cleanLibraryState.metadataCleanup;
+  if (dbRepairsEl) dbRepairsEl.textContent = cleanLibraryState.databaseRepairs;
   if (
-    updateIndexState?.overlayPhase !== 'working' &&
-    updateIndexState?.overlayPhase !== 'finished'
+    cleanLibraryState?.overlayPhase !== 'working' &&
+    cleanLibraryState?.overlayPhase !== 'finished'
   ) {
     setCleanLibraryOverlayPhase('legacy-audit');
   } else {
@@ -9208,8 +9340,8 @@ function showUpdateIndexStats() {
 /**
  * Hide legacy audit scoreboard (visibility follows overlayPhase via sync).
  */
-function hideUpdateIndexStats() {
-  if (updateIndexState?.overlayPhase === 'legacy-audit') {
+function hideCleanLibraryStats() {
+  if (cleanLibraryState?.overlayPhase === 'legacy-audit') {
     setCleanLibraryOverlayPhase('eta');
   }
 }
@@ -9217,11 +9349,23 @@ function hideUpdateIndexStats() {
 /**
  * Show appropriate buttons for each phase
  */
-function showUpdateIndexButtons(...buttons) {
-  const cancelBtn = document.getElementById('updateIndexCancelBtn');
-  const proceedBtn = document.getElementById('updateIndexProceedBtn');
-  const doneBtn = document.getElementById('updateIndexDoneBtn');
-  const startOverBtn = document.getElementById('updateIndexStartOverBtn');
+function showCleanLibraryButtons(...buttons) {
+  const cancelBtn = requireCleanLibraryElement(
+    'cleanLibraryCancelBtn',
+    'button phase',
+  );
+  const proceedBtn = requireCleanLibraryElement(
+    'cleanLibraryProceedBtn',
+    'button phase',
+  );
+  const doneBtn = requireCleanLibraryElement(
+    'cleanLibraryDoneBtn',
+    'button phase',
+  );
+  const startOverBtn = requireCleanLibraryElement(
+    'cleanLibraryStartOverBtn',
+    'button phase',
+  );
 
   // Hide all first
   if (cancelBtn) cancelBtn.style.display = 'none';
@@ -9240,6 +9384,10 @@ function showUpdateIndexButtons(...buttons) {
     if (btn === 'cancel' && cancelBtn) {
       cancelBtn.style.display = 'inline-block';
       cancelBtn.disabled = false;
+    } else if (btn === 'cancel' && !cancelBtn) {
+      console.error(
+        `${CLEAN_LIBRARY_LOG_PREFIX} Cannot show cancel button — #cleanLibraryCancelBtn missing`,
+      );
     } else if (btn === 'cancel-disabled' && cancelBtn) {
       cancelBtn.style.display = 'inline-block';
       cancelBtn.disabled = true;
@@ -9249,11 +9397,19 @@ function showUpdateIndexButtons(...buttons) {
     } else if (btn === 'proceed' && proceedBtn) {
       proceedBtn.style.display = 'inline-block';
       proceedBtn.disabled = false;
+    } else if (btn === 'proceed' && !proceedBtn) {
+      console.error(
+        `${CLEAN_LIBRARY_LOG_PREFIX} Cannot show proceed button — #cleanLibraryProceedBtn missing`,
+      );
     } else if (btn === 'proceed-disabled' && proceedBtn) {
       proceedBtn.style.display = 'inline-block';
       proceedBtn.disabled = true;
     } else if (btn === 'done' && doneBtn) {
       doneBtn.style.display = 'inline-block';
+    } else if (btn === 'done' && !doneBtn) {
+      console.error(
+        `${CLEAN_LIBRARY_LOG_PREFIX} Cannot show done button — #cleanLibraryDoneBtn missing`,
+      );
     }
   });
 }
@@ -9261,17 +9417,22 @@ function showUpdateIndexButtons(...buttons) {
 /**
  * Render details (Phase 4 only)
  */
-function renderUpdateIndexDetails() {
-  const detailsSection = document.getElementById('updateIndexDetailsSection');
-  const detailsList = document.getElementById('updateIndexDetailsList');
+function renderCleanLibraryDetails() {
+  const detailsSection = requireCleanLibraryElement(
+    'cleanLibraryDetailsSection',
+    'details render',
+  );
+  const detailsList = requireCleanLibraryElement(
+    'cleanLibraryDetailsList',
+    'details render',
+  );
 
   if (!detailsSection || !detailsList) {
-    console.warn('⚠️ Details elements not found in DOM!');
     return;
   }
 
-  const details = updateIndexState.details;
-  const resultStats = updateIndexState.resultStats;
+  const details = cleanLibraryState.details;
+  const resultStats = cleanLibraryState.resultStats;
   let html = '';
 
   if (resultStats) {
@@ -9327,7 +9488,7 @@ function renderUpdateIndexDetails() {
     html +=
       '<div class="update-detail-section"><strong>Misfiled Media:</strong><ul>';
     details.misfiled_media.slice(0, 20).forEach((item) => {
-      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
+      html += `<li>${escapeHtml(renderCleanLibraryDetailMessage(item))}</li>`;
     });
     if (details.misfiled_media.length > 20) {
       html += `<li><em>... and ${
@@ -9341,7 +9502,7 @@ function renderUpdateIndexDetails() {
     html +=
       '<div class="update-detail-section"><strong>Duplicates:</strong><ul>';
     details.duplicates.slice(0, 20).forEach((item) => {
-      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
+      html += `<li>${escapeHtml(renderCleanLibraryDetailMessage(item))}</li>`;
     });
     if (details.duplicates.length > 20) {
       html += `<li><em>... and ${
@@ -9355,7 +9516,7 @@ function renderUpdateIndexDetails() {
     html +=
       '<div class="update-detail-section"><strong>Unsupported Files:</strong><ul>';
     details.unsupported_files.slice(0, 20).forEach((item) => {
-      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
+      html += `<li>${escapeHtml(renderCleanLibraryDetailMessage(item))}</li>`;
     });
     if (details.unsupported_files.length > 20) {
       html += `<li><em>... and ${
@@ -9369,7 +9530,7 @@ function renderUpdateIndexDetails() {
     html +=
       '<div class="update-detail-section"><strong>Metadata Cleanup:</strong><ul>';
     details.metadata_cleanup.slice(0, 20).forEach((item) => {
-      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
+      html += `<li>${escapeHtml(renderCleanLibraryDetailMessage(item))}</li>`;
     });
     if (details.metadata_cleanup.length > 20) {
       html += `<li><em>... and ${
@@ -9383,7 +9544,7 @@ function renderUpdateIndexDetails() {
     html +=
       '<div class="update-detail-section"><strong>Database Repairs:</strong><ul>';
     details.database_repairs.slice(0, 20).forEach((item) => {
-      html += `<li>${escapeHtml(renderUpdateIndexDetailMessage(item))}</li>`;
+      html += `<li>${escapeHtml(renderCleanLibraryDetailMessage(item))}</li>`;
     });
     if (details.database_repairs.length > 20) {
       html += `<li><em>... and ${
@@ -9402,7 +9563,7 @@ function renderUpdateIndexDetails() {
   detailsSection.style.display = 'block';
 }
 
-function renderUpdateIndexDetailMessage(item) {
+function renderCleanLibraryDetailMessage(item) {
   if (item && typeof item === 'object') {
     return item.message || item.path || '';
   }
@@ -9428,22 +9589,22 @@ function resumeCleanLibraryRunUiUpdates() {
   cleanLibraryRunUiPaused = false;
 }
 
-function handleUpdateIndexProceedClick() {
-  if (updateIndexState.onInterruptedChoice) {
-    updateIndexState.onInterruptedChoice('continue');
+function handleCleanLibraryProceedClick() {
+  if (cleanLibraryState.onInterruptedChoice) {
+    cleanLibraryState.onInterruptedChoice('continue');
     return;
   }
-  void executeUpdateIndex();
+  void executeCleanLibrary();
 }
 
-function handleUpdateIndexStartOverClick() {
-  if (updateIndexState.onInterruptedChoice) {
-    updateIndexState.onInterruptedChoice('start-over');
+function handleCleanLibraryStartOverClick() {
+  if (cleanLibraryState.onInterruptedChoice) {
+    cleanLibraryState.onInterruptedChoice('start-over');
     return;
   }
   if (
-    updateIndexState.overlayPhase === 'eta' &&
-    updateIndexState.preflight?.status === 'RESUME'
+    cleanLibraryState.overlayPhase === 'eta' &&
+    cleanLibraryState.preflight?.status === 'RESUME'
   ) {
     void restartCleanLibraryPreflightFromStartOver();
   }
@@ -9452,31 +9613,31 @@ function handleUpdateIndexStartOverClick() {
 async function restartCleanLibraryPreflightFromStartOver() {
   try {
     await abandonCleanLibraryCheckpoint();
-    updateIndexState.resumeIntent = false;
-    resetUpdateIndexOverlayTitle();
-    const scanResult = await runUpdateIndexPreflightScan();
-    renderUpdateIndexPreflightResult(scanResult);
+    cleanLibraryState.resumeIntent = false;
+    resetCleanLibraryOverlayTitle();
+    const scanResult = await runCleanLibraryPreflightScan();
+    renderCleanLibraryPreflightResult(scanResult);
   } catch (error) {
     console.error('❌ Clean library start over failed:', error);
-    updateUpdateIndexUI('Failed to scan library', false);
+    updateCleanLibraryUI('Failed to scan library', false);
     showToast(`Scan failed: ${error.message}`, 'error');
-    showUpdateIndexButtons('cancel');
+    showCleanLibraryButtons('cancel');
   }
 }
 
 /**
- * Close Update Database overlay
+ * Close Clean Library overlay
  */
-function closeUpdateIndexOverlayImmediate() {
+function closeCleanLibraryOverlayImmediate() {
   cleanLibraryRunUiPaused = false;
   setCleanLibraryOverlayInert(false);
   setCleanLibraryExplainerVisible(false);
   setCleanLibrarySecondaryStatus(null, false);
   resetCleanLibraryLogFeed();
   showCleanLibraryDetailsSection(false);
-  resetUpdateIndexOverlayTitle();
+  resetCleanLibraryOverlayTitle();
   setCleanLibraryOverlayPhase(null);
-  const overlay = document.getElementById('updateIndexOverlay');
+  const overlay = document.getElementById('cleanLibraryOverlay');
   if (overlay) {
     overlay.style.display = 'none';
   }
@@ -9501,27 +9662,27 @@ async function confirmStopCleanLibraryRun() {
   }
 }
 
-async function handleUpdateIndexCancelClick() {
-  if (updateIndexState?.onInterruptedChoice) {
-    updateIndexState.onInterruptedChoice('cancel');
+async function handleCleanLibraryCancelClick() {
+  if (cleanLibraryState?.onInterruptedChoice) {
+    cleanLibraryState.onInterruptedChoice('cancel');
     return;
   }
 
-  if (updateIndexState?.isRunning) {
+  if (cleanLibraryState?.isRunning) {
     const confirmed = await confirmStopCleanLibraryRun();
     if (!confirmed) {
       return;
     }
-    updateIndexState.cancelRequested = true;
-    updateIndexState.abortController?.abort();
+    cleanLibraryState.cancelRequested = true;
+    cleanLibraryState.abortController?.abort();
     return;
   }
 
-  closeUpdateIndexOverlayImmediate();
+  closeCleanLibraryOverlayImmediate();
 }
 
-function closeUpdateIndexOverlay() {
-  void handleUpdateIndexCancelClick();
+function closeCleanLibraryOverlay() {
+  void handleCleanLibraryCancelClick();
 }
 
 // =====================
@@ -13264,7 +13425,7 @@ async function startImportFromPaths(filePaths) {
 
       const event = eventMatch[1];
       const data = JSON.parse(dataMatch[1]);
-      handleImportEvent(event, data);
+      await handleImportEvent(event, data);
 
       if (event === 'complete' || event === 'error') {
         await teardown();
@@ -13346,7 +13507,7 @@ async function startImportFromPaths(filePaths) {
 /**
  * Handle import SSE events
  */
-function handleImportEvent(event, data) {
+async function handleImportEvent(event, data) {
   const statusText = document.getElementById('importStatusText');
   const stats = document.getElementById('importStats');
   const importedCount = document.getElementById('importedCount');
@@ -13446,7 +13607,7 @@ function handleImportEvent(event, data) {
       logPath: data.log_path || null,
     });
 
-    loadAndRenderPhotos(false);
+    await syncGridAfterHistogramChange();
   }
 
   if (event === 'error') {

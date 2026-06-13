@@ -936,6 +936,11 @@ def bump_library_catalog_revision():
     """Bump catalog revision after structural library/catalog changes."""
     global LIBRARY_CATALOG_REVISION
     LIBRARY_CATALOG_REVISION += 1
+    invalidate_grid_read_caches()
+
+
+def invalidate_grid_read_caches():
+    """Drop cached month histogram and total count after row/histogram mutations."""
     invalidate_photo_total_count_cache()
     invalidate_month_index_cache()
 
@@ -2049,8 +2054,7 @@ def delete_photos():
                 error_logger.error(f"Delete failed for photo {photo_id}: {e}")
         
         conn.commit()
-        invalidate_photo_total_count_cache()
-        invalidate_month_index_cache()
+        invalidate_grid_read_caches()
         conn.close()
 
         print(f"✅ Deleted {deleted_count} photos\n", flush=True)
@@ -2356,8 +2360,7 @@ def update_photo_date_execute():
 
             if success:
                 conn.commit()
-                invalidate_photo_total_count_cache()
-                invalidate_month_index_cache()
+                invalidate_grid_read_caches()
                 print(f"✅ Updated photo {photo_id} with file operations")
 
                 if result['status'] == 'duplicate_removed':
@@ -2572,8 +2575,7 @@ def bulk_update_photo_dates_execute():
                     raise
             else:
                 conn.commit()
-                invalidate_photo_total_count_cache()
-                invalidate_month_index_cache()
+                invalidate_grid_read_caches()
                 conn.close()
 
                 if duplicate_count > 0:
@@ -2682,6 +2684,8 @@ def restore_photos():
                 error_logger.error(f"Restore failed for photo {photo_id}: {e}")
         
         conn.commit()
+        if restored_count > 0:
+            invalidate_grid_read_caches()
         conn.close()
         
         print(f"✅ Restored {restored_count} photos\n")
@@ -3037,6 +3041,8 @@ def import_from_paths():
                 remove_source_after_commit=False,
             )
 
+            imported_so_far = 0
+
             try:
                 for event_name, payload in iter_ingest_events(
                     conn,
@@ -3045,7 +3051,16 @@ def import_from_paths():
                     stop_check=lambda: client_disconnected,
                     log_entry=log_import_entry,
                 ):
-                    if event_name == 'complete':
+                    if event_name == 'progress':
+                        imported_so_far = max(
+                            imported_so_far,
+                            int(payload.get('imported') or 0),
+                        )
+                    elif event_name == 'complete':
+                        imported_so_far = max(
+                            imported_so_far,
+                            int(payload.get('imported') or 0),
+                        )
                         print(f"\n{'='*60}")
                         print("IMPORT COMPLETE:")
                         print(f"  Imported: {payload.get('imported', 0)}")
@@ -3064,6 +3079,8 @@ def import_from_paths():
                     return
             finally:
                 log_file.close()
+                if imported_so_far > 0:
+                    invalidate_grid_read_caches()
             
         except GeneratorExit:
             print("🛑 Import stream disconnected")
@@ -3367,8 +3384,7 @@ def reset_to_welcome_state():
     """Clear session and saved config — first-run / welcome screen."""
     delete_config()
     clear_library_session()
-    invalidate_photo_total_count_cache()
-    invalidate_month_index_cache()
+    invalidate_grid_read_caches()
 
 def update_app_paths(library_path, db_path):
     """Update all global path variables"""
@@ -4964,6 +4980,9 @@ def terraform_library():
             print(f"   Errors: {error_count}")
             print(f"   Log: {os.path.relpath(log_path, library_path)}")
             print(f"{'='*60}\n")
+
+            if processed_count > 0:
+                invalidate_grid_read_caches()
             
             yield f"event: complete\ndata: {json.dumps({'processed': processed_count, 'duplicates': duplicate_count, 'errors': error_count, 'log_path': os.path.relpath(log_path, library_path), 'db_path': db_path})}\n\n"
             

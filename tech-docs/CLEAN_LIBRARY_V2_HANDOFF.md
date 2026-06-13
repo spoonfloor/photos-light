@@ -2,6 +2,8 @@
 
 **Status:** v2 is the default engine. Add Photos and Clean now share normalization primitives; Clean keeps cheap inventory preflight, resume, live ETA, **blocking final verification**, and **skip-unchanged** re-runs.
 **Last doc sync:** 2026-06-08 (aligned with shared normalization runtime, `make_library_clean_v2.py`, `main.js`, tests).
+
+> **2026-06-13:** Legacy engine removed. Restore from git tag `clean-library-legacy-final` if needed. Shared helpers live in `clean_library_media_utils.py`.
 **Test library:** `/Volumes/public/clean-lib-speed-test` (~400 media files on NAS/WiFi)
 **Last full clean (R7):** 2026-06-07 — 847.2s wall, SUCCESS, 371 survivors
 **Last profile:** `tools/results/scan-profile_2026-06-07T16-40-35+00-00.json`

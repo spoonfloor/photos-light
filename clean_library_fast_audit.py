@@ -38,13 +38,13 @@ from normalization_contract import (
     expected_canonical_rel_path_from_db_date,
 )
 
-from make_library_perfect_legacy import (
+from clean_library_media_utils import (
+    can_bake_losslessly,
     format_issue,
     get_birth_time,
     get_orientation_flag,
-    can_bake_losslessly,
-    visible_directory_entries,
     verify_media_file,
+    visible_directory_entries,
 )
 
 CANONICAL_BASENAME_RE = re.compile(

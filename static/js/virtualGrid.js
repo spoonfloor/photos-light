@@ -84,9 +84,23 @@ const VirtualGrid = (() => {
 
   function resetHandoffState() {
     committedMonths = new Set();
-    if (tileLayer) {
-      tileLayer.classList.remove('grid-comfort-off');
+  }
+
+  function monthSectionSelector(monthKey) {
+    return `.virtual-month-section[data-month="${monthKey}"]`;
+  }
+
+  function getMountedMonthSection(monthKey) {
+    return contentLayer?.querySelector(monthSectionSelector(monthKey)) || null;
+  }
+
+  function clearComfortLayer({ hide = true } = {}) {
+    if (!tileLayer) {
+      return;
     }
+    tileLayer.replaceChildren();
+    tileLayer.style.height = '0px';
+    tileLayer.classList.toggle('grid-comfort-off', hide);
   }
 
   function publishGridThumbSync(source, detail = {}) {
@@ -187,7 +201,7 @@ const VirtualGrid = (() => {
   }
 
   function hydrateMonthSection(monthKey, section, photos) {
-    const wrapper = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+    const wrapper = getMountedMonthSection(monthKey);
     if (!wrapper) {
       return;
     }
@@ -206,7 +220,7 @@ const VirtualGrid = (() => {
 
   function mountHydratedMonthSection(section) {
     const monthKey = section.month;
-    const existing = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+    const existing = getMountedMonthSection(monthKey);
     if (existing) {
       mountedMonths.add(monthKey);
       committedMonths.add(monthKey);
@@ -251,7 +265,7 @@ const VirtualGrid = (() => {
   }
 
   function unmountMonth(monthKey) {
-    const node = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+    const node = getMountedMonthSection(monthKey);
     if (node) {
       node.remove();
     }
@@ -269,7 +283,7 @@ const VirtualGrid = (() => {
 
   function mountPlaceholderSection(section, { pending = true } = {}) {
     const monthKey = section.month;
-    const existing = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+    const existing = getMountedMonthSection(monthKey);
     if (existing) {
       mountedMonths.add(monthKey);
       if (pending && !committedMonths.has(monthKey)) {
@@ -289,7 +303,7 @@ const VirtualGrid = (() => {
 
   function revealCommittedSections(monthKeys) {
     monthKeys.forEach((monthKey) => {
-      const node = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+      const node = getMountedMonthSection(monthKey);
       if (!node) {
         return;
       }
@@ -300,7 +314,7 @@ const VirtualGrid = (() => {
 
   function setSectionsPending(monthKeys, pending) {
     monthKeys.forEach((monthKey) => {
-      const node = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+      const node = getMountedMonthSection(monthKey);
       if (!node) {
         return;
       }
@@ -331,7 +345,7 @@ const VirtualGrid = (() => {
       return;
     }
 
-    const wrapper = contentLayer?.querySelector(`[data-month="${monthKey}"]`);
+    const wrapper = getMountedMonthSection(monthKey);
     if (!wrapper || !wrapper.classList.contains('virtual-month-placeholder')) {
       return;
     }
@@ -361,6 +375,13 @@ const VirtualGrid = (() => {
       anchorSectionEl.remove();
       anchorSectionEl = null;
     }
+  }
+
+  function clearProvisionalArtifacts() {
+    clearMountedMonths();
+    clearAnchorMonthSection();
+    anchorMonthKey = null;
+    clearComfortLayer({ hide: true });
   }
 
   /** Truth-gated month section at scroll 0 during provisional layout (limit=1 month). */
@@ -810,8 +831,24 @@ const VirtualGrid = (() => {
 
     monthIndex = indexPayload;
     sortOrder = indexPayload?.sort || sortOrder;
-    rebuildLayoutFromIndex(indexPayload, container.clientWidth);
+    const handoffMonth =
+      anchorMonthKey || indexPayload?.months?.[0]?.month || null;
+    const wasProvisional = Boolean(layout?.provisional);
+    if (wasProvisional) {
+      clearProvisionalArtifacts();
+    }
+    rebuildLayoutFromIndex(indexPayload, container.clientWidth, {
+      remount: wasProvisional,
+    });
     scheduleSync();
+
+    if (wasProvisional) {
+      if (handoffMonth) {
+        scrollToMonth(handoffMonth);
+      } else {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }
+    }
 
     if (hooks.onReady) {
       hooks.onReady(indexPayload, layout);
@@ -1073,68 +1110,24 @@ const VirtualGrid = (() => {
     scheduleSync();
   }
 
-  function applyLocalIndex(nextIndex, affectedMonths = []) {
-    if (!nextIndex) {
-      return false;
-    }
-    monthIndex = nextIndex;
+  async function refreshMonthIndex(sortOrderNext = sortOrder, options = {}) {
+    const { scrollTargetMonth = null, preserveScroll = true } = options;
     const container = getContainer();
     if (!container) {
       return false;
     }
-    affectedMonths.forEach((monthKey) => {
-      monthCache.delete(monthKey);
-      hydratedMonths.delete(monthKey);
-    });
-    clearMountedMonths();
-    rebuildLayoutFromIndex(nextIndex, container.clientWidth, { keepMounted: true });
-    scheduleSync();
-    if (hooks.onIndexReady) {
-      hooks.onIndexReady(nextIndex);
-    }
-    return true;
-  }
+    const wasProvisional = Boolean(layout?.provisional);
+    const previousScrollTop = getScrollElement().scrollTop;
+    const previousHeight = layout?.totalHeight ?? 0;
+    const preserveMonth =
+      preserveScroll && layout && !wasProvisional
+        ? GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80)
+        : null;
+    const handoffMonth =
+      scrollTargetMonth ||
+      anchorMonthKey ||
+      null;
 
-  /**
-   * Incremental grid update — no full month_index round trip.
-   * @param {{ oldMonth?: string, newMonth?: string, monthCounts?: Map<string, number> }} patch
-   */
-  function applyMutationPatch(patch = {}) {
-    if (!monthIndex || !layout) {
-      return false;
-    }
-
-    let nextIndex = monthIndex;
-    const affected = [];
-
-    if (patch.monthCounts?.size) {
-      nextIndex = GridLayout.patchPhotoDeletes(nextIndex, patch.monthCounts);
-      patch.monthCounts.forEach((_count, monthKey) => {
-        affected.push(monthKey);
-      });
-    } else if (patch.oldMonth && patch.newMonth) {
-      nextIndex = GridLayout.patchPhotoMonthMove(
-        nextIndex,
-        patch.oldMonth,
-        patch.newMonth,
-      );
-      affected.push(patch.oldMonth, patch.newMonth);
-    } else if (patch.newMonth) {
-      nextIndex = GridLayout.patchMonthIndexDelta(nextIndex, patch.newMonth, 1);
-      affected.push(patch.newMonth);
-    } else if (patch.oldMonth) {
-      nextIndex = GridLayout.patchMonthIndexDelta(nextIndex, patch.oldMonth, -1);
-      affected.push(patch.oldMonth);
-    }
-
-    return applyLocalIndex(nextIndex, affected);
-  }
-
-  async function refreshMonthIndex(sortOrderNext = sortOrder) {
-    const container = getContainer();
-    if (!container) {
-      return false;
-    }
     const response = await fetch(
       `/api/photos/month_index?sort=${encodeURIComponent(sortOrderNext)}`,
     );
@@ -1152,6 +1145,33 @@ const VirtualGrid = (() => {
       hooks.onIndexReady(indexPayload);
     }
     scheduleSync();
+
+    const nextHeight = layout?.totalHeight ?? 0;
+    const maxScrollTop = Math.max(
+      0,
+      nextHeight - (window.innerHeight || document.documentElement.clientHeight),
+    );
+
+    if (scrollTargetMonth) {
+      scrollToMonth(scrollTargetMonth);
+    } else if (wasProvisional) {
+      const anchor = handoffMonth || indexPayload?.months?.[0]?.month || null;
+      if (anchor) {
+        scrollToMonth(anchor);
+      } else {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }
+    } else if (preserveMonth && Math.abs(nextHeight - previousHeight) < 200) {
+      scrollToMonth(preserveMonth);
+    } else if (previousScrollTop > maxScrollTop + 1) {
+      const anchor = indexPayload?.months?.[0]?.month || null;
+      if (anchor) {
+        scrollToMonth(anchor);
+      } else {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }
+    }
+
     return true;
   }
 
@@ -1177,7 +1197,6 @@ const VirtualGrid = (() => {
     scrollToMonth,
     invalidateMonth,
     invalidateAllMonths,
-    applyMutationPatch,
     refreshMonthIndex,
     scheduleSync,
     getLayout,

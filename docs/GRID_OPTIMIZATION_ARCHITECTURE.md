@@ -20,7 +20,7 @@ Canonical design for the Photos Light main timeline grid: virtual scroll, placeh
 | **Label gate** | ⚠️ | Blocks wrong provisional headers; **Phase A correct date still open** (see below) |
 | **TimelineNavigator (scroll ↔ date)** | ✅ | `findMonthAtScrollTop` / `scrollTopForMonth` on snapshot; provisional gate on scroll-sync |
 | **Resize remount** | ✅ | `ResizeObserver` → geometry change clears mounts |
-| **Grid mutation sync** | ✅ | `applyMutationPatch` on date edit / delete / bulk delete (no `refreshMonthIndex` on timeline path) |
+| **Grid mutation sync** | ✅ | `syncGridAfterHistogramChange` + server `invalidate_grid_read_caches()` on row mutators |
 | **Overlay at Phase A** | ✅ | `onProvisionalReady` dismisses overlay; app bar enabled at Phase A |
 | **Phase A first date (anchor month)** | ❌ | App bar + grid label at comfort-grid first frame — **not passing** (v410–v412) |
 | **ThumbnailQueue** | ⏳ | Not started — still passive lazy load |
@@ -297,7 +297,7 @@ Paged 400-photo window is **legacy** — do not use for unfiltered timeline (gat
 - `IntersectionObserver` for date picker scroll sync (timeline uses layout math)
 - Second renderer (`renderPhotoGrid`) for main timeline
 - Overlay blocked on `month_index` completion
-- Full `month_index` refetch after timeline edit/delete — **retired on timeline path** (`applyMutationPatch`)
+- Per-flow incremental DOM patch without server cache invalidation (`applyMutationPatch` retired from production paths)
 - Showing month headers or date jumper month from **provisional** layout — **retired** (label gate)
 
 ---
@@ -461,25 +461,27 @@ Lessons from building and debugging the P0 slice — worth reading before the ne
 
 ## Grid mutation sync (product requirement)
 
-When the user mutates library media, the timeline grid reflects the change **near instantly**. Top-notch UX and smart architecture are both non-negotiable: one **GridController** applies incremental `LayoutSnapshot` patches and remounts affected sections only — not a parallel refresh path.
+When the user mutates library media, the timeline grid reflects the change **near instantly** without a full catalog reset. Two tiers share one contract:
 
-### Row mutation (incremental)
+### Row mutation (histogram change, same catalog)
 
-**In scope:** date edit (single + bulk), delete, duplicate removal during date edit.
+**In scope:** date edit (single + bulk), delete, restore/undo delete, import (complete or partial cancel), convert/terraform ingest into an existing histogram.
 
-**Anti-pattern (retire):** `VirtualGrid.refreshMonthIndex()` after every edit/delete on the timeline path.
+**Server:** Every histogram-changing mutator calls `invalidate_grid_read_caches()` on success (drops `MONTH_INDEX_CACHE` + photo total count). Does **not** bump `LIBRARY_CATALOG_REVISION` — same catalog identity.
 
-**Implementation (shipped):** `GridLayout.patchPhotoMonthMove` / `patchPhotoDeletes` / `patchMonthIndexDelta` → `VirtualGrid.applyMutationPatch` → `applyLocalIndex` → placeholder-first remount of visible sections. Wired from `main.js` on date edit, delete, and bulk delete — not `refreshMonthIndex`.
+**Client:** `syncGridAfterHistogramChange(scrollTargetMonth?)` — virtual grid + no filters → `VirtualGrid.refreshMonthIndex()`; otherwise → `loadAndRenderPhotos(false, { forcePaged })`. Wired from date edit finalize, delete, undo date/delete, import complete/cancel follow-up.
+
+**Anti-pattern (retire):** Per-flow `applyMutationPatch` / ad-hoc `loadAndRenderPhotos(false)` without server cache invalidation first.
 
 ### Catalog reset (full rehydrate)
 
 **In scope:** Clean `photos_table_rebuilt`, recovery DB rebuild, library switch + make-perfect, any operation that replaces the photos catalog identity (row ids, month histogram).
 
-**Client:** `rehydrateLibraryCatalog()` — bumps `libraryGeneration`, destroys virtual grid, clears thumbnail queue, runs `loadAndRenderPhotosCommitted` (Phase A→B bootstrap). **Not** `applyMutationPatch`.
+**Client:** `rehydrateLibraryCatalog()` — bumps `libraryGeneration`, destroys virtual grid, clears thumbnail queue, runs `loadAndRenderPhotosCommitted` (Phase A→B bootstrap).
 
-**Server:** `LIBRARY_CATALOG_REVISION` bumped via `bump_library_catalog_revision()` on library switch and structural completion (make-perfect SUCCESS, rebuild DB complete). Grid read caches (`month_index`, total count) are keyed to revision; exposed as `catalog_revision` on grid APIs.
+**Server:** `LIBRARY_CATALOG_REVISION` bumped via `bump_library_catalog_revision()` on library switch and structural completion (make-perfect SUCCESS, rebuild DB complete). `bump_library_catalog_revision()` also calls `invalidate_grid_read_caches()`. Grid read caches are keyed to revision; exposed as `catalog_revision` on grid APIs.
 
-**Anti-pattern:** Per-overlay `loadAndRenderPhotos(false)` or manual `invalidate_*()` at individual mutators without revision model.
+**Anti-pattern:** Calling `refreshMonthIndex` after catalog reset, or bumping revision on row-level delete/import/date edit.
 
 ---
 
@@ -488,7 +490,6 @@ When the user mutates library media, the timeline grid reflects the change **nea
 - Lightbox streaming / NAS video read latency
 - Electron DevTools menu
 - Local SSD metadata cache (explicitly deferred)
-- Undo date edit full reload (may still call `loadAndRenderPhotos`; optimize separately)
 
 ---
 

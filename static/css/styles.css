@@ -1500,7 +1500,7 @@ body.filter-chip-rail-visible {
   flex-shrink: 0;
 }
 
-#updateIndexOverlay .import-card {
+#cleanLibraryOverlay .import-card {
   display: flex;
   flex-direction: column;
   /* Between content-tight (~320px) and original full width (640px) */
@@ -1511,16 +1511,16 @@ body.filter-chip-rail-visible {
   overflow-y: auto;
 }
 
-#updateIndexOverlay .import-header,
-#updateIndexOverlay .import-actions {
+#cleanLibraryOverlay .import-header,
+#cleanLibraryOverlay .import-actions {
   flex-shrink: 0;
 }
 
-#updateIndexOverlay .import-progress-section {
+#cleanLibraryOverlay .import-progress-section {
   padding-bottom: 4px;
 }
 
-#updateIndexOverlay .import-explainer {
+#cleanLibraryOverlay .import-explainer {
   margin: 0 0 12px;
   font-size: 14px;
   line-height: 1.45;
@@ -1796,7 +1796,7 @@ body.library-recovery-active .library-recovery-dock {
   }
 }
 
-#updateIndexOverlay .import-stats {
+#cleanLibraryOverlay .import-stats {
   display: grid;
   grid-template-columns: repeat(
     5,
@@ -1808,8 +1808,8 @@ body.library-recovery-active .library-recovery-dock {
   justify-content: space-between;
 }
 
-#updateIndexOverlay #updateIndexPreflightStats,
-#updateIndexOverlay #updateIndexInflightStats,
+#cleanLibraryOverlay #cleanLibraryPreflightStats,
+#cleanLibraryOverlay #cleanLibraryInflightStats,
 #importOverlay #importPreflightStats,
 #importOverlay #importStats,
 #terraformPreviewOverlay #terraformPreviewPreflightStats,
@@ -1827,8 +1827,8 @@ body.library-recovery-active .library-recovery-dock {
   align-items: flex-start;
 }
 
-#updateIndexOverlay #updateIndexPreflightStats .import-stat,
-#updateIndexOverlay #updateIndexInflightStats .import-stat,
+#cleanLibraryOverlay #cleanLibraryPreflightStats .import-stat,
+#cleanLibraryOverlay #cleanLibraryInflightStats .import-stat,
 #importOverlay #importPreflightStats .import-stat,
 #importOverlay #importStats .import-stat,
 #terraformPreviewOverlay #terraformPreviewPreflightStats .import-stat,
@@ -1842,10 +1842,10 @@ body.library-recovery-active .library-recovery-dock {
   min-width: var(--scoreboard-col-min-width);
 }
 
-#updateIndexOverlay #updateIndexPreflightStats .import-stat-label,
-#updateIndexOverlay #updateIndexPreflightStats .import-stat-value,
-#updateIndexOverlay #updateIndexInflightStats .import-stat-label,
-#updateIndexOverlay #updateIndexInflightStats .import-stat-value,
+#cleanLibraryOverlay #cleanLibraryPreflightStats .import-stat-label,
+#cleanLibraryOverlay #cleanLibraryPreflightStats .import-stat-value,
+#cleanLibraryOverlay #cleanLibraryInflightStats .import-stat-label,
+#cleanLibraryOverlay #cleanLibraryInflightStats .import-stat-value,
 #importOverlay #importPreflightStats .import-stat-label,
 #importOverlay #importPreflightStats .import-stat-value,
 #importOverlay #importStats .import-stat-label,
@@ -1872,7 +1872,7 @@ body.library-recovery-active .library-recovery-dock {
 }
 
 #importOverlay .import-secondary-status,
-#updateIndexOverlay .import-secondary-status,
+#cleanLibraryOverlay .import-secondary-status,
 #terraformProgressOverlay .import-secondary-status {
   margin-top: 8px;
   font-size: 14px;
@@ -1912,7 +1912,7 @@ body.library-recovery-active .library-recovery-dock {
   word-break: break-all;
 }
 
-#updateIndexOverlay #updateIndexStats .import-stat {
+#cleanLibraryOverlay #cleanLibraryStats .import-stat {
   display: grid;
   grid-template-rows: minmax(28px, auto) auto;
   gap: 8px;
@@ -1920,12 +1920,12 @@ body.library-recovery-active .library-recovery-dock {
   min-width: var(--scoreboard-col-min-width);
 }
 
-#updateIndexOverlay #updateIndexStats .import-stat-label {
+#cleanLibraryOverlay #cleanLibraryStats .import-stat-label {
   max-width: 92px;
   line-height: 1.15;
 }
 
-#updateIndexOverlay .import-stat-value {
+#cleanLibraryOverlay .import-stat-value {
   align-self: end;
 }
 
@@ -1970,7 +1970,7 @@ body.library-recovery-active .library-recovery-dock {
   padding: 8px 0;
 }
 
-#updateIndexOverlay .import-details-list {
+#cleanLibraryOverlay .import-details-list {
   max-height: none;
   overflow-y: visible;
 }

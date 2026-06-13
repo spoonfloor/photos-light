@@ -5,7 +5,6 @@ Cheap inventory preflight by default; optional verify audit (?verify=1). Hash-on
 Blocking final audit at end of every run — SUCCESS only when yardstick is CLEAN.
 Full clean repairs in place; duplicate media === identical file hash only.
 
-Set PHOTOS_CLEAN_LIBRARY_ENGINE=legacy to use make_library_perfect_legacy instead.
 """
 
 from __future__ import annotations
@@ -29,11 +28,7 @@ from PIL import Image, ImageOps
 from db_schema import create_database_schema
 from file_operations import extract_exif_date, extract_exif_rating, strip_exif_rating
 from hash_cache import HashCache, compute_hash_legacy
-from rotation_utils import (
-    bake_orientation as shared_bake_orientation,
-    can_bake_losslessly as shared_can_bake_losslessly,
-    get_orientation_flag as shared_get_orientation_flag,
-)
+from rotation_utils import bake_orientation as shared_bake_orientation
 from library_cleanliness import (
     ALL_MEDIA_EXTENSIONS,
     CANONICAL_DB_DATE_FORMAT,
@@ -66,6 +61,14 @@ from library_filesystem import (
     finalize_library_layout,
     iter_library_walk,
     quarantine_root_hidden,
+)
+from clean_library_media_utils import (
+    can_bake_losslessly,
+    format_issue,
+    get_birth_time,
+    get_orientation_flag,
+    verify_media_file,
+    visible_directory_entries,
 )
 from clean_library_fast_audit import (
     FastAuditCancelled,
@@ -100,16 +103,6 @@ from photo_canonicalization import (
 PHOTO_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS
 VIDEO_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS
 SUPPORTED_MEDIA_EXTENSIONS = ALL_MEDIA_EXTENSIONS
-PIL_VERIFY_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".tiff",
-    ".tif",
-    ".webp",
-    ".avif",
-}
 LOSSLESS_ROTATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif"}
 
 CLEAN_LIBRARY_SIGNAL_KEYS = (
@@ -312,11 +305,6 @@ def _compute_photo_duplicate_key(full_path: str, fallback_hash: Optional[str] = 
         raise CleanLibraryError(f"Failed to compute duplicate key for {full_path}")
     return duplicate_key
 
-def get_birth_time(stat_result: os.stat_result) -> float:
-    """Use birthtime when available, otherwise fall back to mtime."""
-    return float(getattr(stat_result, "st_birthtime", stat_result.st_mtime))
-
-
 def exiftool_json(file_path: str, args: List[str]) -> Dict[str, Any]:
     result = subprocess.run(
         ["exiftool", "-j", *args, file_path],
@@ -330,53 +318,8 @@ def exiftool_json(file_path: str, args: List[str]) -> Dict[str, Any]:
     return payload[0] if payload else {}
 
 
-def get_orientation_flag(file_path: str) -> Optional[int]:
-    ext = os.path.splitext(file_path)[1].lower()
-    if ext not in PHOTO_EXTENSIONS:
-        return None
-    return shared_get_orientation_flag(file_path)
-
-
-def can_bake_losslessly(file_path: str) -> bool:
-    return shared_can_bake_losslessly(file_path)
-
-
 def bake_orientation(file_path: str) -> Tuple[bool, str, Optional[int]]:
     return shared_bake_orientation(file_path)
-
-
-def verify_media_file(file_path: str) -> Tuple[bool, str]:
-    ext = os.path.splitext(file_path)[1].lower()
-    try:
-        if ext in VIDEO_EXTENSIONS:
-            result = subprocess.run(
-                ["ffprobe", "-v", "error", file_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            return (result.returncode == 0, "video validation")
-
-        if ext in PIL_VERIFY_EXTENSIONS:
-            with Image.open(file_path) as image:
-                image.verify()
-            return True, "image validation"
-
-        if ext in PHOTO_EXTENSIONS:
-            subprocess.run(
-                ["exiftool", "-fast2", file_path],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            return True, "metadata validation"
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return False, "validation failed"
-    except Exception:
-        return False, "validation failed"
-
-    return False, "unsupported"
 
 
 def read_dimensions(file_path: str) -> Tuple[Optional[int], Optional[int]]:
@@ -409,14 +352,6 @@ def read_dimensions(file_path: str) -> Tuple[Optional[int], Optional[int]]:
         return payload.get("ImageWidth"), payload.get("ImageHeight")
     except Exception:
         return None, None
-
-
-def format_issue(kind: str, path: str, detail: str = "") -> Dict[str, str]:
-    return {"kind": kind, "path": path, "detail": detail}
-
-
-def visible_directory_entries(dir_path: str) -> List[str]:
-    return [entry for entry in os.listdir(dir_path) if entry not in IGNORED_LIBRARY_FILES]
 
 
 def remove_ignored_directory_files(dir_path: str) -> None:

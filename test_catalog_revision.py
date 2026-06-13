@@ -9,8 +9,7 @@ class CatalogRevisionTest(unittest.TestCase):
 
     def tearDown(self):
         photo_app.LIBRARY_CATALOG_REVISION = self._initial_revision
-        photo_app.invalidate_photo_total_count_cache()
-        photo_app.invalidate_month_index_cache()
+        photo_app.invalidate_grid_read_caches()
 
     def test_bump_increments_revision(self):
         before = photo_app.get_library_catalog_revision()

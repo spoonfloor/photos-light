@@ -1,12 +1,12 @@
 <!-- Clean Library Overlay -->
-<div class="import-overlay" id="updateIndexOverlay" style="display: none">
+<div class="import-overlay" id="cleanLibraryOverlay" style="display: none">
   <div class="import-card">
     <!-- Header -->
     <div class="import-header">
       <span class="import-title">Clean library</span>
       <button
         class="import-close-btn"
-        id="updateIndexCloseBtn"
+        id="cleanLibraryCloseBtn"
         aria-label="Close"
       >
         <span class="material-symbols-outlined">close</span>
@@ -15,50 +15,50 @@
 
     <!-- Progress Section -->
     <div class="import-progress-section">
-      <p class="import-explainer" id="updateIndexExplainer" style="display: none">
+      <p class="import-explainer" id="cleanLibraryExplainer" style="display: none">
         This will organize your library, remove duplicates and corrupted media, and
         fix any database issues.
       </p>
 
-      <div class="import-status-text" id="updateIndexStatusText"></div>
+      <div class="import-status-text" id="cleanLibraryStatusText"></div>
 
       <div
         class="import-secondary-status"
-        id="updateIndexSecondaryStatus"
+        id="cleanLibrarySecondaryStatus"
         style="display: none"
       ></div>
 
-      <div class="import-stats" id="updateIndexPreflightStats" style="display: none">
+      <div class="import-stats" id="cleanLibraryPreflightStats" style="display: none">
         <span class="import-stat">
           <span class="import-stat-label">Photos:</span>
-          <span class="import-stat-value" id="updateIndexPhotoCount">0</span>
+          <span class="import-stat-value" id="cleanLibraryPhotoCount">0</span>
         </span>
         <span class="import-stat">
           <span class="import-stat-label">Videos:</span>
-          <span class="import-stat-value" id="updateIndexVideoCount">0</span>
+          <span class="import-stat-value" id="cleanLibraryVideoCount">0</span>
         </span>
         <span class="import-stat">
           <span class="import-stat-label">Total:</span>
-          <span class="import-stat-value" id="updateIndexTotalCount">0</span>
+          <span class="import-stat-value" id="cleanLibraryTotalCount">0</span>
         </span>
       </div>
 
-      <div class="import-stats" id="updateIndexInflightStats" style="display: none">
+      <div class="import-stats" id="cleanLibraryInflightStats" style="display: none">
         <span class="import-stat">
           <span class="import-stat-label">Processed:</span>
-          <span class="import-stat-value" id="updateIndexInflightProcessed">0</span>
+          <span class="import-stat-value" id="cleanLibraryInflightProcessed">0</span>
         </span>
         <span class="import-stat">
           <span class="import-stat-label">Duplicates:</span>
-          <span class="import-stat-value" id="updateIndexInflightDuplicates">0</span>
+          <span class="import-stat-value" id="cleanLibraryInflightDuplicates">0</span>
         </span>
         <span class="import-stat">
           <span class="import-stat-label">Skipped:</span>
-          <span class="import-stat-value" id="updateIndexInflightSkipped">0</span>
+          <span class="import-stat-value" id="cleanLibraryInflightSkipped">0</span>
         </span>
       </div>
 
-      <div class="import-stats" id="updateIndexStats" style="display: none">
+      <div class="import-stats" id="cleanLibraryStats" style="display: none">
         <span class="import-stat">
           <span class="import-stat-label">Misfiled Media:</span>
           <span class="import-stat-value" id="misfiledMediaCount">0</span>
@@ -85,24 +85,24 @@
     <!-- Details Section (Phase 4 only) -->
     <div
       class="import-details-section"
-      id="updateIndexDetailsSection"
+      id="cleanLibraryDetailsSection"
       style="display: none"
     >
-      <button class="import-details-toggle" id="updateIndexDetailsToggle">
+      <button class="import-details-toggle" id="cleanLibraryDetailsToggle">
         <span class="material-symbols-outlined">expand_more</span>
         <span>Show details</span>
       </button>
 
       <pre
         class="clean-library-log-feed"
-        id="updateIndexLogFeed"
+        id="cleanLibraryLogFeed"
         style="display: none"
         aria-live="polite"
       ></pre>
 
       <div
         class="import-details-list"
-        id="updateIndexDetailsList"
+        id="cleanLibraryDetailsList"
         style="display: none"
       >
         <!-- Populated dynamically -->
@@ -111,26 +111,26 @@
 
     <!-- Action Buttons -->
     <div class="import-actions">
-      <button class="btn btn-secondary" id="updateIndexCancelBtn">
+      <button class="btn btn-secondary" id="cleanLibraryCancelBtn">
         Cancel
       </button>
       <button
         class="btn btn-secondary"
-        id="updateIndexStartOverBtn"
+        id="cleanLibraryStartOverBtn"
         style="display: none"
       >
         Start over
       </button>
       <button
         class="btn btn-primary"
-        id="updateIndexProceedBtn"
+        id="cleanLibraryProceedBtn"
         style="display: none"
       >
         Continue
       </button>
       <button
         class="btn btn-primary"
-        id="updateIndexDoneBtn"
+        id="cleanLibraryDoneBtn"
         style="display: none"
       >
         Done
