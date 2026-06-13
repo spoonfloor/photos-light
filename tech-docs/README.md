@@ -54,6 +54,10 @@ This folder contains deep-dive technical documentation, implementation notes, an
 ### Dialog System
 - `DIALOG_CHECKLIST.md` - Dialog implementation checklist
 
+### Architecture & cleanup
+- `ARCHITECTURE_FRAGMENTATION_AUDIT.md` - Dead code removal log, fragmentation hotspots, restore instructions (`cleanup/dead-code` branch)
+- `GRID_HYDRATION_BUGS.md` - **Open:** stale grid after Clean, bulk date edit thumbnail 404s (session cache + reload path)
+
 ## Purpose
 
 These documents provide:

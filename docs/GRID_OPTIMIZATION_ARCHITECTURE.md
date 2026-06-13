@@ -463,11 +463,23 @@ Lessons from building and debugging the P0 slice — worth reading before the ne
 
 When the user mutates library media, the timeline grid reflects the change **near instantly**. Top-notch UX and smart architecture are both non-negotiable: one **GridController** applies incremental `LayoutSnapshot` patches and remounts affected sections only — not a parallel refresh path.
 
+### Row mutation (incremental)
+
 **In scope:** date edit (single + bulk), delete, duplicate removal during date edit.
 
 **Anti-pattern (retire):** `VirtualGrid.refreshMonthIndex()` after every edit/delete on the timeline path.
 
 **Implementation (shipped):** `GridLayout.patchPhotoMonthMove` / `patchPhotoDeletes` / `patchMonthIndexDelta` → `VirtualGrid.applyMutationPatch` → `applyLocalIndex` → placeholder-first remount of visible sections. Wired from `main.js` on date edit, delete, and bulk delete — not `refreshMonthIndex`.
+
+### Catalog reset (full rehydrate)
+
+**In scope:** Clean `photos_table_rebuilt`, recovery DB rebuild, library switch + make-perfect, any operation that replaces the photos catalog identity (row ids, month histogram).
+
+**Client:** `rehydrateLibraryCatalog()` — bumps `libraryGeneration`, destroys virtual grid, clears thumbnail queue, runs `loadAndRenderPhotosCommitted` (Phase A→B bootstrap). **Not** `applyMutationPatch`.
+
+**Server:** `LIBRARY_CATALOG_REVISION` bumped via `bump_library_catalog_revision()` on library switch and structural completion (make-perfect SUCCESS, rebuild DB complete). Grid read caches (`month_index`, total count) are keyed to revision; exposed as `catalog_revision` on grid APIs.
+
+**Anti-pattern:** Per-overlay `loadAndRenderPhotos(false)` or manual `invalidate_*()` at individual mutators without revision model.
 
 ---
 

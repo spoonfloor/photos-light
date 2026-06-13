@@ -156,7 +156,7 @@ photo_library_test/
 
 Create a test library:
 ```bash
-python3 create_test_library.py
+python3 tools/fixtures/create_test_library.py
 ```
 
 This creates a small test database you can experiment with safely.

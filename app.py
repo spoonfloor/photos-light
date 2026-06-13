@@ -421,15 +421,6 @@ class StagedCanonicalPhoto:
     canonical_photo: CanonicalizedPhoto
 
 
-@dataclass
-class DebugFileCountAnalysisResult:
-    all_files: list[str]
-    file_buckets: list[str]
-    unique_media_count: int
-    duplicate_media_count: int
-    other_file_count: int
-
-
 def cleanup_staged_file(staged_path):
     """Best-effort cleanup for staged temp files."""
     if not staged_path:
@@ -483,95 +474,6 @@ def stage_photo_for_canonicalization(source_path, *, temp_prefix, temp_dir=None)
     except Exception:
         cleanup_staged_file(staged_path)
         raise
-
-
-def iter_debug_file_count_paths(selected_path):
-    """Yield every file under the selected path."""
-    if os.path.isfile(selected_path):
-        yield selected_path
-        return
-
-    for root, _, files in os.walk(selected_path):
-        for filename in files:
-            yield os.path.join(root, filename)
-
-
-def analyze_debug_media_duplicate_key(file_path):
-    """
-    Return the cleaner-compatible duplicate identity for a media file without
-    mutating the source path.
-    """
-    valid, _ = verify_media_file(file_path)
-    if not valid:
-        raise RuntimeError(f"Unreadable media file: {file_path}")
-
-    file_type = media_kind_for_extension(os.path.splitext(file_path)[1].lower())
-    if file_type == 'photo':
-        staged_photo = stage_photo_for_canonicalization(
-            file_path,
-            temp_prefix='debug-file-count-',
-        )
-        try:
-            return _compute_photo_duplicate_key(
-                staged_photo.staged_path,
-                fallback_hash=staged_photo.canonical_photo.content_hash,
-            )
-        finally:
-            cleanup_staged_file(staged_photo.staged_path)
-
-    content_hash = compute_full_hash(file_path)
-    if not content_hash:
-        raise RuntimeError(f"Failed to hash media file: {file_path}")
-    return content_hash
-
-
-def analyze_debug_file_count_path(selected_path):
-    """Compute the debug file-count scorecard without touching source files."""
-    if not selected_path:
-        raise RuntimeError('No path selected')
-    if not os.path.exists(selected_path):
-        raise RuntimeError(f'Path not found: {selected_path}')
-
-    all_files: list[str] = []
-    path_bucket: dict[str, str] = {}
-    key_to_paths: dict[str, list[str]] = defaultdict(list)
-
-    for file_path in iter_debug_file_count_paths(selected_path):
-        all_files.append(file_path)
-        ext = os.path.splitext(file_path)[1].lower()
-
-        if not is_supported_media_extension(ext):
-            path_bucket[file_path] = 'other_files'
-            continue
-
-        try:
-            duplicate_key = analyze_debug_media_duplicate_key(file_path)
-        except Exception as error:
-            print(f"  ⚠️  Debug analyzer counted as other file: {file_path} ({error})")
-            path_bucket[file_path] = 'other_files'
-            continue
-
-        key_to_paths[duplicate_key].append(file_path)
-
-    for paths in key_to_paths.values():
-        sorted_paths = sorted(paths)
-        path_bucket[sorted_paths[0]] = 'unique_media'
-        for extra_path in sorted_paths[1:]:
-            path_bucket[extra_path] = 'duplicate_media'
-
-    file_buckets = [path_bucket[p] for p in all_files]
-
-    unique_media_count = sum(1 for b in file_buckets if b == 'unique_media')
-    duplicate_media_count = sum(1 for b in file_buckets if b == 'duplicate_media')
-    other_file_count = sum(1 for b in file_buckets if b == 'other_files')
-
-    return DebugFileCountAnalysisResult(
-        all_files=all_files,
-        file_buckets=file_buckets,
-        unique_media_count=unique_media_count,
-        duplicate_media_count=duplicate_media_count,
-        other_file_count=other_file_count,
-    )
 
 
 def insert_canonical_photo_row(conn, *, original_filename, relative_path, canonical_photo):
@@ -1007,20 +909,54 @@ PHOTO_GRID_SELECT = """
     FROM photos
 """
 
+# Monotonic catalog generation for grid read caches. Bumped on library switch and
+# structural catalog changes (photos table rebuild, full DB re-index). Row-level
+# mutations invalidate histogram caches without bumping revision.
+LIBRARY_CATALOG_REVISION = 0
 PHOTO_TOTAL_COUNT_CACHE = None
+PHOTO_TOTAL_COUNT_CACHE_REVISION = None
 MONTH_INDEX_CACHE = {}
+MONTH_INDEX_CACHE_REVISION = None
+
+
+def get_library_catalog_revision():
+    """Return current server catalog revision exposed to the grid client."""
+    return LIBRARY_CATALOG_REVISION
+
+
+def attach_catalog_revision(payload):
+    """Attach catalog_revision to a grid API JSON payload."""
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload['catalog_revision'] = LIBRARY_CATALOG_REVISION
+    return payload
+
+
+def bump_library_catalog_revision():
+    """Bump catalog revision after structural library/catalog changes."""
+    global LIBRARY_CATALOG_REVISION
+    LIBRARY_CATALOG_REVISION += 1
+    invalidate_photo_total_count_cache()
+    invalidate_month_index_cache()
 
 
 def invalidate_photo_total_count_cache():
-    """Drop cached library row count after mutations or library switch."""
-    global PHOTO_TOTAL_COUNT_CACHE
+    """Drop cached library row count for the current catalog revision."""
+    global PHOTO_TOTAL_COUNT_CACHE, PHOTO_TOTAL_COUNT_CACHE_REVISION
     PHOTO_TOTAL_COUNT_CACHE = None
+    PHOTO_TOTAL_COUNT_CACHE_REVISION = None
 
 
 def invalidate_month_index_cache():
-    """Drop cached per-sort month histogram used by the virtual grid."""
+    """Drop cached per-sort month histogram for the current catalog revision."""
     global MONTH_INDEX_CACHE
     MONTH_INDEX_CACHE = {}
+
+
+def notify_catalog_reset_from_make_perfect(result):
+    """Bump catalog revision after a successful make-perfect (Clean) run."""
+    if result and result.get('status') == 'SUCCESS':
+        bump_library_catalog_revision()
 
 
 def ensure_photo_grid_indices(db_path=None):
@@ -1043,10 +979,11 @@ def ensure_photo_grid_indices(db_path=None):
 
 
 def get_photo_total_count(cursor):
-    """Return total photos row count; cached per session until invalidated."""
-    global PHOTO_TOTAL_COUNT_CACHE
-    if PHOTO_TOTAL_COUNT_CACHE is None:
+    """Return total photos row count; cached per catalog revision."""
+    global PHOTO_TOTAL_COUNT_CACHE, PHOTO_TOTAL_COUNT_CACHE_REVISION
+    if PHOTO_TOTAL_COUNT_CACHE_REVISION != LIBRARY_CATALOG_REVISION:
         PHOTO_TOTAL_COUNT_CACHE = cursor.execute('SELECT COUNT(*) FROM photos').fetchone()[0]
+        PHOTO_TOTAL_COUNT_CACHE_REVISION = LIBRARY_CATALOG_REVISION
     return PHOTO_TOTAL_COUNT_CACHE
 
 
@@ -1372,7 +1309,7 @@ def get_photos():
             rows = fetch_all_photos_for_grid(cursor, sort_order)
             photos = [photo_row_to_grid_dict(row) for row in rows]
             conn.close()
-            return jsonify({'photos': photos, 'count': len(photos)})
+            return jsonify(attach_catalog_revision({'photos': photos, 'count': len(photos)}))
 
         if cursor_str:
             payload = fetch_photos_page(cursor, limit, sort_order, cursor_str=cursor_str)
@@ -1381,7 +1318,7 @@ def get_photos():
 
         conn.close()
         payload['offset'] = offset
-        return jsonify(payload)
+        return jsonify(attach_catalog_revision(payload))
     except Exception as e:
         app.logger.error(f"Error fetching photos: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1420,7 +1357,11 @@ def build_month_index(cursor, sort_order='newest'):
 
 
 def get_cached_month_index(cursor, sort_order='newest'):
-    """Return month histogram; cached per sort order until invalidated."""
+    """Return month histogram; cached per sort order for the current catalog revision."""
+    global MONTH_INDEX_CACHE, MONTH_INDEX_CACHE_REVISION
+    if MONTH_INDEX_CACHE_REVISION != LIBRARY_CATALOG_REVISION:
+        MONTH_INDEX_CACHE = {}
+        MONTH_INDEX_CACHE_REVISION = LIBRARY_CATALOG_REVISION
     if sort_order not in MONTH_INDEX_CACHE:
         MONTH_INDEX_CACHE[sort_order] = build_month_index(cursor, sort_order)
     return MONTH_INDEX_CACHE[sort_order]
@@ -1485,7 +1426,7 @@ def get_photos_month_index():
         cursor = conn.cursor()
         payload = get_cached_month_index(cursor, sort_order)
         conn.close()
-        return jsonify(payload)
+        return jsonify(attach_catalog_revision(payload))
     except Exception as e:
         app.logger.error(f"Error fetching month index: {e}")
         return jsonify({'error': str(e)}), 500
@@ -3019,74 +2960,6 @@ def scan_import_paths():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/debug/analyze-file-count', methods=['POST'])
-@handle_db_corruption
-def analyze_debug_file_count():
-    """Analyze a folder for unique media, duplicates, and other files."""
-    try:
-        data = request.json or {}
-        selected_path = data.get('path')
-
-        if not selected_path:
-            return jsonify({'error': 'No path provided'}), 400
-
-        print(f"\n🧪 Debug file count analysis: {selected_path}")
-        result = analyze_debug_file_count_path(selected_path)
-
-        return jsonify({
-            'status': 'success',
-            'path': selected_path,
-            'files': result.all_files,
-            'file_buckets': result.file_buckets,
-            'unique_media_count': result.unique_media_count,
-            'duplicate_media_count': result.duplicate_media_count,
-            'other_file_count': result.other_file_count,
-        })
-    except Exception as e:
-        error_logger.error(f"Debug file count analysis failed: {e}")
-        print(f"\n❌ Debug file count analysis failed: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/debug/scan-clean-library', methods=['POST'])
-@handle_db_corruption
-def debug_scan_clean_library():
-    """
-    Read-only clean-library scan for an arbitrary directory (dev sandbox).
-
-    Uses the same scan_library_cleanliness rulebook as /api/library/make-perfect/scan,
-    with library_path set to the picked folder so DB sidecars under that tree are used
-    when present.
-    """
-    try:
-        data = request.json or {}
-        selected_path = data.get('path')
-
-        if not selected_path:
-            return jsonify({'error': 'No path provided'}), 400
-
-        if not os.path.exists(selected_path):
-            return jsonify({'error': 'Path not found'}), 400
-
-        if not os.path.isdir(selected_path):
-            return jsonify({'error': 'Path must be a directory'}), 400
-
-        if not os.access(selected_path, os.R_OK | os.X_OK):
-            return jsonify({'error': 'Path is not accessible'}), 503
-
-        from make_library_perfect import scan_library_cleanliness
-
-        abs_path = os.path.abspath(selected_path)
-        print(f"\n🧪 DEBUG clean-library scan: {abs_path}\n")
-
-        result = scan_library_cleanliness(abs_path, db_path=None, verify=True)
-        return jsonify(result)
-    except Exception as e:
-        error_logger.error(f"Debug clean-library scan failed: {e}")
-        print(f"\n❌ Debug clean-library scan failed: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/photos/import-from-paths', methods=['POST'])
 def import_from_paths():
     """
@@ -3343,165 +3216,6 @@ def start_background_thumbnail_generation(photo_ids):
 
 
 # ============================================================================
-# UTILITIES API
-# ============================================================================
-
-@app.route('/api/utilities/update-index/scan')
-@handle_db_corruption
-def scan_index():
-    """
-    Update Library Index: Scan library and database to find what needs updating.
-    Returns counts without making any changes.
-    
-    Returns:
-    {
-      "missing_files": 12,  (ghosts - in DB but not on disk)
-      "untracked_files": 45, (moles - on disk but not in DB)
-      "name_updates": 3,     (non-standard filenames)
-      "empty_folders": 8
-    }
-    """
-    try:
-        import sys
-        sys.stdout.flush()
-        print("\n🔍 UPDATE LIBRARY INDEX: Scanning library...", flush=True)
-        
-        # Check if database exists
-        if not os.path.exists(DB_PATH):
-            print(f"  ⚠️  Database not found at: {DB_PATH}")
-            # Return that everything needs to be added
-            from library_sync import count_media_files
-            file_count = count_media_files(LIBRARY_PATH)
-            return jsonify({
-                'missing_files': 0,
-                'untracked_files': file_count,
-                'name_updates': 0,
-                'empty_folders': 0
-            })
-        
-        # Scan filesystem for all media files
-        filesystem_paths = set()
-        file_count = 0
-        
-        # v223: Use global constants - was missing .webp/.avif/.jp2/RAW formats (BUG FIX)
-        photo_exts = PHOTO_EXTENSIONS
-        video_exts = VIDEO_EXTENSIONS
-        all_exts = photo_exts | video_exts
-        
-        for root, dirs, filenames in os.walk(LIBRARY_PATH, followlinks=False):
-            # Skip hidden directories
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
-            
-            for filename in filenames:
-                if filename.startswith('.'):
-                    continue
-                
-                ext = os.path.splitext(filename)[1].lower()
-                if ext not in all_exts:
-                    continue
-                
-                file_count += 1
-                full_path = os.path.join(root, filename)
-                
-                try:
-                    rel_path = os.path.relpath(full_path, LIBRARY_PATH)
-                    filesystem_paths.add(rel_path)
-                except ValueError:
-                    continue
-        
-        print(f"  Found {file_count} files on disk")
-        
-        # Load database paths
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT current_path FROM photos")
-        db_paths = {row['current_path'] for row in cursor.fetchall()}
-        conn.close()
-        
-        print(f"  Found {len(db_paths)} entries in database")
-        
-        # Calculate what needs updating
-        missing_files = db_paths - filesystem_paths  # In DB but not on disk
-        untracked_files = filesystem_paths - db_paths  # On disk but not in DB
-        name_updates = 0  # TODO: check for non-standard filenames
-        
-        # Count empty folders
-        empty_folders = 0
-        empty_folder_paths = []
-        for root, dirs, files in os.walk(LIBRARY_PATH, topdown=False):
-            if os.path.basename(root).startswith('.') or root == LIBRARY_PATH:
-                continue
-            try:
-                entries = os.listdir(root)
-                non_hidden = [e for e in entries if not e.startswith('.')]
-                if len(non_hidden) == 0:
-                    empty_folders += 1
-                    rel_path = os.path.relpath(root, LIBRARY_PATH)
-                    empty_folder_paths.append(rel_path)
-            except:
-                continue
-        
-        print(f"  Found {empty_folders} empty folders:", flush=True)
-        for path in empty_folder_paths:
-            print(f"    • {path}", flush=True)
-        
-        results = {
-            'missing_files': len(missing_files),
-            'untracked_files': len(untracked_files),
-            'name_updates': name_updates,
-            'empty_folders': empty_folders
-        }
-        
-        print(f"  Scan results: {results}")
-        return jsonify(results)
-        
-    except Exception as e:
-        app.logger.error(f"Error in Update Library Index scan: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/utilities/update-index/execute', methods=['GET', 'POST'])
-def execute_update_index():
-    """
-    Update Library Index: Execute library cleanup with SSE progress streaming.
-    
-    Phases:
-    1. Remove deleted files (ghosts)
-    2. Add untracked files (moles)
-    3. Update names (non-standard filenames)
-    4. Remove empty folders
-    """
-    
-    def generate():
-        try:
-            import_logger.info("Update Library Index execute started")
-            
-            # Create backup before modifying database
-            print(f"\n💾 Creating database backup before index update...")
-            backup_path = create_db_backup()
-            if backup_path:
-                print(f"  ✅ Backup created: {os.path.basename(backup_path)}")
-            else:
-                print(f"  ⚠️  Backup failed, but continuing with index update")
-            
-            conn = get_db_connection()
-            yield from synchronize_library_generator(
-                LIBRARY_PATH, 
-                conn, 
-                extract_exif_date, 
-                get_image_dimensions,
-                mode='incremental'
-            )
-            import_logger.info("Update Library Index execute completed")
-        except Exception as e:
-            error_logger.error(f"Update Library Index execute failed: {e}")
-            print(f"\n❌ Update Library Index execute failed: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
-    
-    return Response(stream_with_context(generate()), mimetype='text/event-stream')
-
-
-# ============================================================================
 # RECOVERY API
 # ============================================================================
 
@@ -3584,13 +3298,16 @@ def execute_rebuild_database():
             
             conn = get_db_connection()
             
-            yield from synchronize_library_generator(
+            for event in synchronize_library_generator(
                 LIBRARY_PATH,
                 conn,
                 extract_exif_date,
                 get_image_dimensions,
-                mode='full'
-            )
+                mode='full',
+            ):
+                if event.startswith('event: complete'):
+                    bump_library_catalog_revision()
+                yield event
             import_logger.info("Rebuild Database execute completed")
         except Exception as e:
             error_logger.error(f"Rebuild Database execute failed: {e}")
@@ -3598,72 +3315,6 @@ def execute_rebuild_database():
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
-
-
-@app.route('/api/utilities/rebuild-thumbnails', methods=['POST'])
-def rebuild_thumbnails():
-    """
-    Rebuild thumbnails: Delete all cached thumbnails.
-    They will regenerate automatically via lazy loading as users scroll.
-
-    No in-app menu item as of Apr 2026 (same as removing `.thumbnails/` by hand);
-    endpoint kept for support and possible future UI.
-    """
-    try:
-        import shutil
-        
-        print("\n🗑️  REBUILD THUMBNAILS: Clearing cache...")
-        
-        # Count existing thumbnails
-        thumb_count = 0
-        for root, dirs, files in os.walk(THUMBNAIL_CACHE_DIR):
-            thumb_count += len([f for f in files if f.endswith('.jpg')])
-        
-        print(f"  Found {thumb_count} cached thumbnails")
-        
-        # Nuke everything
-        shutil.rmtree(THUMBNAIL_CACHE_DIR)
-        os.makedirs(THUMBNAIL_CACHE_DIR, exist_ok=True)
-        
-        print(f"  ✅ Cleared all thumbnails")
-        import_logger.info(f"Rebuild thumbnails: Cleared {thumb_count} thumbnails")
-        
-        return jsonify({
-            'status': 'success',
-            'cleared_count': thumb_count,
-            'message': 'Thumbnails cleared. They will regenerate as you scroll.'
-        })
-
-    except Exception as e:
-        print(f"  ❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/utilities/check-thumbnails', methods=['GET'])
-def check_thumbnails():
-    """
-    Check how many thumbnails exist without deleting them.
-    """
-    try:
-        # Count existing thumbnails
-        thumb_count = 0
-        for root, dirs, files in os.walk(THUMBNAIL_CACHE_DIR):
-            thumb_count += len([f for f in files if f.endswith('.jpg')])
-        
-        return jsonify({
-            'status': 'success',
-            'thumbnail_count': thumb_count
-        })
-
-    except Exception as e:
-        print(f"  ❌ Error checking thumbnails: {e}")
-        return jsonify({'error': str(e)}), 500
-        
-    except Exception as e:
-        error_logger.error(f"Rebuild thumbnails failed: {e}")
-        print(f"\n❌ Rebuild thumbnails failed: {e}")
-        return jsonify({'error': str(e)}), 500
 
 
 # ============================================================================
@@ -3711,12 +3362,19 @@ def clear_library_session():
     IMPORT_TEMP_DIR = None
     LOG_DIR = None
 
+
+def reset_to_welcome_state():
+    """Clear session and saved config — first-run / welcome screen."""
+    delete_config()
+    clear_library_session()
+    invalidate_photo_total_count_cache()
+    invalidate_month_index_cache()
+
 def update_app_paths(library_path, db_path):
     """Update all global path variables"""
     global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR
 
-    invalidate_photo_total_count_cache()
-    invalidate_month_index_cache()
+    bump_library_catalog_revision()
     LIBRARY_PATH = library_path
     DB_PATH = db_path
     ensure_photo_grid_indices(db_path)
@@ -3733,39 +3391,6 @@ def update_app_paths(library_path, db_path):
         except (PermissionError, OSError) as e:
             print(f"⚠️  Warning: Could not create directory {directory}: {e}")
             print(f"   This may indicate the library is not accessible.")
-
-
-def restore_library_session_from_config():
-    """Rehydrate in-memory library paths after a process restart."""
-    if LIBRARY_PATH and DB_PATH and THUMBNAIL_CACHE_DIR:
-        return True
-
-    config = load_config()
-    if not config:
-        return False
-
-    library_path = config.get('library_path')
-    db_path = config.get('db_path')
-    if not library_path or not db_path:
-        return False
-
-    if not os.path.isdir(library_path):
-        print(f"⚠️  Saved library path is missing: {library_path}")
-        return False
-
-    try:
-        resolved_db_path = resolve_db_path(library_path, db_path)
-    except (OSError, PermissionError) as exc:
-        print(f"⚠️  Cannot access saved database: {exc}")
-        return False
-
-    if not os.path.isfile(resolved_db_path):
-        print(f"⚠️  Saved database not found: {resolved_db_path}")
-        return False
-
-    update_app_paths(library_path, resolved_db_path)
-    print(f"📚 Restored library session: {library_path}")
-    return True
 
 
 def build_library_status_payload(library_path, db_path, report):
@@ -3832,10 +3457,10 @@ def build_library_status_payload(library_path, db_path, report):
 @app.route('/api/library/current', methods=['GET'])
 def get_current_library():
     """Get current library path"""
-    return jsonify({
+    return jsonify(attach_catalog_revision({
         'library_path': LIBRARY_PATH,
         'db_path': DB_PATH
-    })
+    }))
 
 
 @app.route('/api/library/last-used', methods=['GET'])
@@ -3880,20 +3505,24 @@ def library_status():
         try:
             library_exists = os.path.exists(library_path)
         except (OSError, PermissionError) as e:
+            print(f"⚠️  Library inaccessible — returning to welcome: {library_path} ({e})")
+            reset_to_welcome_state()
             return jsonify({
-                'status': 'library_inaccessible',
-                'message': f'Cannot check library access: {str(e)}',
-                'library_path': library_path,
-                'db_path': db_path,
+                'status': 'not_configured',
+                'message': 'No library configured. Please select a library.',
+                'library_path': None,
+                'db_path': None,
                 'valid': False
             })
 
         if not library_exists:
+            print(f"⚠️  Library folder missing — returning to welcome: {library_path}")
+            reset_to_welcome_state()
             return jsonify({
-                'status': 'library_missing',
-                'message': 'Library folder not found. It may have been moved or deleted.',
-                'library_path': library_path,
-                'db_path': db_path,
+                'status': 'not_configured',
+                'message': 'No library configured. Please select a library.',
+                'library_path': None,
+                'db_path': None,
                 'valid': False
             })
 
@@ -3925,14 +3554,6 @@ def library_status():
             'db_path': None,
             'valid': False
         }), 500
-
-@app.route('/api/library/current', methods=['GET'])
-def library_current():
-    """Get current library and database paths"""
-    return jsonify({
-        'library_path': LIBRARY_PATH,
-        'db_path': DB_PATH
-    })
 
 @app.route('/api/check-path', methods=['GET'])
 def check_path():
@@ -4873,10 +4494,10 @@ def switch_library():
 def reset_library():
     """Reset library configuration to first-run state (debug feature)"""
     try:
-        deleted = delete_config()
-        clear_library_session()
+        had_config = os.path.exists(CONFIG_FILE)
+        reset_to_welcome_state()
 
-        if deleted:
+        if had_config:
             print("\n🔄 Library configuration reset - returning to first-run state")
             return jsonify({
                 'status': 'success',
@@ -4892,124 +4513,6 @@ def reset_library():
         error_logger.error(f"Reset library failed: {e}")
         print(f"\n❌ Reset library failed: {e}")
         return jsonify({'error': str(e)}), 500
-
-
-def cleanup_terraform_folders(library_path):
-    """Remove non-canonical folders after convert (delegates to shared filesystem helper)."""
-    return remove_noncanonical_trees(library_path)
-
-
-def cleanup_empty_folders_recursive(root_path):
-    """
-    Recursively remove empty directories from a library after terraform.
-    Walks bottom-up to ensure deepest directories are checked first.
-    Skips hidden directories (.trash, .thumbnails, etc).
-    
-    NOTE: This function is deprecated for terraform and kept only for backward compatibility
-    with other operations (import, date change, etc.). Use cleanup_terraform_folders() instead.
-    """
-    # v223: Use global constant - was missing .webp/.avif/.jp2, some videos (BUG FIX)
-    # Note: Had extra RAW formats (.raf/.orf/.rw2) not in PHOTO_EXTENSIONS, now removed
-    MEDIA_EXTS = ALL_MEDIA_EXTENSIONS
-    
-    removed_count = 0
-    
-    # Walk bottom-up (topdown=False) so we process leaf directories first
-    for dirpath, dirnames, filenames in os.walk(root_path, topdown=False):
-        # Skip hidden directories
-        if any(part.startswith('.') for part in dirpath.split(os.sep)):
-            continue
-        
-        # Don't delete root
-        if os.path.abspath(dirpath) == os.path.abspath(root_path):
-            continue
-        
-        # Check if directory is empty or contains only non-media files
-        has_media = False
-        
-        for filename in filenames:
-            _, ext = os.path.splitext(filename)
-            if ext.lower() in MEDIA_EXTS:
-                has_media = True
-                break
-        
-        # If no media files and no subdirectories, delete the folder
-        if not has_media:
-            try:
-                # Remove any non-media files first
-                for filename in filenames:
-                    file_path = os.path.join(dirpath, filename)
-                    try:
-                        os.remove(file_path)
-                    except Exception:
-                        pass
-                
-                # Try to remove directory
-                os.rmdir(dirpath)
-                removed_count += 1
-                print(f"    🗑️  Removed empty folder: {os.path.relpath(dirpath, root_path)}")
-            except OSError as e:
-                # Folder not empty (has subdirs) or permission error
-                pass
-    
-    return removed_count
-
-
-def cleanup_terraform_source_folders(source_folders, library_path):
-    """
-    DEPRECATED: This function is no longer used by terraform.
-    Use cleanup_terraform_folders() instead.
-    
-    Aggressively remove source folders after terraform completes.
-    Uses shutil.rmtree to delete entire directory trees, including hidden folders.
-    Only deletes if no media files remain.
-    
-    Args:
-        source_folders: Set of folder paths that contained media before terraform
-        library_path: Root library path (never deleted)
-    
-    Returns:
-        Number of folders deleted
-    """
-    # v223: Use global constant - was missing .webp/.avif/.jp2, some videos (BUG FIX)
-    # Note: Had extra RAW formats (.raf/.orf/.rw2) not in PHOTO_EXTENSIONS, now removed
-    MEDIA_EXTS = ALL_MEDIA_EXTENSIONS
-    
-    removed_count = 0
-    
-    for folder in sorted(source_folders, reverse=True):  # Process deepest first
-        # Safety check - never delete root
-        if os.path.abspath(folder) == os.path.abspath(library_path):
-            continue
-        
-        # Safety check - folder must still exist
-        if not os.path.exists(folder):
-            continue
-        
-        # Check if any media files remain in this tree
-        media_remaining = []
-        try:
-            for root, dirs, files in os.walk(folder):
-                for filename in files:
-                    _, ext = os.path.splitext(filename)
-                    if ext.lower() in MEDIA_EXTS:
-                        media_remaining.append(os.path.join(root, filename))
-        except Exception as e:
-            print(f"    ⚠️  Error checking {folder}: {e}")
-            continue
-        
-        # If no media remains, delete entire tree
-        if not media_remaining:
-            try:
-                shutil.rmtree(folder)
-                removed_count += 1
-                print(f"    🗑️  Removed source folder: {os.path.relpath(folder, library_path)}")
-            except Exception as e:
-                print(f"    ⚠️  Could not remove {folder}: {e}")
-        else:
-            print(f"    ⚠️  Skipped {folder} - {len(media_remaining)} media file(s) remain")
-    
-    return removed_count
 
 
 @app.route('/api/library/terraform/scan', methods=['POST'])
@@ -5711,9 +5214,11 @@ def api_make_library_perfect():
         # Execute the operation against the configured DB path.
         result = run_db_normalization_engine(LIBRARY_PATH, db_path=DB_PATH)
         
+        notify_catalog_reset_from_make_perfect(result)
+        
         print(f"\n✅ Make Library Perfect completed successfully")
         
-        return jsonify(result)
+        return jsonify(attach_catalog_revision(result))
         
     except Exception as e:
         print(f"\n❌ Make Library Perfect failed: {str(e)}")
@@ -5797,7 +5302,8 @@ def api_make_library_perfect_stream():
                 if kind == 'evt':
                     yield f"data: {json.dumps(payload)}\n\n"
                 elif kind == 'done':
-                    yield f"data: {json.dumps({'type': 'complete', 'result': payload})}\n\n"
+                    notify_catalog_reset_from_make_perfect(payload)
+                    yield f"data: {json.dumps({'type': 'complete', 'result': attach_catalog_revision(payload)})}\n\n"
                     break
                 elif kind == 'cancelled':
                     yield f"data: {json.dumps({'type': 'cancelled', 'result': payload})}\n\n"
@@ -6064,9 +5570,8 @@ def bulk_favorite():
 if __name__ == '__main__':
     print("\n🖼️  Photos Light Starting...")
     print(f"📁 Static files: {STATIC_DIR}")
-    if not restore_library_session_from_config():
-        print("📚 No library loaded — choose one from the welcome screen.")
-    
+    print("📚 No library loaded — choose one from the welcome screen.")
+
     print(f"🌐 Open: http://localhost:5001\n")
     
     # Run a single backend process to avoid transient route drift from the

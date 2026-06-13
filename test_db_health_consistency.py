@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sqlite3
 import unittest
 from tempfile import TemporaryDirectory
@@ -243,11 +244,28 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         library_path = self._make_library("startup-saved-library")
         legacy_db_path = os.path.join(library_path, "photo_library.db")
         sqlite3.connect(legacy_db_path).close()
-        canonical_path = self._create_healthy_db(library_path)
+        self._create_healthy_db(library_path)
         self._write_config(library_path, legacy_db_path)
 
         self.assertIsNone(photo_app.LIBRARY_PATH)
         self.assertIsNone(photo_app.DB_PATH)
+
+    def test_library_status_missing_folder_resets_to_not_configured(self):
+        library_path = self._make_library("vanished-library")
+        db_path = self._create_healthy_db(library_path)
+        self._write_config(library_path, db_path)
+        photo_app.update_app_paths(library_path, db_path)
+
+        shutil.rmtree(library_path)
+
+        response = self.client.get("/api/library/status")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "not_configured")
+        self.assertIsNone(payload["library_path"])
+        self.assertIsNone(photo_app.LIBRARY_PATH)
+        self.assertFalse(os.path.exists(self.config_path))
 
     def test_switch_library_missing_db_requires_create_new(self):
         library_path = self._make_library("switch-missing-db")

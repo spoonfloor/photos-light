@@ -3,8 +3,8 @@
 > **👋 Welcome! If you're a fresh AI agent with zero context:**  
 > 1. This is a photo viewer web app (Flask + vanilla JS)  
 > 2. Run `./run.sh` to start it (that's it!)  
-> 3. If it breaks, read [TROUBLESHOOTING.md](TROUBLESHOOTING.md)  
-> 4. To understand how it works, read [SETUP.md](SETUP.md)
+> 3. If it breaks, read [TROUBLESHOOTING.md](archive/TROUBLESHOOTING.md)  
+> 4. To understand how it works, read [SETUP.md](archive/SETUP.md)
 
 A fast, minimal photo viewer and manager for large personal photo libraries.
 
@@ -33,8 +33,8 @@ Open: http://localhost:5001
 
 **Getting Started:**
 - [QUICKSTART.md](QUICKSTART.md) - Get running in 30 seconds
-- [SETUP.md](SETUP.md) - Detailed setup and configuration
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Fix common issues
+- [SETUP.md](archive/SETUP.md) - Detailed setup and configuration
+- [TROUBLESHOOTING.md](archive/TROUBLESHOOTING.md) - Fix common issues
 
 **Technical Docs:**
 - [Lazy Thumbnail Architecture](docs/LAZY_THUMBNAIL_ARCHITECTURE.md)
@@ -56,4 +56,4 @@ Edit `run.sh` to set your paths:
 - `PHOTO_DB_PATH` - Path to your SQLite database
 - `PHOTO_LIBRARY_PATH` - Path to your photo library directory
 
-See [SETUP.md](SETUP.md) for details.
+See [SETUP.md](archive/SETUP.md) for details.

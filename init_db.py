@@ -45,7 +45,7 @@ def init_database():
     print("   - deleted_photos (stores deleted items for restore)")
     print("\n💡 Next steps:")
     print("   1. Use the import feature in the web UI to add photos")
-    print("   2. Or run create_test_library.py to populate with test data")
+    print("   2. Or run tools/fixtures/create_test_library.py to populate with test data")
 
 if __name__ == '__main__':
     init_database()

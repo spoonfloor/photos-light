@@ -1,8 +1,16 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: January 29, 2026
+Last updated: June 13, 2026
 
-**Status:** 5 remaining bugs
+**Status:** 4 remaining bugs
+
+---
+
+## 🔴 TIER 1: GRID HYDRATION — FIXED 2026-06-13
+
+Catalog reset tier shipped. Re-smoke passed 2026-06-13 (Clean grid, bulk date, empty startup).
+
+See `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset and `tech-docs/GRID_HYDRATION_BUGS.md`.
 
 ---
 
@@ -12,7 +20,7 @@ Last updated: January 29, 2026
 
 **Priority:** 🔴 CRITICAL  
 **Estimated effort:** 1-2 hours  
-**Status:** NOT STARTED
+**Status:** FIXED 2026-06-13
 
 **Issue:** 'Go back' action in terraforming leads to a stalled state (loading library)
 
@@ -22,14 +30,7 @@ Last updated: January 29, 2026
 - App enters limbo state and can't recover to show library
 - User is stuck with no way to proceed
 
-**Impact:** Blocks user from accessing their library after canceling terraforming, requires app restart
-
-**Fix approach:**
-
-- Add proper cleanup/state reset when terraform is cancelled
-- Ensure library state is restored properly after cancel
-- Return user to previous valid state (e.g., folder picker or previous library)
-- Add error recovery mechanism
+**Fix:** `recoverLibraryUiAfterFlowCancel()` on convert cancel — clears transition/handoff overlays and reloads grid or empty state.
 - Test all cancel/back paths in terraform flow
 
 ---

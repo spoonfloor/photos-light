@@ -48,7 +48,7 @@ def main() -> int:
         print("Quit the other Photos Light instance and try again.")
         return 1
 
-    from app import app, restore_library_session_from_config
+    from app import app
     from waitress import serve
 
     print("\n🖼️  Photos Light Starting...")
@@ -56,8 +56,7 @@ def main() -> int:
         print("📦 Running from application bundle")
     else:
         print("🚀 Running via launcher.py")
-    if not restore_library_session_from_config():
-        print("📚 No library loaded — choose one from the welcome screen.")
+    print("📚 No library loaded — choose one from the welcome screen.")
 
     print(f"🌐 Open: {APP_URL}\n")
     if os.environ.get("PHOTOS_LIGHT_ELECTRON") != "1":

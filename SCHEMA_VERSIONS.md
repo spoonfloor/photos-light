@@ -8,10 +8,10 @@
 
 | File              | Version | Status                  | Tables                                       |
 | ----------------- | ------- | ----------------------- | -------------------------------------------- |
-| `db_schema_v1.py` | 1       | Original                | `photos`, `deleted_photos`                   |
-| `db_schema_v2.py` | 2       | Overengineered          | + `hash_cache`, `operation_state` + `rating` |
-| `db_schema_v3.py` | 3       | **Current/Recommended** | + `hash_cache` + `rating`                    |
+| `db_schema_v3.py` | 3       | **Current**             | `photos`, `deleted_photos`, `hash_cache`     |
 | `db_schema.py`    | -       | Alias to v3             | (imports v3)                                 |
+
+Historical v1/v2 module files were removed Jun 2026; see git tag `pre-cleanup-2026-06-13` or `tech-docs/ARCHITECTURE_FRAGMENTATION_AUDIT.md`.
 
 ---
 

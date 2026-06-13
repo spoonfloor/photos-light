@@ -22,6 +22,7 @@ const state = {
   photos: [],
   loading: false,
   libraryGeneration: 0,
+  serverCatalogRevision: null,
   libraryTransitionActive: false,
   lastClickedIndex: null, // For shift-select
   lightboxOpen: false,
@@ -49,16 +50,6 @@ const libraryRecoveryState = {
   hasSwitchedLibrary: false,
   rebuildTotal: 0,
   rebuildAdded: 0,
-};
-
-const debugFileCountState = {
-  runId: 0,
-  scanRoot: null,
-  signalCounts: null,
-  logEntries: [],
-  scorecard: null,
-  runtime: null,
-  entryState: null,
 };
 
 const CLEANER_SIGNAL_DEFS = [
@@ -151,9 +142,6 @@ function getOpenFolderRecoveryPendingTotal(signalCounts = {}) {
   return Number(normalizeCleanerSignalCounts(signalCounts).operation_count || 0);
 }
 
-/** Pause between debug log lines so the scoreboard animation and console output are observable. */
-const DEBUG_FILE_COUNT_LOG_STEP_MS = 200;
-
 let currentPhotoLoad = null;
 let currentPhotoLoadAbortController = null;
 let photoLoadRequestId = 0;
@@ -211,40 +199,14 @@ const IMPORT_VIDEO_EXTENSIONS = new Set([
 const IMPORT_OVERLAY_TITLE = 'Add photos';
 
 // ============================================================================
-// DEBUG FLAG - Click-to-load lightbox (set to true for testing gray placeholder)
-// ============================================================================
-const DEBUG_CLICK_TO_LOAD = false; // Set to false for production
-
-// ============================================================================
 // DEBUG FLAG - First-run empty state button (TODO: delete in future cleanup)
 // ============================================================================
 const SHOW_FIRST_RUN_DEBUG_BUTTON = false;
 
-const DEBUG_FLOW_PREVIEW_SCAN_MS = 4000;
-const DEBUG_FLOW_PREVIEW_INFLIGHT_MS = 6000;
-const DEBUG_FLOW_LOG_PATHS = {
-  add: '.logs/import_20260609_143022.jsonl',
-  clean: '.logs/clean_library_20260609_143022.jsonl',
-  convert: '.logs/terraform_20260609_143022.jsonl',
-};
 const FLOW_INFLIGHT_BODY = {
   add: 'Adding photos and videos to your library.',
   clean: 'Checking media files, repairing issues, and updating library database.',
   convert: 'Converting files and organizing your library.',
-};
-const debugFlowPreviewState = {
-  active: false,
-  flow: null,
-  screen: null,
-  runId: 0,
-  timers: [],
-  photoTarget: 0,
-  videoTarget: 0,
-  estimatedDisplay: '',
-  estimatedSeconds: 0,
-  inflightTargets: null,
-  onPreflightContinue: null,
-  onDismiss: null,
 };
 
 const CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES = 200;
@@ -503,14 +465,6 @@ function shouldUseFlowActivityFeed(flowKey) {
   if (feed.hasLines()) {
     return true;
   }
-  if (
-    debugFlowPreviewState.active &&
-    debugFlowPreviewState.flow === flowKey &&
-    (debugFlowPreviewState.screen === 'inflight' ||
-      debugFlowPreviewState.screen === 'complete')
-  ) {
-    return true;
-  }
   if (flowKey === 'add') {
     return Boolean(
       importState.isImporting ||
@@ -522,9 +476,7 @@ function shouldUseFlowActivityFeed(flowKey) {
     return Boolean(
       updateIndexState?.workingPhaseActive ||
         updateIndexState?.overlayPhase === 'working' ||
-        updateIndexState?.overlayPhase === 'finished' ||
-        (cleanLibraryPreviewState?.active &&
-          cleanLibraryPreviewState.phase === 'working'),
+        updateIndexState?.overlayPhase === 'finished',
     );
   }
   if (flowKey === 'convert' || flowKey === 'convertComplete') {
@@ -678,21 +630,9 @@ function formatFlowLogEntry(entry) {
   }
 }
 
-function canWriteFlowActivityFeed(
-  flowKey,
-  { previewOnly = false, allowInactive = false } = {},
-) {
+function canWriteFlowActivityFeed(flowKey, { allowInactive = false } = {}) {
   if (allowInactive) {
     return true;
-  }
-  if (previewOnly) {
-    if (debugFlowPreviewState.active && debugFlowPreviewState.flow === flowKey) {
-      return true;
-    }
-    if (flowKey === 'clean' && cleanLibraryPreviewState.active) {
-      return true;
-    }
-    return false;
   }
   return shouldUseFlowActivityFeed(flowKey);
 }
@@ -700,9 +640,9 @@ function canWriteFlowActivityFeed(
 function appendFlowActivityLine(
   flowKey,
   line,
-  { previewOnly = false, allowInactive = false } = {},
+  { allowInactive = false } = {},
 ) {
-  if (!canWriteFlowActivityFeed(flowKey, { previewOnly, allowInactive })) {
+  if (!canWriteFlowActivityFeed(flowKey, { allowInactive })) {
     return;
   }
   const text = String(line || '').trim();
@@ -715,9 +655,9 @@ function appendFlowActivityLine(
 function prependFlowActivityLine(
   flowKey,
   line,
-  { previewOnly = false, allowInactive = false } = {},
+  { allowInactive = false } = {},
 ) {
-  if (!canWriteFlowActivityFeed(flowKey, { previewOnly, allowInactive })) {
+  if (!canWriteFlowActivityFeed(flowKey, { allowInactive })) {
     return;
   }
   const text = String(line || '').trim();
@@ -730,11 +670,11 @@ function prependFlowActivityLine(
 function appendFlowEngineLogEntry(
   flowKey,
   entry,
-  { previewOnly = false, allowInactive = false } = {},
+  { allowInactive = false } = {},
 ) {
   const line = formatFlowLogEntry(entry);
   if (line) {
-    appendFlowActivityLine(flowKey, line, { previewOnly, allowInactive });
+    appendFlowActivityLine(flowKey, line, { allowInactive });
   }
 }
 
@@ -761,7 +701,7 @@ function maybeAppendFlowProgressMilestone(
   phaseKey,
   current,
   total,
-  { previewOnly = false, allowInactive = false, verb = null } = {},
+  { allowInactive = false, verb = null } = {},
 ) {
   const progressVerb = verb || getFlowProgressVerb(flowKey, phaseKey);
   if (!progressVerb) {
@@ -812,7 +752,7 @@ function maybeAppendFlowProgressMilestone(
   appendFlowActivityLine(
     flowKey,
     `${progressVerb} ${Math.min(marker, cap).toLocaleString()} of ${cap.toLocaleString()}`,
-    { previewOnly, allowInactive },
+    { allowInactive },
   );
 }
 
@@ -2118,9 +2058,7 @@ async function executeRebuildDatabase() {
 
       eventSource.close();
 
-      // Check library health and reload photos
-
-      checkLibraryHealthAndInit().catch((err) => {
+      void rehydrateLibraryCatalog().catch((err) => {
         console.error('❌ Failed to reload after rebuild:', err);
       });
     });
@@ -3702,448 +3640,6 @@ function loadDateChangeProgressOverlay() {
     });
 }
 
-async function loadDebugFileCountOverlay() {
-  if (document.getElementById('debugFileCountOverlay')) {
-    return;
-  }
-
-  const response = await fetch('fragments/debugFileCountOverlay.html');
-  if (!response.ok) {
-    throw new Error(`Failed to load debug file count overlay (${response.status})`);
-  }
-
-  document.body.insertAdjacentHTML('beforeend', await response.text());
-}
-
-function getDebugFileCountOverlayElements() {
-  return {
-    overlay: document.getElementById('debugFileCountOverlay'),
-    titleEl: document.getElementById('debugFileCountTitle'),
-    statusEl: document.getElementById('debugFileCountStatusText'),
-    statsEl: document.getElementById('debugFileCountStats'),
-    canonicalLineEl: document.getElementById('debugFileCountCanonicalLine'),
-    closeBtn: document.getElementById('debugFileCountCloseBtn'),
-    cancelBtn: document.getElementById('debugFileCountCancelBtn'),
-    proceedBtn: document.getElementById('debugFileCountProceedBtn'),
-  };
-}
-
-function resetDebugFileCountScorecard() {
-  debugFileCountState.scorecard?.destroy();
-  debugFileCountState.scorecard = null;
-}
-
-function captureDebugFileCountEntryState() {
-  const datePickerContainer = document.querySelector('.date-picker');
-  return {
-    hasDatabase: !!state.hasDatabase,
-    photos: Array.isArray(state.photos)
-      ? state.photos.map((photo) => ({ ...photo }))
-      : [],
-    selectedPhotoIds: Array.from(state.selectedPhotos),
-    lastClickedIndex: state.lastClickedIndex,
-    datePickerVisibility: datePickerContainer?.style.visibility || '',
-  };
-}
-
-function restoreDebugFileCountEntryState() {
-  const entryState = debugFileCountState.entryState || {
-    hasDatabase: false,
-    photos: [],
-    selectedPhotoIds: [],
-    lastClickedIndex: null,
-    datePickerVisibility: 'hidden',
-  };
-
-  advanceLibraryGeneration();
-  state.photos = entryState.photos.map((photo) => ({ ...photo }));
-  state.hasDatabase = !!entryState.hasDatabase;
-  state.selectedPhotos.clear();
-  entryState.selectedPhotoIds.forEach((photoId) => {
-    state.selectedPhotos.add(photoId);
-  });
-  state.lastClickedIndex = entryState.lastClickedIndex ?? null;
-
-  renderPhotoGrid(getFilteredPhotos(state.photos), false);
-  if (state.photos.length > 0) {
-    setupThumbnailLazyLoading();
-  }
-
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility =
-      state.photos.length > 0
-        ? entryState.datePickerVisibility || 'visible'
-        : 'hidden';
-  }
-
-  updateFilterChipRailVisibility();
-
-  enableAppBarButtons();
-  updateUtilityMenuAvailability();
-  debugFileCountState.entryState = null;
-}
-
-function closeDebugFileCountOverlay() {
-  debugFileCountState.runId += 1;
-  debugFileCountState.scanRoot = null;
-  debugFileCountState.signalCounts = null;
-  debugFileCountState.logEntries = [];
-  debugFileCountState.runtime = null;
-  resetDebugFileCountScorecard();
-
-  const { overlay, titleEl, closeBtn, cancelBtn, proceedBtn } =
-    getDebugFileCountOverlayElements();
-  if (titleEl) {
-    titleEl.textContent = 'Debug file count';
-  }
-  if (closeBtn) {
-    closeBtn.disabled = false;
-  }
-  if (cancelBtn) {
-    cancelBtn.disabled = false;
-    cancelBtn.style.display = 'inline-block';
-  }
-  if (proceedBtn) {
-    proceedBtn.disabled = false;
-    proceedBtn.textContent = 'Proceed';
-    proceedBtn.style.display = 'none';
-    proceedBtn.onclick = null;
-  }
-  if (overlay) {
-    overlay.style.display = 'none';
-  }
-  const { canonicalLineEl } = getDebugFileCountOverlayElements();
-  if (canonicalLineEl) {
-    canonicalLineEl.textContent = '';
-    canonicalLineEl.style.display = 'none';
-  }
-}
-
-function setDebugFileCountCanonicalLine({
-  summary = {},
-  serverOperationCount,
-  rawIssueCount,
-  usedIssuesFallback = false,
-} = {}) {
-  const { canonicalLineEl } = getDebugFileCountOverlayElements();
-  if (!canonicalLineEl) {
-    return;
-  }
-  const n = Number(summary?.operation_count ?? 0);
-  const lines = [
-    `Canonical cleaner operations: ${Number.isFinite(n) ? n.toLocaleString() : '0'}`,
-  ];
-  if (
-    Number.isFinite(serverOperationCount) &&
-    Number(serverOperationCount) !== n
-  ) {
-    lines.push(
-      `(API operation_count ${Number(serverOperationCount).toLocaleString()} ≠ sum of detail rows)`,
-    );
-  }
-  if (rawIssueCount !== undefined && rawIssueCount !== null) {
-    const m = Number(rawIssueCount);
-    lines.push(
-      `Raw audit issue_count: ${Number.isFinite(m) ? m.toLocaleString() : `${rawIssueCount}`}`,
-    );
-  }
-  if (usedIssuesFallback) {
-    lines.push('Warning: operations.details missing; used top-level details (issue buckets).');
-  }
-  canonicalLineEl.textContent = lines.join('\n');
-  canonicalLineEl.style.display = 'block';
-  canonicalLineEl.style.whiteSpace = 'pre-line';
-}
-
-function buildDebugScorecardMetrics(summary = {}) {
-  return reduceCleanerSignalsToBuckets(summary, DEFAULT_CLEANER_SCORECARD_VIEW);
-}
-
-/** Single source of truth: counts come from detail list lengths (must match log line totals). */
-function buildDebugFileCountSummaryFromDetails(details = {}) {
-  const summary = {};
-  CLEANER_SIGNAL_DEFS.forEach((taskDef) => {
-    const items = Array.isArray(details[taskDef.detailKey])
-      ? details[taskDef.detailKey]
-      : [];
-    summary[taskDef.key] = items.length;
-  });
-  return normalizeCleanerSignalCounts(summary);
-}
-
-function buildDebugScorecardLogEntries(details = {}) {
-  const entries = [];
-  CLEANER_SIGNAL_DEFS.forEach((taskDef) => {
-    const items = Array.isArray(details?.[taskDef.detailKey])
-      ? details[taskDef.detailKey]
-      : [];
-    items
-      .slice()
-      .sort((left, right) => {
-        const leftPath = `${left?.path || ''}`.toLowerCase();
-        const rightPath = `${right?.path || ''}`.toLowerCase();
-        if (leftPath !== rightPath) {
-          return leftPath.localeCompare(rightPath);
-        }
-        const leftMessage = `${left?.message || ''}`.toLowerCase();
-        const rightMessage = `${right?.message || ''}`.toLowerCase();
-        return leftMessage.localeCompare(rightMessage);
-      })
-      .forEach((item) => {
-      entries.push({
-        metricKey: taskDef.key,
-        label: taskDef.label,
-        path: item?.path || '',
-        kind: item?.kind || '',
-        message: item?.message || '',
-      });
-      });
-  });
-  return entries;
-}
-
-function renderDebugFileCountReview({
-  details = {},
-  serverOperationCount,
-  rawIssueCount,
-  usedIssuesFallback = false,
-}) {
-  const {
-    overlay,
-    titleEl,
-    statusEl,
-    statsEl,
-    closeBtn,
-    cancelBtn,
-    proceedBtn,
-  } = getDebugFileCountOverlayElements();
-
-  if (!overlay || !statusEl || !statsEl || !proceedBtn) {
-    throw new Error('Debug file count overlay is unavailable');
-  }
-
-  resetDebugFileCountScorecard();
-  debugFileCountState.scorecard = createScorecardController({
-    statusEl,
-    statsEl,
-  });
-  debugFileCountState.runtime = createCleanerScorecardRuntime({
-    scorecard: debugFileCountState.scorecard,
-    view: DEFAULT_CLEANER_SCORECARD_VIEW,
-  });
-
-  const signalCounts = buildDebugFileCountSummaryFromDetails(details);
-  debugFileCountState.signalCounts = { ...signalCounts };
-  debugFileCountState.logEntries = buildDebugScorecardLogEntries(details);
-
-  if (titleEl) {
-    titleEl.textContent = 'Debug file count';
-  }
-
-  setDebugFileCountCanonicalLine({
-    summary: signalCounts,
-    serverOperationCount,
-    rawIssueCount,
-    usedIssuesFallback,
-  });
-
-  debugFileCountState.scorecard.setStatus('Ready to log every pending task.');
-  void debugFileCountState.runtime?.setSignalCounts(signalCounts);
-
-  if (closeBtn) {
-    closeBtn.disabled = false;
-    closeBtn.onclick = closeDebugFileCountOverlay;
-  }
-  if (cancelBtn) {
-    cancelBtn.disabled = false;
-    cancelBtn.style.display = 'inline-block';
-    cancelBtn.onclick = closeDebugFileCountOverlay;
-  }
-  proceedBtn.disabled = false;
-  proceedBtn.textContent = 'Proceed';
-  proceedBtn.style.display = 'inline-block';
-  proceedBtn.onclick = () => {
-    void runDebugFileCountLogging();
-  };
-
-  overlay.style.display = 'flex';
-}
-
-async function runDebugFileCountLogging() {
-  const {
-    closeBtn,
-    cancelBtn,
-    proceedBtn,
-  } = getDebugFileCountOverlayElements();
-  const logEntries = [...debugFileCountState.logEntries];
-  const totalCount = logEntries.length;
-  const runId = ++debugFileCountState.runId;
-
-  if (!debugFileCountState.scorecard || !debugFileCountState.runtime || !proceedBtn) {
-    return false;
-  }
-
-  debugFileCountState.scorecard.setStatus(
-    totalCount
-      ? `Logging task paths (0 / ${totalCount})`
-      : 'Logging task paths',
-    { spinner: true },
-  );
-  await debugFileCountState.runtime.setSignalCounts(debugFileCountState.signalCounts || {});
-
-  if (closeBtn) {
-    closeBtn.disabled = true;
-  }
-  if (cancelBtn) {
-    cancelBtn.disabled = true;
-  }
-  proceedBtn.disabled = true;
-  proceedBtn.textContent = 'Working...';
-
-  try {
-    for (let index = 0; index < logEntries.length; index += 1) {
-      if (runId !== debugFileCountState.runId) {
-        return false;
-      }
-
-      const entry = logEntries[index];
-      const line = entry.path || entry.message || '(missing path)';
-      debugFileCountState.scorecard.setStatus(
-        `Logging task paths (${index + 1} / ${totalCount})`,
-        { spinner: true },
-      );
-      console.log(`[${entry.label}] ${line}`);
-
-      if (entry.metricKey && CLEANER_SIGNAL_KEYS.includes(entry.metricKey)) {
-        await debugFileCountState.runtime.applySignalDeltas(
-          { [entry.metricKey]: 1 },
-          { animate: true, duration: DEBUG_FILE_COUNT_LOG_STEP_MS },
-        );
-      } else {
-        await new Promise((resolve) => {
-          setTimeout(resolve, DEBUG_FILE_COUNT_LOG_STEP_MS);
-        });
-      }
-    }
-
-    closeDebugFileCountOverlay();
-
-    const action = await showDialog(
-      'Success',
-      `Logged ${totalCount.toLocaleString()} task path${totalCount === 1 ? '' : 's'}.`,
-      [{ text: 'Go to library', value: 'go_to_library', primary: true }],
-    );
-
-    if (action === 'go_to_library') {
-      restoreDebugFileCountEntryState();
-    }
-
-    return true;
-  } catch (error) {
-    console.error('❌ Debug file count failed:', error);
-    closeDebugFileCountOverlay();
-    showToast(`Error: ${error.message}`);
-    return false;
-  }
-}
-
-async function startDebugFileCountFlow() {
-  try {
-    debugFileCountState.entryState = captureDebugFileCountEntryState();
-
-    const selectedPath = await FolderPicker.show({
-      intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
-      title: 'Debug scoreboard',
-      subtitle: 'Choose a folder to scan with the cleaner rulebook.',
-    });
-
-    if (!selectedPath) {
-      return false;
-    }
-
-    await loadDebugFileCountOverlay();
-
-    const {
-      overlay,
-      titleEl,
-      statusEl,
-      statsEl,
-      closeBtn,
-      cancelBtn,
-      proceedBtn,
-    } = getDebugFileCountOverlayElements();
-
-    if (!overlay || !statusEl || !statsEl) {
-      throw new Error('Debug file count overlay is unavailable');
-    }
-
-    resetDebugFileCountScorecard();
-    debugFileCountState.scorecard = createScorecardController({
-      statusEl,
-      statsEl,
-    });
-    debugFileCountState.runtime = createCleanerScorecardRuntime({
-      scorecard: debugFileCountState.scorecard,
-      view: DEFAULT_CLEANER_SCORECARD_VIEW,
-    });
-
-    if (titleEl) {
-      titleEl.textContent = 'Debug file count';
-    }
-    if (closeBtn) {
-      closeBtn.disabled = false;
-      closeBtn.onclick = closeDebugFileCountOverlay;
-    }
-    if (cancelBtn) {
-      cancelBtn.disabled = false;
-      cancelBtn.style.display = 'inline-block';
-      cancelBtn.onclick = closeDebugFileCountOverlay;
-    }
-    if (proceedBtn) {
-      proceedBtn.style.display = 'none';
-      proceedBtn.disabled = true;
-      proceedBtn.textContent = 'Proceed';
-      proceedBtn.onclick = null;
-    }
-
-    debugFileCountState.scanRoot = selectedPath;
-
-    debugFileCountState.scorecard.setStatus('Scanning cleaner tasks', { spinner: true });
-    await debugFileCountState.runtime.setSignalCounts({});
-    overlay.style.display = 'flex';
-
-    const response = await fetch('/api/debug/scan-clean-library', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: selectedPath }),
-    });
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to scan cleaner tasks');
-    }
-
-    const usedIssuesFallback =
-      !result.operations?.details && Boolean(result.details);
-    const operationDetails =
-      result.operations?.details || result.details || {};
-
-    renderDebugFileCountReview({
-      details: operationDetails,
-      serverOperationCount: result.operations?.summary?.operation_count,
-      rawIssueCount: result.summary?.issue_count,
-      usedIssuesFallback,
-    });
-    return true;
-  } catch (error) {
-    console.error('❌ Failed to start debug file count flow:', error);
-    closeDebugFileCountOverlay();
-    showToast(`Error: ${error.message}`);
-    return false;
-  }
-}
-
 /**
  * Show date change progress overlay
  */
@@ -4682,7 +4178,7 @@ function showCriticalErrorModal(type, path = '') {
     retryBtn.textContent = 'Retry';
     retryBtn.onclick = () => {
       hideCriticalErrorModal();
-      window.location.reload();
+      void resetLibraryConfig();
     };
 
     actions.appendChild(switchBtn);
@@ -5735,23 +5231,9 @@ async function openLightbox(photoIndex) {
     (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
   const previewRotation = getLightboxPreviewRotation(photo.id);
 
-  // DEBUG MODE: Show pink overlay to verify sizing
-  if (DEBUG_CLICK_TO_LOAD) {
-    // Load media normally (with preload logic)
-    loadMediaIntoContent(content, photo, isVideo, {
-      rotationDegrees: previewRotation,
-    });
-
-    // Add pink debug overlay on top
-    const dims = calculateMediaDimensions(photo, previewRotation);
-    const debugOverlay = createPlaceholder(photo, dims, true);
-    content.appendChild(debugOverlay);
-  } else {
-    // PRODUCTION MODE: Auto-load media immediately
-    loadMediaIntoContent(content, photo, isVideo, {
-      rotationDegrees: previewRotation,
-    });
-  }
+  loadMediaIntoContent(content, photo, isVideo, {
+    rotationDegrees: previewRotation,
+  });
 
   overlay.style.display = 'flex';
 
@@ -5881,14 +5363,6 @@ function preloadAdjacentImages(currentIndex) {
 
   preloadPhoto(currentIndex - 1);
   preloadPhoto(currentIndex + 1);
-}
-
-/**
- * Update lightbox placeholder dimensions based on aspect ratio
- * (No longer needed with real images, keeping for compatibility)
- */
-function updateLightboxDimensions(placeholder, aspectRatio) {
-  // Deprecated - real images handle their own aspect ratio
 }
 
 /**
@@ -6579,6 +6053,53 @@ async function loadAndRenderPhotosCommitted(generation) {
   throw new Error('Photos failed to load. Try refreshing the page.');
 }
 
+async function syncServerCatalogRevision() {
+  try {
+    const response = await fetch('/api/library/current');
+    if (!response.ok) {
+      return null;
+    }
+    const data = await response.json();
+    if (Number.isFinite(data.catalog_revision)) {
+      state.serverCatalogRevision = data.catalog_revision;
+    }
+    return state.serverCatalogRevision;
+  } catch (error) {
+    console.warn('Failed to sync catalog revision:', error);
+    return null;
+  }
+}
+
+/**
+ * Catalog reset — full timeline re-init after structural library changes
+ * (Clean photos_table_rebuilt, DB rebuild, library switch). Row mutations
+ * use applyMutationPatch instead; do not call this for single/bulk date edit.
+ */
+async function rehydrateLibraryCatalog(options = {}) {
+  const {
+    throwOnError = true,
+    generation = advanceLibraryGeneration(),
+  } = options;
+
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    VirtualGrid.destroy();
+  }
+  resetPhotoWindowState();
+  state.selectedPhotos.clear();
+  state.lastClickedIndex = null;
+  if (typeof ThumbnailQueue !== 'undefined') {
+    ThumbnailQueue.clear();
+  }
+
+  const ok = await loadAndRenderPhotosCommitted(generation);
+  await syncServerCatalogRevision();
+
+  if (!ok && throwOnError) {
+    throw new Error('Failed to rehydrate library catalog');
+  }
+  return ok;
+}
+
 /**
  * Viewport-first thumbnail loading (timeline uses ThumbnailQueue.prioritize*).
  */
@@ -6735,6 +6256,10 @@ function wireFilterChipRail() {
 // RENDERING
 // =====================
 
+function openFirstRunDebugMenu() {
+  // Reserved for first-run dev tools — wire when needed.
+}
+
 /**
  * First run or no library configured — open library + add photos
  */
@@ -6758,7 +6283,7 @@ function renderFirstRunEmptyState() {
           <span>Add photos</span>
         </button>
         ${SHOW_FIRST_RUN_DEBUG_BUTTON ? `
-        <button class="btn" onclick="void openDebugFlowPicker()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+        <button class="btn" onclick="void openFirstRunDebugMenu()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">bug_report</span>
           <span>Debug</span>
         </button>
@@ -7080,13 +6605,6 @@ function handleMonthCircleClick(circle, event) {
 }
 
 /**
- * @deprecated Per-card wiring replaced by ensureGridInteractionsWired delegation.
- */
-function wirePhotoCards() {
-  ensureGridInteractionsWired();
-}
-
-/**
  * Toggle photo selection (for multi-select)
  */
 function togglePhotoSelection(card, e) {
@@ -7150,13 +6668,6 @@ function togglePhotoSelection(card, e) {
     updateDeleteButtonVisibility();
     updateMonthCircleStates(); // Update month circles
   }
-}
-
-/**
- * @deprecated Month circle wiring replaced by ensureGridInteractionsWired delegation.
- */
-function wireMonthSelectors() {
-  ensureGridInteractionsWired();
 }
 
 /**
@@ -7884,15 +7395,6 @@ function showImportOverlay() {
 }
 
 function resolveImportPreflight(shouldContinue) {
-  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'add') {
-    if (debugFlowPreviewState.screen === 'preflight' && shouldContinue) {
-      triggerDebugPreflightContinue();
-    } else {
-      dismissDebugFlowPreview();
-    }
-    return;
-  }
-
   if (!importState.preflightResolve) {
     return;
   }
@@ -7917,11 +7419,6 @@ async function hideImportOverlay(reloadPhotos = true) {
  * Close import overlay
  */
 async function closeImportOverlay() {
-  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'add') {
-    dismissDebugFlowPreview();
-    return;
-  }
-
   if (importState.preflightResolve) {
     resolveImportPreflight(false);
     await hideImportOverlay(false);
@@ -8114,11 +7611,6 @@ async function cancelImport() {
  * Undo import - delete all imported photos
  */
 async function undoImport() {
-  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'add') {
-    dismissDebugFlowPreview();
-    return;
-  }
-
   if (importState.importedPhotoIds.length === 0) {
     showToast('Nothing to undo', null);
     return;
@@ -8381,573 +7873,6 @@ async function loadUpdateIndexOverlay() {
   }
 }
 
-function stopDebugFlowPreview() {
-  debugFlowPreviewState.runId += 1;
-  debugFlowPreviewState.active = false;
-  debugFlowPreviewState.flow = null;
-  debugFlowPreviewState.screen = null;
-  debugFlowPreviewState.onDismiss = null;
-  debugFlowPreviewState.onPreflightContinue = null;
-  debugFlowPreviewState.inflightTargets = null;
-  Object.keys(FLOW_ACTIVITY_LOG_REGISTRY).forEach(resetFlowDetailsPanel);
-  debugFlowPreviewState.timers.forEach((timerId) => {
-    clearTimeout(timerId);
-    clearInterval(timerId);
-  });
-  debugFlowPreviewState.timers = [];
-
-  cleanLibraryPreviewState.active = false;
-  cleanLibraryPreviewState.onProceed = null;
-  cleanLibraryPreviewState.onInterruptedChoice = null;
-
-  [
-    'importOverlay',
-    'updateIndexOverlay',
-    'terraformPreviewOverlay',
-    'terraformProgressOverlay',
-    'terraformCompleteOverlay',
-  ].forEach((id) => {
-    const overlay = document.getElementById(id);
-    if (overlay) {
-      overlay.style.display = 'none';
-    }
-  });
-}
-
-function dismissDebugFlowPreview() {
-  if (debugFlowPreviewState.onDismiss) {
-    debugFlowPreviewState.onDismiss();
-  } else {
-    stopDebugFlowPreview();
-  }
-}
-
-function triggerDebugPreflightContinue() {
-  if (debugFlowPreviewState.onPreflightContinue) {
-    debugFlowPreviewState.onPreflightContinue();
-  }
-}
-
-function waitForDebugPreflightContinue(runId) {
-  return new Promise((resolve, reject) => {
-    debugFlowPreviewState.onPreflightContinue = () => {
-      if (runId !== debugFlowPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      debugFlowPreviewState.onPreflightContinue = null;
-      resolve(true);
-    };
-    debugFlowPreviewState.onDismiss = () => {
-      if (runId !== debugFlowPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      debugFlowPreviewState.onDismiss = null;
-      resolve(false);
-    };
-  });
-}
-
-function waitForDebugFlowDismiss(runId) {
-  return new Promise((resolve, reject) => {
-    debugFlowPreviewState.onDismiss = () => {
-      if (runId !== debugFlowPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      debugFlowPreviewState.onDismiss = null;
-      resolve();
-    };
-  });
-}
-
-function getDebugFlowTotalCount() {
-  return (
-    debugFlowPreviewState.photoTarget + debugFlowPreviewState.videoTarget
-  );
-}
-
-function deriveDebugInflightTargets(total) {
-  const safeTotal = Math.max(1, Number(total) || 1);
-  const duplicates = Math.max(0, Math.round(safeTotal * 0.08));
-  const skipped = Math.max(0, Math.round(safeTotal * 0.03));
-  const primary = Math.max(0, safeTotal - duplicates - skipped);
-  return { primary, duplicates, skipped };
-}
-
-function resetDebugLogFeed(flow, logPath = DEBUG_FLOW_LOG_PATHS[flow]) {
-  getFlowActivityLogFeed(flow).reset(logPath);
-}
-
-function appendDebugLogFeed(flow, line) {
-  getFlowActivityLogFeed(flow).append(line);
-}
-
-function showDebugDetailsSection(flow, visible = true) {
-  if (flow === 'add') {
-    const section = document.getElementById('importDetailsSection');
-    if (section) {
-      section.style.display = visible ? 'block' : 'none';
-    }
-    return;
-  }
-  if (flow === 'clean') {
-    showCleanLibraryDetailsSection(visible);
-    return;
-  }
-  if (flow === 'convert') {
-    const section = document.getElementById('terraformProgressDetailsSection');
-    if (section) {
-      section.style.display = visible ? 'block' : 'none';
-    }
-  }
-}
-
-function setDebugInflightCounts(flow, primary, duplicates, skipped) {
-  if (flow === 'add') {
-    const preflightEl = document.getElementById('importPreflightStats');
-    const statsEl = document.getElementById('importStats');
-    const importedEl = document.getElementById('importedCount');
-    const duplicateEl = document.getElementById('duplicateCount');
-    const skippedEl = document.getElementById('errorCount');
-    if (preflightEl) preflightEl.style.display = 'none';
-    if (statsEl) statsEl.style.display = 'grid';
-    if (importedEl) importedEl.textContent = Number(primary).toLocaleString();
-    if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
-    if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
-    return;
-  }
-  if (flow === 'clean') {
-    const preflightEl = document.getElementById('updateIndexPreflightStats');
-    const statsEl = document.getElementById('updateIndexInflightStats');
-    const processedEl = document.getElementById('updateIndexInflightProcessed');
-    const duplicateEl = document.getElementById('updateIndexInflightDuplicates');
-    const skippedEl = document.getElementById('updateIndexInflightSkipped');
-    if (preflightEl) preflightEl.style.display = 'none';
-    if (statsEl) statsEl.style.display = 'grid';
-    hideUpdateIndexStats();
-    if (processedEl) processedEl.textContent = Number(primary).toLocaleString();
-    if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
-    if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
-    return;
-  }
-  if (flow === 'convert') {
-    const processedEl = document.getElementById('terraformProgressProcessed');
-    const duplicateEl = document.getElementById('terraformProgressDuplicates');
-    const skippedEl = document.getElementById('terraformProgressSkipped');
-    if (processedEl) processedEl.textContent = Number(primary).toLocaleString();
-    if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
-    if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
-  }
-}
-
-function animateDebugInflightCounts(runId, flow, targets, durationMs) {
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const tick = () => {
-      if (runId !== debugFlowPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      const elapsed = Date.now() - startedAt;
-      const ratio = Math.min(1, elapsed / durationMs);
-      const eased = 1 - (1 - ratio) ** 2;
-      setDebugInflightCounts(
-        flow,
-        Math.round(targets.primary * eased),
-        Math.round(targets.duplicates * eased),
-        Math.round(targets.skipped * eased),
-      );
-      if (ratio >= 1) {
-        setDebugInflightCounts(
-          flow,
-          targets.primary,
-          targets.duplicates,
-          targets.skipped,
-        );
-        resolve();
-        return;
-      }
-      const timerId = setTimeout(tick, 50);
-      debugFlowPreviewState.timers.push(timerId);
-    };
-    tick();
-  });
-}
-
-function buildDebugInflightStatusLine(flow, ratio) {
-  const total = getDebugFlowTotalCount();
-  const current = Math.max(1, Math.round(total * ratio));
-  if (flow === 'add') {
-    return `Processing ${current.toLocaleString()} of ${total.toLocaleString()} files`;
-  }
-  if (flow === 'clean') {
-    const stepNumber = Math.min(
-      6,
-      Math.max(1, Math.ceil(ratio * CLEAN_LIBRARY_PREVIEW_WORKING_STEPS.length)),
-    );
-    const stepLabel = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1];
-    return `Step ${stepNumber} of 6: ${stepLabel}`;
-  }
-  const stepNumber = Math.min(3, Math.max(1, Math.ceil(ratio * 3)));
-  const labels = ['Converting files', 'Cleaning folders', 'Final verification'];
-  return `Step ${stepNumber} of 3: ${labels[stepNumber - 1]} (${current.toLocaleString()} / ${total.toLocaleString()})`;
-}
-
-function buildDebugInflightSecondaryStatus(ratio) {
-  const remainingSec = Math.max(
-    5,
-    Math.round(
-      (debugFlowPreviewState.estimatedSeconds || 30) * (1 - ratio),
-    ),
-  );
-  return `Total time remaining: ${formatAboutDurationFromSeconds(remainingSec)}`;
-}
-
-async function simulateDebugInflightPhase(flow, runId) {
-  debugFlowPreviewState.screen = 'inflight';
-  const total = getDebugFlowTotalCount();
-  const targets = deriveDebugInflightTargets(total);
-  debugFlowPreviewState.inflightTargets = targets;
-
-  if (flow === 'convert') {
-    const previewOverlay = document.getElementById('terraformPreviewOverlay');
-    let progressOverlay = document.getElementById('terraformProgressOverlay');
-    if (!progressOverlay) {
-      await loadTerraformProgressOverlay();
-      progressOverlay = document.getElementById('terraformProgressOverlay');
-    }
-    if (!progressOverlay) {
-      return;
-    }
-    resetFlowDetailsPanel('convert');
-    handoffFlowOverlays(progressOverlay, previewOverlay);
-    wireFlowDetailsToggle('convert');
-    wireDebugConvertProgressHandlers(runId);
-  }
-
-  if (flow === 'add') {
-    const explainerEl = document.getElementById('importExplainer');
-    if (explainerEl) {
-      explainerEl.textContent = FLOW_INFLIGHT_BODY.add;
-      explainerEl.style.display = 'block';
-    }
-    setImportActionButtons({ showCancel: true });
-    setDebugInflightCounts(flow, 0, 0, 0);
-    resetFlowDetailsPanel(flow);
-    showDebugDetailsSection(flow, true);
-    resetDebugLogFeed(flow);
-    appendDebugLogFeed(
-      flow,
-      `Started: ${formatCleanLibraryFeedTimestamp(new Date())}`,
-    );
-  }
-
-  if (flow === 'clean') {
-    showCleanLibraryWorkingBody();
-    setCleanLibrarySecondaryStatus(null, false);
-    showUpdateIndexButtons('cancel');
-    setDebugInflightCounts(flow, 0, 0, 0);
-    resetDebugLogFeed(flow);
-    showDebugDetailsSection(flow, true);
-    appendDebugLogFeed(
-      flow,
-      `Started: ${formatCleanLibraryFeedTimestamp(new Date())}`,
-    );
-  }
-
-  if (flow === 'convert') {
-    const explainerEl = document.getElementById('terraformProgressExplainer');
-    if (explainerEl) {
-      explainerEl.textContent = FLOW_INFLIGHT_BODY.convert;
-    }
-    setDebugInflightCounts(flow, 0, 0, 0);
-    resetFlowDetailsPanel(flow);
-    showDebugDetailsSection(flow, true);
-    resetDebugLogFeed(flow);
-    appendDebugLogFeed(
-      flow,
-      `Started: ${formatCleanLibraryFeedTimestamp(new Date())}`,
-    );
-  }
-
-  const startedAt = Date.now();
-  let logTicker = null;
-  const updateStatus = () => {
-    if (runId !== debugFlowPreviewState.runId) {
-      return;
-    }
-    const ratio = Math.min(
-      1,
-      (Date.now() - startedAt) / DEBUG_FLOW_PREVIEW_INFLIGHT_MS,
-    );
-    const statusLine = buildDebugInflightStatusLine(flow, ratio);
-    if (flow === 'add') {
-      const statusEl = document.getElementById('importStatusText');
-      if (statusEl) {
-        setImportSpinnerStatus(statusEl, statusLine);
-      }
-      const secondaryEl = document.getElementById('importSecondaryStatus');
-      if (secondaryEl) {
-        secondaryEl.style.display = 'block';
-        secondaryEl.textContent = buildDebugInflightSecondaryStatus(ratio);
-      }
-    } else if (flow === 'clean') {
-      const statusEl = document.getElementById('updateIndexStatusText');
-      if (statusEl) {
-        setImportSpinnerStatus(statusEl, statusLine);
-      }
-      setCleanLibrarySecondaryStatus(buildDebugInflightSecondaryStatus(ratio));
-    } else if (flow === 'convert') {
-      const statusEl = document.getElementById('terraformProgressStatus');
-      if (statusEl) {
-        setImportSpinnerStatus(statusEl, statusLine);
-      }
-      const secondaryEl = document.getElementById(
-        'terraformProgressSecondaryStatus',
-      );
-      if (secondaryEl) {
-        secondaryEl.style.display = 'block';
-        secondaryEl.textContent = buildDebugInflightSecondaryStatus(ratio);
-      }
-    }
-  };
-
-  updateStatus();
-  const statusTicker = setInterval(updateStatus, 400);
-  debugFlowPreviewState.timers.push(statusTicker);
-  logTicker = setInterval(() => {
-    if (runId !== debugFlowPreviewState.runId) {
-      return;
-    }
-    appendDebugLogFeed(flow, buildPreviewFakeLogLine());
-  }, 900);
-  debugFlowPreviewState.timers.push(logTicker);
-
-  try {
-    await animateDebugInflightCounts(
-      runId,
-      flow,
-      targets,
-      DEBUG_FLOW_PREVIEW_INFLIGHT_MS,
-    );
-  } finally {
-    clearInterval(statusTicker);
-    if (logTicker) {
-      clearInterval(logTicker);
-    }
-  }
-}
-
-async function showDebugAddComplete(runId) {
-  if (runId !== debugFlowPreviewState.runId) {
-    return;
-  }
-  debugFlowPreviewState.screen = 'complete';
-  const targets = debugFlowPreviewState.inflightTargets || deriveDebugInflightTargets(
-    getDebugFlowTotalCount(),
-  );
-  const explainerEl = document.getElementById('importExplainer');
-  if (explainerEl) {
-    explainerEl.style.display = 'none';
-  }
-  const secondaryEl = document.getElementById('importSecondaryStatus');
-  if (secondaryEl) {
-    secondaryEl.style.display = 'none';
-  }
-  const statusEl = document.getElementById('importStatusText');
-  if (statusEl) {
-    statusEl.textContent = `Added ${targets.primary.toLocaleString()} file${
-      targets.primary === 1 ? '' : 's'
-    } to your library.`;
-  }
-  setDebugInflightCounts('add', targets.primary, targets.duplicates, targets.skipped);
-  showDebugDetailsSection('add', true);
-  completeFlowActivityFeed('add', {
-    finishedAt: new Date(),
-    elapsedSec: Number(debugFlowPreviewState.estimatedSeconds) || 0,
-    logPath: DEBUG_FLOW_LOG_PATHS.add,
-    preserveExpanded: true,
-  });
-  setImportActionButtons({ showDone: true, showUndo: targets.primary > 0 });
-}
-
-async function showDebugCleanComplete(runId) {
-  if (runId !== debugFlowPreviewState.runId) {
-    return;
-  }
-  debugFlowPreviewState.screen = 'complete';
-  const targets = debugFlowPreviewState.inflightTargets || deriveDebugInflightTargets(
-    getDebugFlowTotalCount(),
-  );
-  setCleanLibraryExplainerVisible(false);
-  setCleanLibrarySecondaryStatus(
-    `Total time: ${debugFlowPreviewState.estimatedDisplay}`,
-    true,
-  );
-  const inflightEl = document.getElementById('updateIndexInflightStats');
-  if (inflightEl) {
-    inflightEl.style.display = 'grid';
-  }
-  setDebugInflightCounts(
-    'clean',
-    targets.primary,
-    targets.duplicates,
-    targets.skipped,
-  );
-  updateUpdateIndexUI(
-    'Library check complete. Your library is clean and organized.',
-  );
-  showDebugDetailsSection('clean', true);
-  completeFlowActivityFeed('clean', {
-    finishedAt: new Date(),
-    elapsedSec: Number(debugFlowPreviewState.estimatedSeconds) || 0,
-    logPath: DEBUG_FLOW_LOG_PATHS.clean,
-    preserveExpanded: true,
-  });
-  const detailsList = document.getElementById('updateIndexDetailsList');
-  if (detailsList) {
-    detailsList.style.display = 'none';
-  }
-  showUpdateIndexButtons('done');
-}
-
-async function showDebugConvertComplete(runId) {
-  if (runId !== debugFlowPreviewState.runId) {
-    return;
-  }
-  debugFlowPreviewState.screen = 'complete';
-  const targets = debugFlowPreviewState.inflightTargets || deriveDebugInflightTargets(
-    getDebugFlowTotalCount(),
-  );
-  const progressOverlay = document.getElementById('terraformProgressOverlay');
-  let completeOverlay = document.getElementById('terraformCompleteOverlay');
-  if (!completeOverlay) {
-    await loadTerraformCompleteOverlay();
-    completeOverlay = document.getElementById('terraformCompleteOverlay');
-  }
-  if (!completeOverlay) {
-    return;
-  }
-
-  handoffFlowOverlays(completeOverlay, progressOverlay);
-
-  wireFlowDetailsToggle('convertComplete');
-
-  document.getElementById('terraformCompleteProcessed').textContent =
-    targets.primary.toLocaleString();
-  document.getElementById('terraformCompleteDuplicates').textContent =
-    targets.duplicates.toLocaleString();
-  document.getElementById('terraformCompleteSkipped').textContent =
-    targets.skipped.toLocaleString();
-
-  const statusEl = document.getElementById('terraformCompleteStatusText');
-  if (statusEl) {
-    statusEl.textContent = `Converted ${targets.primary.toLocaleString()} file${
-      targets.primary === 1 ? '' : 's'
-    } to your library.`;
-  }
-
-  populateTerraformCompleteActivityFeed({
-    logPath: DEBUG_FLOW_LOG_PATHS.convert,
-    finishedAt: new Date(),
-    elapsedSec: Number(debugFlowPreviewState.estimatedSeconds) || 0,
-  });
-  showTerraformCompleteDetailsSection(true);
-
-  const closeBtn = document.getElementById('terraformCompleteCloseBtn');
-  const doneBtn = document.getElementById('terraformCompleteDoneBtn');
-  const dismissHandler = () => dismissDebugFlowPreview();
-  if (closeBtn) closeBtn.onclick = dismissHandler;
-  if (doneBtn) doneBtn.onclick = dismissHandler;
-}
-
-function wireDebugConvertPreviewHandlers() {
-  const dismissHandler = () => dismissDebugFlowPreview();
-  const continueHandler = () => {
-    if (debugFlowPreviewState.screen === 'preflight') {
-      triggerDebugPreflightContinue();
-    } else {
-      dismissDebugFlowPreview();
-    }
-  };
-
-  ['terraformPreviewCloseBtn', 'terraformPreviewCancelBtn', 'terraformPreviewGoBackBtn'].forEach(
-    (id) => {
-      const btn = document.getElementById(id);
-      if (btn) btn.onclick = dismissHandler;
-    },
-  );
-  const continueBtn = document.getElementById('terraformPreviewContinueBtn');
-  if (continueBtn) continueBtn.onclick = continueHandler;
-}
-
-function wireDebugConvertProgressHandlers(runId) {
-  const dismissHandler = () => dismissDebugFlowPreview();
-  const cancelBtn = document.getElementById('terraformProgressCancelBtn');
-  if (cancelBtn) cancelBtn.onclick = dismissHandler;
-}
-
-async function waitDebugPreflightOrientDelay(runId, orientStartedAtMs) {
-  const elapsed = Date.now() - orientStartedAtMs;
-  const remaining = Math.max(
-    0,
-    CLEAN_LIBRARY_PREFLIGHT_SCOREBOARD_DELAY_MS - elapsed,
-  );
-  if (remaining <= 0) {
-    return;
-  }
-  await new Promise((resolve, reject) => {
-    const timerId = setTimeout(() => {
-      if (runId !== debugFlowPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      resolve();
-    }, remaining);
-    debugFlowPreviewState.timers.push(timerId);
-  });
-}
-
-function animateDebugPreflightCounts(
-  runId,
-  photoTarget,
-  videoTarget,
-  durationMs,
-  setCounts,
-  totalTarget = null,
-) {
-  const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-
-    const tick = () => {
-      if (runId !== debugFlowPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      const elapsed = Date.now() - startedAt;
-      const ratio = Math.min(1, elapsed / durationMs);
-      const eased = 1 - (1 - ratio) ** 2;
-      setCounts(
-        Math.round(photoTarget * eased),
-        Math.round(videoTarget * eased),
-        Math.round(resolvedTotalTarget * eased),
-      );
-      if (ratio >= 1) {
-        setCounts(photoTarget, videoTarget, resolvedTotalTarget);
-        resolve();
-        return;
-      }
-      const timerId = setTimeout(tick, 50);
-      debugFlowPreviewState.timers.push(timerId);
-    };
-
-    tick();
-  });
-}
-
 function setImportDebugPreflightCounts(photoCount, videoCount, totalCount) {
   const preflightEl = document.getElementById('importPreflightStats');
   const runtimeEl = document.getElementById('importStats');
@@ -9014,233 +7939,6 @@ function setTerraformPreviewActionButtons({ continueDisabled = false } = {}) {
   }
 }
 
-function initDebugFlowTargets() {
-  debugFlowPreviewState.photoTarget = previewRandomMediaCount();
-  debugFlowPreviewState.videoTarget = previewRandomMediaCount();
-  const estimate = estimatePreviewCleanDuration(
-    debugFlowPreviewState.photoTarget,
-    debugFlowPreviewState.videoTarget,
-  );
-  debugFlowPreviewState.estimatedDisplay = estimate.display;
-  debugFlowPreviewState.estimatedSeconds = estimate.seconds;
-}
-
-async function prepareDebugFlowOverlay(flow) {
-  if (flow === 'add') {
-    await loadImportOverlay();
-    return document.getElementById('importOverlay');
-  }
-  if (flow === 'clean') {
-    await loadUpdateIndexOverlay();
-    return document.getElementById('updateIndexOverlay');
-  }
-  if (flow === 'convert') {
-    let overlay = document.getElementById('terraformPreviewOverlay');
-    if (!overlay) {
-      await loadTerraformPreviewOverlay();
-      overlay = document.getElementById('terraformPreviewOverlay');
-    }
-    return overlay;
-  }
-  return null;
-}
-
-function setupDebugFlowInitialUi(flow, overlay) {
-  overlay.style.display = 'flex';
-  resetFlowDetailsPanel(flow);
-
-  if (flow === 'add') {
-    setImportOverlayTitle();
-    const explainerEl = document.getElementById('importExplainer');
-    if (explainerEl) {
-      explainerEl.style.display = 'none';
-    }
-    showDebugDetailsSection('add', false);
-    setImportDebugPreflightCounts(0, 0, 0);
-    setImportActionButtons({
-      showCancel: true,
-      showContinue: true,
-      continueDisabled: true,
-    });
-    return;
-  }
-
-  if (flow === 'clean') {
-    resetUpdateIndexOverlayTitle();
-    resetCleanLibraryLogFeed();
-    showCleanLibraryPreflightExplainer();
-    setCleanLibrarySecondaryStatus(null, false);
-    showDebugDetailsSection('clean', false);
-    showUpdateIndexPreflightStats(null);
-    hideUpdateIndexStats();
-    const inflightEl = document.getElementById('updateIndexInflightStats');
-    if (inflightEl) {
-      inflightEl.style.display = 'none';
-    }
-    showUpdateIndexButtons('cancel', 'proceed-disabled');
-    showPreflightScoreboardZeros();
-    return;
-  }
-
-  const pathEl = document.getElementById('terraformPreviewPath');
-  if (pathEl) {
-    pathEl.textContent = '/Users/example/Photos/library';
-  }
-  setTerraformPreviewPhase('scanning');
-  setTerraformDebugPreflightCounts(0, 0, 0);
-  setTerraformPreviewActionButtons({ continueDisabled: true });
-  wireDebugConvertPreviewHandlers();
-}
-
-async function runDebugPreflightScan(flow, runId) {
-  let statusEl = null;
-  if (flow === 'add') {
-    statusEl = document.getElementById('importStatusText');
-    if (statusEl) {
-      setImportSpinnerStatus(statusEl, 'Scanning library…');
-    }
-  } else if (flow === 'clean') {
-    statusEl = document.getElementById('updateIndexStatusText');
-    if (statusEl) {
-      setImportSpinnerStatus(statusEl, 'Scanning library…');
-    }
-  } else {
-    statusEl = document.getElementById('terraformPreviewScanStatus');
-    if (statusEl) {
-      setImportSpinnerStatus(statusEl, 'Scanning library…');
-    }
-  }
-
-  const orientStartedAt = Date.now();
-  await waitDebugPreflightOrientDelay(runId, orientStartedAt);
-
-  const setCounts =
-    flow === 'add'
-      ? setImportDebugPreflightCounts
-      : flow === 'clean'
-        ? (photos, videos, total) => {
-            setPreviewPreflightCounts(photos, videos, total);
-          }
-        : setTerraformDebugPreflightCounts;
-
-  await animateDebugPreflightCounts(
-    runId,
-    debugFlowPreviewState.photoTarget,
-    debugFlowPreviewState.videoTarget,
-    DEBUG_FLOW_PREVIEW_SCAN_MS,
-    setCounts,
-  );
-
-  if (flow === 'convert') {
-    setTerraformPreviewPhase('confirm');
-    setTerraformDebugPreflightCounts(
-      debugFlowPreviewState.photoTarget,
-      debugFlowPreviewState.videoTarget,
-      getDebugFlowTotalCount(),
-    );
-    setTerraformPreviewActionButtons({ continueDisabled: false });
-    return;
-  }
-
-  if (flow === 'clean') {
-    showCleanLibraryPreflightExplainer();
-    setPreviewPreflightCounts(
-      debugFlowPreviewState.photoTarget,
-      debugFlowPreviewState.videoTarget,
-    );
-    if (statusEl) {
-      statusEl.textContent = `Time required: ${debugFlowPreviewState.estimatedDisplay}`;
-    }
-    showUpdateIndexButtons('cancel', 'proceed');
-    return;
-  }
-
-  if (statusEl) {
-    statusEl.textContent = `Time required: ${debugFlowPreviewState.estimatedDisplay}`;
-  }
-  setImportActionButtons({
-    showCancel: true,
-    showContinue: true,
-    continueDisabled: false,
-  });
-}
-
-async function runDebugFlowPreview(flow) {
-  stopDebugFlowPreview();
-
-  const overlay = await prepareDebugFlowOverlay(flow);
-  if (!overlay) {
-    return;
-  }
-
-  debugFlowPreviewState.active = true;
-  debugFlowPreviewState.flow = flow;
-  if (flow === 'clean') {
-    cleanLibraryPreviewState.active = true;
-    if (!updateIndexState) {
-      updateIndexState = {};
-    }
-  }
-
-  const runId = (debugFlowPreviewState.runId += 1);
-  initDebugFlowTargets();
-  setupDebugFlowInitialUi(flow, overlay);
-
-  try {
-    debugFlowPreviewState.screen = 'preflight';
-    await runDebugPreflightScan(flow, runId);
-    const continued = await waitForDebugPreflightContinue(runId);
-    if (!continued) {
-      return;
-    }
-
-    await simulateDebugInflightPhase(flow, runId);
-
-    if (flow === 'add') {
-      await showDebugAddComplete(runId);
-    } else if (flow === 'clean') {
-      await showDebugCleanComplete(runId);
-    } else {
-      await showDebugConvertComplete(runId);
-    }
-
-    await waitForDebugFlowDismiss(runId);
-  } catch (error) {
-    if (error?.message !== 'cancelled') {
-      console.error(`❌ ${flow} flow preview failed:`, error);
-    }
-  } finally {
-    stopDebugFlowPreview();
-  }
-}
-
-async function openDebugFlowPicker() {
-  const choice = await showDialog('Debug flows', 'Pick a flow to preview.', [
-    { text: 'Cancel', value: 'cancel', primary: false },
-    { text: 'Add photos', value: 'add', primary: false },
-    { text: 'Clean library', value: 'clean', primary: false },
-    { text: 'Convert to library', value: 'convert', primary: false },
-  ]);
-
-  if (choice === 'add' || choice === 'clean' || choice === 'convert') {
-    await runDebugFlowPreview(choice);
-  }
-}
-
-const CLEAN_LIBRARY_PREVIEW_SCAN_MS = 4000;
-const CLEAN_LIBRARY_PREVIEW_WORKING_MS = 20000;
-const CLEAN_LIBRARY_PREVIEW_INTERRUPTED_CHANCE = 0.2;
-const CLEAN_LIBRARY_PREFLIGHT_SCOREBOARD_DELAY_MS = 500;
-const CLEAN_LIBRARY_PREFLIGHT_COUNT_ANIMATION_MS = 1500;
-
-const PREVIEW_MEDIA_COUNT_TIERS = [
-  { id: 'xs', min: 0, max: 9 },
-  { id: 's', min: 10, max: 99 },
-  { id: 'm', min: 100, max: 999 },
-  { id: 'l', min: 1000, max: 9999 },
-  { id: 'xl', min: 10000, max: 100000 },
-];
-
 const CLEAN_LIBRARY_OVERLAY_TITLE = 'Clean library';
 const CLEAN_LIBRARY_CONTINUE_TITLE = 'Continue cleanup';
 const CLEAN_LIBRARY_PAUSE_TOAST =
@@ -9249,6 +7947,9 @@ const CLEAN_LIBRARY_PREFLIGHT_EXPLAINER =
   'This will organize your library, remove duplicates and corrupted media, and fix any database issues.';
 const CLEAN_LIBRARY_WORKING_BODY =
   'Checking media files, repairing issues, and updating library database.';
+
+const CLEAN_LIBRARY_PREFLIGHT_SCOREBOARD_DELAY_MS = 500;
+const CLEAN_LIBRARY_PREFLIGHT_COUNT_ANIMATION_MS = 1500;
 
 const CLEAN_LIBRARY_PREVIEW_WORKING_STEPS = [
   'Scanning files',
@@ -9279,103 +7980,36 @@ const CLEAN_LIBRARY_STEP_PROGRESS_PHASES = new Set([
   'audit',
 ]);
 
+/** Which scoreboard row is visible — derived from updateIndexState.overlayPhase only. */
+function syncCleanLibraryScoreboards() {
+  const phase = updateIndexState?.overlayPhase ?? null;
+  const preflightEl = document.getElementById('updateIndexPreflightStats');
+  const inflightEl = document.getElementById('updateIndexInflightStats');
+  const legacyEl = document.getElementById('updateIndexStats');
+
+  const showPreflight = phase === 'scanning' || phase === 'eta';
+  const showInflight = phase === 'working' || phase === 'finished';
+  const showLegacy = phase === 'legacy-audit';
+
+  if (preflightEl) {
+    preflightEl.style.display = showPreflight ? 'grid' : 'none';
+  }
+  if (inflightEl) {
+    inflightEl.style.display = showInflight ? 'grid' : 'none';
+  }
+  if (legacyEl) {
+    legacyEl.style.display = showLegacy ? 'grid' : 'none';
+  }
+}
+
+function setCleanLibraryOverlayPhase(phase) {
+  if (updateIndexState) {
+    updateIndexState.overlayPhase = phase;
+  }
+  syncCleanLibraryScoreboards();
+}
+
 let cleanLibraryWorkingStepState = null;
-
-const cleanLibraryPreviewState = {
-  active: false,
-  runId: 0,
-  timers: [],
-  photoTarget: 0,
-  videoTarget: 0,
-  estimatedDisplay: '',
-  estimatedSeconds: 0,
-  phase: null,
-  onProceed: null,
-  onStartOver: null,
-  onInterruptedChoice: null,
-  workingProgress: null,
-};
-
-let cleanLibraryRunUiPaused = false;
-
-function pauseCleanLibraryWorkingProgress() {
-  const progress = cleanLibraryPreviewState.workingProgress;
-  if (!progress || progress.pauseStartedAt != null) {
-    return;
-  }
-  progress.pauseStartedAt = Date.now();
-}
-
-function resumeCleanLibraryWorkingProgress() {
-  const progress = cleanLibraryPreviewState.workingProgress;
-  if (!progress || progress.pauseStartedAt == null) {
-    return;
-  }
-  progress.pauseAccumMs += Date.now() - progress.pauseStartedAt;
-  progress.pauseStartedAt = null;
-}
-
-function getPreviewWorkingElapsedMs() {
-  const progress = cleanLibraryPreviewState.workingProgress;
-  if (!progress) {
-    return 0;
-  }
-  let elapsed = Date.now() - progress.startedAt - progress.pauseAccumMs;
-  if (progress.pauseStartedAt) {
-    elapsed -= Date.now() - progress.pauseStartedAt;
-  }
-  return Math.max(0, elapsed);
-}
-
-function isCleanLibraryWorkingProgressPaused() {
-  const progress = cleanLibraryPreviewState.workingProgress;
-  return Boolean(progress?.pauseStartedAt);
-}
-
-function pauseCleanLibraryRunUiUpdates() {
-  cleanLibraryRunUiPaused = true;
-}
-
-function resumeCleanLibraryRunUiUpdates() {
-  cleanLibraryRunUiPaused = false;
-}
-
-function stopCleanLibraryPreview() {
-  const workingProgress = cleanLibraryPreviewState.workingProgress;
-  cleanLibraryPreviewState.runId += 1;
-  cleanLibraryPreviewState.active = false;
-  cleanLibraryPreviewState.workingProgress = null;
-  cleanLibraryRunUiPaused = false;
-  cleanLibraryPreviewState.onProceed = null;
-  cleanLibraryPreviewState.onStartOver = null;
-  cleanLibraryPreviewState.onInterruptedChoice = null;
-  cleanLibraryPreviewState.timers.forEach((timerId) => {
-    clearTimeout(timerId);
-    clearInterval(timerId);
-  });
-  cleanLibraryPreviewState.timers = [];
-  if (workingProgress?.rejectCompletion) {
-    workingProgress.rejectCompletion(new Error('cancelled'));
-  }
-}
-
-function previewRandomMediaCount() {
-  const tier =
-    PREVIEW_MEDIA_COUNT_TIERS[
-      Math.floor(Math.random() * PREVIEW_MEDIA_COUNT_TIERS.length)
-    ];
-  return tier.min + Math.floor(Math.random() * (tier.max - tier.min + 1));
-}
-
-function estimatePreviewCleanDuration(photoCount, videoCount) {
-  const photoSec = Math.max(0, photoCount) * 1.7;
-  const videoSec = Math.max(0, videoCount) * 1.2;
-  const totalSeconds = (photoSec + videoSec) * 1.05;
-  return {
-    seconds: totalSeconds,
-    display: formatAboutDurationFromSeconds(totalSeconds),
-  };
-}
 
 function setCleanLibraryExplainerVisible(visible) {
   const explainerEl = document.getElementById('updateIndexExplainer');
@@ -9533,18 +8167,15 @@ function resetCleanLibraryLogFeed() {
   resetFlowActivityFeed('clean');
 }
 
-function appendCleanLibraryLogLine(line, { previewOnly = false } = {}) {
-  if (previewOnly && !cleanLibraryPreviewState.active) {
-    return;
-  }
+function appendCleanLibraryLogLine(line) {
   const trimmed = String(line || '').trim();
   if (!trimmed) {
     return;
   }
   try {
-    appendCleanLibraryEngineLogEntry(JSON.parse(trimmed), { previewOnly });
+    appendCleanLibraryEngineLogEntry(JSON.parse(trimmed));
   } catch {
-    appendCleanLibraryActivityLine(trimmed, { previewOnly });
+    appendCleanLibraryActivityLine(trimmed);
   }
 }
 
@@ -9564,7 +8195,7 @@ function getCleanLibraryPreflightTotal(scanResult, photos, videos) {
   );
 }
 
-function setPreviewPreflightCounts(photoCount, videoCount, totalCount = null) {
+function setCleanLibraryPreflightCounts(photoCount, videoCount, totalCount = null) {
   const total = totalCount ?? photoCount + videoCount;
   showUpdateIndexPreflightStats({
     summary: {
@@ -9575,26 +8206,17 @@ function setPreviewPreflightCounts(photoCount, videoCount, totalCount = null) {
   });
 }
 
-async function waitPreflightScoreboardOrientDelay(
-  orientStartedAtMs,
-  { runId = null, previewOnly = false } = {},
-) {
+async function waitPreflightScoreboardOrientDelay(orientStartedAtMs) {
   const elapsed = Date.now() - orientStartedAtMs;
-  const remaining = Math.max(0, CLEAN_LIBRARY_PREFLIGHT_SCOREBOARD_DELAY_MS - elapsed);
+  const remaining = Math.max(
+    0,
+    CLEAN_LIBRARY_PREFLIGHT_SCOREBOARD_DELAY_MS - elapsed,
+  );
   if (remaining <= 0) {
     return;
   }
-  await new Promise((resolve, reject) => {
-    const timerId = setTimeout(() => {
-      if (previewOnly && runId !== cleanLibraryPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      resolve();
-    }, remaining);
-    if (previewOnly) {
-      cleanLibraryPreviewState.timers.push(timerId);
-    }
+  await new Promise((resolve) => {
+    setTimeout(resolve, remaining);
   });
 }
 
@@ -9602,358 +8224,35 @@ function animatePreflightScoreboardCounts(
   photoTarget,
   videoTarget,
   durationMs,
-  { runId = null, previewOnly = false, totalTarget = null } = {},
+  { totalTarget = null } = {},
 ) {
   const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const startedAt = Date.now();
 
     const tick = () => {
-      if (previewOnly && runId !== cleanLibraryPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
       const elapsed = Date.now() - startedAt;
       const ratio = Math.min(1, elapsed / durationMs);
       const eased = 1 - (1 - ratio) ** 2;
-      setPreviewPreflightCounts(
+      setCleanLibraryPreflightCounts(
         Math.round(photoTarget * eased),
         Math.round(videoTarget * eased),
         Math.round(resolvedTotalTarget * eased),
       );
       if (ratio >= 1) {
-        setPreviewPreflightCounts(photoTarget, videoTarget, resolvedTotalTarget);
+        setCleanLibraryPreflightCounts(
+          photoTarget,
+          videoTarget,
+          resolvedTotalTarget,
+        );
         resolve();
         return;
       }
-      const timerId = setTimeout(tick, 50);
-      if (previewOnly) {
-        cleanLibraryPreviewState.timers.push(timerId);
-      }
+      setTimeout(tick, 50);
     };
 
     tick();
   });
-}
-
-function animatePreviewPreflightCounts(runId, photoTarget, videoTarget, durationMs) {
-  return animatePreflightScoreboardCounts(photoTarget, videoTarget, durationMs, {
-    runId,
-    previewOnly: true,
-  });
-}
-
-function waitForPreviewProceed(runId) {
-  return new Promise((resolve, reject) => {
-    cleanLibraryPreviewState.onProceed = () => {
-      if (runId !== cleanLibraryPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      cleanLibraryPreviewState.onProceed = null;
-      resolve();
-    };
-  });
-}
-
-function waitForPreviewInterruptedChoice(runId) {
-  return new Promise((resolve, reject) => {
-    cleanLibraryPreviewState.onInterruptedChoice = (choice) => {
-      if (runId !== cleanLibraryPreviewState.runId) {
-        reject(new Error('cancelled'));
-        return;
-      }
-      cleanLibraryPreviewState.onInterruptedChoice = null;
-      resolve(choice);
-    };
-  });
-}
-
-function buildPreviewFakeLogLine() {
-  const hash = Math.random().toString(16).slice(2, 10);
-  const year = 2020 + Math.floor(Math.random() * 6);
-  const templates = [
-    `Scanned ${(Math.floor(Math.random() * 20) + 1) * 500} of 13,899`,
-    `Moved batch/photo_${hash.slice(0, 4)}.jpg → ${year}/${year}-03-12/img_${hash}.jpg`,
-    `Removed duplicate: imports/dup_${hash.slice(0, 4)}.jpg`,
-    `Baked rotation: ${year}/${year}-03-12/img_${hash}.jpg`,
-    `Removed empty folder: batch/old_folder`,
-    `Database rebuilt (${(Math.floor(Math.random() * 9000) + 100).toLocaleString()} rows)`,
-    `Verifying ${(Math.floor(Math.random() * 20) + 1) * 500} of 13,899`,
-  ];
-  return templates[Math.floor(Math.random() * templates.length)];
-}
-
-async function showPreviewInterruptedScreen(runId) {
-  cleanLibraryPreviewState.phase = 'interrupted';
-  showContinueLibraryCleanupTitle();
-  setCleanLibraryExplainerVisible(false);
-  setCleanLibrarySecondaryStatus(null, false);
-  showUpdateIndexPreflightStats(null);
-  hideUpdateIndexStats();
-  showCleanLibraryDetailsSection(false);
-  resetCleanLibraryLogFeed();
-  updateUpdateIndexUI(
-    'It looks like a previous library cleanup was not completed. You can continue it, start a new cleanup, or cancel.',
-    false,
-  );
-  showUpdateIndexButtons('cancel', 'start-over', 'proceed');
-  return waitForPreviewInterruptedChoice(runId);
-}
-
-async function showPreviewScanningPhase(runId) {
-  cleanLibraryPreviewState.phase = 'scanning';
-  showCleanLibraryPreflightExplainer();
-  setCleanLibrarySecondaryStatus(null, false);
-  showCleanLibraryDetailsSection(false);
-  resetCleanLibraryLogFeed();
-  updateUpdateIndexUI('Scanning library', true);
-  showUpdateIndexButtons('cancel', 'proceed-disabled');
-  showPreflightScoreboardZeros();
-
-  const orientStartedAt = Date.now();
-  await waitPreflightScoreboardOrientDelay(orientStartedAt, {
-    runId,
-    previewOnly: true,
-  });
-  await animatePreviewPreflightCounts(
-    runId,
-    cleanLibraryPreviewState.photoTarget,
-    cleanLibraryPreviewState.videoTarget,
-    CLEAN_LIBRARY_PREVIEW_SCAN_MS,
-  );
-}
-
-async function showPreviewEtaScreen(runId) {
-  cleanLibraryPreviewState.phase = 'eta';
-  const { photoTarget, videoTarget, estimatedDisplay } = cleanLibraryPreviewState;
-  showCleanLibraryPreflightExplainer();
-  setCleanLibrarySecondaryStatus(null, false);
-  setPreviewPreflightCounts(photoTarget, videoTarget);
-  updateUpdateIndexUI(`Time required: ${estimatedDisplay}`, false);
-  showUpdateIndexButtons('cancel', 'proceed');
-  await waitForPreviewProceed(runId);
-}
-
-async function showPreviewWorkingPhase(runId) {
-  cleanLibraryPreviewState.phase = 'working';
-  resetUpdateIndexOverlayTitle();
-  resetCleanLibraryLogFeed();
-  showCleanLibraryDetailsSection(true);
-  showUpdateIndexPreflightStats(null);
-  hideUpdateIndexStats();
-  showCleanLibraryWorkingBody();
-  showUpdateIndexButtons('cancel');
-
-  const workingProgress = {
-    startedAt: Date.now(),
-    pauseAccumMs: 0,
-    pauseStartedAt: null,
-    resolveCompletion: null,
-    rejectCompletion: null,
-  };
-  cleanLibraryPreviewState.workingProgress = workingProgress;
-  cleanLibraryPreviewState.runStartedAtMs = workingProgress.startedAt;
-  beginFlowInflightFeed('clean', workingProgress.startedAt, { previewOnly: true });
-
-  let logTicker = null;
-  let frameTicker = null;
-  let workingUiActive = true;
-
-  const stopWorkingTickers = () => {
-    workingUiActive = false;
-    if (logTicker !== null) {
-      clearInterval(logTicker);
-      logTicker = null;
-    }
-    if (frameTicker !== null) {
-      clearInterval(frameTicker);
-      frameTicker = null;
-    }
-  };
-
-  const finishWorkingPhase = () => {
-    if (!workingUiActive) {
-      return;
-    }
-    stopWorkingTickers();
-    if (workingProgress.resolveCompletion) {
-      workingProgress.resolveCompletion();
-    }
-  };
-
-  const updateWorkingUi = () => {
-    if (!workingUiActive || runId !== cleanLibraryPreviewState.runId) return;
-    if (isCleanLibraryWorkingProgressPaused()) return;
-
-    const elapsed = getPreviewWorkingElapsedMs();
-    if (elapsed >= CLEAN_LIBRARY_PREVIEW_WORKING_MS) {
-      finishWorkingPhase();
-      return;
-    }
-
-    const stepNumber = Math.min(
-      CLEAN_LIBRARY_PREVIEW_WORKING_STEPS.length,
-      Math.max(
-        1,
-        Math.floor(
-          (elapsed / CLEAN_LIBRARY_PREVIEW_WORKING_MS) *
-            CLEAN_LIBRARY_PREVIEW_WORKING_STEPS.length,
-        ) + 1,
-      ),
-    );
-    const stepLabel = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1];
-    updateUpdateIndexUI(`Step ${stepNumber} of 6: ${stepLabel}`, true);
-    setCleanLibrarySecondaryStatus(
-      `Total time remaining: ${formatAboutDurationFromSeconds(
-        Math.max(
-          5,
-          cleanLibraryPreviewState.estimatedSeconds *
-            (1 - elapsed / CLEAN_LIBRARY_PREVIEW_WORKING_MS),
-        ),
-      )}`,
-    );
-  };
-
-  updateWorkingUi();
-  logTicker = setInterval(() => {
-    if (isCleanLibraryWorkingProgressPaused()) return;
-    appendCleanLibraryActivityLine(buildPreviewFakeLogLine(), { previewOnly: true });
-  }, 450);
-  cleanLibraryPreviewState.timers.push(logTicker);
-
-  frameTicker = setInterval(updateWorkingUi, 200);
-  cleanLibraryPreviewState.timers.push(frameTicker);
-
-  try {
-    await new Promise((resolve, reject) => {
-      workingProgress.resolveCompletion = resolve;
-      workingProgress.rejectCompletion = reject;
-      if (getPreviewWorkingElapsedMs() >= CLEAN_LIBRARY_PREVIEW_WORKING_MS) {
-        finishWorkingPhase();
-      }
-    });
-  } catch (error) {
-    if (error?.message !== 'cancelled') {
-      throw error;
-    }
-  } finally {
-    stopWorkingTickers();
-    if (cleanLibraryPreviewState.workingProgress === workingProgress) {
-      cleanLibraryPreviewState.workingProgress = null;
-    }
-  }
-}
-
-function showPreviewFinishedScreen() {
-  const finishedAt = new Date();
-  const startedAtMs =
-    cleanLibraryPreviewState.runStartedAtMs ||
-    cleanLibraryPreviewState.workingProgress?.startedAt;
-  const elapsedSec = startedAtMs
-    ? (finishedAt.getTime() - startedAtMs) / 1000
-    : Number(cleanLibraryPreviewState.estimatedSeconds) || 0;
-  const totalDisplay = formatPreciseDurationFromSeconds(elapsedSec);
-
-  completeFlowActivityFeed('clean', {
-    finishedAt,
-    elapsedSec,
-    preserveExpanded: true,
-  });
-
-  cleanLibraryPreviewState.phase = 'finished';
-  setCleanLibraryExplainerVisible(false);
-  setCleanLibrarySecondaryStatus(`Total time: ${totalDisplay}`, true);
-  updateUpdateIndexUI(
-    'Library check complete. Your library is clean and organized.',
-  );
-  showCleanLibraryDetailsSection(true);
-  showUpdateIndexButtons('done');
-
-  const detailsList = document.getElementById('updateIndexDetailsList');
-  if (detailsList) {
-    detailsList.style.display = 'none';
-  }
-}
-
-async function startCleanLibraryPreviewFlow() {
-  await runDebugFlowPreview('clean');
-}
-
-function handleUpdateIndexProceedClick() {
-  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'clean') {
-    if (debugFlowPreviewState.screen === 'preflight') {
-      triggerDebugPreflightContinue();
-    } else {
-      dismissDebugFlowPreview();
-    }
-    return;
-  }
-
-  if (cleanLibraryPreviewState.active) {
-    if (cleanLibraryPreviewState.onProceed) {
-      cleanLibraryPreviewState.onProceed();
-    } else if (cleanLibraryPreviewState.onInterruptedChoice) {
-      cleanLibraryPreviewState.onInterruptedChoice('continue');
-    }
-    return;
-  }
-  if (updateIndexState.onInterruptedChoice) {
-    updateIndexState.onInterruptedChoice('continue');
-    return;
-  }
-  void executeUpdateIndex();
-}
-
-function handleUpdateIndexStartOverClick() {
-  if (cleanLibraryPreviewState.active) {
-    if (cleanLibraryPreviewState.onInterruptedChoice) {
-      cleanLibraryPreviewState.onInterruptedChoice('start-over');
-      return;
-    }
-    void restartCleanLibraryPreviewFromStartOver();
-    return;
-  }
-  if (updateIndexState.onInterruptedChoice) {
-    updateIndexState.onInterruptedChoice('start-over');
-    return;
-  }
-  if (
-    updateIndexState.overlayPhase === 'eta' &&
-    updateIndexState.preflight?.status === 'RESUME'
-  ) {
-    void restartCleanLibraryPreflightFromStartOver();
-  }
-}
-
-async function restartCleanLibraryPreflightFromStartOver() {
-  try {
-    await abandonCleanLibraryCheckpoint();
-    updateIndexState.resumeIntent = false;
-    resetUpdateIndexOverlayTitle();
-    const scanResult = await runUpdateIndexPreflightScan();
-    renderUpdateIndexPreflightResult(scanResult);
-  } catch (error) {
-    console.error('❌ Clean library start over failed:', error);
-    updateUpdateIndexUI('Failed to scan library', false);
-    showToast(`Scan failed: ${error.message}`, 'error');
-    showUpdateIndexButtons('cancel');
-  }
-}
-
-async function restartCleanLibraryPreviewFromStartOver() {
-  const runId = cleanLibraryPreviewState.runId;
-  resetUpdateIndexOverlayTitle();
-  try {
-    await showPreviewScanningPhase(runId);
-    await showPreviewEtaScreen(runId);
-    await showPreviewWorkingPhase(runId);
-    showPreviewFinishedScreen();
-  } catch (error) {
-    if (error?.message !== 'cancelled') {
-      console.error('❌ Clean library preview restart failed:', error);
-    }
-  }
 }
 
 const CLEAN_LIBRARY_PHASE_LABELS = {
@@ -10236,13 +8535,11 @@ function handleCleanLibraryWorkingProgressEvent(event = {}) {
 
 function beginCleanLibraryWorkingUi() {
   updateIndexState.workingPhaseActive = true;
-  updateIndexState.overlayPhase = 'working';
   updateIndexState.runStartedAtMs = Date.now();
   resetCleanLibraryWorkingStepState();
   resetUpdateIndexOverlayTitle();
   showCleanLibraryWorkingBody();
-  showUpdateIndexPreflightStats(null);
-  hideUpdateIndexStats();
+  setCleanLibraryOverlayPhase('working');
   initCleanLibraryInflightStats();
   showCleanLibraryDetailsSection(true);
   beginFlowInflightFeed('clean', updateIndexState.runStartedAtMs, {
@@ -10309,7 +8606,7 @@ function showCleanLibraryFinishedUi() {
   });
 
   endCleanLibraryWorkingUi();
-  updateIndexState.overlayPhase = 'finished';
+  setCleanLibraryOverlayPhase('finished');
   setCleanLibrarySecondaryStatus(`Total time: ${totalDisplay}`, true);
   updateUpdateIndexUI(
     'Library check complete. Your library is clean and organized.',
@@ -10417,12 +8714,10 @@ async function prefetchCleanLibraryManifestTail() {
 }
 
 function showCleanLibraryInterruptedGate() {
-  updateIndexState.overlayPhase = 'interrupted';
+  setCleanLibraryOverlayPhase('interrupted');
   showContinueLibraryCleanupTitle();
   setCleanLibraryExplainerVisible(false);
   setCleanLibrarySecondaryStatus(null, false);
-  showUpdateIndexPreflightStats(null);
-  hideUpdateIndexStats();
   showCleanLibraryDetailsSection(false);
   resetCleanLibraryLogFeed();
   updateUpdateIndexUI(
@@ -10554,16 +8849,11 @@ function updateIndexStatusForCleanerPhase(event = {}) {
   );
 }
 
-function showUpdateIndexPreflightStats(scanResult = null) {
-  const preflightEl = document.getElementById('updateIndexPreflightStats');
-  const runStatsEl = document.getElementById('updateIndexStats');
+function updateCleanLibraryPreflightScoreboardValues(scanResult) {
   const photoEl = document.getElementById('updateIndexPhotoCount');
   const videoEl = document.getElementById('updateIndexVideoCount');
   const totalEl = document.getElementById('updateIndexTotalCount');
-
-  if (runStatsEl) runStatsEl.style.display = 'none';
   if (!scanResult) {
-    if (preflightEl) preflightEl.style.display = 'none';
     return;
   }
 
@@ -10575,30 +8865,27 @@ function showUpdateIndexPreflightStats(scanResult = null) {
   if (photoEl) photoEl.textContent = Number(photos).toLocaleString();
   if (videoEl) videoEl.textContent = Number(videos).toLocaleString();
   if (totalEl) totalEl.textContent = Number(total).toLocaleString();
-  if (preflightEl) preflightEl.style.display = 'grid';
+}
+
+function showUpdateIndexPreflightStats(scanResult = null) {
+  updateCleanLibraryPreflightScoreboardValues(scanResult);
+  syncCleanLibraryScoreboards();
 }
 
 function showPreflightScoreboardZeros() {
-  const preflightEl = document.getElementById('updateIndexPreflightStats');
-  const runStatsEl = document.getElementById('updateIndexStats');
-  const photoEl = document.getElementById('updateIndexPhotoCount');
-  const videoEl = document.getElementById('updateIndexVideoCount');
-  const totalEl = document.getElementById('updateIndexTotalCount');
-  if (runStatsEl) runStatsEl.style.display = 'none';
-  if (photoEl) photoEl.textContent = '0';
-  if (videoEl) videoEl.textContent = '0';
-  if (totalEl) totalEl.textContent = '0';
-  if (preflightEl) preflightEl.style.display = 'grid';
+  updateCleanLibraryPreflightScoreboardValues({
+    summary: { photo_count: 0, video_count: 0, media_count: 0 },
+  });
+  syncCleanLibraryScoreboards();
 }
 
 async function runUpdateIndexPreflightScan() {
-  updateIndexState.overlayPhase = 'scanning';
+  setCleanLibraryOverlayPhase('scanning');
   resetCleanLibraryLogFeed();
   updateUpdateIndexUI('Scanning library…', true);
   showUpdateIndexButtons('cancel', 'proceed-disabled');
   showCleanLibraryPreflightExplainer();
   showPreflightScoreboardZeros();
-  hideUpdateIndexStats();
 
   const orientStartedAt = Date.now();
   const response = await fetch('/api/library/make-perfect/scan');
@@ -10628,9 +8915,9 @@ async function runUpdateIndexPreflightScan() {
 function renderUpdateIndexPreflightResult(scanResult) {
   updateIndexState.preflight = scanResult;
   storeCleanLibraryPreflightEstimate(scanResult);
-  updateIndexState.overlayPhase = 'eta';
 
   if (scanResult.status === 'INVENTORY' || scanResult.status === 'RESUME') {
+    setCleanLibraryOverlayPhase('eta');
     if (scanResult.status === 'RESUME') {
       updateIndexState.resumeIntent = true;
       if (scanResult.resume?.manifest_path) {
@@ -10666,6 +8953,7 @@ function renderUpdateIndexPreflightResult(scanResult) {
     updateIndexState.unsupportedFiles = summary.unsupported_files || 0;
     updateIndexState.metadataCleanup = summary.metadata_cleanup || 0;
     updateIndexState.databaseRepairs = summary.database_repairs || 0;
+    setCleanLibraryOverlayPhase('legacy-audit');
     showUpdateIndexStats();
     const issueCount = summary.issue_count ?? summary.operation_count ?? 0;
     updateUpdateIndexUI(
@@ -10724,6 +9012,7 @@ async function openUpdateIndexOverlay() {
 
   showFlowOverlay(overlay);
   resetUpdateIndexOverlayTitle();
+  syncCleanLibraryScoreboards();
 
   try {
     const checkpoint = await probeCleanLibraryCheckpoint();
@@ -10794,7 +9083,7 @@ async function executeUpdateIndex() {
     updateIndexState.resultStats = result?.stats || null;
     updateIndexState.logPath = resolveCleanLibraryLogPath(result);
     showCleanLibraryFinishedUi();
-    await loadAndRenderPhotos(false);
+    await rehydrateLibraryCatalog();
   } catch (error) {
     if (error?.name === 'AbortError' || updateIndexState?.cancelRequested) {
       updateIndexState.resumeIntent = null;
@@ -10835,18 +9124,9 @@ function updateUpdateIndexUI(statusText, showSpinner = false) {
 }
 
 function setCleanLibraryInflightCounts(processed, duplicates, skipped) {
-  const preflightEl = document.getElementById('updateIndexPreflightStats');
-  const statsEl = document.getElementById('updateIndexInflightStats');
   const processedEl = document.getElementById('updateIndexInflightProcessed');
   const duplicateEl = document.getElementById('updateIndexInflightDuplicates');
   const skippedEl = document.getElementById('updateIndexInflightSkipped');
-  if (preflightEl) {
-    preflightEl.style.display = 'none';
-  }
-  if (statsEl) {
-    statsEl.style.display = 'grid';
-  }
-  hideUpdateIndexStats();
   if (processedEl) {
     processedEl.textContent = Number(processed).toLocaleString();
   }
@@ -10856,6 +9136,7 @@ function setCleanLibraryInflightCounts(processed, duplicates, skipped) {
   if (skippedEl) {
     skippedEl.textContent = Number(skipped).toLocaleString();
   }
+  syncCleanLibraryScoreboards();
 }
 
 function initCleanLibraryInflightStats() {
@@ -10902,28 +9183,35 @@ function syncCleanLibraryInflightFromResultStats(resultStats) {
  * Show statistics
  */
 function showUpdateIndexStats() {
-  const statsEl = document.getElementById('updateIndexStats');
   const misfiledEl = document.getElementById('misfiledMediaCount');
   const duplicatesEl = document.getElementById('duplicatesCount');
   const unsupportedEl = document.getElementById('unsupportedFilesCount');
   const metadataEl = document.getElementById('metadataCleanupCount');
   const dbRepairsEl = document.getElementById('databaseRepairsCount');
 
-  if (statsEl) statsEl.style.display = 'grid';
   if (misfiledEl) misfiledEl.textContent = updateIndexState.misfiledMedia;
   if (duplicatesEl) duplicatesEl.textContent = updateIndexState.duplicates;
   if (unsupportedEl)
     unsupportedEl.textContent = updateIndexState.unsupportedFiles;
   if (metadataEl) metadataEl.textContent = updateIndexState.metadataCleanup;
   if (dbRepairsEl) dbRepairsEl.textContent = updateIndexState.databaseRepairs;
+  if (
+    updateIndexState?.overlayPhase !== 'working' &&
+    updateIndexState?.overlayPhase !== 'finished'
+  ) {
+    setCleanLibraryOverlayPhase('legacy-audit');
+  } else {
+    syncCleanLibraryScoreboards();
+  }
 }
 
 /**
- * Hide statistics (Phase 4)
+ * Hide legacy audit scoreboard (visibility follows overlayPhase via sync).
  */
 function hideUpdateIndexStats() {
-  const statsEl = document.getElementById('updateIndexStats');
-  if (statsEl) statsEl.style.display = 'none';
+  if (updateIndexState?.overlayPhase === 'legacy-audit') {
+    setCleanLibraryOverlayPhase('eta');
+  }
 }
 
 /**
@@ -11130,17 +9418,64 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+let cleanLibraryRunUiPaused = false;
+
+function pauseCleanLibraryRunUiUpdates() {
+  cleanLibraryRunUiPaused = true;
+}
+
+function resumeCleanLibraryRunUiUpdates() {
+  cleanLibraryRunUiPaused = false;
+}
+
+function handleUpdateIndexProceedClick() {
+  if (updateIndexState.onInterruptedChoice) {
+    updateIndexState.onInterruptedChoice('continue');
+    return;
+  }
+  void executeUpdateIndex();
+}
+
+function handleUpdateIndexStartOverClick() {
+  if (updateIndexState.onInterruptedChoice) {
+    updateIndexState.onInterruptedChoice('start-over');
+    return;
+  }
+  if (
+    updateIndexState.overlayPhase === 'eta' &&
+    updateIndexState.preflight?.status === 'RESUME'
+  ) {
+    void restartCleanLibraryPreflightFromStartOver();
+  }
+}
+
+async function restartCleanLibraryPreflightFromStartOver() {
+  try {
+    await abandonCleanLibraryCheckpoint();
+    updateIndexState.resumeIntent = false;
+    resetUpdateIndexOverlayTitle();
+    const scanResult = await runUpdateIndexPreflightScan();
+    renderUpdateIndexPreflightResult(scanResult);
+  } catch (error) {
+    console.error('❌ Clean library start over failed:', error);
+    updateUpdateIndexUI('Failed to scan library', false);
+    showToast(`Scan failed: ${error.message}`, 'error');
+    showUpdateIndexButtons('cancel');
+  }
+}
+
 /**
  * Close Update Database overlay
  */
 function closeUpdateIndexOverlayImmediate() {
-  stopCleanLibraryPreview();
+  cleanLibraryRunUiPaused = false;
   setCleanLibraryOverlayInert(false);
   setCleanLibraryExplainerVisible(false);
   setCleanLibrarySecondaryStatus(null, false);
   resetCleanLibraryLogFeed();
   showCleanLibraryDetailsSection(false);
   resetUpdateIndexOverlayTitle();
+  setCleanLibraryOverlayPhase(null);
   const overlay = document.getElementById('updateIndexOverlay');
   if (overlay) {
     overlay.style.display = 'none';
@@ -11148,7 +9483,6 @@ function closeUpdateIndexOverlayImmediate() {
 }
 
 async function confirmStopCleanLibraryRun() {
-  pauseCleanLibraryWorkingProgress();
   pauseCleanLibraryRunUiUpdates();
   setCleanLibraryOverlayInert(true);
   try {
@@ -11164,29 +9498,10 @@ async function confirmStopCleanLibraryRun() {
   } finally {
     setCleanLibraryOverlayInert(false);
     resumeCleanLibraryRunUiUpdates();
-    resumeCleanLibraryWorkingProgress();
   }
 }
 
 async function handleUpdateIndexCancelClick() {
-  if (debugFlowPreviewState.active && debugFlowPreviewState.flow === 'clean') {
-    dismissDebugFlowPreview();
-    return;
-  }
-
-  if (cleanLibraryPreviewState.active) {
-    if (cleanLibraryPreviewState.phase === 'working') {
-      const confirmed = await confirmStopCleanLibraryRun();
-      if (!confirmed) {
-        return;
-      }
-      showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
-    }
-    stopCleanLibraryPreview();
-    closeUpdateIndexOverlayImmediate();
-    return;
-  }
-
   if (updateIndexState?.onInterruptedChoice) {
     updateIndexState.onInterruptedChoice('cancel');
     return;
@@ -11206,200 +9521,12 @@ async function handleUpdateIndexCancelClick() {
 }
 
 function closeUpdateIndexOverlay() {
-  if (
-    debugFlowPreviewState.active &&
-    debugFlowPreviewState.flow === 'clean' &&
-    debugFlowPreviewState.screen === 'complete'
-  ) {
-    dismissDebugFlowPreview();
-    return;
-  }
   void handleUpdateIndexCancelClick();
 }
 
 // =====================
 // INITIALIZATION
 // =====================
-
-/**
- * Rebuild thumbnails — 3-phase overlay pattern.
- *
- * UI entry (More menu) removed Apr 2026: thumbnail cache issues are rare; deleting
- * the library `.thumbnails` folder manually is equivalent. Kept so POST
- * `/api/utilities/rebuild-thumbnails` and this flow remain available if we
- * re-expose or call from devtools / a future setting.
- */
-async function rebuildThumbnails() {
-  // Load overlay if not already loaded
-  const overlay = document.getElementById('rebuildThumbnailsOverlay');
-  if (!overlay) {
-    await loadRebuildThumbnailsOverlay();
-  }
-
-  openRebuildThumbnailsOverlay();
-}
-
-/**
- * Load rebuild thumbnails overlay fragment
- */
-async function loadRebuildThumbnailsOverlay() {
-  try {
-    const response = await fetch('/fragments/rebuildThumbnailsOverlay.html');
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-
-    // Wire up event listeners
-    document
-      .getElementById('rebuildThumbnailsCloseBtn')
-      ?.addEventListener('click', closeRebuildThumbnailsOverlay);
-    document
-      .getElementById('rebuildThumbnailsCancelBtn')
-      ?.addEventListener('click', closeRebuildThumbnailsOverlay);
-    document
-      .getElementById('rebuildThumbnailsProceedBtn')
-      ?.addEventListener('click', executeRebuildThumbnails);
-    document
-      .getElementById('rebuildThumbnailsDoneBtn')
-      ?.addEventListener('click', async () => {
-        closeRebuildThumbnailsOverlay();
-        ThumbnailQueue.clear();
-        document.querySelectorAll('.photo-thumb').forEach((img) => {
-          img.removeAttribute('src');
-          img.classList.remove('loading', 'error');
-        });
-        setupThumbnailLazyLoading();
-      });
-  } catch (error) {
-    console.error('❌ Failed to load rebuild thumbnails overlay:', error);
-  }
-}
-
-/**
- * Open rebuild thumbnails overlay (Phase 1: Confirmation)
- */
-async function openRebuildThumbnailsOverlay() {
-  const overlay = document.getElementById('rebuildThumbnailsOverlay');
-  if (!overlay) return;
-
-  // Get UI elements
-  const statusText = document.getElementById('rebuildThumbnailsStatusText');
-  const cancelBtn = document.getElementById('rebuildThumbnailsCancelBtn');
-  const proceedBtn = document.getElementById('rebuildThumbnailsProceedBtn');
-  const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
-
-  // Show loading state while checking
-  statusText.innerHTML =
-    '<p>Checking thumbnails<span class="import-spinner"></span></p>';
-  cancelBtn.style.display = 'none';
-  proceedBtn.style.display = 'none';
-  doneBtn.style.display = 'none';
-  overlay.style.display = 'block';
-
-  try {
-    // First, check if there are any thumbnails without deleting
-    const response = await fetch('/api/utilities/check-thumbnails');
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to check thumbnails');
-    }
-
-    // If no thumbnails exist, show info message with Done button only
-    if (result.thumbnail_count === 0) {
-      statusText.innerHTML =
-        '<p>No thumbnails found. Thumbnails will be generated automatically as you scroll.</p>';
-      cancelBtn.style.display = 'none';
-      proceedBtn.style.display = 'none';
-      doneBtn.style.display = 'block';
-    } else {
-      // Thumbnails exist, show confirmation dialog
-      statusText.innerHTML =
-        '<p>This will clear all cached thumbnails. They will regenerate automatically as you scroll.</p><p>Ready to delete existing thumbnails?</p>';
-      cancelBtn.style.display = 'block';
-      proceedBtn.style.display = 'block';
-      doneBtn.style.display = 'none';
-    }
-  } catch (error) {
-    console.error('❌ Failed to check thumbnails:', error);
-    statusText.innerHTML = `<p>Error: ${error.message}</p>`;
-    cancelBtn.style.display = 'none';
-    proceedBtn.style.display = 'none';
-    doneBtn.style.display = 'block';
-  }
-}
-
-/**
- * Close rebuild thumbnails overlay
- */
-function closeRebuildThumbnailsOverlay() {
-  const overlay = document.getElementById('rebuildThumbnailsOverlay');
-  if (overlay) {
-    overlay.style.display = 'none';
-  }
-}
-
-/**
- * Execute thumbnail rebuild (Phase 2 -> 3)
- */
-async function executeRebuildThumbnails() {
-  const statusText = document.getElementById('rebuildThumbnailsStatusText');
-  const cancelBtn = document.getElementById('rebuildThumbnailsCancelBtn');
-  const proceedBtn = document.getElementById('rebuildThumbnailsProceedBtn');
-  const doneBtn = document.getElementById('rebuildThumbnailsDoneBtn');
-
-  try {
-    // Immediately show Phase 2 (spinner)
-    statusText.innerHTML =
-      '<p>Clearing thumbnails<span class="import-spinner"></span></p>';
-    cancelBtn.disabled = true;
-    cancelBtn.style.opacity = '0.5';
-    proceedBtn.style.display = 'none';
-
-    // Execute rebuild
-    const response = await fetch('/api/utilities/rebuild-thumbnails', {
-      method: 'POST',
-    });
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      throw new Error(result.error || 'Failed to rebuild thumbnails');
-    }
-
-    // Visual confirmation: Clear all thumbnail images
-    if (result.cleared_count > 0) {
-      // Clear the grid to show user that purge happened
-      const container = document.getElementById('photoContainer');
-      if (container) {
-        container.innerHTML = '';
-      }
-
-      // Show blank grid for 300ms before reloading
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      // Reload grid with fresh thumbnails
-
-      await loadAndRenderPhotos(false);
-    }
-
-    // Show Phase 3 (confirmation)
-    if (result.cleared_count === 0) {
-      // No thumbnails to rebuild
-      statusText.innerHTML =
-        '<p>No thumbnails found. Thumbnails are generated automatically as you scroll.</p>';
-    } else {
-      // Thumbnails were cleared
-      statusText.innerHTML =
-        '<p>Old thumbnails have been removed. New ones are created automatically as you scroll.</p>';
-    }
-    cancelBtn.style.display = 'none';
-    doneBtn.style.display = 'block';
-  } catch (error) {
-    console.error('❌ Failed to rebuild thumbnails:', error);
-    showToast(`Error: ${error.message}`, 'error');
-    closeRebuildThumbnailsOverlay();
-  }
-}
 
 // =============================
 // REBUILD DATABASE OVERLAY
@@ -12793,6 +10920,36 @@ async function showTerraformPoorCandidateDialog(_warning = {}) {
 }
 
 /**
+ * Restore main UI after convert/terraform or library flow is cancelled mid-handoff.
+ */
+async function recoverLibraryUiAfterFlowCancel() {
+  hideLibraryTransitionOverlay();
+  setOpenLibraryModalHandoffShellHidden(false);
+  endTerraformProgressUi();
+  for (const id of [
+    'terraformPreviewOverlay',
+    'terraformWarningOverlay',
+    'terraformProgressOverlay',
+  ]) {
+    hideFlowOverlay(document.getElementById(id));
+  }
+  flushPendingPhotoContainerMount();
+
+  if (state.hasDatabase) {
+    try {
+      await loadAndRenderPhotos(false);
+    } catch (error) {
+      console.warn('Grid reload after flow cancel:', error);
+      enableAppBarButtons();
+    }
+    return;
+  }
+
+  renderFirstRunEmptyState();
+  enableAppBarButtons();
+}
+
+/**
  * Execute terraform conversion (preflight → bad-folder speedbump → warning → convert → complete)
  * @param {Object} options - { path: string, media_count: number }
  */
@@ -13573,7 +11730,7 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
         runtime,
         scorecard,
         loadLibrary: async () => {
-          await loadAndRenderPhotosCommitted(hydrationGeneration);
+          await rehydrateLibraryCatalog({ throwOnError: true });
         },
       });
       runtime.destroy();
@@ -13710,7 +11867,7 @@ async function runSwitchDeferReloadNormalizeAndLoad(libraryPath, dbPath) {
   }
 
   await requestMakeLibraryPerfect();
-  await loadAndRenderPhotos(false, { throwOnError: true });
+  await rehydrateLibraryCatalog({ throwOnError: true });
   showToast(`Opened ${folderName}`);
   return true;
 }
@@ -13793,12 +11950,18 @@ async function convertToLibrary() {
       }
 
       const result = await executeTerraformFlow({ path: selectedPath });
-      if (result !== 'back_to_picker') {
-        return result;
+      if (result === 'back_to_picker') {
+        continue;
       }
+      if (!result) {
+        await recoverLibraryUiAfterFlowCancel();
+        return false;
+      }
+      return result;
     }
   } catch (error) {
     console.error('❌ Failed to convert to library:', error);
+    await recoverLibraryUiAfterFlowCancel();
     showToast(`Error: ${error.message}`);
     return false;
   }
@@ -14134,11 +12297,7 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
           runtime,
           scorecard,
           loadLibrary: async () => {
-            if (switchedGeneration !== null) {
-              await loadAndRenderPhotosCommitted(switchedGeneration);
-            } else {
-              await loadAndRenderPhotos(false, { throwOnError: true });
-            }
+            await rehydrateLibraryCatalog({ throwOnError: true });
           },
         });
         runtime.destroy();
@@ -14164,11 +12323,7 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
     }
 
     finishDockFlow();
-    if (switchedGeneration !== null) {
-      await loadAndRenderPhotosCommitted(switchedGeneration);
-    } else {
-      await loadAndRenderPhotos(false, { throwOnError: true });
-    }
+    await rehydrateLibraryCatalog({ throwOnError: true });
     showToast(`Opened ${folderName}`);
     return true;
   } catch (error) {
@@ -15327,7 +13482,7 @@ async function checkLibraryHealthAndInit() {
       case 'library_missing':
       case 'library_inaccessible':
         state.hasDatabase = false;
-        showCriticalErrorModal('library_not_found', status.library_path);
+        await resetLibraryConfig();
         return;
 
       case 'db_missing':
@@ -15388,153 +13543,6 @@ async function init() {
 
   // Check library health before making any data API calls
   await checkLibraryHealthAndInit();
-}
-
-/**
- * Show unified error details (general errors + rejections) in import overlay
- */
-function showUnifiedErrorDetails() {
-  const detailsSection = document.getElementById('importDetailsSection');
-  const detailsList = document.getElementById('importDetailsList');
-  const toggleBtn = document.getElementById('importDetailsToggle');
-
-  if (!detailsSection || !detailsList) return;
-
-  detailsSection.style.display = 'block';
-  detailsList.innerHTML = '';
-
-  const hasGeneralErrors =
-    window.importErrors && window.importErrors.length > 0;
-  const hasRejections =
-    window.importRejections && window.importRejections.length > 0;
-  const totalErrors =
-    (window.importErrors?.length || 0) + (window.importRejections?.length || 0);
-
-  // Section 1: General errors (if any)
-  if (hasGeneralErrors) {
-    const header = document.createElement('div');
-    header.className = 'import-detail-category-header';
-    header.innerHTML = `
-      <span class="material-symbols-outlined">error</span>
-      <strong>Import Errors</strong> (${window.importErrors.length})
-    `;
-    detailsList.appendChild(header);
-
-    window.importErrors.forEach((err) => {
-      const item = document.createElement('div');
-      item.className = 'import-detail-item';
-      item.innerHTML = `
-        <span class="material-symbols-outlined import-detail-icon error">error</span>
-        <div class="import-detail-text">
-          <div>${err.file}</div>
-          <div class="import-detail-message">${err.message}</div>
-        </div>
-      `;
-      detailsList.appendChild(item);
-    });
-  }
-
-  // Section 2: Rejections - flat list without header
-  if (hasRejections) {
-    const MAX_DISPLAY = 20;
-
-    // Show first 20 rejections
-    const itemsToShow = window.importRejections.slice(0, MAX_DISPLAY);
-
-    itemsToShow.forEach((item) => {
-      const div = document.createElement('div');
-      div.className = 'import-detail-item';
-      div.style.marginTop = hasGeneralErrors ? '16px' : '0';
-
-      // Universal error icon for all rejection types
-      div.innerHTML = `
-        <span class="material-symbols-outlined import-detail-icon error">error</span>
-        <div class="import-detail-text">
-          <div>${item.file}</div>
-          <div class="import-detail-message">${item.reason}</div>
-        </div>
-      `;
-      detailsList.appendChild(div);
-    });
-
-    // Show "and N more" if capped
-    if (window.importRejections.length > MAX_DISPLAY) {
-      const remaining = window.importRejections.length - MAX_DISPLAY;
-      const moreDiv = document.createElement('div');
-      moreDiv.style.padding = '12px';
-      moreDiv.style.textAlign = 'center';
-      moreDiv.style.color = '#b3b3b3';
-      moreDiv.style.fontStyle = 'italic';
-      moreDiv.style.fontSize = '13px';
-      moreDiv.textContent = `... and ${remaining} more`;
-      detailsList.appendChild(moreDiv);
-    }
-
-    // Add action buttons for rejections
-    const actions = document.createElement('div');
-    actions.className = 'import-rejection-actions';
-    actions.innerHTML = `
-      <button class="btn btn-secondary" id="copyRejectedBtn">
-        <span class="material-symbols-outlined">folder_copy</span>
-        Collect rejected files
-      </button>
-      <button class="btn btn-secondary" id="exportRejectionListBtn">
-        <span class="material-symbols-outlined">description</span>
-        Export list
-      </button>
-    `;
-    detailsList.appendChild(actions);
-
-    // Wire up buttons
-    document
-      .getElementById('copyRejectedBtn')
-      ?.addEventListener('click', copyRejectedFiles);
-    document
-      .getElementById('exportRejectionListBtn')
-      ?.addEventListener('click', exportRejectionList);
-  }
-
-  // Keep collapsed initially
-  detailsList.style.display = 'none';
-  if (toggleBtn) {
-    toggleBtn.classList.remove('expanded');
-    toggleBtn.innerHTML = `
-      <span class="material-symbols-outlined">expand_more</span>
-      <span>Show details</span>
-    `;
-
-    // Wire up toggle
-    const newToggleBtn = toggleBtn.cloneNode(true);
-    toggleBtn.parentNode.replaceChild(newToggleBtn, toggleBtn);
-
-    newToggleBtn.addEventListener('click', () => {
-      const isExpanded = detailsList.style.display !== 'none';
-
-      if (isExpanded) {
-        detailsList.style.display = 'none';
-        newToggleBtn.classList.remove('expanded');
-        newToggleBtn.innerHTML = `
-          <span class="material-symbols-outlined">expand_more</span>
-          <span>Show details</span>
-        `;
-      } else {
-        detailsList.style.display = 'block';
-        newToggleBtn.classList.add('expanded');
-        newToggleBtn.innerHTML = `
-          <span class="material-symbols-outlined">expand_less</span>
-          <span>Hide details</span>
-        `;
-      }
-    });
-  }
-}
-
-/**
- * Show rejection details in import overlay (DEPRECATED - use showUnifiedErrorDetails)
- */
-function showRejectionDetails() {
-  // Keep for backward compatibility, redirect to unified version
-  showUnifiedErrorDetails();
 }
 
 /**
