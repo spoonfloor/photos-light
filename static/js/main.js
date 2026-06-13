@@ -956,14 +956,58 @@ function isCalendarMonthKey(monthKey) {
   return typeof monthKey === 'string' && /^\d{4}-\d{2}$/.test(monthKey);
 }
 
+const UNKNOWN_PHOTO_DATE_PREFIX = '1900:01:01';
+
+function inferPhotoDateFromCanonicalPath(photo) {
+  const path = (photo?.path || '').replace(/\\/g, '/');
+  const parts = path.split('/');
+  if (parts.length >= 2) {
+    const daySegment = parts[1];
+    const match = daySegment.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (match) {
+      const date = new Date(
+        parseInt(match[1], 10),
+        parseInt(match[2], 10) - 1,
+        parseInt(match[3], 10),
+      );
+      if (!Number.isNaN(date.getTime())) {
+        return date;
+      }
+    }
+  }
+
+  const filename = parts[parts.length - 1] || '';
+  const nameMatch = filename.match(/^img_(\d{4})(\d{2})(\d{2})_/);
+  if (nameMatch) {
+    const year = parseInt(nameMatch[1], 10);
+    const month = parseInt(nameMatch[2], 10);
+    const day = parseInt(nameMatch[3], 10);
+    if (year === 1900 && month === 1 && day === 1) {
+      return null;
+    }
+    const date = new Date(year, month - 1, day);
+    if (!Number.isNaN(date.getTime())) {
+      return date;
+    }
+  }
+
+  return null;
+}
+
 function parsePhotoDate(photo) {
-  if (!photo || !photo.date) {
+  if (!photo) {
     return null;
   }
 
-  const dateStr = photo.date.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
-  const date = new Date(dateStr);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (photo.date && !photo.date.startsWith(UNKNOWN_PHOTO_DATE_PREFIX)) {
+    const dateStr = photo.date.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+    const date = new Date(dateStr);
+    if (!Number.isNaN(date.getTime())) {
+      return date;
+    }
+  }
+
+  return inferPhotoDateFromCanonicalPath(photo);
 }
 
 // ============================================================================
@@ -1126,8 +1170,11 @@ function applyDatePickerFromYears(years, anchorMonth = null) {
     return false;
   }
 
+  const orderedYears =
+    state.currentSortOrder === 'newest' ? [...years].reverse() : years;
+
   yearPicker.innerHTML = '';
-  years.forEach((year) => {
+  orderedYears.forEach((year) => {
     const option = document.createElement('option');
     option.value = String(year);
     option.textContent = String(year);
@@ -1137,9 +1184,7 @@ function applyDatePickerFromYears(years, anchorMonth = null) {
   if (anchorMonth && isCalendarMonthKey(anchorMonth)) {
     setDatePickerMonthValue(anchorMonth);
   } else {
-    const defaultYear =
-      state.currentSortOrder === 'oldest' ? years[0] : years[years.length - 1];
-    yearPicker.value = String(defaultYear);
+    yearPicker.value = String(orderedYears[0]);
   }
 
   const datePickerContainer = document.querySelector('.date-picker');
@@ -1338,7 +1383,7 @@ function wireDatePicker() {
 
   ensureDatePickerScrollListener();
 
-  const handleDateChange = async () => {
+  const handleDateChange = () => {
     if (datePickerUpdatingFromScroll) return;
 
     const month = monthPicker.value.padStart(2, '0');
@@ -1346,50 +1391,18 @@ function wireDatePicker() {
     const targetMonth = `${year}-${month}`;
 
     if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
-      if (VirtualGrid.scrollToMonth(targetMonth)) {
-        VirtualGrid.scheduleSync();
+      if (VirtualGrid.jumpToMonth(targetMonth)) {
         return;
       }
     }
 
-    // Check if month section already exists in DOM
     const monthSection = document.getElementById(`month-${targetMonth}`);
-
     if (monthSection) {
       scrollToMonthSection(targetMonth);
-    } else {
-      // Not rendered - need to find nearest valid month
-
-      try {
-        const nearestResponse = await fetch(
-          `/api/photos/nearest_month?month=${targetMonth}&sort=${state.currentSortOrder}`,
-        );
-        const nearestData = await nearestResponse.json();
-
-        if (!nearestData.nearest_month) {
-          return;
-        }
-
-        const actualMonth = nearestData.nearest_month;
-
-        // Check if that section exists
-        if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
-          if (VirtualGrid.scrollToMonth(actualMonth)) {
-            VirtualGrid.scheduleSync();
-            return;
-          }
-        }
-
-        const actualSection = document.getElementById(`month-${actualMonth}`);
-        if (actualSection) {
-          scrollToMonthSection(actualMonth);
-        } else {
-          await hydrateGridForMonthJump(actualMonth);
-        }
-      } catch (error) {
-        console.error('❌ Error finding nearest month:', error);
-      }
+      return;
     }
+
+    void hydrateGridForMonthJump(targetMonth);
   };
 
   monthPicker.addEventListener('change', handleDateChange);
@@ -6184,6 +6197,9 @@ async function loadAndRenderPhotosVirtual(options = {}) {
       onProvisionalReady: () => {
         updateUtilityMenuAvailability();
         updateFilterChipRailVisibility();
+        if (state.libraryTransitionActive) {
+          hideLibraryTransitionOverlay();
+        }
       },
       onLayoutApplied: (appliedLayout) => {
         if (appliedLayout?.provisional) {
@@ -6258,14 +6274,14 @@ function updatePhotoWindowFromPage(data, { append = false } = {}) {
   return pagePhotos;
 }
 
-function scrollToMonthSection(targetMonth) {
+function scrollToMonthSection(targetMonth, behavior = 'instant') {
   const monthSection = document.getElementById(`month-${targetMonth}`);
   if (!monthSection) {
     return;
   }
   const appBarHeight = 60;
   const targetY = monthSection.offsetTop - appBarHeight - 20;
-  window.scrollTo({ top: targetY, behavior: 'smooth' });
+  window.scrollTo({ top: targetY, behavior });
 }
 
 function ensureScrollSentinel(container = document.getElementById('photoContainer')) {
@@ -6370,9 +6386,8 @@ async function replaceGridAtMonth(targetMonth) {
 
 async function hydrateGridForMonthJump(targetMonth) {
   try {
-    if (VirtualGrid.isActive()) {
-      if (VirtualGrid.scrollToMonth(targetMonth)) {
-        VirtualGrid.scheduleSync();
+    if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+      if (VirtualGrid.jumpToMonth(targetMonth)) {
         return;
       }
     }

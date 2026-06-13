@@ -7,21 +7,25 @@ alwaysApply: true
 
 When verifying behavior in **packaged / production conditions** (Electron shell, PyInstaller backend, bundled static assets), **always rebuild** before testing. Do not rely on `python3 app.py`, `launcher.py`, or a stale `dist/` or `/Applications` install.
 
-## Build command
+## Build commands
 
 From repo root:
 
 ```bash
+# Full rebuild (backend + static + electron shell)
 ./packaging/build.sh
+
+# Fast rebuild when only electron/ changed
+./packaging/build.sh --electron-only
 ```
 
-Output: `dist/mac-arm64/Photos Light.app` (and `dist/Photos Light.dmg`).
+Output: `dist/mac-arm64/Photos Light.app`
 
 ## When to rebuild
 
-- After backend changes (`app.py`, `image_pixels.py`, Python modules in `packaging/Backend.spec` hiddenimports)
-- After static asset changes (`static/`) — bundled into the backend via PyInstaller
-- After Electron changes (`electron/`)
+- After backend changes (`app.py`, `image_pixels.py`, Python modules in `packaging/Backend.spec` hiddenimports) → full build
+- After static asset changes (`static/`) — bundled into the backend via PyInstaller → full build
+- After Electron changes (`electron/`) → `--electron-only` if backend bundle is already fresh; otherwise full build
 - Before confirming a fix "works in the packaged app"
 
 ## How to test

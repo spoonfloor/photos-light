@@ -24,7 +24,7 @@ const VirtualGrid = (() => {
   let comfortAnchorY = 0;
   let anchorMonthKey = null;
   let anchorSectionEl = null;
-  /** Grid DOM mount deferred while library transition overlay is up (keeps empty state visible). */
+  /** Grid DOM mount deferred while library transition overlay is up (legacy no-op). */
   let pendingContainerMount = null;
 
   function getContainer() {
@@ -757,71 +757,90 @@ const VirtualGrid = (() => {
     window.removeEventListener('scroll', scheduleSync);
   }
 
-  function applyContainerMount(plan) {
+  function applyProvisionalMount(plan) {
     const container = getContainer();
     if (!container || !ensureDom()) {
       return false;
     }
 
     sortOrder = plan.sort;
+    provisionalYears = plan.provisionalYears || [];
+    anchorMonthKey = plan.anchorMonth || null;
 
-    if (plan.hasProvisional) {
-      provisionalYears = plan.provisionalYears;
-      anchorMonthKey = plan.anchorMonth;
+    const columnLayout = GridLayout.computeColumnLayout(container.clientWidth);
+    GridLayout.publishCssVars(
+      container,
+      GridLayout.toLayoutSnapshot({ columnLayout, sections: [], totalHeight: 0 }),
+    );
 
-      const columnLayout = GridLayout.computeColumnLayout(container.clientWidth);
-      GridLayout.publishCssVars(
-        container,
-        GridLayout.toLayoutSnapshot({ columnLayout, sections: [], totalHeight: 0 }),
-      );
+    setSnapshot(
+      GridLayout.buildProvisionalLayout(
+        plan.provisionalTotal,
+        plan.provisionalYears,
+        columnLayout,
+        plan.sort,
+      ),
+    );
 
-      setSnapshot(
-        GridLayout.buildProvisionalLayout(
-          plan.provisionalTotal,
-          plan.provisionalYears,
-          columnLayout,
-          plan.sort,
-        ),
-      );
-
-      if (anchorMonthKey) {
-        void fetchMonthPhotos(anchorMonthKey);
-      }
-
-      bindResize(container);
-      bindScroll();
-      window.scrollTo({ top: 0, behavior: 'instant' });
-      syncComfortAndContent();
-      syncTileLayer();
-      publishPhaseATestState('phase-a-ready');
-
-      if (hooks.onProvisionalReady) {
-        hooks.onProvisionalReady(plan.provisionalMeta);
-      }
+    if (anchorMonthKey) {
+      void fetchMonthPhotos(anchorMonthKey);
     }
 
-    monthIndex = plan.indexPayload;
-    rebuildLayoutFromIndex(plan.indexPayload, container.clientWidth);
-    if (!plan.provisionalTotal) {
-      window.scrollTo({ top: 0, behavior: 'instant' });
-      bindResize(container);
-      bindScroll();
-    }
-    scheduleSync();
+    bindResize(container);
+    bindScroll();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    syncComfortAndContent();
+    syncTileLayer();
+    publishPhaseATestState('phase-a-ready');
 
-    if (hooks.onReady) {
-      hooks.onReady(plan.indexPayload, layout);
+    if (hooks.onProvisionalReady) {
+      hooks.onProvisionalReady(plan.provisionalMeta);
     }
     return true;
   }
 
-  function commitContainerMount() {
-    if (!pendingContainerMount) {
+  function applyRefinedIndex(indexPayload) {
+    const container = getContainer();
+    if (!container) {
       return false;
     }
-    const plan = pendingContainerMount;
-    pendingContainerMount = null;
-    return applyContainerMount(plan);
+    if (!contentLayer && !ensureDom()) {
+      return false;
+    }
+
+    monthIndex = indexPayload;
+    sortOrder = indexPayload?.sort || sortOrder;
+    rebuildLayoutFromIndex(indexPayload, container.clientWidth);
+    scheduleSync();
+
+    if (hooks.onReady) {
+      hooks.onReady(indexPayload, layout);
+    }
+    return true;
+  }
+
+  function applyContainerMount(plan) {
+    if (plan.hasProvisional) {
+      applyProvisionalMount(plan);
+    } else if (!contentLayer) {
+      const container = getContainer();
+      if (!container || !ensureDom()) {
+        return false;
+      }
+      bindResize(container);
+      bindScroll();
+    }
+
+    return applyRefinedIndex(plan.indexPayload);
+  }
+
+  function commitContainerMount() {
+    if (pendingContainerMount) {
+      const plan = pendingContainerMount;
+      pendingContainerMount = null;
+      return applyContainerMount(plan);
+    }
+    return Boolean(layout && contentLayer);
   }
 
   function cancelPendingContainerMount() {
@@ -902,6 +921,18 @@ const VirtualGrid = (() => {
           anchorMonth,
         });
       }
+
+      applyProvisionalMount({
+        sort,
+        provisionalTotal,
+        anchorMonth,
+        provisionalYears: yearsForProvisional,
+        provisionalMeta: {
+          total: provisionalTotal,
+          years: yearsForProvisional,
+          anchorMonth,
+        },
+      });
     }
 
     const indexResponse = await fetch(
@@ -921,26 +952,19 @@ const VirtualGrid = (() => {
       options.onIndexReady(indexPayload);
     }
 
-    const mountPlan = {
-      sort,
-      provisionalTotal,
-      anchorMonth,
-      provisionalYears: hasProvisional ? yearsForProvisional : [],
-      hasProvisional,
-      indexPayload,
-      provisionalMeta: {
-        total: provisionalTotal,
-        years: yearsForProvisional,
+    if (deferContainerMount && !hasProvisional) {
+      pendingContainerMount = {
+        sort,
+        provisionalTotal,
         anchorMonth,
-      },
-    };
-
-    if (deferContainerMount) {
-      pendingContainerMount = mountPlan;
+        provisionalYears: [],
+        hasProvisional: false,
+        indexPayload,
+      };
       return true;
     }
 
-    return applyContainerMount(mountPlan);
+    return applyRefinedIndex(indexPayload);
   }
 
   function destroy() {
@@ -988,18 +1012,43 @@ const VirtualGrid = (() => {
     hooks = {};
   }
 
-  function scrollToMonth(monthKey, behavior = 'smooth') {
-    if (!layout) {
+  function jumpToMonth(monthKey, options = {}) {
+    if (!layout || !monthKey) {
       return false;
     }
-    const top = GridLayout.scrollTopForMonth(layout, monthKey);
+
+    const resolvedMonth = GridLayout.resolveJumpMonth(
+      layout,
+      monthKey,
+      monthIndex,
+      sortOrder,
+    );
+    if (!resolvedMonth) {
+      return false;
+    }
+
+    const top = GridLayout.scrollTopForMonth(
+      layout,
+      resolvedMonth,
+      options.appBarOffset,
+    );
     if (top === null) {
       return false;
     }
+
+    const behavior = options.behavior ?? 'instant';
     window.scrollTo({ top, behavior });
     scheduleSync();
-    publishGridThumbSync('scrollToMonth', { month: monthKey, behavior });
+    publishGridThumbSync('jumpToMonth', {
+      month: monthKey,
+      resolvedMonth,
+      behavior,
+    });
     return true;
+  }
+
+  function scrollToMonth(monthKey, behavior = 'instant') {
+    return jumpToMonth(monthKey, { behavior });
   }
 
   function invalidateMonth(monthKey) {
@@ -1124,6 +1173,7 @@ const VirtualGrid = (() => {
     destroy,
     commitContainerMount,
     cancelPendingContainerMount,
+    jumpToMonth,
     scrollToMonth,
     invalidateMonth,
     invalidateAllMonths,

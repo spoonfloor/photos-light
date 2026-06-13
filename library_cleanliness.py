@@ -6,6 +6,45 @@ flows so canonical naming and folder validation do not drift.
 
 Filesystem walk, classification, quarantine, and tree cleanup live in
 ``library_filesystem`` and are shared by Convert and Clean.
+
+TBD cleanliness criteria (not enforced yet; audit/repair wiring deferred)
+-------------------------------------------------------------------------
+
+1. Usable library date (DB + path consistency)
+
+   Every media row must carry a date sufficient for date edit and for
+   canonical layout. A row is clean when:
+
+   - ``date_taken`` is present, parseable in ``CANONICAL_DB_DATE_FORMAT``, and
+     resolvable for edit (see ``effective_date_taken_for_edit`` in ``app.py``
+     today — to be moved here when implemented).
+   - ``date_taken`` agrees with the canonical path and basename: folder
+     ``YYYY/YYYY-MM-DD/`` and ``img_YYYYMMDD_<hash8>.ext`` must reflect the
+     same calendar date as the DB value.
+   - When no real capture date exists in file metadata, the deterministic
+     unknown-date placeholder applies: ``1900:01:01 00:00:00`` (Jan 1900),
+     stored under ``1900/1900-01-01/`` with matching ``img_19000101_…``
+     basename — not NULL, not path-inferred-only, not a mismatched real date
+     on an unknown-date path.
+
+   Not audited or repaired by Clean / Convert yet.
+
+2. Declared format matches on-disk container format
+
+   Extension and ``file_type`` must reflect the actual bytes on disk.
+   Declared format = path extension (+ DB ``file_type``); detected format =
+   container / codec family sniffed from file content.
+
+   A row is clean when declared and detected formats agree within the
+   supported media taxonomy (photo vs video, and the honest container for
+   that kind). Example failure: JPEG bytes with a ``.heic`` extension — passes
+   extension-based validation but breaks canonical rename, hash finalization,
+   and HEIC-specific pipelines (sips, rotation).
+
+   Repair direction (TBD): detect mismatch, rename to the canonical extension
+   for the true container, update DB path — not transcode (Convert territory).
+
+   Not audited or repaired by Clean / Convert yet.
 """
 
 from __future__ import annotations

@@ -8,7 +8,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --mac dmg"
+    "build": "electron-builder --mac dir"
   },
   "build": {
     "appId": "com.erichenry.photoslight",
@@ -29,7 +29,7 @@
     "mac": {
       "category": "public.app-category.photography",
       "icon": "../packaging/AppIcon.icns",
-      "target": ["dmg"],
+      "target": ["dir"],
       "darkModeSupport": true
     },
     "dmg": {

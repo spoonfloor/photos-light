@@ -168,6 +168,95 @@ const GridLayout = (() => {
     return Math.max(0, section.yStart - appBarOffset);
   }
 
+  function monthOrdinal(monthKey) {
+    if (!monthKey || monthKey === 'undated') {
+      return Number.NaN;
+    }
+    const [year, monthNum] = monthKey.split('-').map((part) => parseInt(part, 10));
+    if (!year || !monthNum) {
+      return Number.NaN;
+    }
+    return year * 12 + monthNum;
+  }
+
+  /**
+   * Client-side mirror of GET /api/photos/nearest_month — no network on jump path.
+   */
+  function nearestMonthInIndex(targetMonth, availableMonths, sortOrder = 'newest') {
+    if (!targetMonth || !availableMonths?.length) {
+      return null;
+    }
+
+    const months = availableMonths.filter(
+      (monthKey) => monthKey && monthKey !== 'undated',
+    );
+    if (!months.length) {
+      return null;
+    }
+    if (months.includes(targetMonth)) {
+      return targetMonth;
+    }
+
+    const targetYear = targetMonth.slice(0, 4);
+    const targetMonthNum = parseInt(targetMonth.slice(5, 7), 10);
+    const yearMonths = months
+      .filter((monthKey) => monthKey.slice(0, 4) === targetYear)
+      .sort((a, b) => a.localeCompare(b));
+
+    if (yearMonths.length) {
+      if (sortOrder === 'newest') {
+        const candidates = yearMonths.filter(
+          (monthKey) => parseInt(monthKey.slice(5, 7), 10) >= targetMonthNum,
+        );
+        return candidates.length ? candidates[0] : yearMonths[yearMonths.length - 1];
+      }
+      const candidates = yearMonths.filter(
+        (monthKey) => parseInt(monthKey.slice(5, 7), 10) <= targetMonthNum,
+      );
+      return candidates.length
+        ? candidates[candidates.length - 1]
+        : yearMonths[0];
+    }
+
+    const targetOrdinal = monthOrdinal(targetMonth);
+    let bestMonth = months[0];
+    let bestDistance = Infinity;
+    months.forEach((monthKey) => {
+      const distance = Math.abs(monthOrdinal(monthKey) - targetOrdinal);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestMonth = monthKey;
+      }
+    });
+    return bestMonth;
+  }
+
+  /** Resolve picker month to a section present in the current snapshot. */
+  function resolveJumpMonth(layout, monthKey, monthIndex, sortOrder = 'newest') {
+    if (!layout || !monthKey) {
+      return null;
+    }
+    if (findSectionForMonth(layout, monthKey)) {
+      return monthKey;
+    }
+
+    const indexMonths = monthIndex?.months
+      ?.map((entry) => entry.month)
+      .filter((month) => month && month !== 'undated');
+    if (indexMonths?.length) {
+      return nearestMonthInIndex(monthKey, indexMonths, sortOrder);
+    }
+
+    const layoutMonths = layout.sections
+      ?.map((section) => section.month)
+      .filter((month) => month && month !== 'undated');
+    if (layoutMonths?.length) {
+      return nearestMonthInIndex(monthKey, layoutMonths, sortOrder);
+    }
+
+    return null;
+  }
+
   /** Month header at the viewport anchor — independent of mounted DOM. */
   function findMonthAtScrollTop(layout, scrollTop, appBarOffset = 80) {
     const sections = layout?.sections;
@@ -365,6 +454,8 @@ const GridLayout = (() => {
     findSectionForMonth,
     findSectionForGlobalIndex,
     scrollTopForMonth,
+    nearestMonthInIndex,
+    resolveJumpMonth,
     findMonthAtScrollTop,
     monthLabel,
   };

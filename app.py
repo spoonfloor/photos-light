@@ -963,20 +963,42 @@ def get_file_counts():
         return jsonify({'error': str(e)}), 500
 
 
+def infer_date_taken_from_canonical_path(current_path):
+    """Infer YYYY:MM:DD HH:MM:SS from canonical library path when DB date is missing."""
+    norm = (current_path or '').replace('\\', '/')
+    parts = norm.split('/')
+    if len(parts) >= 2:
+        seg = parts[1]
+        if len(seg) >= 10 and seg[4] == '-' and seg[7] == '-' and seg[:4].isdigit():
+            try:
+                date_obj = datetime.strptime(seg[:10], '%Y-%m-%d')
+                return date_obj.strftime('%Y:%m:%d %H:%M:%S')
+            except ValueError:
+                pass
+    return None
+
+
+def effective_date_taken_for_edit(date_taken, current_path):
+    """Resolve a date for editing when DB date may be null or the unknown placeholder."""
+    if date_taken:
+        normalized = str(date_taken)
+        if not normalized.startswith('1900:01:01'):
+            return normalized
+    inferred = infer_date_taken_from_canonical_path(current_path)
+    if inferred:
+        return inferred
+    return str(date_taken) if date_taken else None
+
+
 def month_key_for_photo_grid(date_taken, current_path):
     """
     YYYY-MM bucket for the main grid. When EXIF date is missing, infer from canonical
     path (YYYY/YYYY-MM-DD/...) so undated rows still appear.
     """
-    if date_taken:
-        date_normalized = str(date_taken).replace(':', '-', 2)
+    effective_date = effective_date_taken_for_edit(date_taken, current_path)
+    if effective_date:
+        date_normalized = effective_date.replace(':', '-', 2)
         return date_normalized[:7]
-    norm = (current_path or '').replace('\\', '/')
-    parts = norm.split('/')
-    if len(parts) >= 2:
-        seg = parts[1]
-        if len(seg) >= 7 and seg[4] == '-' and seg[:4].isdigit():
-            return seg[:7]
     return 'undated'
 
 
@@ -2226,22 +2248,42 @@ def bulk_update_photo_dates():
         
         elif mode == 'shift':
             # Shift all photos by the offset from the first photo
-            cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_ids[0],))
+            cursor.execute(
+                "SELECT date_taken, current_path FROM photos WHERE id = ?",
+                (photo_ids[0],),
+            )
             row = cursor.fetchone()
             if not row:
                 return jsonify({'error': 'First photo not found'}), 404
-            
-            original_date_str = row['date_taken']
+
+            original_date_str = effective_date_taken_for_edit(
+                row['date_taken'],
+                row['current_path'],
+            )
+            if not original_date_str:
+                return jsonify({'error': 'First photo has no usable date to shift from'}), 400
+
             original_date = datetime.strptime(original_date_str, '%Y:%m:%d %H:%M:%S')
             new_date_obj = datetime.strptime(new_date, '%Y:%m:%d %H:%M:%S')
             offset = new_date_obj - original_date
-            
+
             # Calculate shifted date for each photo
             for photo_id in photo_ids:
-                cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
+                cursor.execute(
+                    "SELECT date_taken, current_path FROM photos WHERE id = ?",
+                    (photo_id,),
+                )
                 row = cursor.fetchone()
                 if row:
-                    photo_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
+                    photo_date_str = effective_date_taken_for_edit(
+                        row['date_taken'],
+                        row['current_path'],
+                    )
+                    if not photo_date_str:
+                        return jsonify({
+                            'error': f'Photo {photo_id} has no usable date to shift from',
+                        }), 400
+                    photo_date = datetime.strptime(photo_date_str, '%Y:%m:%d %H:%M:%S')
                     shifted_date = photo_date + offset
                     photo_date_map[photo_id] = shifted_date.strftime('%Y:%m:%d %H:%M:%S')
         
@@ -2263,10 +2305,21 @@ def bulk_update_photo_dates():
             # Get all photos with their original dates
             photo_dates = []
             for photo_id in photo_ids:
-                cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
+                cursor.execute(
+                    "SELECT date_taken, current_path FROM photos WHERE id = ?",
+                    (photo_id,),
+                )
                 row = cursor.fetchone()
                 if row:
-                    original_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
+                    photo_date_str = effective_date_taken_for_edit(
+                        row['date_taken'],
+                        row['current_path'],
+                    )
+                    if not photo_date_str:
+                        return jsonify({
+                            'error': f'Photo {photo_id} has no usable date to sequence from',
+                        }), 400
+                    original_date = datetime.strptime(photo_date_str, '%Y:%m:%d %H:%M:%S')
                     photo_dates.append((photo_id, original_date))
             
             # Sort by original date
@@ -2434,23 +2487,43 @@ def bulk_update_photo_dates_execute():
             
             elif mode == 'shift':
                 # Shift all photos by the offset from the first photo
-                cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_ids[0],))
+                cursor.execute(
+                    "SELECT date_taken, current_path FROM photos WHERE id = ?",
+                    (photo_ids[0],),
+                )
                 row = cursor.fetchone()
                 if not row:
                     yield f"event: error\ndata: {json.dumps({'error': 'First photo not found'})}\n\n"
                     return
-                
-                original_date_str = row['date_taken']
+
+                original_date_str = effective_date_taken_for_edit(
+                    row['date_taken'],
+                    row['current_path'],
+                )
+                if not original_date_str:
+                    yield f"event: error\ndata: {json.dumps({'error': 'First photo has no usable date to shift from'})}\n\n"
+                    return
+
                 original_date = datetime.strptime(original_date_str, '%Y:%m:%d %H:%M:%S')
                 new_date_obj = datetime.strptime(new_date, '%Y:%m:%d %H:%M:%S')
                 offset = new_date_obj - original_date
-                
+
                 # Calculate shifted date for each photo
                 for photo_id in photo_ids:
-                    cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
+                    cursor.execute(
+                        "SELECT date_taken, current_path FROM photos WHERE id = ?",
+                        (photo_id,),
+                    )
                     row = cursor.fetchone()
                     if row:
-                        photo_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
+                        photo_date_str = effective_date_taken_for_edit(
+                            row['date_taken'],
+                            row['current_path'],
+                        )
+                        if not photo_date_str:
+                            yield f"event: error\ndata: {json.dumps({'error': f'Photo {photo_id} has no usable date to shift from'})}\n\n"
+                            return
+                        photo_date = datetime.strptime(photo_date_str, '%Y:%m:%d %H:%M:%S')
                         shifted_date = photo_date + offset
                         photo_date_map[photo_id] = shifted_date.strftime('%Y:%m:%d %H:%M:%S')
             
@@ -2473,10 +2546,20 @@ def bulk_update_photo_dates_execute():
                 # Get all photos with their original dates
                 photo_dates = []
                 for photo_id in photo_ids:
-                    cursor.execute("SELECT date_taken FROM photos WHERE id = ?", (photo_id,))
+                    cursor.execute(
+                        "SELECT date_taken, current_path FROM photos WHERE id = ?",
+                        (photo_id,),
+                    )
                     row = cursor.fetchone()
                     if row:
-                        original_date = datetime.strptime(row['date_taken'], '%Y:%m:%d %H:%M:%S')
+                        photo_date_str = effective_date_taken_for_edit(
+                            row['date_taken'],
+                            row['current_path'],
+                        )
+                        if not photo_date_str:
+                            yield f"event: error\ndata: {json.dumps({'error': f'Photo {photo_id} has no usable date to sequence from'})}\n\n"
+                            return
+                        original_date = datetime.strptime(photo_date_str, '%Y:%m:%d %H:%M:%S')
                         photo_dates.append((photo_id, original_date))
                 
                 # Sort by original date
