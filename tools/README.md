@@ -48,6 +48,16 @@ Reports are written to `tools/results/*.json`.
 
 See `tech-docs/CLEAN_LIBRARY_V2_HANDOFF.md` for full context.
 
+## CI checks
+
+From repo root:
+
+```bash
+./tools/run_ci_checks.sh
+```
+
+Runs JS syntax checks, orphan-route grep (`tools/check_orphan_routes.py`), and the full Python unittest suite.
+
 ## Reading results
 
 - **sec/file** — wall time ÷ supported media files

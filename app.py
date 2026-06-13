@@ -973,6 +973,24 @@ def ensure_photo_grid_indices(db_path=None):
 
     conn = sqlite3.connect(target_db)
     cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='photos'")
+    if not cursor.fetchone():
+        conn.close()
+        return
+    cursor.execute("PRAGMA table_info(photos)")
+    columns = {row[1] for row in cursor.fetchall()}
+    required_columns = {
+        'id',
+        'content_hash',
+        'date_taken',
+        'file_type',
+        'rating',
+        'current_path',
+    }
+    if not required_columns.issubset(columns):
+        conn.close()
+        return
+
     cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")
     existing = {row[0] for row in cursor.fetchall()}
     for index_sql in PHOTOS_INDICES:

@@ -220,11 +220,10 @@ Fixes for ghost-folder Clean → broken grid and hard-refresh duplicate top row 
 
 ## Known fragmentation (remaining)
 
-- Clean Library UI still uses `updateIndex*` DOM/JS names while calling `make-perfect` APIs.
 - First-run debug button is a stub; wire `openFirstRunDebugMenu()` when adding dev tools.
-- `VirtualGrid.applyMutationPatch` remains exported in `virtualGrid.js` but is **not** wired from production `main.js` paths — remove or gate when handoff smoke is green.
 - `test_grid_handoff_contract.py` is static (regex on source); no browser/integration test for full Phase A→B yet.
-- Filtered grid still uses paged `renderPhotoGrid` path (`shouldUseVirtualGrid()` false when starred/video chips active) — parity not verified after handoff work.
+- Filtered grid still uses paged `renderPhotoGrid` path (`shouldUseVirtualGrid()` false when starred/video chips active) — parity verified manually 2026-06-13; no automated test yet.
+- Bulk favorites API (`GET /api/photos/favorites`, `POST /api/photos/bulk-favorite`) documented in infrastructure specs but not wired in production UI.
 
 ## Resolved since Pass 4 (documented for traceability)
 
@@ -234,9 +233,10 @@ Fixes for ghost-folder Clean → broken grid and hard-refresh duplicate top row 
 | Clean / hard refresh ghost rows (provisional + refined DOM) | `clearProvisionalArtifacts`, anchor/month selector split, `remount: wasProvisional`, Clean awaits rehydrate before finished UI |
 | `loadAndRenderPhotosCommitted` false success on provisional grid | `hasCommittedPhotoRender()` gate |
 | Per-flow delete `applyMutationPatch` vs unified sync | Delete uses `syncGridAfterHistogramChange` only |
+| Clean Library UI used `updateIndex*` DOM/JS names | Renamed to `cleanLibrary*`; bind-time `[Clean Library]` console guards |
+| `VirtualGrid.applyMutationPatch` exported but unused in production | Removed from `virtualGrid.js` after handoff smoke green |
 
 ## Deferred (Phase 4)
 
-- Rename `updateIndex*` → `cleanLibrary*` (Clean overlay DOM/JS)
 - Decide fate of `operation_state.py` (keep — wired into library_sync/schema)
-- CI grep for orphan routes; loader-failed test scripts
+- Browser/integration test for full Phase A→B handoff (static contract test exists)
