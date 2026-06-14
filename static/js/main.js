@@ -5,6 +5,13 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 /** Photos fetched per viewport window (initial open + each scroll load). */
 const PHOTO_PAGE_SIZE = 400;
 
+/** Bump when static HTML fragments or main.js need cache invalidation. */
+const STATIC_ASSET_VERSION = '420';
+
+function versionedStaticUrl(path) {
+  return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
+}
+
 let gridScrollObserver = null;
 let gridInteractionsWired = false;
 
@@ -963,11 +970,10 @@ function loadAppBar() {
   const mount = document.getElementById('appBarMount');
 
   // Check session cache first (with version check)
-  const APP_BAR_VERSION = '50'; // Increment this when appBar changes
   try {
     const cachedVersion = sessionStorage.getItem('photoViewer_appBarVersion');
     const cached = sessionStorage.getItem('photoViewer_appBarShell');
-    if (cached && cachedVersion === APP_BAR_VERSION) {
+    if (cached && cachedVersion === STATIC_ASSET_VERSION) {
       mount.innerHTML = cached;
       wireAppBar();
       return Promise.resolve();
@@ -976,8 +982,7 @@ function loadAppBar() {
     // Ignore cache errors
   }
 
-  // Fetch fragment (query must stay in sync with APP_BAR_VERSION for HTTP caches)
-  return fetch(`fragments/appBar.html?v=${APP_BAR_VERSION}`)
+  return fetch(versionedStaticUrl('fragments/appBar.html'))
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load app bar (${r.status})`);
       return r.text();
@@ -988,7 +993,7 @@ function loadAppBar() {
       // Cache it with version
       try {
         sessionStorage.setItem('photoViewer_appBarShell', html);
-        sessionStorage.setItem('photoViewer_appBarVersion', APP_BAR_VERSION);
+        sessionStorage.setItem('photoViewer_appBarVersion', STATIC_ASSET_VERSION);
       } catch (e) {
         // Ignore cache errors
       }
@@ -2188,7 +2193,7 @@ async function loadLibraryRecoveryDock() {
   }
 
   try {
-    const response = await fetch('fragments/libraryRecoveryDock.html?v=4');
+    const response = await fetch(versionedStaticUrl('fragments/libraryRecoveryDock.html'));
     if (!response.ok) {
       throw new Error(
         `Failed to load library recovery dock (${response.status})`,
@@ -3314,7 +3319,7 @@ function getRecoveryFailureCopy(stage, hasSwitchedLibrary) {
 function loadDateEditor() {
   const mount = document.getElementById('dateEditorMount');
 
-  return fetch('fragments/dateEditor.html?v=4') // Version 4: Sequence with interval
+  return fetch(versionedStaticUrl('fragments/dateEditor.html')) // Sequence with interval
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load date editor (${r.status})`);
       return r.text();
@@ -4210,7 +4215,7 @@ function hideCriticalErrorModal() {
 function loadLightbox() {
   const mount = document.getElementById('lightboxMount');
 
-  return fetch('fragments/lightbox.html?v=6')
+  return fetch(versionedStaticUrl('fragments/lightbox.html'))
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load lightbox (${r.status})`);
       return r.text();
@@ -7247,7 +7252,7 @@ async function loadImportOverlay() {
   }
 
   try {
-    const response = await fetch('fragments/importOverlay.html?v=5');
+    const response = await fetch(versionedStaticUrl('fragments/importOverlay.html'));
     if (!response.ok)
       throw new Error(`Failed to load import overlay (${response.status})`);
 
@@ -7627,7 +7632,7 @@ async function loadUtilitiesMenu() {
   if (utilitiesMenuLoaded) return;
 
   try {
-    const response = await fetch('fragments/utilitiesMenu.html?v=7');
+    const response = await fetch(versionedStaticUrl('fragments/utilitiesMenu.html'));
     if (!response.ok) throw new Error('Failed to load utilities menu');
 
     const html = await response.text();
@@ -7882,7 +7887,7 @@ async function loadCleanLibraryOverlay() {
   }
 
   try {
-    const response = await fetch('fragments/cleanLibraryOverlay.html?v=3');
+    const response = await fetch(versionedStaticUrl('fragments/cleanLibraryOverlay.html'));
     if (!response.ok) throw new Error('Failed to load Clean Library overlay');
 
     const html = await response.text();
@@ -10502,7 +10507,7 @@ async function showTerraformChoiceDialog(options = {}) {
  */
 async function loadTerraformPreviewOverlay() {
   try {
-    const response = await fetch('/fragments/terraformPreviewOverlay.html?v=8');
+    const response = await fetch(versionedStaticUrl('/fragments/terraformPreviewOverlay.html'));
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
   } catch (error) {
@@ -10712,7 +10717,7 @@ async function showTerraformPreviewDialog(options = {}) {
  */
 async function loadTerraformWarningOverlay() {
   try {
-    const response = await fetch('/fragments/terraformWarningOverlay.html?v=3');
+    const response = await fetch(versionedStaticUrl('/fragments/terraformWarningOverlay.html'));
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
   } catch (error) {
@@ -10788,7 +10793,7 @@ async function loadTerraformProgressOverlay() {
     return;
   }
   try {
-    const response = await fetch('/fragments/terraformProgressOverlay.html?v=3');
+    const response = await fetch(versionedStaticUrl('/fragments/terraformProgressOverlay.html'));
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
     wireFlowDetailsToggle('convert');
@@ -10824,7 +10829,7 @@ async function loadTerraformCompleteOverlay() {
     return;
   }
   try {
-    const response = await fetch('/fragments/terraformCompleteOverlay.html?v=3');
+    const response = await fetch(versionedStaticUrl('/fragments/terraformCompleteOverlay.html'));
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
     wireFlowDetailsToggle('convertComplete');
