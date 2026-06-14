@@ -1482,48 +1482,6 @@ function loadCriticalErrorModal() {
     });
 }
 
-/**
- * Load rebuild database overlay fragment
- */
-function loadRebuildDatabaseOverlay() {
-  const mount = document.createElement('div');
-  mount.id = 'rebuildDatabaseOverlayMount';
-  document.body.appendChild(mount);
-
-  return fetch('fragments/rebuildDatabaseOverlay.html')
-    .then((r) => {
-      if (!r.ok)
-        throw new Error(
-          `Failed to load rebuild database overlay (${r.status})`,
-        );
-      return r.text();
-    })
-    .then((html) => {
-      mount.innerHTML = html;
-
-      // Wire up event listeners
-      const closeBtn = document.getElementById('rebuildDatabaseCloseBtn');
-      const cancelBtn = document.getElementById('rebuildDatabaseCancelBtn');
-      const proceedBtn = document.getElementById('rebuildDatabaseProceedBtn');
-      const doneBtn = document.getElementById('rebuildDatabaseDoneBtn');
-
-      if (closeBtn)
-        closeBtn.addEventListener('click', hideRebuildDatabaseOverlay);
-      if (cancelBtn)
-        cancelBtn.addEventListener('click', hideRebuildDatabaseOverlay);
-      if (proceedBtn)
-        proceedBtn.addEventListener('click', executeRebuildDatabase);
-      if (doneBtn)
-        doneBtn.addEventListener('click', () => {
-          hideRebuildDatabaseOverlay();
-          loadAndRenderPhotos(); // Reload photos after rebuild
-        });
-    })
-    .catch((err) => {
-      console.error('❌ Rebuild database overlay load failed:', err);
-    });
-}
-
 function hideRebuildDatabaseOverlay() {
   const overlay = document.getElementById('rebuildDatabaseOverlay');
   if (overlay) {
