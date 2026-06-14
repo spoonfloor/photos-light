@@ -12,6 +12,113 @@ function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
 }
 
+async function consumeSseStream(response, options = {}) {
+  const {
+    isAborted = () => false,
+    onMessage,
+    onStop = null,
+  } = options;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let currentEvent = 'message';
+  let stopped = false;
+
+  const stopStream = async () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
+    if (typeof onStop === 'function') {
+      await onStop();
+    }
+  };
+
+  const consumeChunk = async (chunk) => {
+    if (!chunk.trim()) {
+      return null;
+    }
+
+    for (const line of chunk.split('\n')) {
+      if (!line.trim()) {
+        continue;
+      }
+      if (line.startsWith('event: ')) {
+        currentEvent = line.slice(7).trim() || 'message';
+        continue;
+      }
+      if (!line.startsWith('data: ')) {
+        continue;
+      }
+
+      const event = currentEvent;
+      currentEvent = 'message';
+      const result = await onMessage?.({
+        event,
+        dataText: line.slice(6),
+      });
+      if (result?.done) {
+        await stopStream();
+        return result;
+      }
+    }
+
+    return null;
+  };
+
+  try {
+    while (true) {
+      let done;
+      let value;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (readErr) {
+        if (isAborted() || readErr?.name === 'AbortError') {
+          throw new DOMException('The operation was aborted.', 'AbortError');
+        }
+        throw readErr;
+      }
+
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+      }
+
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const result = await consumeChunk(chunk);
+        if (result?.done) {
+          return result.result;
+        }
+      }
+
+      if (done) {
+        if (buffer.trim()) {
+          const result = await consumeChunk(buffer);
+          if (result?.done) {
+            return result.result;
+          }
+        }
+        break;
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return undefined;
+}
+
 let gridScrollObserver = null;
 let gridInteractionsWired = false;
 
@@ -1789,18 +1896,9 @@ async function streamMakeLibraryPerfect(options = {}) {
     throw new Error('No response body');
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
   // Forcibly release the underlying HTTP/1.1 socket so any follow-up fetch
   // (e.g. /api/photos, /api/years) isn't queued behind this connection.
   const teardown = async () => {
-    try {
-      await reader.cancel();
-    } catch {
-      /* ignore */
-    }
     try {
       internalAbort.abort();
     } catch {
@@ -1812,16 +1910,15 @@ async function streamMakeLibraryPerfect(options = {}) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  function consumeDataLine(line) {
-    if (!line.startsWith('data: ')) return null;
+  function consumeMakePerfectPayload(dataText) {
     let payload;
     try {
-      payload = JSON.parse(line.slice(6));
+      payload = JSON.parse(dataText);
     } catch {
       return null;
     }
     if (payload.type === 'complete') {
-      return { done: true, result: payload.result };
+      return { done: true, result: payload.result ?? null };
     }
     if (payload.type === 'cancelled') {
       return { done: true, result: payload.result || { status: 'CANCELLED' } };
@@ -1836,48 +1933,13 @@ async function streamMakeLibraryPerfect(options = {}) {
   }
 
   try {
-    while (true) {
-      let done;
-      let value;
-      try {
-        ({ done, value } = await reader.read());
-      } catch (readErr) {
-        if (
-          callerSignal?.aborted ||
-          internalAbort.signal.aborted ||
-          readErr?.name === 'AbortError'
-        ) {
-          throw new DOMException('The operation was aborted.', 'AbortError');
-        }
-        throw readErr;
-      }
-      if (value) {
-        buffer += decoder.decode(value, { stream: !done });
-      }
-
-      let sep;
-      while ((sep = buffer.indexOf('\n\n')) >= 0) {
-        const chunk = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-        for (const line of chunk.split('\n')) {
-          const fin = consumeDataLine(line);
-          if (fin) {
-            await teardown();
-            return fin.result;
-          }
-        }
-      }
-
-      if (done) {
-        for (const line of buffer.split('\n')) {
-          const fin = consumeDataLine(line);
-          if (fin) {
-            await teardown();
-            return fin.result;
-          }
-        }
-        break;
-      }
+    const result = await consumeSseStream(response, {
+      isAborted: () => callerSignal?.aborted || internalAbort.signal.aborted,
+      onStop: teardown,
+      onMessage: ({ dataText }) => consumeMakePerfectPayload(dataText),
+    });
+    if (result !== undefined) {
+      return result;
     }
   } finally {
     try {
@@ -1886,11 +1948,6 @@ async function streamMakeLibraryPerfect(options = {}) {
       /* ignore */
     }
     cleanupCallerSignal();
-    try {
-      reader.releaseLock();
-    } catch {
-      /* ignore */
-    }
   }
 
   throw new Error('Stream ended without complete event');
@@ -11107,11 +11164,6 @@ async function executeTerraformFlow(options = {}) {
       throw new Error(data.error || 'Failed to start conversion');
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let currentEvent = 'message';
-
     let processed = 0;
     let duplicates = 0;
     let errors = 0;
@@ -11119,106 +11171,91 @@ async function executeTerraformFlow(options = {}) {
     let dbPath = null;
     let completed = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    await consumeSseStream(response, {
+      isAborted: () => terraformAbort.signal.aborted,
+      onMessage: ({ event: eventType, dataText }) => {
+        const data = JSON.parse(dataText);
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-
-        if (line.startsWith('event: ')) {
-          currentEvent = line.substring(7).trim();
-          continue;
+        if (eventType === 'error') {
+          throw new Error(data.error || 'Conversion failed');
         }
 
-        if (line.startsWith('data: ')) {
-          const data = JSON.parse(line.substring(6));
-          const eventType = currentEvent;
-          currentEvent = 'message';
+        if (eventType === 'log' && data.entry) {
+          appendFlowEngineLogEntry('convert', data.entry);
+          return null;
+        }
 
-          if (eventType === 'error') {
-            throw new Error(data.error || 'Conversion failed');
-          }
-
-          if (eventType === 'log' && data.entry) {
-            appendFlowEngineLogEntry('convert', data.entry);
-            continue;
-          }
-
-          if (eventType === 'phase') {
-            const statusEl = document.getElementById('terraformProgressStatus');
-            if (statusEl && data.phase) {
-              setImportSpinnerStatus(
-                statusEl,
-                formatTerraformStepStatus(data.phase, data),
-              );
-            }
-            if (data.status === 'starting' && data.phase) {
-              appendFlowActivityLine(
-                'convert',
-                formatTerraformStepStatus(data.phase, data),
-              );
-            }
-            const secondaryStatus = document.getElementById(
-              'terraformProgressSecondaryStatus',
-            );
-            if (secondaryStatus && data.phase === 'audit') {
-              secondaryStatus.textContent =
-                data.status === 'complete'
-                  ? 'Final verification complete'
-                  : 'Verifying converted library before opening it…';
-            } else {
-              syncTerraformProgressRemainingDisplay();
-            }
-            continue;
-          }
-
-          // Update progress UI
-          if (data.processed !== undefined) {
-            processed = data.processed;
-            document.getElementById('terraformProgressProcessed').textContent =
-              processed.toLocaleString();
-          }
-          if (data.duplicates !== undefined) {
-            duplicates = data.duplicates;
-            document.getElementById('terraformProgressDuplicates').textContent =
-              duplicates.toLocaleString();
-          }
-          if (data.errors !== undefined) {
-            errors = data.errors;
-            document.getElementById('terraformProgressSkipped').textContent =
-              errors.toLocaleString();
-          }
-          if (data.log_path) {
-            log_path = data.log_path;
-          }
-          if (data.db_path) {
-            dbPath = data.db_path;
-          }
-
-          if (eventType === 'complete') {
-            completed = true;
-          } else if (data.total) {
-            const statusEl = document.getElementById('terraformProgressStatus');
+        if (eventType === 'phase') {
+          const statusEl = document.getElementById('terraformProgressStatus');
+          if (statusEl && data.phase) {
             setImportSpinnerStatus(
               statusEl,
-              formatTerraformStepStatus('convert', data),
+              formatTerraformStepStatus(data.phase, data),
             );
-            maybeAppendFlowProgressMilestone(
+          }
+          if (data.status === 'starting' && data.phase) {
+            appendFlowActivityLine(
               'convert',
-              'convert',
-              data.current ?? data.processed,
-              data.total,
+              formatTerraformStepStatus(data.phase, data),
             );
+          }
+          const secondaryStatus = document.getElementById(
+            'terraformProgressSecondaryStatus',
+          );
+          if (secondaryStatus && data.phase === 'audit') {
+            secondaryStatus.textContent =
+              data.status === 'complete'
+                ? 'Final verification complete'
+                : 'Verifying converted library before opening it…';
+          } else {
             syncTerraformProgressRemainingDisplay();
           }
+          return null;
         }
-      }
-    }
+
+        // Update progress UI
+        if (data.processed !== undefined) {
+          processed = data.processed;
+          document.getElementById('terraformProgressProcessed').textContent =
+            processed.toLocaleString();
+        }
+        if (data.duplicates !== undefined) {
+          duplicates = data.duplicates;
+          document.getElementById('terraformProgressDuplicates').textContent =
+            duplicates.toLocaleString();
+        }
+        if (data.errors !== undefined) {
+          errors = data.errors;
+          document.getElementById('terraformProgressSkipped').textContent =
+            errors.toLocaleString();
+        }
+        if (data.log_path) {
+          log_path = data.log_path;
+        }
+        if (data.db_path) {
+          dbPath = data.db_path;
+        }
+
+        if (eventType === 'complete') {
+          completed = true;
+        } else if (data.total) {
+          const statusEl = document.getElementById('terraformProgressStatus');
+          setImportSpinnerStatus(
+            statusEl,
+            formatTerraformStepStatus('convert', data),
+          );
+          maybeAppendFlowProgressMilestone(
+            'convert',
+            'convert',
+            data.current ?? data.processed,
+            data.total,
+          );
+          syncTerraformProgressRemainingDisplay();
+        }
+
+        return null;
+      },
+    });
 
     if (!completed || !dbPath) {
       throw new Error('Conversion did not complete');
