@@ -58,7 +58,9 @@
 🚀 READY TO START?
 
   cd ~/Desktop/photos-light
-  cd electron && npm start
+  cd electron
+  npm install
+  npm start
 
   The Electron window opens at http://localhost:5001
 

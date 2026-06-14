@@ -2,7 +2,7 @@
 
 > **👋 Welcome! If you're a fresh AI agent with zero context:**  
 > 1. This is a photo viewer desktop app (Electron + Flask + vanilla JS)  
-> 2. Run `cd electron && npm start` to start it (that's it!)  
+> 2. Run the Quick Start commands below to start it
 > 3. If it breaks, read [TROUBLESHOOTING.md](archive/TROUBLESHOOTING.md)  
 > 4. To understand how it works, read [SETUP.md](archive/SETUP.md)
 

@@ -1261,14 +1261,12 @@ async function populateDatePicker(options = {}) {
   try {
     let years = prefetchedYears;
     if (!Array.isArray(years)) {
-      const response = await fetch('/api/years');
+      const { response, data } = await apiFetchJson('/api/years');
 
       if (!response.ok) {
         console.warn('⚠️  Date picker disabled (database not available)');
         return;
       }
-
-      const data = await response.json();
 
       if (checkForDatabaseCorruption(data)) {
         return;
@@ -6128,11 +6126,10 @@ async function loadAndRenderPhotosCommitted(generation) {
 
 async function syncServerCatalogRevision() {
   try {
-    const response = await fetch('/api/library/current');
+    const { response, data } = await apiFetchJson('/api/library/current');
     if (!response.ok) {
       return null;
     }
-    const data = await response.json();
     if (Number.isFinite(data.catalog_revision)) {
       state.serverCatalogRevision = data.catalog_revision;
     }
@@ -8713,29 +8710,27 @@ async function reconcileCleanLibraryStreamResume() {
 }
 
 async function probeCleanLibraryCheckpoint() {
-  const response = await fetch('/api/library/make-perfect/checkpoint');
+  const { response, data } = await apiFetchJson('/api/library/make-perfect/checkpoint');
   if (response.status === 404) {
     return { status: 'NONE', resumable: false };
   }
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
     throw new Error(data.error || `Checkpoint probe failed (${response.status})`);
   }
-  return response.json();
+  return data;
 }
 
 async function abandonCleanLibraryCheckpoint() {
-  const response = await fetch('/api/library/make-perfect/checkpoint/abandon', {
+  const { response, data } = await apiFetchJson('/api/library/make-perfect/checkpoint/abandon', {
     method: 'POST',
   });
   if (response.status === 404) {
     return { ok: true, abandoned: false };
   }
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
     throw new Error(data.error || `Abandon failed (${response.status})`);
   }
-  return response.json();
+  return data;
 }
 
 async function loadCleanLibraryManifestTail(manifestPath, lines = 40) {
@@ -10487,11 +10482,11 @@ function closeSwitchLibraryOverlay() {
 
 async function fetchCurrentLibraryInfo() {
   try {
-    const response = await fetch('/api/library/current');
+    const { response, data } = await apiFetchJson('/api/library/current');
     if (!response.ok) {
       throw new Error(`Failed to load current library (${response.status})`);
     }
-    return await response.json();
+    return data;
   } catch (error) {
     console.warn('⚠️ Failed to get current library:', error);
     return null;

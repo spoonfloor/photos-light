@@ -68,8 +68,6 @@ Five passes: dead-code removal (Passes 1–3), architecture fixes (Pass 4), repo
 
 | Item | Reason |
 |------|--------|
-| `SHOW_FIRST_RUN_DEBUG_BUTTON` + hidden button | Future dev hook (`false` today) |
-| `openFirstRunDebugMenu()` | Empty stub; button onclick |
 | `setImportDebugPreflightCounts` / `setTerraformDebugPreflightCounts` | Real import & convert preflight |
 | `CLEAN_LIBRARY_PREVIEW_WORKING_STEPS` | Real clean working step labels |
 
@@ -220,7 +218,6 @@ Fixes for ghost-folder Clean → broken grid and hard-refresh duplicate top row 
 
 ## Known fragmentation (remaining)
 
-- First-run debug button is a stub; wire `openFirstRunDebugMenu()` when adding dev tools.
 - `test_grid_handoff_contract.py` is static (regex on source); no browser/integration test for full Phase A→B yet.
 - Filtered grid still uses paged `renderPhotoGrid` path (`shouldUseVirtualGrid()` false when starred/video chips active) — parity verified manually 2026-06-13; no automated test yet.
 - Bulk favorites API (`GET /api/photos/favorites`, `POST /api/photos/bulk-favorite`) documented in infrastructure specs but not wired in production UI.

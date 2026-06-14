@@ -18,7 +18,7 @@ The Electron shell opens automatically at http://localhost:5001.
 
 ## If it doesn't work
 
-1. **Install dependencies** — Run `pip3 install -r requirements.txt` and `cd electron && npm install`
+1. **Install dependencies** — Run `pip3 install -r requirements.txt`, then `cd electron`, then `npm install`
 2. **Port 5001 in use** — Quit any other Photos Light instance and try again
 3. **Library folder missing** — Re-open the library folder or pick a valid path from the welcome screen
 4. See [SETUP.md](archive/SETUP.md) for detailed troubleshooting
