@@ -104,6 +104,10 @@ class ConvertInvarianceContractTest(unittest.TestCase):
             photo_app,
             "write_photo_exif",
             side_effect=write_side_effect,
+        ), patch.object(
+            photo_app,
+            "write_video_metadata",
+            side_effect=write_side_effect,
         ), patch("app.subprocess.run", return_value=self.fake_subprocess_result), patch(
             "clean_library_fast_audit.run_fast_library_audit",
             return_value=audit_issues,
@@ -356,6 +360,80 @@ class ConvertInvarianceContractTest(unittest.TestCase):
 
         self.assertIn("event: complete", response_text)
         self.assertFalse(os.path.exists(old_year_dir))
+
+    def test_convert_handles_healthy_library_nested_inside_date_folder(self):
+        library_path = os.path.join(self.tmpdir.name, "convert-nested-library-lib")
+        nested_root = os.path.join(library_path, "2080", "1999", "1999-11-27")
+        os.makedirs(nested_root, exist_ok=True)
+
+        for rel_path, payload in (
+            (".library/photo_library.db", b"old-db"),
+            (".logs/terraform_old.jsonl", b"old-log"),
+            (".thumbnails/aa/bb/thumb.jpg", b"thumb-not-media"),
+            (".trash/duplicates/old.jpg", b"trashed-not-media"),
+        ):
+            artifact_path = os.path.join(nested_root, rel_path)
+            os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+            with open(artifact_path, "wb") as handle:
+                handle.write(payload)
+
+        for index in range(17):
+            photo_path = os.path.join(
+                nested_root,
+                "1999",
+                "1999-11-27",
+                f"photo-{index:02d}.jpg",
+            )
+            os.makedirs(os.path.dirname(photo_path), exist_ok=True)
+            with open(photo_path, "wb") as handle:
+                handle.write(f"photo-{index:02d}".encode("utf-8"))
+
+        for index in range(2):
+            video_path = os.path.join(
+                nested_root,
+                "1999",
+                "1999-11-27",
+                f"video-{index:02d}.mov",
+            )
+            with open(video_path, "wb") as handle:
+                handle.write(f"video-{index:02d}".encode("utf-8"))
+
+        preflight_response = self.client.post(
+            "/api/library/terraform/scan",
+            json={"library_path": library_path},
+        )
+        self.assertEqual(preflight_response.status_code, 200)
+        preflight = preflight_response.get_json()
+        self.assertEqual(preflight["photo_count"], 17)
+        self.assertEqual(preflight["video_count"], 2)
+        self.assertEqual(preflight["media_count"], 19)
+
+        def fake_write_metadata(file_path, target_date):
+            with open(file_path, "ab") as handle:
+                handle.write(b"|canonical-date|" + target_date.encode("utf-8"))
+
+        response_text = self._run_convert(
+            library_path,
+            exif_date="1999:11:27 09:41:44",
+            write_side_effect=fake_write_metadata,
+        )
+
+        self.assertIn("event: complete", response_text)
+        self.assertFalse(os.path.exists(os.path.join(library_path, "2080")))
+
+        conn = sqlite3.connect(canonical_db_path(library_path))
+        row_count = conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+        photo_count = conn.execute(
+            "SELECT COUNT(*) FROM photos WHERE file_type = 'photo'"
+        ).fetchone()[0]
+        video_count = conn.execute(
+            "SELECT COUNT(*) FROM photos WHERE file_type = 'video'"
+        ).fetchone()[0]
+        conn.close()
+
+        self.assertEqual(row_count, 19)
+        self.assertEqual(photo_count, 17)
+        self.assertEqual(video_count, 2)
 
     def test_convert_followed_by_clean_scan_reports_no_photo_issues(self):
         payload = b"convert-clean-scan"
