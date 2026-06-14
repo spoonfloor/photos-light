@@ -1,8 +1,52 @@
 # Bugs To Be Fixed - Prioritized
 
-Last updated: June 13, 2026
+Last updated: June 14, 2026
 
-**Status:** 4 remaining bugs
+**Status:** 5 remaining bugs (+ 1 architecture item)
+
+---
+
+## 🔴 TIER 1: MEDIA DATE TRUTH — SINGLE RULEBOOK (Architecture)
+
+**Priority:** 🔴 CRITICAL (high-order; blocks “truth in media”)  
+**Estimated effort:** 1–2 days (shared module + wire all mutators + contract tests)  
+**Status:** NOT STARTED
+
+**Issue:** Date writes and reads are inconsistent across flows. The app can report success while only the DB/folders changed; embedded file metadata (especially video) is often untouched. Rebuild then “corrects” the grid back to whatever is still inside the file.
+
+**Repro (example):** Import `img_19001127_….mov` → embedded `creation_time` is 2037 (not filename 1900) → manual date edit to 1900 → toast success but ffprobe still shows old date → rebuild shows wrong year again.
+
+**Root causes:**
+
+- **Writes:** Photos use exiftool + read-back verify; video date edit uses ffmpeg with **no verify** and failures are **swallowed** (DB/path still update). Import rejects failed video writes; date edit does not.
+- **Reads:** Videos ignore `img_YYYYMMDD` filenames at ingest; `library_sync` (rebuild) is a **separate indexer**, not the normalization engine.
+- **Drift:** Add, Convert, Clean, date edit, and rebuild do not all call one `read_media_date` / `write_and_verify_media_date` / `metadata_write_policy(ext)`.
+- **UI:** Year picker may not refresh after date edit (`populateDatePicker` missing from post-edit sync).
+
+**Flows that must share the rulebook:**
+
+| Mutators (write + verify) | Read-only auditor (same read rules) | Separate jobs (no own date logic) |
+|---------------------------|-------------------------------------|-----------------------------------|
+| Add photos, Convert, Clean library, single/bulk/lightbox date edit, undo date edit | Rebuild database | Switch library, restore from trash |
+
+**Do not allow:**
+
+- Duplicate date/hash/path logic per flow
+- Best-effort metadata writes on supported formats
+- Success toasts without verified read-back
+- Rebuild reading dates differently than ingest/edit wrote them
+
+**Fix shape:**
+
+1. One policy table (supported vs unsupported embedded dates per extension).
+2. One `write_and_verify_media_date()` — fail closed; full rollback on failure.
+3. One `read_media_date()` — used by ingest, clean, edit finalization, and rebuild (`library_sync` delegates here).
+4. Video write: ffprobe read-back after ffmpeg; exiftool fallback for QuickTime if needed.
+5. Wire all mutators through the shared API; remove swallow in `update_photo_date_with_files`.
+6. Surface write failures in UI (no fake “Date updated”).
+7. Contract tests: same fixture through add → edit → rebuild; ingest invariance for videos.
+
+**Related docs:** `tech-docs/DATE_EDIT_BUG_SUMMARY.md`, `tech-docs/ARCHITECTURE_FRAGMENTATION_AUDIT.md`, workspace rule high-before-low fix ethic.
 
 ---
 
@@ -145,23 +189,25 @@ See `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset and `tech-docs/GRI
 
 ## Recommended Fix Order
 
-Based on impact, frequency, and effort (quick wins first, then deep work):
+Based on impact, frequency, and effort (high-order architecture first, then quick wins):
 
-1. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access)
-2. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
-3. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
-4. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
-5. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+1. 🔴 **Media Date Truth — Single Rulebook** (1–2 days, CRITICAL - truth in media; fixes video date edit + rebuild drift)
+2. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access) — FIXED 2026-06-13
+3. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
+4. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
+5. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
+6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 
 ---
 
 ## SUMMARY
 
-**Next up:** Terraforming - Cancel/Go Back Causes Stalled State (CRITICAL - 1-2 hrs)
+**Next up:** Media Date Truth — Single Rulebook (CRITICAL - 1–2 days, architecture)
 
-**Total remaining:** 5 bugs
+**Total remaining:** 5 bugs + 1 architecture item
 
-- 🔴 Critical: 3 bugs (Terraforming Cancel Stall, Lightbox RAW Format, Lightbox MOV Videos)
+- 🔴 Critical architecture: 1 (Media Date Truth)
+- 🔴 Critical: 3 bugs (Lightbox RAW Format, Lightbox MOV Videos; Terraforming cancel — fixed)
 - 🟡 Polish: 2 bugs (Lightbox Rotation, Performance Research)
 
 **Estimated total effort:** ~9-12 hours for remaining bugs + research (excluding performance optimization implementation)
@@ -189,6 +235,7 @@ These are enhancement ideas, not bugs. To be considered for future feature work.
 
 ### Date Editing
 
+- **See Tier 1: Media Date Truth** — video writes unverified; rebuild/read drift; year picker not refreshed after edit
 - Date change causes navigation from lightbox to grid (bad UX)
 - Date change anchor date should be topmost photo in grid
 
@@ -225,7 +272,7 @@ These issues need more information or test cases before they can be prioritized.
 
 ### Import Behind the Scenes
 
-- Extract EXIF date (fallback to mtime) - What does this mean?
+- ~~Extract EXIF date (fallback to mtime)~~ — superseded by **Media Date Truth — Single Rulebook** (Tier 1); see that entry for ingest/rebuild read policy and video filename handling.
 
 ### Various Features Need Backend Verification
 
