@@ -103,10 +103,23 @@ def write_and_verify_video_date(file_path: str, new_date: str) -> None:
     This intentionally rejects post-2040 MOV/QuickTime dates until the dedicated
     64-bit atom patching pipeline is available.
     """
-    ensure_video_date_write_supported(file_path, new_date)
+    base, ext = os.path.splitext(file_path)
+    ext_lower = ext.lower()
+    if ext_lower in UNSUPPORTED_VIDEO_DATE_FORMATS:
+        raise UnsupportedMediaDateWrite(
+            f"Format {ext.upper()} does not support embedded metadata"
+        )
+
+    target = parse_canonical_media_date(new_date)
+    if ext_lower in QUICKTIME_POST_2040_EXTENSIONS and target > QUICKTIME_V0_MAX_DATE:
+        if read_video_creation_time(file_path) == new_date:
+            return
+        raise UnsupportedMediaDateWrite(
+            "MOV/QuickTime dates after 2040 require verified 64-bit atom patching"
+        )
+
     iso_date = canonical_date_to_iso(new_date)
 
-    base, ext = os.path.splitext(file_path)
     temp_output = f"{base}_temp{ext}"
 
     try:

@@ -26,6 +26,20 @@ class MediaDatePolicyTest(unittest.TestCase):
             "2039:12:31 23:59:59",
         )
 
+    def test_post_2040_mov_is_noop_when_ffprobe_already_matches(self):
+        def fake_run(args, **_kwargs):
+            if args[0] == "ffprobe":
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    '{"format":{"tags":{"creation_time":"2080-01-01T00:09:00.000000Z"}}}',
+                    "",
+                )
+            raise AssertionError(f"Unexpected write command: {args}")
+
+        with patch("media_dates.subprocess.run", side_effect=fake_run):
+            write_and_verify_video_date("/tmp/future.mov", "2080:01:01 00:09:00")
+
     def test_ffprobe_mismatch_fails_after_video_write(self):
         with TemporaryDirectory() as tmpdir:
             video_path = os.path.join(tmpdir, "clip.mp4")

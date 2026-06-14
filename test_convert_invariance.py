@@ -251,6 +251,37 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         self.assertEqual(convert_row["date_taken"], import_row["date_taken"])
         self.assertEqual(convert_bytes, import_bytes)
 
+    def test_import_accepts_post_2040_mov_when_ffprobe_already_matches(self):
+        library_path, db_path = self._make_import_library("import-post-2040-mov")
+        source_path = os.path.join(self.tmpdir.name, "img_20800101_f2b46044.mov")
+        with open(source_path, "wb") as handle:
+            handle.write(b"already-patched-future-mov")
+
+        def fake_run(args, **_kwargs):
+            if args[0] == "ffprobe":
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    '{"format":{"tags":{"creation_time":"2080-01-01T00:09:00.000000Z"}}}',
+                    "",
+                )
+            raise AssertionError(f"Unexpected metadata write command: {args}")
+
+        with patch("media_dates.subprocess.run", side_effect=fake_run):
+            response_text = self._run_import(
+                library_path,
+                db_path,
+                source_path,
+                exif_date="2080:01:01 00:09:00",
+                write_side_effect=AssertionError("photo writer should not be used for MOV"),
+            )
+
+        self.assertIn('"event": "imported"', response_text)
+        self.assertIn('"errors": 0', response_text)
+        row = self._read_single_row(db_path)
+        self.assertEqual(row["date_taken"], "2080:01:01 00:09:00")
+        self.assertTrue(row["current_path"].startswith("2080/2080-01-01/"))
+
     def test_failed_convert_preserves_original_source_photo(self):
         payload = b"convert-preserve-original-on-failure"
         library_path, source_path = self._make_convert_library(
