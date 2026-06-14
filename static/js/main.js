@@ -7186,7 +7186,13 @@ function renderImportCompleteUi({ hasErrors = false, logPath = null } = {}) {
   });
 }
 
-function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, durationMs) {
+function animatePreflightNumericCounts(
+  photoTarget,
+  videoTarget,
+  totalTarget,
+  durationMs,
+  applyCounts,
+) {
   const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
   return new Promise((resolve) => {
     const startedAt = Date.now();
@@ -7194,17 +7200,13 @@ function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, 
       const elapsed = Date.now() - startedAt;
       const ratio = Math.min(1, elapsed / durationMs);
       const eased = 1 - (1 - ratio) ** 2;
-      setTerraformDebugPreflightCounts(
+      applyCounts(
         Math.round(photoTarget * eased),
         Math.round(videoTarget * eased),
         Math.round(resolvedTotalTarget * eased),
       );
       if (ratio >= 1) {
-        setTerraformDebugPreflightCounts(
-          photoTarget,
-          videoTarget,
-          resolvedTotalTarget,
-        );
+        applyCounts(photoTarget, videoTarget, resolvedTotalTarget);
         resolve();
         return;
       }
@@ -7214,32 +7216,24 @@ function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, 
   });
 }
 
+function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, durationMs) {
+  return animatePreflightNumericCounts(
+    photoTarget,
+    videoTarget,
+    totalTarget,
+    durationMs,
+    setTerraformDebugPreflightCounts,
+  );
+}
+
 function animateImportPreflightCounts(photoTarget, videoTarget, totalTarget, durationMs) {
-  const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    const tick = () => {
-      const elapsed = Date.now() - startedAt;
-      const ratio = Math.min(1, elapsed / durationMs);
-      const eased = 1 - (1 - ratio) ** 2;
-      setImportDebugPreflightCounts(
-        Math.round(photoTarget * eased),
-        Math.round(videoTarget * eased),
-        Math.round(resolvedTotalTarget * eased),
-      );
-      if (ratio >= 1) {
-        setImportDebugPreflightCounts(
-          photoTarget,
-          videoTarget,
-          resolvedTotalTarget,
-        );
-        resolve();
-        return;
-      }
-      setTimeout(tick, 50);
-    };
-    tick();
-  });
+  return animatePreflightNumericCounts(
+    photoTarget,
+    videoTarget,
+    totalTarget,
+    durationMs,
+    setImportDebugPreflightCounts,
+  );
 }
 
 function scheduleImportRefresh(delayMs = 1500) {
@@ -8258,33 +8252,13 @@ function animatePreflightScoreboardCounts(
   durationMs,
   { totalTarget = null } = {},
 ) {
-  const resolvedTotalTarget = totalTarget ?? photoTarget + videoTarget;
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-
-    const tick = () => {
-      const elapsed = Date.now() - startedAt;
-      const ratio = Math.min(1, elapsed / durationMs);
-      const eased = 1 - (1 - ratio) ** 2;
-      setCleanLibraryPreflightCounts(
-        Math.round(photoTarget * eased),
-        Math.round(videoTarget * eased),
-        Math.round(resolvedTotalTarget * eased),
-      );
-      if (ratio >= 1) {
-        setCleanLibraryPreflightCounts(
-          photoTarget,
-          videoTarget,
-          resolvedTotalTarget,
-        );
-        resolve();
-        return;
-      }
-      setTimeout(tick, 50);
-    };
-
-    tick();
-  });
+  return animatePreflightNumericCounts(
+    photoTarget,
+    videoTarget,
+    totalTarget,
+    durationMs,
+    setCleanLibraryPreflightCounts,
+  );
 }
 
 const CLEAN_LIBRARY_PHASE_LABELS = {
