@@ -113,7 +113,10 @@ def quarantine_root_hidden(library_path: str) -> Tuple[List[str], List[str]]:
 
         item_path = os.path.join(library_path, item)
         if os.path.isdir(item_path):
-            if item not in infrastructure:
+            if item not in infrastructure and not directory_tree_has_media(
+                item_path,
+                library_path=library_path,
+            ):
                 quarantine_dirs.append(item_path)
         elif os.path.isfile(item_path):
             quarantine_files.append(item_path)

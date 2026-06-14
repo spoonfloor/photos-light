@@ -785,6 +785,39 @@ class CleanerFullHashRegressionTest(unittest.TestCase):
             self.assertEqual(len(rows[0]["content_hash"]), 64)
             self.assertTrue(os.path.exists(os.path.join(tmpdir, rows[0]["current_path"])))
 
+    def test_engine_processes_media_inside_root_hidden_folder(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+
+            date_taken = "2026:01:27 12:00:00"
+            source_dir = os.path.join(tmpdir, ".hidden-album", "deep")
+            source_path = os.path.join(source_dir, "source.png")
+            os.makedirs(source_dir, exist_ok=True)
+
+            with open(source_path, "wb") as handle:
+                handle.write(b"hidden-folder-media")
+            with open(os.path.join(tmpdir, ".hidden-album", "notes.txt"), "wb") as handle:
+                handle.write(b"notes")
+
+            with patch("make_library_perfect.verify_media_file", return_value=(True, "mock")), patch(
+                "make_library_perfect.extract_exif_date", return_value=date_taken
+            ), patch("make_library_perfect.extract_exif_rating", return_value=None), patch(
+                "make_library_perfect.get_orientation_flag", return_value=1
+            ), patch("make_library_perfect.read_dimensions", return_value=(1, 1)):
+                result = run_db_normalization_engine(tmpdir, db_path=db_path)
+
+            self.assertEqual(result["status"], "SUCCESS")
+            self.assertFalse(os.path.exists(os.path.join(tmpdir, ".hidden-album")))
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT current_path FROM photos").fetchall()
+            conn.close()
+
+            self.assertEqual(len(rows), 1)
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, rows[0]["current_path"])))
+
     def test_engine_emits_signal_plan_and_truthful_signal_burndown(self):
         with TemporaryDirectory() as tmpdir:
             db_path, conn = self._create_library_db(tmpdir)

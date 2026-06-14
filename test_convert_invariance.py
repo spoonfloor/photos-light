@@ -435,6 +435,39 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         self.assertEqual(photo_count, 17)
         self.assertEqual(video_count, 2)
 
+    def test_convert_processes_media_inside_root_hidden_folder(self):
+        library_path = os.path.join(self.tmpdir.name, "convert-hidden-media-lib")
+        source_path = os.path.join(library_path, ".hidden-album", "deep", "photo.jpg")
+        notes_path = os.path.join(library_path, ".hidden-album", "notes.txt")
+        os.makedirs(os.path.dirname(source_path), exist_ok=True)
+        with open(source_path, "wb") as handle:
+            handle.write(b"hidden-photo")
+        with open(notes_path, "wb") as handle:
+            handle.write(b"notes")
+
+        preflight_response = self.client.post(
+            "/api/library/terraform/scan",
+            json={"library_path": library_path},
+        )
+        self.assertEqual(preflight_response.status_code, 200)
+        preflight = preflight_response.get_json()
+        self.assertEqual(preflight["photo_count"], 1)
+        self.assertEqual(preflight["media_count"], 1)
+
+        def fake_write_metadata(file_path, target_date):
+            with open(file_path, "ab") as handle:
+                handle.write(b"|canonical-date|" + target_date.encode("utf-8"))
+
+        response_text = self._run_convert(
+            library_path,
+            exif_date="1999:11:27 09:41:44",
+            write_side_effect=fake_write_metadata,
+        )
+
+        self.assertIn("event: complete", response_text)
+        self.assertFalse(os.path.exists(os.path.join(library_path, ".hidden-album")))
+        self.assertEqual(len(self._read_rows(canonical_db_path(library_path))), 1)
+
     def test_convert_followed_by_clean_scan_reports_no_photo_issues(self):
         payload = b"convert-clean-scan"
         library_path, _ = self._make_convert_library(

@@ -70,6 +70,22 @@ class LibraryFilesystemTest(unittest.TestCase):
         self.assertEqual(quarantine_dirs, [os.path.join(tmpdir, ".git")])
         self.assertEqual(quarantine_files, [os.path.join(tmpdir, ".gitignore")])
 
+    def test_quarantine_root_hidden_keeps_hidden_dirs_with_media(self):
+        with TemporaryDirectory() as tmpdir:
+            hidden_media_path = os.path.join(tmpdir, ".hidden-album", "deep", "photo.jpg")
+            os.makedirs(os.path.dirname(hidden_media_path), exist_ok=True)
+            with open(hidden_media_path, "wb") as handle:
+                handle.write(b"hidden-photo")
+            with open(os.path.join(tmpdir, ".gitignore"), "wb") as handle:
+                handle.write(b"*.pyc")
+
+            quarantine_dirs, quarantine_files = quarantine_root_hidden(tmpdir)
+            partition = partition_library_files(tmpdir)
+
+        self.assertEqual(quarantine_dirs, [])
+        self.assertEqual(quarantine_files, [os.path.join(tmpdir, ".gitignore")])
+        self.assertEqual(partition.media_files, [hidden_media_path])
+
     def test_remove_noncanonical_trees_removes_empty_incoming_folder(self):
         with TemporaryDirectory() as tmpdir:
             os.makedirs(os.path.join(tmpdir, "2026", "2026-04-12"), exist_ok=True)
