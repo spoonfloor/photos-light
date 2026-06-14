@@ -5,8 +5,9 @@
 ```bash
 cd ~/Desktop/photos-light
 pip3 install -r requirements.txt
-cd electron && npm install   # first time only
-cd electron && npm start
+cd electron
+npm install   # first time only
+npm start
 ```
 
 The Electron shell opens automatically at http://localhost:5001.
