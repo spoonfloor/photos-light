@@ -2993,6 +2993,14 @@ def import_from_paths():
     def generate():
         conn = None
         client_disconnected = False
+        grid_read_caches_invalidated = False
+
+        def invalidate_import_grid_caches():
+            nonlocal grid_read_caches_invalidated
+            if grid_read_caches_invalidated:
+                return
+            invalidate_grid_read_caches()
+            grid_read_caches_invalidated = True
 
         def emit_event(event_name, payload):
             nonlocal client_disconnected
@@ -3088,6 +3096,8 @@ def import_from_paths():
                         print(f"{'='*60}\n")
                         payload = dict(payload)
                         payload['log_path'] = log_path_rel
+                        if imported_so_far > 0:
+                            invalidate_import_grid_caches()
 
                     if not (yield from emit_event(event_name, payload)):
                         break
@@ -3098,7 +3108,7 @@ def import_from_paths():
             finally:
                 log_file.close()
                 if imported_so_far > 0:
-                    invalidate_grid_read_caches()
+                    invalidate_import_grid_caches()
             
         except GeneratorExit:
             print("🛑 Import stream disconnected")

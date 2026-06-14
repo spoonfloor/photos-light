@@ -11505,9 +11505,22 @@ function isCurrentLibraryGeneration(generation) {
 function renderSafeLibraryFallback() {
   cancelPendingPhotoContainerMount();
   advanceLibraryGeneration();
-  state.photos = [];
+  if (currentPhotoLoadAbortController) {
+    currentPhotoLoadAbortController.abort();
+    currentPhotoLoadAbortController = null;
+  }
+  currentPhotoLoad = null;
+  if (typeof VirtualGrid !== 'undefined') {
+    VirtualGrid.destroy();
+  }
+  if (typeof ThumbnailQueue !== 'undefined') {
+    ThumbnailQueue.clear();
+  }
+  resetPhotoWindowState();
   state.hasDatabase = false;
   state.libraryPath = null;
+  state.photoTotalCount = 0;
+  state.loading = false;
   state.selectedPhotos.clear();
   state.lastClickedIndex = null;
   resetPhotoFilters();

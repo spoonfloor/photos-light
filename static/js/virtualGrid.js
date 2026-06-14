@@ -1185,7 +1185,14 @@ const VirtualGrid = (() => {
   }
 
   function isActive() {
-    return Boolean(layout && contentLayer);
+    const container = getContainer();
+    return Boolean(
+      layout &&
+        contentLayer &&
+        contentLayer.isConnected &&
+        container &&
+        container.contains(contentLayer),
+    );
   }
 
   return {

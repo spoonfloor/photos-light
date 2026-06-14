@@ -9,6 +9,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parent
 MAIN_JS = REPO_ROOT / "static" / "js" / "main.js"
 VIRTUAL_GRID_JS = REPO_ROOT / "static" / "js" / "virtualGrid.js"
+APP_PY = REPO_ROOT / "app.py"
 
 
 def _function_body(source, name):
@@ -34,6 +35,7 @@ class TestGridHandoffContract(unittest.TestCase):
     def setUp(self):
         self.main_js = MAIN_JS.read_text()
         self.virtual_grid_js = VIRTUAL_GRID_JS.read_text()
+        self.app_py = APP_PY.read_text()
 
     def test_clean_completion_waits_for_catalog_rehydrate(self):
         body = _function_body(self.main_js, "executeCleanLibrary")
@@ -47,6 +49,20 @@ class TestGridHandoffContract(unittest.TestCase):
         body = _function_body(self.main_js, "hasCommittedPhotoRender")
         self.assertIn("VirtualGrid.isActive()", body)
         self.assertIn("!VirtualGrid.getLayout()?.provisional", body)
+
+    def test_safe_library_fallback_destroys_client_grid_session(self):
+        body = _function_body(self.main_js, "renderSafeLibraryFallback")
+        self.assertIn("currentPhotoLoadAbortController.abort()", body)
+        self.assertIn("VirtualGrid.destroy()", body)
+        self.assertIn("ThumbnailQueue.clear()", body)
+        self.assertIn("resetPhotoWindowState()", body)
+        self.assertIn("state.photoTotalCount = 0", body)
+        self.assertIn("state.libraryPath = null", body)
+
+    def test_virtual_grid_active_requires_connected_owned_dom(self):
+        body = _function_body(self.virtual_grid_js, "isActive")
+        self.assertIn("contentLayer.isConnected", body)
+        self.assertIn("container.contains(contentLayer)", body)
 
     def test_refined_index_clears_provisional_artifacts_before_rebuild(self):
         body = _function_body(self.virtual_grid_js, "applyRefinedIndex")
@@ -72,6 +88,18 @@ class TestGridHandoffContract(unittest.TestCase):
         ):
             body = _function_body(self.virtual_grid_js, name)
             self.assertIn("getMountedMonthSection(monthKey)", body)
+
+    def test_import_complete_invalidates_grid_caches_before_sse_complete(self):
+        complete_branch = self.app_py.split("elif event_name == 'complete':", 1)[1]
+        complete_branch = complete_branch.split(
+            "if not (yield from emit_event(event_name, payload)):",
+            1,
+        )[0]
+        invalidate_at = complete_branch.find("invalidate_import_grid_caches()")
+        log_path_at = complete_branch.find("payload['log_path'] = log_path_rel")
+        self.assertGreaterEqual(invalidate_at, 0)
+        self.assertGreaterEqual(log_path_at, 0)
+        self.assertGreater(invalidate_at, log_path_at)
 
 
 if __name__ == "__main__":
