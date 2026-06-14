@@ -333,6 +333,30 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         self.assertIn("Final verification failed", response_text)
         self.assertNotIn("event: complete", response_text)
 
+    def test_convert_removes_empty_source_year_folder_after_rehousing(self):
+        payload = b"convert-empty-year-folder"
+        library_path = os.path.join(self.tmpdir.name, "convert-empty-year-lib")
+        old_year_dir = os.path.join(library_path, "2080")
+        old_source_dir = os.path.join(old_year_dir, "1999", "1999-11-27")
+        source_path = os.path.join(old_source_dir, "source.jpg")
+        os.makedirs(old_source_dir, exist_ok=True)
+        with open(source_path, "wb") as handle:
+            handle.write(payload)
+        os.utime(source_path, (123, 123))
+
+        def fake_write_photo_exif(file_path, target_date):
+            with open(file_path, "ab") as handle:
+                handle.write(b"|canonical-date|" + target_date.encode("utf-8"))
+
+        response_text = self._run_convert(
+            library_path,
+            exif_date="1999:11:27 09:41:44",
+            write_side_effect=fake_write_photo_exif,
+        )
+
+        self.assertIn("event: complete", response_text)
+        self.assertFalse(os.path.exists(old_year_dir))
+
     def test_convert_followed_by_clean_scan_reports_no_photo_issues(self):
         payload = b"convert-clean-scan"
         library_path, _ = self._make_convert_library(

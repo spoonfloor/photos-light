@@ -221,7 +221,9 @@ def prune_empty_year_subfolders(library_path: str) -> int:
                 continue
 
             parts = path_parts(rel_root)
-            if len(parts) == 2 and is_year_folder_name(parts[0]) and is_day_folder_name(parts[0], parts[1]):
+            if len(parts) == 1 and is_year_folder_name(parts[0]):
+                pass
+            elif len(parts) == 2 and is_year_folder_name(parts[0]) and is_day_folder_name(parts[0], parts[1]):
                 pass
             elif len(parts) < 2:
                 continue
