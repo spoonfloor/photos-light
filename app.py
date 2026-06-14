@@ -90,6 +90,7 @@ from library_layout import (
     resolve_db_path,
 )
 from media_finalization import finalize_mutated_media
+from media_dates import write_and_verify_video_date
 from library_filesystem import (
     iter_layout_cleanup_passes,
     quarantine_root_hidden,
@@ -371,48 +372,8 @@ def write_photo_exif(file_path, new_date):
     print("   ✅ EXIF write verified")
 
 def write_video_metadata(file_path, new_date):
-    """Write metadata to video using ffmpeg"""
-    try:
-        # Check if format supports metadata before attempting write
-        _, ext = os.path.splitext(file_path)
-        ext_lower = ext.lower()
-        
-        # Formats that don't support embedded metadata reliably
-        unsupported_formats = {'.mpg', '.mpeg', '.vob', '.ts', '.mts', '.avi', '.wmv'}
-        if ext_lower in unsupported_formats:
-            raise Exception(f"Format {ext.upper()} does not support embedded metadata")
-        
-        # Convert to ISO 8601 format
-        iso_date = new_date.replace(':', '-', 2).replace(' ', 'T')
-        
-        base, ext = os.path.splitext(file_path)
-        temp_output = f"{base}_temp{ext}"
-        
-        cmd = [
-            'ffmpeg',
-            '-i', file_path,
-            '-metadata', f'creation_time={iso_date}',
-            '-codec', 'copy',
-            '-y',
-            temp_output
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        
-        if result.returncode != 0:
-            if os.path.exists(temp_output):
-                os.remove(temp_output)
-            raise Exception(f"ffmpeg failed: {result.stderr}")
-        
-        # Replace original
-        os.replace(temp_output, file_path)
-            
-    except subprocess.TimeoutExpired:
-        if os.path.exists(temp_output):
-            os.remove(temp_output)
-        raise Exception("ffmpeg timeout after 60s")
-    except FileNotFoundError:
-        raise Exception("ffmpeg not found")
+    """Write and verify video metadata using the shared fail-closed policy."""
+    write_and_verify_video_date(file_path, new_date)
 
 
 @dataclass
@@ -720,10 +681,8 @@ def update_photo_date_with_files(photo_id, new_date, conn):
             print(f"  ⚠️  Orientation baking failed: {bake_error}")
             # Continue anyway - not critical for date change operation
         
-        # Phase 1: Write EXIF (best effort; shared finalization will reconcile the
-        # actual bytes/path state afterward so date-edit doesn't maintain a second
-        # post-mutation cleanliness implementation.)
-        exif_write_error = None
+        # Phase 1: write and verify embedded metadata. Date edits fail closed:
+        # do not update DB/path when supported metadata could not be written.
         try:
             if file_type in ('photo', 'image'):  # Handle both for backward compatibility
                 write_photo_exif(old_full_path, new_date)
@@ -736,7 +695,8 @@ def update_photo_date_with_files(photo_id, new_date, conn):
             
         except Exception as e:
             print(f"  ❌ EXIF write failed: {e}")
-            exif_write_error = str(e)
+            transaction.log_failure(old_filename, e)
+            raise
 
         # Phase 2: Reconcile hash/path/thumbnail/DB through the shared finalizer.
         try:
@@ -754,12 +714,6 @@ def update_photo_date_with_files(photo_id, new_date, conn):
                 duplicate_policy='trash',
                 duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
             )
-
-            if exif_write_error:
-                print(
-                    "  ⚠️  EXIF write failed; reconciled canonical path/DB using the "
-                    f"current on-disk bytes: {exif_write_error}"
-                )
 
             if finalize_result.status == 'duplicate_removed':
                 return True, {

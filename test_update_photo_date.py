@@ -8,6 +8,7 @@ from unittest.mock import patch
 import app as photo_app
 from db_schema import create_database_schema
 from library_cleanliness import build_canonical_photo_path
+from media_dates import UnsupportedMediaDateWrite
 
 
 class UpdatePhotoDateRouteTest(unittest.TestCase):
@@ -211,6 +212,67 @@ class UpdatePhotoDateRouteTest(unittest.TestCase):
         self.assertIsNone(source_row)
         self.assertEqual(duplicate_row[0], duplicate_rel_path)
         self.assertEqual(duplicate_row[1], duplicate_hash)
+
+    def test_update_video_date_fails_closed_when_metadata_write_unsupported(self):
+        old_date = "2039:01:01 00:00:00"
+        new_date = "2080:01:01 00:09:00"
+        video_bytes = b"video-date-write-unsupported"
+        content_hash = hashlib.sha256(video_bytes).hexdigest()
+        old_rel_path, _ = build_canonical_photo_path(old_date, content_hash, ".mov")
+        old_full_path = os.path.join(self.library_path, old_rel_path)
+        os.makedirs(os.path.dirname(old_full_path), exist_ok=True)
+        with open(old_full_path, "wb") as fh:
+            fh.write(video_bytes)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename,
+                current_path,
+                date_taken,
+                content_hash,
+                file_size,
+                file_type,
+                width,
+                height
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                os.path.basename(old_rel_path),
+                old_rel_path,
+                old_date,
+                content_hash,
+                len(video_bytes),
+                "video",
+                400,
+                300,
+            ),
+        )
+        photo_id = conn.execute("SELECT id FROM photos ORDER BY id DESC").fetchone()[0]
+        conn.commit()
+        conn.close()
+
+        with patch.object(photo_app, "write_video_metadata", side_effect=UnsupportedMediaDateWrite("unsafe mov")):
+            response = self.client.post(
+                "/api/photo/update_date",
+                json={"photo_id": photo_id, "new_date": new_date},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertTrue(os.path.exists(old_full_path))
+
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT current_path, content_hash, date_taken FROM photos WHERE id = ?",
+            (photo_id,),
+        ).fetchone()
+        conn.close()
+
+        self.assertEqual(row[0], old_rel_path)
+        self.assertEqual(row[1], content_hash)
+        self.assertEqual(row[2], old_date)
 
 
 if __name__ == "__main__":
