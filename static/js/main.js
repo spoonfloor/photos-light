@@ -12,6 +12,12 @@ function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
 }
 
+async function apiFetchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  return { response, data };
+}
+
 async function consumeSseStream(response, options = {}) {
   const {
     isAborted = () => false,
@@ -10981,12 +10987,11 @@ const CONVERT_OS_PRIMARY_MESSAGE =
   'Unable to convert primary OS directories. Pick another folder to continue.';
 
 async function fetchTerraformPreflight(path) {
-  const response = await fetch('/api/library/terraform/scan', {
+  const { response, data } = await apiFetchJson('/api/library/terraform/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ library_path: path }),
   });
-  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (data.convert_blocked) {
       return { convert_blocked: true };
@@ -13106,13 +13111,14 @@ function setImportOverlayTitle(title = IMPORT_OVERLAY_TITLE) {
 }
 
 async function scanImportPaths(paths) {
-  const response = await fetch('/api/import/scan-paths', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths }),
-  });
-
-  const result = await response.json();
+  const { response, data: result } = await apiFetchJson(
+    '/api/import/scan-paths',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths }),
+    },
+  );
 
   if (!response.ok) {
     throw new Error(result.error || 'Failed to scan paths');
