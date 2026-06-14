@@ -1,14 +1,46 @@
-# Bugs To Be Fixed - Prioritized
+# Bugs To Be Fixed — Prioritized
 
 Last updated: June 14, 2026
 
-**Status:** 4 remaining product bugs (+ 6 architecture items)
+**Prioritization lens:** Clean, smart architecture throughout the app. Fix **single sources of truth and shared contracts** before flow polish, lightbox features, or performance tuning. Do not stack tactical patches on fragmented paths (see workspace rule *high-before-low fix ethic*).
+
+**Status:** 2 architecture foundations · 4 architecture consolidations · 4 product items (2 critical lightbox · 1 feature · 1 research)
 
 ---
 
-## 🔴 TIER 1: MEDIA DATE TRUTH — SINGLE RULEBOOK (Architecture)
+## Recommended sequence
 
-**Priority:** 🔴 CRITICAL (high-order; blocks “truth in media”)  
+Work top-to-bottom. Each step should land with smoke + (where noted) packaged `.app` verification before the next begins.
+
+| Step | Item | Why this order |
+|------|------|----------------|
+| 1 | **Media Date Truth — Single Rulebook** | Highest-order data contract; every mutator and rebuild must share read/write/verify rules before more flow UI is unified. |
+| 2 | **Open Library Journey — Protected Performance Path** | Pin the app-entry path in isolation; no Add/Clean/Convert refactors in the same pass. |
+| 3 | **Add/Clean/Convert Flow Controller Helpers** | Safe, PR-sized extractions only after date truth and open-library behavior are pinned. |
+| 4 | **Overlay Loader Factory / Progress Dialog Template** | One overlay family at a time; no state-machine changes in the same pass. |
+| 5 | **Picker Module Unification** | Shared listing/sort helpers; keep selection models separate. |
+| 6 | **Shared `apiFetchJson()` — Broader Adoption** | Incremental JSON clusters; leave SSE, fragments, and open-library paths alone unless scoped. |
+| 7 | **Lightbox — RAW not displaying** | Product correctness; benefits from stable media/MIME patterns but does not block architecture work above. |
+| 8 | **Lightbox — MOV not displaying** | Same as RAW; pair smoke after both land. |
+| 9 | **Lightbox — Add rotation action** | Feature on top of stable lightbox + media write paths; follow terraforming rotation protocol. |
+| 10 | **Performance — high-latency operations** | Research/plan only until architecture tiers above are stable; implementation may depend on unified sync/date paths. |
+
+**Sequencing rules**
+
+- Do **not** mix Open-library/recovery/grid-handoff changes with Add/Clean/Convert refactors.
+- Do **not** add per-flow date/hash/path logic — extend the shared rulebook instead.
+- Flow-helper and overlay extractions: one slice per PR, flow smoke after each.
+- Lightbox display fixes: verify MIME/serve path and error surfacing; avoid a third parallel preview pipeline.
+
+---
+
+## Tier 1 — Architecture foundations
+
+These define app-wide contracts. Nothing below Tier 2 should bypass or duplicate them.
+
+### Media Date Truth — Single Rulebook
+
+**Priority:** 🔴 CRITICAL  
 **Estimated effort:** 1–2 days (shared module + wire all mutators + contract tests)  
 **Status:** NOT STARTED
 
@@ -46,22 +78,14 @@ Last updated: June 14, 2026
 6. Surface write failures in UI (no fake “Date updated”).
 7. Contract tests: same fixture through add → edit → rebuild; ingest invariance for videos.
 
-**Related docs:** `tech-docs/DATE_EDIT_BUG_SUMMARY.md`, `tech-docs/ARCHITECTURE_FRAGMENTATION_AUDIT.md`, workspace rule high-before-low fix ethic.
+**Related docs:** `tech-docs/DATE_EDIT_BUG_SUMMARY.md`, `tech-docs/ARCHITECTURE_FRAGMENTATION_AUDIT.md`
 
 ---
 
-## 🔴 TIER 1: GRID HYDRATION — FIXED 2026-06-13
+### Open Library Journey — Protected Performance Path
 
-Catalog reset tier shipped. Re-smoke passed 2026-06-13 (Clean grid, bulk date, empty startup).
-
-See `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset and `tech-docs/GRID_HYDRATION_BUGS.md`.
-
----
-
-## 🔴 TIER 1: OPEN LIBRARY JOURNEY — PROTECTED PERFORMANCE PATH (Architecture)
-
-**Priority:** 🔴 CRITICAL (protected app-entry path)
-**Estimated effort:** 1 day
+**Priority:** 🔴 CRITICAL  
+**Estimated effort:** 1 day  
 **Status:** NOT STARTED
 
 **Issue:** Open library, switch library, recovery, and grid handoff still have fragmented control paths. Prior broad refactors regressed the healthy-library open path by adding slow pre-open behavior / disrupting the handoff.
@@ -82,19 +106,19 @@ See `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset and `tech-docs/GRI
 
 ---
 
-## 🟡 TIER 2: ARCHITECTURE AUDIT REMAINING ITEMS
+## Tier 2 — Architecture consolidation
 
-These are bugs because they are known maintainability risks from the architecture audit. Keep them PR-sized and independently smoke-testable.
+PR-sized deduplication and shared helpers. Start only after Tier 1 is pinned or explicitly scoped away from the same files.
 
 ### Add/Clean/Convert Flow Controller Helpers
 
-**Priority:** 🟡 MEDIUM
-**Estimated effort:** 2-4 hours per helper
+**Priority:** 🟡 MEDIUM (architecture risk reduction)  
+**Estimated effort:** 2–4 hours per helper slice  
 **Status:** PARTIAL
 
 **Issue:** Add, Clean, and Convert still carry separate state machines and helper patterns. Some safe shared helpers have shipped, but a full flow-controller extraction remains risky.
 
-**Completed slices:**
+**Completed slices (see also Completed work):**
 
 - Shared preflight count animator.
 - Shared SSE stream consumer.
@@ -115,8 +139,8 @@ These are bugs because they are known maintainability risks from the architectur
 
 ### Overlay Loader Factory / Progress Dialog Template
 
-**Priority:** 🟡 MEDIUM
-**Estimated effort:** 2-4 hours
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 2–4 hours  
 **Status:** NOT STARTED
 
 **Issue:** Overlay loading/progress dialog wiring is duplicated across flows, increasing the chance of inconsistent close/done/cancel behavior.
@@ -136,8 +160,8 @@ These are bugs because they are known maintainability risks from the architectur
 
 ### Picker Module Unification
 
-**Priority:** 🟡 MEDIUM
-**Estimated effort:** 4-6 hours
+**Priority:** 🟡 MEDIUM  
+**Estimated effort:** 4–6 hours  
 **Status:** NOT STARTED
 
 **Issue:** Folder and photo pickers share filesystem/listing/sort concerns but remain separate implementations, which invites drift and repeated fixes.
@@ -155,10 +179,10 @@ These are bugs because they are known maintainability risks from the architectur
 
 ---
 
-### Shared `apiFetch` Wrapper — Broader Adoption
+### Shared `apiFetchJson()` — Broader Adoption
 
-**Priority:** 🟡 LOW-MEDIUM
-**Estimated effort:** Incremental
+**Priority:** 🟡 LOW–MEDIUM  
+**Estimated effort:** Incremental  
 **Status:** PARTIAL
 
 **Issue:** JSON fetch/error handling remains inconsistent across `static/js/main.js`, though a small `apiFetchJson()` helper exists and some endpoints have been migrated.
@@ -176,34 +200,94 @@ These are bugs because they are known maintainability risks from the architectur
 
 ---
 
-## 🟡 TIER 2: POLISH - SHOULD FIX (Moderate Impact, Quick Wins)
+## Tier 3 — Product correctness & features
 
-### Terraforming - Cancel/Go Back Causes Stalled State
+User-visible bugs and features that should not drive new parallel architecture. Prefer extending Tier 1–2 contracts when touching shared code.
 
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 1-2 hours  
-**Status:** FIXED 2026-06-13
+### Lightbox — RAW Format Not Displaying
 
-**Issue:** 'Go back' action in terraforming leads to a stalled state (loading library)
+**Priority:** 🔴 CRITICAL (product)  
+**Estimated effort:** 2–3 hours  
+**Status:** NOT STARTED
 
-- During terraform preview, user clicks "go back" or cancels
-- App shows "Loading library..." indefinitely
-- Console shows "User cancelled at preview" and "Terraform flow failed or was cancelled"
-- App enters limbo state and can't recover to show library
-- User is stuck with no way to proceed
+**Issue:** RAW format doesn't show in lightbox
 
-**Fix:** `recoverLibraryUiAfterFlowCancel()` on convert cancel — clears transition/handoff overlays and reloads grid or empty state.
-- Test all cancel/back paths in terraform flow
+- Lightbox opens for RAW files but image fails to load
+- Console shows "Image 1 failed to load" despite Status: 200, OK: true
+- Corruption check passes but display fails
+- Likely needs RAW file conversion or proper MIME type handling
+
+**Impact:** RAW photos are common in photo libraries; prevents viewing a significant portion of the library.
+
+**Fix approach:**
+
+- Check if server is serving RAW files with correct MIME type
+- May need to generate preview/proxy image for RAW files
+- Consider converting RAW to JPEG on-the-fly for display
+- Check if browser can handle RAW formats natively
+- Add error handling and user feedback for unsupported formats
 
 ---
 
-### Performance Optimization - High-Latency Operations
+### Lightbox — MOV Videos Not Displaying
 
-**Priority:** 🟡 MEDIUM  
+**Priority:** 🔴 CRITICAL (product)  
+**Estimated effort:** 2–3 hours  
+**Status:** NOT STARTED
+
+**Issue:** .mov doesn't show in lightbox
+
+- Lightbox opens for .mov files and shows video player controls
+- Video duration shows (e.g., "0:03 / 0:05") but video content is black/not displaying
+- Console shows proper dimensions and viewport calculations
+- Likely codec or MIME type issue
+
+**Impact:** MOV is a very common video format; prevents viewing videos in lightbox.
+
+**Fix approach:**
+
+- Check if server is serving .mov files with correct MIME type (`video/quicktime`)
+- Verify browser codec support for MOV container
+- May need to transcode MOV to MP4/WebM for broader browser compatibility
+- Check video element source and loading
+- Add codec detection and error handling
+- Consider generating web-compatible preview versions on import
+
+---
+
+### Lightbox — Add Rotation Action
+
+**Priority:** 🟡 MEDIUM (feature)  
+**Estimated effort:** 3–4 hours  
+**Status:** NOT STARTED
+
+**Issue:** Add rotation action in lightbox; needs to rotate actual pixels when possible losslessly, use flag when not (per terraforming protocol)
+
+- Lightbox currently lacks ability to rotate images
+- Should rotate actual pixels for lossless formats (JPEG with proper tools)
+- Should use EXIF rotation flag for formats where pixel rotation would be lossy
+- Follow terraforming protocol for file handling
+
+**Fix approach:**
+
+- Add rotation button(s) to lightbox UI (rotate left/right)
+- Use Material Symbols icon: `rotate_right` at 100 weight
+- Implement backend endpoint for rotation
+- Use lossless JPEG rotation when possible (jpegtran or similar)
+- Fall back to EXIF rotation flag for other formats
+- Update thumbnail after rotation; refresh display in lightbox
+
+---
+
+## Tier 4 — Research & deferred optimization
+
+### Performance — High-Latency Operations
+
+**Priority:** 🟡 MEDIUM (research)  
 **Estimated effort:** Research + implementation (TBD)  
 **Status:** NOT STARTED
 
-**Issue:** Research improvements to efficiency of operations requiring rehashing and high-latency processing
+**Issue:** Research improvements to efficiency of operations requiring rehashing and high-latency processing.
 
 **Operations to analyze:**
 
@@ -221,144 +305,73 @@ These are bugs because they are known maintainability risks from the architectur
 - Explore parallelization opportunities
 - Assess trade-offs between speed and accuracy
 
-**Outcome:** Performance optimization plan with prioritized improvements
+**Outcome:** Performance optimization plan with prioritized improvements — **implement only after Tier 1–2 contracts are stable** so optimizations attach to one code path, not three.
 
 ---
 
-### Lightbox - RAW Format Not Displaying
+## Summary
 
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 2-3 hours  
-**Status:** NOT STARTED
+| Category | Count | Next action |
+|----------|-------|-------------|
+| Tier 1 — Architecture foundations | 2 | Start **Media Date Truth — Single Rulebook** |
+| Tier 2 — Architecture consolidation | 4 | Flow helpers (incremental) after Tier 1 pinned |
+| Tier 3 — Product | 3 | Lightbox RAW/MOV after architecture queue or in parallel if isolated |
+| Tier 4 — Research | 1 | Plan only until unified sync/date paths exist |
 
-**Issue:** RAW format doesn't show in lightbox
-
-- Lightbox opens for RAW files but image fails to load
-- Console shows "Image 1 failed to load" despite Status: 200, OK: true
-- Corruption check passes but display fails
-- Likely needs RAW file conversion or proper MIME type handling
-
-**Impact:** RAW photos are common in photo libraries, prevents viewing significant portion of library
-
-**Fix approach:**
-
-- Check if server is serving RAW files with correct MIME type
-- May need to generate preview/proxy image for RAW files
-- Consider converting RAW to JPEG on-the-fly for display
-- Check if browser can handle RAW formats natively
-- Add error handling and user feedback for unsupported formats
+**Estimated effort (remaining):** ~2–3 days architecture foundations + ~1 day consolidation slices + ~9–12 hours product/research (excluding performance implementation)
 
 ---
 
-### Lightbox - MOV Videos Not Displaying
+## Completed work
 
-**Priority:** 🔴 CRITICAL  
-**Estimated effort:** 2-3 hours  
-**Status:** NOT STARTED
+Fixed items kept here for traceability. Detailed histories live in `bugs-fixed.md` and `tech-docs/ARCHITECTURE_FRAGMENTATION_AUDIT.md` where noted.
 
-**Issue:** .mov doesn't show in lightbox
+### Grid hydration & catalog reset — 2026-06-13
 
-- Lightbox opens for .mov files and shows video player controls
-- Video duration shows (e.g., "0:03 / 0:05") but video content is black/not displaying
-- Console shows proper dimensions and viewport calculations
-- Likely codec or MIME type issue
+Catalog reset tier shipped. Re-smoke passed 2026-06-13 (Clean grid, bulk date, empty startup).
 
-**Impact:** MOV is a very common video format, prevents viewing videos in lightbox
+Includes histogram mutation sync (`syncGridAfterHistogramChange`), Phase A→B handoff hardening, and Clean scoreboard phase wiring from `cleanup/dead-code`.
 
-**Fix approach:**
-
-- Check if server is serving .mov files with correct MIME type (video/quicktime)
-- Verify browser codec support for MOV container
-- May need to transcode MOV to MP4/WebM for broader browser compatibility
-- Check video element source and loading
-- Add codec detection and error handling
-- Consider generating web-compatible preview versions on import
+**Docs:** `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset, `tech-docs/GRID_HYDRATION_BUGS.md`, `tech-docs/ARCHITECTURE_FRAGMENTATION_AUDIT.md` (Pass 4 + grid sync sections)
 
 ---
 
-### Lightbox - Add Rotation Action
+### Terraforming — Cancel/Go Back stalled state — 2026-06-13
 
-**Priority:** 🟡 MEDIUM  
-**Estimated effort:** 3-4 hours  
-**Status:** NOT STARTED
+**Issue:** “Go back” or cancel during terraform preview left the app stuck on “Loading library…” with no recovery path.
 
-**Issue:** Add rotation action in lightbox; needs to rotate actual pixels when possible losslessly, use flag when not (per terraforming protocol)
+**Fix:** `recoverLibraryUiAfterFlowCancel()` on convert cancel — clears transition/handoff overlays and reloads grid or empty state.
 
-- Lightbox currently lacks ability to rotate images
-- Should rotate actual pixels for lossless formats (JPEG with proper tools)
-- Should use EXIF rotation flag for formats where pixel rotation would be lossy
-- Follow terraforming protocol for file handling
-
-**Impact:** Allows quick photo correction without leaving lightbox view
-
-**Fix approach:**
-
-- Add rotation button(s) to lightbox UI (rotate left/right)
-- Use Material Symbols icon: `rotate_right` at 100 weight
-- Decide if rotation should be clockwise (cw) or counterclockwise (ccw)
-- Icon stylesheet: `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=rotate_right" />`
-- Implement backend endpoint for rotation
-- Use lossless JPEG rotation when possible (jpegtran or similar)
-- Fall back to EXIF rotation flag for other formats
-- Update thumbnail after rotation
-- Refresh display in lightbox
+**Verification:** Convert cancel/back paths smoke-tested 2026-06-13.
 
 ---
 
-## Recommended Fix Order
+### Picker & grid UI — 2026-01-29
 
-Based on impact, frequency, and effort (high-order architecture first, then quick wins):
-
-1. 🔴 **Media Date Truth — Single Rulebook** (1–2 days, CRITICAL - truth in media; fixes video date edit + rebuild drift)
-2. 🔴 **Open Library Journey — Protected Performance Path** (1 day, CRITICAL - app entry path)
-3. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access) — FIXED 2026-06-13
-4. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
-5. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
-6. 🟡 **Flow Controller Helpers** (incremental, architecture risk reduction)
-7. 🟡 **Overlay Loader Factory / Progress Dialog Template** (2-4 hrs, duplication reduction)
-8. 🟡 **Picker Module Unification** (4-6 hrs, listing/sort helper extraction first)
-9. 🟡 **Shared `apiFetch` Wrapper — Broader Adoption** (incremental, JSON endpoints only)
-10. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
-11. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+- ✅ Picker shift-select
+- ✅ Grid star icon
+- ✅ Grid video icon
 
 ---
 
-## SUMMARY
+## Backlog — UX improvements (not bugs)
 
-**Next up:** Continue Media Date Truth — Single Rulebook (CRITICAL - shared read policy + rebuild parity)
+Enhancement ideas for future feature work, not current fix queue.
 
-**Total remaining:** 4 product bugs + 6 architecture items
-
-- 🔴 Critical architecture: 2 (Media Date Truth, Open Library Journey)
-- 🟡 Architecture: 4 (Flow Controller Helpers, Overlay Loader Factory, Picker Module Unification, Shared `apiFetch` adoption)
-- 🔴 Critical product bugs: 2 (Lightbox RAW Format, Lightbox MOV Videos)
-- 🟡 Product bugs: 2 (Lightbox Rotation, Performance Research)
-- ✅ Fixed critical product bug still documented for traceability: Terraforming cancel/go back
-
-**Estimated total effort:** ~2-3 days for architecture items + ~9-12 hours for product bugs/research (excluding performance optimization implementation)
-
-**Recently Fixed:** ✅ Picker Shift-Select, ✅ Grid Star Icon, ✅ Grid Video Icon (Jan 29, 2026)
-
----
-
-## 📝 BACKLOG: UX IMPROVEMENTS (Not Bugs, Future Enhancements)
-
-These are enhancement ideas, not bugs. To be considered for future feature work.
-
-### Library Management
+### Library management
 
 - Add rescan button to folder picker
 - Picker should refresh on change to disk contents
 - Add keyboard shortcut for desktop (command-shift D)
 - Photo picker is a bit sluggish
-- 'Select this location' should read 'Open' and be disabled for folders without DB
-- Add 'Create new' button that creates blank DB and navigates to empty library state
+- “Select this location” should read “Open” and be disabled for folders without DB
+- Add “Create new” button that creates blank DB and navigates to empty library state
 
-### Delete & Recovery
+### Delete & recovery
 
 - Should also remove thumbnail folder when deleting thumbnail cache entry
 
-### Date Editing
+### Date editing
 
 - **See Tier 1: Media Date Truth** — video writes unverified; rebuild/read drift; year picker not refreshed after edit
 - Date change causes navigation from lightbox to grid (bad UX)
@@ -370,39 +383,39 @@ These are enhancement ideas, not bugs. To be considered for future feature work.
 - Full frame icon → spacebar → closes full frame (bad)
 - Video thumbnail shows first frame (bad UX when frame is black)
 
-### Library Creation - Better New Library Flow
+### Library creation — better new library flow
 
-- Switch library → Create new (change to Sentence case) → folder/location selection flow → empty library state (NOT first run state)
-- Current problem: New library points to first run state instead of empty library state
+- Switch library → Create new (sentence case) → folder/location selection flow → empty library state (NOT first-run state)
+- Current problem: New library points to first-run state instead of empty library state
 
-### Index Rebuild - No Resume Capability
+### Index rebuild — no resume capability
 
 - Need a way to resume index rebuilding if it fails
-- Impact: If rebuild process fails or is interrupted, must start over from scratch
+- Impact: If rebuild fails or is interrupted, must start over from scratch
 
 ---
 
-## ⏸️ DEFERRED: CAN'T ASSESS / NEED CLARIFICATION
+## Deferred — can't assess / need clarification
 
-These issues need more information or test cases before they can be prioritized.
+These need more information or test cases before prioritization.
 
-### Navigation & Sorting Edge Cases
+### Navigation & sorting edge cases
 
-- Year-aware landing (prefers staying in target year) - Don't understand; need script to test
-- Directional landing based on sort order - Don't understand; need script to test
+- Year-aware landing (prefers staying in target year) — need script to test
+- Directional landing based on sort order — need script to test
 
-### Date Editing
+### Date editing
 
-- Sequence mode seconds interval - Can't assess in app because lacks seconds display
+- Sequence mode seconds interval — can't assess in app because it lacks seconds display
 
-### Import Behind the Scenes
+### Import behind the scenes
 
-- ~~Extract EXIF date (fallback to mtime)~~ — superseded by **Media Date Truth — Single Rulebook** (Tier 1); see that entry for ingest/rebuild read policy and video filename handling.
+- ~~Extract EXIF date (fallback to mtime)~~ — superseded by **Media Date Truth — Single Rulebook** (Tier 1)
 
-### Various Features Need Backend Verification
+### Various features need backend verification
 
 - Clean Index: scan/execute/ghosts/moles
-- Remove Duplicates utility internals (will be "Show Duplicates" after migration)
+- Remove Duplicates utility internals (will be “Show Duplicates” after migration)
 - Rebuild Thumbnails: check count/clear cache/lazy regen
 - Health check on switch library
 - Handle migration prompts
