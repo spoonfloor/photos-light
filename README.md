@@ -1,8 +1,8 @@
 # Photos Light
 
 > **👋 Welcome! If you're a fresh AI agent with zero context:**  
-> 1. This is a photo viewer web app (Flask + vanilla JS)  
-> 2. Run `./run.sh` to start it (that's it!)  
+> 1. This is a photo viewer desktop app (Electron + Flask + vanilla JS)  
+> 2. Run `cd electron && npm start` to start it (that's it!)  
 > 3. If it breaks, read [TROUBLESHOOTING.md](archive/TROUBLESHOOTING.md)  
 > 4. To understand how it works, read [SETUP.md](archive/SETUP.md)
 
@@ -22,10 +22,11 @@ A fast, minimal photo viewer and manager for large personal photo libraries.
 ```bash
 cd ~/Desktop/photos-light
 pip3 install -r requirements.txt
-./run.sh
+cd electron && npm install   # first time only
+cd electron && npm start
 ```
 
-Open: http://localhost:5001
+The Electron shell opens automatically at http://localhost:5001
 
 **That's it!** See [QUICKSTART.md](QUICKSTART.md) if you need help.
 
@@ -52,8 +53,6 @@ Built for a 65k photo library, works with any size.
 
 ## Configuration
 
-Edit `run.sh` to set your paths:
-- `PHOTO_DB_PATH` - Path to your SQLite database
-- `PHOTO_LIBRARY_PATH` - Path to your photo library directory
+Open or create a library from the welcome screen (**Open library** or **Add photos**). Each library is a folder with a SQLite database and photo files on disk.
 
 See [SETUP.md](archive/SETUP.md) for details.

@@ -201,8 +201,6 @@ const IMPORT_OVERLAY_TITLE = 'Add photos';
 // ============================================================================
 // DEBUG FLAG - First-run empty state button (TODO: delete in future cleanup)
 // ============================================================================
-const SHOW_FIRST_RUN_DEBUG_BUTTON = false;
-
 const FLOW_INFLIGHT_BODY = {
   add: 'Adding photos and videos to your library.',
   clean: 'Checking media files, repairing issues, and updating library database.',
@@ -6263,10 +6261,6 @@ function wireFilterChipRail() {
 // RENDERING
 // =====================
 
-function openFirstRunDebugMenu() {
-  // Reserved for first-run dev tools — wire when needed.
-}
-
 /**
  * First run or no library configured — open library + add photos
  */
@@ -6289,12 +6283,6 @@ function renderFirstRunEmptyState() {
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
           <span>Add photos</span>
         </button>
-        ${SHOW_FIRST_RUN_DEBUG_BUTTON ? `
-        <button class="btn" onclick="void openFirstRunDebugMenu()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
-          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">bug_report</span>
-          <span>Debug</span>
-        </button>
-        ` : ''}
       </div>
     </div>
   `;
@@ -7222,7 +7210,7 @@ function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, 
     videoTarget,
     totalTarget,
     durationMs,
-    setTerraformDebugPreflightCounts,
+    setTerraformPreflightCounts,
   );
 }
 
@@ -7232,7 +7220,7 @@ function animateImportPreflightCounts(photoTarget, videoTarget, totalTarget, dur
     videoTarget,
     totalTarget,
     durationMs,
-    setImportDebugPreflightCounts,
+    setImportPreflightCounts,
   );
 }
 
@@ -7939,7 +7927,7 @@ async function loadCleanLibraryOverlay() {
   }
 }
 
-function setImportDebugPreflightCounts(photoCount, videoCount, totalCount) {
+function setImportPreflightCounts(photoCount, videoCount, totalCount) {
   const preflightEl = document.getElementById('importPreflightStats');
   const runtimeEl = document.getElementById('importStats');
   const photoEl = document.getElementById('importPhotoCount');
@@ -7952,7 +7940,7 @@ function setImportDebugPreflightCounts(photoCount, videoCount, totalCount) {
   if (runtimeEl) runtimeEl.style.display = 'none';
 }
 
-function setTerraformDebugPreflightCounts(photoCount, videoCount, totalCount) {
+function setTerraformPreflightCounts(photoCount, videoCount, totalCount) {
   const pairs = [
     ['terraformPreviewPreflightPhotos', photoCount],
     ['terraformPreviewPreflightVideos', videoCount],
@@ -10550,7 +10538,7 @@ async function prepareTerraformPreviewScanningShell(path) {
     pathEl.textContent = path;
   }
   setTerraformPreviewPhase('scanning');
-  setTerraformDebugPreflightCounts(0, 0, 0);
+  setTerraformPreflightCounts(0, 0, 0);
   setTerraformPreviewActionButtons({ continueDisabled: true });
 
   const statusEl = document.getElementById('terraformPreviewScanStatus');
@@ -10667,7 +10655,7 @@ async function showTerraformPreviewDialog(options = {}) {
 
     document.getElementById('terraformPreviewPath').textContent = options.path;
     setTerraformPreviewPhase('scanning');
-    setTerraformDebugPreflightCounts(0, 0, 0);
+    setTerraformPreflightCounts(0, 0, 0);
     setTerraformPreviewActionButtons({ continueDisabled: true });
 
     const statusEl = document.getElementById('terraformPreviewScanStatus');
@@ -10711,7 +10699,7 @@ async function showTerraformPreviewDialog(options = {}) {
     );
 
     setTerraformPreviewPhase('confirm');
-    setTerraformDebugPreflightCounts(photoCount, videoCount, totalCount);
+    setTerraformPreflightCounts(photoCount, videoCount, totalCount);
     setTerraformPreviewActionButtons({ continueDisabled: false });
     if (statusEl && options.estimated_display) {
       statusEl.textContent = `Time required: ${options.estimated_display}`;
@@ -13120,7 +13108,7 @@ async function prepareImportPreflightOverlay() {
   if (runtimeStats) {
     runtimeStats.style.display = 'none';
   }
-  setImportDebugPreflightCounts(0, 0, 0);
+  setImportPreflightCounts(0, 0, 0);
   setImportActionButtons({
     showCancel: true,
     showContinue: true,

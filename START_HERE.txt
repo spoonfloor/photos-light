@@ -10,25 +10,28 @@
 👋 FIRST TIME HERE?
 
   Run this:
-    ./run.sh
+    cd ~/Desktop/photos-light
+    pip3 install -r requirements.txt
+    cd electron && npm install   # first time only
+    cd electron && npm start
 
   That's it! The app will:
-    ✓ Check your configuration
-    ✓ Start the server
-    ✓ Open at http://localhost:5001
+    ✓ Start the backend server
+    ✓ Open the Electron shell
+    ✓ Load at http://localhost:5001
 
 
 🔧 IF SOMETHING BREAKS:
 
-  Read: TROUBLESHOOTING.md
+  Read: archive/TROUBLESHOOTING.md
   
-  It has a debug checklist and fixes for 7 common issues.
+  It has a debug checklist and fixes for common issues.
   (Written specifically for AI agents with zero context!)
 
 
 📚 WANT TO UNDERSTAND HOW IT WORKS?
 
-  Read: SETUP.md
+  Read: archive/SETUP.md
   
   Shows exactly how database + photo library connect.
   Includes architecture diagrams and API reference.
@@ -37,7 +40,7 @@
 🎯 KEY FACTS:
 
   • This app needs 2 things: a SQLite database + a photo library folder
-  • Both paths are configured in run.sh (edit lines 4-5)
+  • You open or create a library from the welcome screen in the app
   • Database stores metadata, library has actual files
   • Thumbnails generate lazily on first view
   • Built for 65k photos, works with any size
@@ -47,22 +50,21 @@
 
   README.md           ← You are here (start here)
   QUICKSTART.md       ← 30-second setup commands
-  SETUP.md            ← Complete architecture guide
-  TROUBLESHOOTING.md  ← Debug reference for agents
-  MIGRATION_SUMMARY.md← What changed from old repo
+  archive/SETUP.md    ← Complete architecture guide
+  archive/TROUBLESHOOTING.md  ← Debug reference for agents
 
 
 🚀 READY TO START?
 
   cd ~/Desktop/photos-light
-  ./run.sh
+  cd electron && npm start
 
-  Then open: http://localhost:5001
+  The Electron window opens at http://localhost:5001
 
 
 ═══════════════════════════════════════════════════════════════
 
-Questions? Check TROUBLESHOOTING.md or SETUP.md.
+Questions? Check archive/TROUBLESHOOTING.md or archive/SETUP.md.
 Everything you need is documented.
 
 Good luck! 🎉
