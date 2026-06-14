@@ -8201,12 +8201,6 @@ function resetTerraformProgressDetailsExpanded() {
   resetFlowDetailsPanel('convert');
 }
 
-function updateCleanLibraryDetailsToggleLabel(expanded, { activityMode = false } = {}) {
-  updateFlowDetailsToggleLabel('cleanLibraryDetailsToggle', expanded, {
-    activityMode,
-  });
-}
-
 function formatCleanLibraryFeedTimestamp(date) {
   return date.toLocaleString(undefined, {
     month: 'short',
@@ -8215,50 +8209,6 @@ function formatCleanLibraryFeedTimestamp(date) {
     hour: 'numeric',
     minute: '2-digit',
   });
-}
-
-function isCleanLibraryActivityFeedExpanded() {
-  return getFlowActivityLogFeed('clean').isExpanded();
-}
-
-function shouldUseCleanLibraryActivityFeedToggle() {
-  return shouldUseFlowActivityFeed('clean');
-}
-
-function setCleanLibraryActivityFeedVisible(visible, { activityMode = false } = {}) {
-  getFlowActivityLogFeed('clean').setExpanded(visible, { activityMode });
-}
-
-function renderCleanLibraryActivityFeed() {
-  getFlowActivityLogFeed('clean').render();
-}
-
-function appendCleanLibraryActivityLine(line, options = {}) {
-  appendFlowActivityLine('clean', line, options);
-}
-
-function maybeAppendCleanLibraryProgressMilestone(phase, processed, total, options = {}) {
-  maybeAppendFlowProgressMilestone('clean', phase, processed, total, options);
-}
-
-function appendCleanLibraryEngineLogEntry(entry, options = {}) {
-  appendFlowEngineLogEntry('clean', entry, options);
-}
-
-function resetCleanLibraryLogFeed() {
-  resetFlowActivityFeed('clean');
-}
-
-function appendCleanLibraryLogLine(line) {
-  const trimmed = String(line || '').trim();
-  if (!trimmed) {
-    return;
-  }
-  try {
-    appendCleanLibraryEngineLogEntry(JSON.parse(trimmed));
-  } catch {
-    appendCleanLibraryActivityLine(trimmed);
-  }
 }
 
 function showCleanLibraryDetailsSection(visible) {
@@ -8592,7 +8542,8 @@ function handleCleanLibraryWorkingProgressEvent(event = {}) {
   }
   updateCleanLibraryWorkingProgress(event.phase, event.processed, event.total);
   syncCleanLibraryInflightFromProgress(event);
-  maybeAppendCleanLibraryProgressMilestone(
+  maybeAppendFlowProgressMilestone(
+    'clean',
     event.phase,
     event.processed,
     event.total,
@@ -8775,7 +8726,7 @@ async function loadCleanLibraryManifestTail(manifestPath, lines = 40) {
   for (const line of data.lines || []) {
     const formatted = formatCleanLibraryManifestLine(line);
     if (formatted) {
-      appendCleanLibraryActivityLine(formatted);
+      appendFlowActivityLine('clean', formatted);
     }
   }
 }
@@ -8801,7 +8752,7 @@ function showCleanLibraryInterruptedGate() {
   setCleanLibraryExplainerVisible(false);
   setCleanLibrarySecondaryStatus(null, false);
   showCleanLibraryDetailsSection(false);
-  resetCleanLibraryLogFeed();
+  resetFlowActivityFeed('clean');
   updateCleanLibraryUI(
     'It looks like a previous library cleanup was not completed. You can continue it, start a new cleanup, or cancel.',
     false,
@@ -8818,7 +8769,7 @@ function showCleanLibraryInterruptedGate() {
 function applyCleanerStreamToCleanLibrary(event = {}) {
   if (event.type === 'log' && event.entry) {
     if (cleanLibraryState.workingPhaseActive) {
-      appendCleanLibraryEngineLogEntry(event.entry);
+      appendFlowEngineLogEntry('clean', event.entry);
     }
     return;
   }
@@ -8963,7 +8914,7 @@ function showPreflightScoreboardZeros() {
 
 async function runCleanLibraryPreflightScan() {
   setCleanLibraryOverlayPhase('scanning');
-  resetCleanLibraryLogFeed();
+  resetFlowActivityFeed('clean');
   updateCleanLibraryUI('Scanning library…', true);
   showCleanLibraryButtons('cancel', 'proceed-disabled');
   showCleanLibraryPreflightExplainer();
@@ -9095,7 +9046,7 @@ async function openCleanLibraryOverlay() {
 
   const detailsSection = document.getElementById('cleanLibraryDetailsSection');
   if (detailsSection) detailsSection.style.display = 'none';
-  resetCleanLibraryLogFeed();
+  resetFlowActivityFeed('clean');
 
   showFlowOverlay(overlay);
   resetCleanLibraryOverlayTitle();
@@ -9591,7 +9542,7 @@ function closeCleanLibraryOverlayImmediate() {
   setCleanLibraryOverlayInert(false);
   setCleanLibraryExplainerVisible(false);
   setCleanLibrarySecondaryStatus(null, false);
-  resetCleanLibraryLogFeed();
+  resetFlowActivityFeed('clean');
   showCleanLibraryDetailsSection(false);
   resetCleanLibraryOverlayTitle();
   setCleanLibraryOverlayPhase(null);
