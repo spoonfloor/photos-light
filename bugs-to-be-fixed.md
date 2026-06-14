@@ -2,7 +2,7 @@
 
 Last updated: June 14, 2026
 
-**Status:** 5 remaining bugs (+ 1 architecture item)
+**Status:** 4 remaining product bugs (+ 6 architecture items)
 
 ---
 
@@ -55,6 +55,124 @@ Last updated: June 14, 2026
 Catalog reset tier shipped. Re-smoke passed 2026-06-13 (Clean grid, bulk date, empty startup).
 
 See `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset and `tech-docs/GRID_HYDRATION_BUGS.md`.
+
+---
+
+## 🔴 TIER 1: OPEN LIBRARY JOURNEY — PROTECTED PERFORMANCE PATH (Architecture)
+
+**Priority:** 🔴 CRITICAL (protected app-entry path)
+**Estimated effort:** 1 day
+**Status:** NOT STARTED
+
+**Issue:** Open library, switch library, recovery, and grid handoff still have fragmented control paths. Prior broad refactors regressed the healthy-library open path by adding slow pre-open behavior / disrupting the handoff.
+
+**Non-negotiable acceptance:**
+
+- Healthy large library opens to visible grid tiles in ≤3s.
+- Close/reopen remains fast.
+- No full filesystem/media scan before opening a healthy library.
+- Recovery UI appears only after a fast DB/openability probe says the DB is not usable.
+- Add/Clean/Convert flow changes must not be mixed into this work.
+
+**Fix approach:**
+
+- Treat Open library as its own branch/pass.
+- Preserve the current fast path exactly until tests prove a replacement is equivalent.
+- Add explicit smoke/perf checks for healthy open, close/reopen, missing DB, and corrupt DB.
+
+---
+
+## 🟡 TIER 2: ARCHITECTURE AUDIT REMAINING ITEMS
+
+These are bugs because they are known maintainability risks from the architecture audit. Keep them PR-sized and independently smoke-testable.
+
+### Add/Clean/Convert Flow Controller Helpers
+
+**Priority:** 🟡 MEDIUM
+**Estimated effort:** 2-4 hours per helper
+**Status:** PARTIAL
+
+**Issue:** Add, Clean, and Convert still carry separate state machines and helper patterns. Some safe shared helpers have shipped, but a full flow-controller extraction remains risky.
+
+**Completed slices:**
+
+- Shared preflight count animator.
+- Shared SSE stream consumer.
+- Clean activity-feed wrapper cleanup.
+
+**Remaining safe slices:**
+
+- Extract ETA ticker helper only where duplicate behavior is clear and outside protected Open-library/recovery paths.
+- Continue small `apiFetchJson()` adoption clusters where JSON/error handling is duplicated.
+- Do not collapse `importState`, `cleanLibraryState`, and `terraformProgressState` until behavior is pinned.
+
+**Acceptance:**
+
+- Add, Clean, and Convert smoke pass after each slice.
+- No Open-library/grid startup changes in the same pass.
+
+---
+
+### Overlay Loader Factory / Progress Dialog Template
+
+**Priority:** 🟡 MEDIUM
+**Estimated effort:** 2-4 hours
+**Status:** NOT STARTED
+
+**Issue:** Overlay loading/progress dialog wiring is duplicated across flows, increasing the chance of inconsistent close/done/cancel behavior.
+
+**Fix approach:**
+
+- Start with one overlay family only.
+- Extract shared loader/template plumbing without changing flow state or backend APIs.
+- Keep UI copy and behavior identical in the first pass.
+
+**Acceptance:**
+
+- Target overlay still opens, closes, cancels, and completes exactly as before.
+- No Add/Clean/Convert state-machine changes in the same pass.
+
+---
+
+### Picker Module Unification
+
+**Priority:** 🟡 MEDIUM
+**Estimated effort:** 4-6 hours
+**Status:** NOT STARTED
+
+**Issue:** Folder and photo pickers share filesystem/listing/sort concerns but remain separate implementations, which invites drift and repeated fixes.
+
+**Fix approach:**
+
+- Extract shared filesystem/listing/sort helpers first.
+- Keep `FolderPicker` and `PhotoPicker` selection models separate.
+- Do not merge the picker classes wholesale.
+
+**Acceptance:**
+
+- Folder picker and photo picker preserve current selection behavior.
+- Picker sort/listing behavior is covered by focused tests or manual smoke.
+
+---
+
+### Shared `apiFetch` Wrapper — Broader Adoption
+
+**Priority:** 🟡 LOW-MEDIUM
+**Estimated effort:** Incremental
+**Status:** PARTIAL
+
+**Issue:** JSON fetch/error handling remains inconsistent across `static/js/main.js`, though a small `apiFetchJson()` helper exists and some endpoints have been migrated.
+
+**Fix approach:**
+
+- Continue adopting `apiFetchJson()` in small endpoint clusters.
+- Prioritize JSON-only endpoints with repeated `response.json().catch(() => ({}))` patterns.
+- Leave SSE streams, static fragment loads, and protected Open-library flows alone unless the cluster is specifically scoped.
+
+**Acceptance:**
+
+- Each adoption cluster has JS syntax check and relevant flow smoke.
+- No broad “convert all fetches” pass.
 
 ---
 
@@ -192,25 +310,32 @@ See `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset and `tech-docs/GRI
 Based on impact, frequency, and effort (high-order architecture first, then quick wins):
 
 1. 🔴 **Media Date Truth — Single Rulebook** (1–2 days, CRITICAL - truth in media; fixes video date edit + rebuild drift)
-2. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access) — FIXED 2026-06-13
-3. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
-4. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
-5. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
-6. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
+2. 🔴 **Open Library Journey — Protected Performance Path** (1 day, CRITICAL - app entry path)
+3. 🔴 **Terraforming - Cancel/Go Back Causes Stalled State** (1-2 hrs, CRITICAL - blocks app access) — FIXED 2026-06-13
+4. 🔴 **Lightbox - RAW Format Not Displaying** (2-3 hrs, CRITICAL - common file format)
+5. 🔴 **Lightbox - MOV Videos Not Displaying** (2-3 hrs, CRITICAL - common video format)
+6. 🟡 **Flow Controller Helpers** (incremental, architecture risk reduction)
+7. 🟡 **Overlay Loader Factory / Progress Dialog Template** (2-4 hrs, duplication reduction)
+8. 🟡 **Picker Module Unification** (4-6 hrs, listing/sort helper extraction first)
+9. 🟡 **Shared `apiFetch` Wrapper — Broader Adoption** (incremental, JSON endpoints only)
+10. 🟡 **Lightbox - Add Rotation Action** (3-4 hrs, feature addition with lossless rotation)
+11. 🟡 **Performance Optimization - High-Latency Operations** (research + implementation TBD)
 
 ---
 
 ## SUMMARY
 
-**Next up:** Media Date Truth — Single Rulebook (CRITICAL - 1–2 days, architecture)
+**Next up:** Continue Media Date Truth — Single Rulebook (CRITICAL - shared read policy + rebuild parity)
 
-**Total remaining:** 5 bugs + 1 architecture item
+**Total remaining:** 4 product bugs + 6 architecture items
 
-- 🔴 Critical architecture: 1 (Media Date Truth)
-- 🔴 Critical: 3 bugs (Lightbox RAW Format, Lightbox MOV Videos; Terraforming cancel — fixed)
-- 🟡 Polish: 2 bugs (Lightbox Rotation, Performance Research)
+- 🔴 Critical architecture: 2 (Media Date Truth, Open Library Journey)
+- 🟡 Architecture: 4 (Flow Controller Helpers, Overlay Loader Factory, Picker Module Unification, Shared `apiFetch` adoption)
+- 🔴 Critical product bugs: 2 (Lightbox RAW Format, Lightbox MOV Videos)
+- 🟡 Product bugs: 2 (Lightbox Rotation, Performance Research)
+- ✅ Fixed critical product bug still documented for traceability: Terraforming cancel/go back
 
-**Estimated total effort:** ~9-12 hours for remaining bugs + research (excluding performance optimization implementation)
+**Estimated total effort:** ~2-3 days for architecture items + ~9-12 hours for product bugs/research (excluding performance optimization implementation)
 
 **Recently Fixed:** ✅ Picker Shift-Select, ✅ Grid Star Icon, ✅ Grid Video Icon (Jan 29, 2026)
 
