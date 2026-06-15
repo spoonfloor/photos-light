@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import app as photo_app
+from clean_library_media_utils import verify_media_file as real_verify_media_file
 from db_schema import create_database_schema
 from library_layout import canonical_db_path
 from make_library_perfect import scan_library_cleanliness
@@ -282,7 +283,7 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         self.assertEqual(row["date_taken"], "2080:01:01 00:09:00")
         self.assertTrue(row["current_path"].startswith("2080/2080-01-01/"))
 
-    def test_failed_convert_preserves_original_source_photo(self):
+    def test_failed_convert_trashes_rejected_orphan_during_blocking_cleanup(self):
         payload = b"convert-preserve-original-on-failure"
         library_path, source_path = self._make_convert_library(
             "convert-failure-lib",
@@ -301,8 +302,15 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         )
 
         self.assertIn("event: rejected", response_text)
-        self.assertTrue(os.path.exists(source_path))
+        self.assertFalse(os.path.exists(source_path))
         self.assertEqual(len(self._read_rows(canonical_db_path(library_path))), 0)
+        trashed_corrupt = os.path.join(
+            library_path, ".trash", "corrupted", "incoming", "failure.jpg"
+        )
+        trashed_errors = os.path.join(
+            library_path, ".trash", "errors", "incoming", "failure.jpg"
+        )
+        self.assertTrue(os.path.exists(trashed_corrupt) or os.path.exists(trashed_errors))
 
         import_temp_dir = os.path.join(library_path, ".import_temp")
         self.assertEqual(
@@ -639,6 +647,102 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         self.assertNotIn("final verification failed", response_text.lower())
         self.assertTrue(stripped_paths)
         self.assertEqual(len(self._read_rows(canonical_db_path(library_path))), 1)
+
+    def test_convert_blocking_cleanup_clears_audit_blockers_before_final_audit(self):
+        """Orphan corrupt media and stray .library artifacts must not fail final audit."""
+        from io import BytesIO
+
+        from PIL import Image
+
+        buffer = BytesIO()
+        Image.new("RGB", (8, 8), color="red").save(buffer, format="JPEG")
+        payload = buffer.getvalue()
+
+        library_path = os.path.join(self.tmpdir.name, "convert-blocking-cleanup-lib")
+        fake_png = os.path.join(library_path, "03_fake-png.png")
+        source_path = os.path.join(library_path, "incoming", "photo.jpg")
+        metadata_dir = os.path.join(library_path, ".library")
+        stray_zip = os.path.join(metadata_dir, "photo_library.db.zip")
+        os.makedirs(os.path.dirname(source_path), exist_ok=True)
+        os.makedirs(metadata_dir, exist_ok=True)
+        with open(fake_png, "w", encoding="utf-8") as handle:
+            handle.write("not really a png")
+        with open(source_path, "wb") as handle:
+            handle.write(payload)
+        with open(stray_zip, "w", encoding="utf-8") as handle:
+            handle.write("backup bytes")
+
+        original_stage = photo_app.stage_photo_for_canonicalization
+
+        def stage_side_effect(source_path, **kwargs):
+            if os.path.basename(source_path) == "03_fake-png.png":
+                raise RuntimeError("File corrupted or invalid format")
+            return original_stage(source_path, **kwargs)
+
+        def fake_write_photo_exif_noop(_file_path, _target_date):
+            return None
+
+        with patch.object(
+            photo_app,
+            "stage_photo_for_canonicalization",
+            side_effect=stage_side_effect,
+        ), patch.object(photo_app, "extract_exif_date", return_value=None), patch.object(
+            photo_app,
+            "bake_orientation",
+            return_value=(False, "No orientation flag", None),
+        ), patch.object(
+            photo_app,
+            "get_image_dimensions",
+            return_value=(640, 480),
+        ), patch.object(
+            photo_app,
+            "extract_exif_rating",
+            return_value=None,
+        ), patch.object(
+            photo_app,
+            "strip_exif_rating",
+            return_value=True,
+        ), patch.object(
+            photo_app,
+            "write_photo_exif",
+            side_effect=fake_write_photo_exif_noop,
+        ), patch(
+            "library_metadata_compliance.verify_media_file",
+            side_effect=real_verify_media_file,
+        ), patch("app.subprocess.run", return_value=self.fake_subprocess_result):
+            response = self.client.post(
+                "/api/library/terraform",
+                json={"library_path": library_path},
+                buffered=True,
+            )
+
+        response_text = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"phase": "cleanup"', response_text)
+        self.assertIn('"status": "complete"', response_text)
+        self.assertIn("event: complete", response_text)
+        self.assertFalse(os.path.exists(fake_png))
+        self.assertFalse(os.path.exists(stray_zip))
+        self.assertTrue(
+            os.path.exists(
+                os.path.join(library_path, ".trash", "corrupted", "03_fake-png.png")
+            )
+        )
+        self.assertTrue(
+            any(
+                entry.endswith("photo_library.db.zip")
+                for root, _dirs, files in os.walk(os.path.join(library_path, ".db_backups"))
+                for entry in files
+            )
+        )
+
+        from clean_library_fast_audit import run_fast_library_audit
+
+        issues = run_fast_library_audit(
+            library_path,
+            db_path=canonical_db_path(library_path),
+        )
+        self.assertEqual(issues, [])
 
 
 if __name__ == "__main__":

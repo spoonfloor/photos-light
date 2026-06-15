@@ -1952,6 +1952,10 @@ body.library-recovery-active .library-recovery-dock {
   padding-bottom: 16px;
 }
 
+#libraryTransitionOverlay .import-actions {
+  padding-top: 0;
+}
+
 #libraryTransitionOverlay .library-transition-path {
   margin-top: 8px;
   font-family: monospace;

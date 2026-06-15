@@ -6255,6 +6255,7 @@ async function loadAndRenderPhotos(append = false, options = {}) {
     generation = state.libraryGeneration,
     sortOrder = state.currentSortOrder,
     forcePaged = false,
+    signal: externalSignal = null,
   } = options;
 
   if (append) {
@@ -6271,6 +6272,15 @@ async function loadAndRenderPhotos(append = false, options = {}) {
 
   const loadId = ++photoLoadRequestId;
   const abortController = new AbortController();
+  if (externalSignal?.aborted) {
+    abortController.abort();
+  } else if (externalSignal) {
+    externalSignal.addEventListener(
+      'abort',
+      () => abortController.abort(),
+      { once: true },
+    );
+  }
   currentPhotoLoadAbortController = abortController;
   state.loading = true;
 
@@ -11891,6 +11901,10 @@ async function loadLibraryTransitionOverlay() {
     }
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
+    const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', handleLibraryTransitionCancelClick);
+    }
   } catch (error) {
     console.error('❌ Failed to load library transition overlay:', error);
   }
@@ -11911,6 +11925,34 @@ function cancelPendingPhotoContainerMount() {
     VirtualGrid.cancelPendingContainerMount();
   }
   pendingPagedPhotoRender = null;
+}
+
+/** @type {(() => void) | null} */
+let libraryTransitionCancelHandler = null;
+
+function handleLibraryTransitionCancelClick() {
+  const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
+  if (cancelBtn?.disabled) {
+    return;
+  }
+  if (cancelBtn) {
+    cancelBtn.disabled = true;
+  }
+  if (typeof libraryTransitionCancelHandler === 'function') {
+    libraryTransitionCancelHandler();
+  }
+}
+
+function resetLibraryTransitionCancelUi() {
+  libraryTransitionCancelHandler = null;
+  const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
+  if (cancelBtn) {
+    cancelBtn.disabled = false;
+  }
+  const actionsEl = document.getElementById('libraryTransitionActions');
+  if (actionsEl) {
+    actionsEl.style.display = 'none';
+  }
 }
 
 async function showLibraryTransitionOverlay(options = {}) {
@@ -11945,12 +11987,27 @@ async function showLibraryTransitionOverlay(options = {}) {
     }
   }
 
+  const actionsEl = document.getElementById('libraryTransitionActions');
+  const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
+  const showCancelButton = !!options.showCancelButton;
+  libraryTransitionCancelHandler =
+    showCancelButton && typeof options.onCancel === 'function'
+      ? options.onCancel
+      : null;
+  if (actionsEl) {
+    actionsEl.style.display = showCancelButton ? '' : 'none';
+  }
+  if (cancelBtn) {
+    cancelBtn.disabled = false;
+  }
+
   overlay.style.display = 'flex';
   state.libraryTransitionActive = true;
 }
 
 function hideLibraryTransitionOverlay() {
   flushPendingPhotoContainerMount();
+  resetLibraryTransitionCancelUi();
   const overlay = document.getElementById('libraryTransitionOverlay');
   if (overlay) {
     overlay.style.display = 'none';
@@ -12656,15 +12713,26 @@ async function openExistingLibrary() {
       return false;
     }
 
+    const openAbort = new AbortController();
     await showLibraryTransitionOverlay({
       title: 'Opening library',
       message: 'Loading your media.',
       libraryPath: selectedPath,
+      showCancelButton: true,
+      onCancel: () => {
+        const statusEl = document.getElementById('libraryTransitionStatusLabel');
+        if (statusEl) {
+          statusEl.textContent = 'Cancelling…';
+        }
+        openAbort.abort();
+      },
     });
 
     try {
       const opened = await switchToLibrary(selectedPath, null, {
         skipTransitionOverlay: true,
+        signal: openAbort.signal,
+        suppressFailureToast: true,
       });
       if (opened) {
         hideLibraryTransitionOverlay();
@@ -12672,11 +12740,14 @@ async function openExistingLibrary() {
       }
       return false;
     } catch (error) {
+      if (error.name === 'AbortError') {
+        return false;
+      }
       console.error('❌ Failed to open library:', error);
       showToast(`Error: ${error.message}`);
       return false;
     } finally {
-      if (!state.libraryTransitionActive) {
+      if (state.libraryTransitionActive) {
         hideLibraryTransitionOverlay();
       }
     }
@@ -13349,10 +13420,14 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
 
     // Reload photos from new library
     if (!deferPhotoReload) {
-      await loadAndRenderPhotos(false, {
+      const loaded = await loadAndRenderPhotos(false, {
         throwOnError: true,
         generation: switchedGeneration,
+        signal,
       });
+      if (!loaded && signal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      }
     }
     if (
       !deferTransitionHide &&
@@ -13365,6 +13440,31 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     return true;
   } catch (error) {
     if (error.name === 'AbortError') {
+      if (currentPhotoLoadAbortController) {
+        currentPhotoLoadAbortController.abort();
+        currentPhotoLoadAbortController = null;
+      }
+      if (switchedLibrary) {
+        advanceLibraryGeneration();
+        const shouldAttemptRestore =
+          previousLibrary?.library_path &&
+          previousLibrary.library_path !== libraryPath;
+        if (state.libraryTransitionActive && shouldAttemptRestore) {
+          const statusEl = document.getElementById('libraryTransitionStatusLabel');
+          if (statusEl) {
+            statusEl.textContent = 'Returning to your previous library.';
+          }
+        }
+        if (shouldAttemptRestore) {
+          const restored =
+            await restorePreviousLibraryAfterFailedSwitch(previousLibrary);
+          if (!restored) {
+            await restoreLibraryShellAfterFlowDismiss();
+          }
+        } else {
+          await restoreLibraryShellAfterFlowDismiss();
+        }
+      }
       throw error;
     }
     console.error('❌ Failed to switch library:', error);

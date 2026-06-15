@@ -182,6 +182,7 @@ class TestGridHandoffContract(unittest.TestCase):
     def test_open_existing_library_uses_direct_switch_without_probe_scan(self):
         body = _function_body(self.main_js, "openExistingLibrary")
         self.assertIn("switchToLibrary", body)
+        self.assertIn("showCancelButton", body)
         self.assertNotIn("/api/library/check", body)
         self.assertNotIn("/api/library/make-perfect/scan", body)
         self.assertNotIn("runLibraryRecoveryJourney", body)

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
-from typing import Iterator, List, Tuple
+import sqlite3
+from dataclasses import dataclass, field
+from typing import Callable, Iterator, List, Optional, Set, Tuple
 
+from clean_library_media_utils import verify_media_file
 from library_cleanliness import (
     ALL_MEDIA_EXTENSIONS,
     IGNORED_LIBRARY_FILES,
@@ -22,7 +24,7 @@ from library_cleanliness import (
     is_year_folder_name,
     path_parts,
 )
-from library_layout import ROOT_INFRASTRUCTURE_DIRS
+from library_layout import ROOT_INFRASTRUCTURE_DIRS, quarantine_unexpected_metadata_entries
 
 MAX_LAYOUT_CLEANUP_PASSES = 3
 
@@ -351,3 +353,136 @@ def iter_layout_cleanup_passes(
         yield removed, stragglers
         if not stragglers:
             break
+
+
+def move_file_to_category_trash(
+    library_path: str,
+    trash_dir: str,
+    source_path: str,
+    category: str,
+) -> str:
+    """Move a file into a categorized trash folder while preserving its relative path."""
+    rel_path = os.path.relpath(source_path, library_path)
+    target_path = os.path.join(trash_dir, category, rel_path)
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+    candidate = target_path
+    counter = 1
+    base, ext = os.path.splitext(target_path)
+    while os.path.exists(candidate):
+        candidate = f"{base}_{counter}{ext}"
+        counter += 1
+
+    shutil.move(source_path, candidate)
+    return candidate
+
+
+@dataclass
+class BlockingCleanupStats:
+    quarantined_metadata: List[str] = field(default_factory=list)
+    trashed_corrupt: int = 0
+    trashed_errors: int = 0
+    removed_dirs: int = 0
+    trashed_stragglers: int = 0
+
+    @property
+    def trashed_orphans(self) -> int:
+        return self.trashed_corrupt + self.trashed_errors
+
+
+def _load_db_media_paths(
+    *,
+    db_conn: Optional[sqlite3.Connection] = None,
+    db_path: Optional[str] = None,
+) -> Set[str]:
+    if db_conn is not None:
+        rows = db_conn.execute("SELECT current_path FROM photos").fetchall()
+        return {row[0] for row in rows}
+
+    if db_path and os.path.exists(db_path):
+        conn = sqlite3.connect(f"file:{os.path.abspath(db_path)}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT current_path FROM photos").fetchall()
+            return {row[0] for row in rows}
+        finally:
+            conn.close()
+
+    return set()
+
+
+def ensure_blocking_audit_prep(
+    library_path: str,
+    *,
+    db_path: Optional[str] = None,
+    db_conn: Optional[sqlite3.Connection] = None,
+    trash_dir: Optional[str] = None,
+    reason: str = "convert",
+    progress_callback: Optional[Callable[[dict], None]] = None,
+) -> BlockingCleanupStats:
+    """
+    Remove blocking audit issues Convert can surface but not fix during canonicalize.
+
+    Runs after metadata compliance and before ``run_fast_library_audit``:
+    quarantine stray ``.library`` artifacts, trash orphan supported media not in the DB,
+    then prune empty non-canonical folders.
+    """
+    library_path = _abs_library_path(library_path)
+    resolved_trash_dir = trash_dir or os.path.join(library_path, ".trash")
+    stats = BlockingCleanupStats()
+
+    stats.quarantined_metadata = quarantine_unexpected_metadata_entries(
+        library_path,
+        reason=reason,
+    )
+
+    db_paths = _load_db_media_paths(db_conn=db_conn, db_path=db_path)
+    for root, _dirs, files in iter_library_walk(library_path):
+        for filename in files:
+            if filename in IGNORED_LIBRARY_FILES:
+                continue
+
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in ALL_MEDIA_EXTENSIONS:
+                continue
+
+            full_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(full_path, library_path)
+            if rel_path in db_paths or not os.path.exists(full_path):
+                continue
+
+            valid, _ = verify_media_file(full_path)
+            category = "corrupted" if not valid else "errors"
+            move_file_to_category_trash(
+                library_path,
+                resolved_trash_dir,
+                full_path,
+                category,
+            )
+            if category == "corrupted":
+                stats.trashed_corrupt += 1
+            else:
+                stats.trashed_errors += 1
+
+            if progress_callback:
+                progress_callback(
+                    {
+                        "type": "orphan_trashed",
+                        "path": rel_path,
+                        "category": category,
+                    }
+                )
+
+    for removed, stragglers in iter_layout_cleanup_passes(library_path, max_passes=1):
+        stats.removed_dirs += removed
+        for straggler_path in stragglers:
+            if not os.path.exists(straggler_path):
+                continue
+            move_file_to_category_trash(
+                library_path,
+                resolved_trash_dir,
+                straggler_path,
+                "errors",
+            )
+            stats.trashed_stragglers += 1
+
+    return stats

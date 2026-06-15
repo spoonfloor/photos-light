@@ -1,16 +1,24 @@
 import os
+import sqlite3
 import unittest
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from clean_library_media_utils import verify_media_file as real_verify_media_file
 
 from library_filesystem import (
+    ensure_blocking_audit_prep,
     finalize_library_layout,
     iter_library_walk,
+    move_file_to_category_trash,
     partition_library_files,
     prune_empty_year_subfolders,
     quarantine_root_hidden,
     remove_misplaced_infrastructure_trees,
     remove_noncanonical_trees,
 )
+from library_layout import canonical_db_path
+from db_schema import create_database_schema
 
 
 class LibraryFilesystemTest(unittest.TestCase):
@@ -202,6 +210,99 @@ class LibraryFilesystemTest(unittest.TestCase):
             set(walk_files),
             set(partition.media_files) | set(partition.non_media_files),
         )
+
+    def test_move_file_to_category_trash_preserves_relative_path(self):
+        with TemporaryDirectory() as tmpdir:
+            trash_dir = os.path.join(tmpdir, ".trash")
+            source_path = os.path.join(tmpdir, "incoming", "notes.txt")
+            os.makedirs(os.path.dirname(source_path), exist_ok=True)
+            with open(source_path, "wb") as handle:
+                handle.write(b"notes")
+
+            trash_path = move_file_to_category_trash(tmpdir, trash_dir, source_path, "errors")
+
+            self.assertFalse(os.path.exists(source_path))
+            self.assertTrue(os.path.exists(trash_path))
+            self.assertEqual(
+                trash_path,
+                os.path.join(trash_dir, "errors", "incoming", "notes.txt"),
+            )
+
+    def test_ensure_blocking_audit_prep_quarantines_metadata_and_trashes_orphans(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path = canonical_db_path(tmpdir)
+            metadata_dir = os.path.dirname(db_path)
+            os.makedirs(metadata_dir, exist_ok=True)
+            conn = sqlite3.connect(db_path)
+            create_database_schema(conn.cursor())
+            canonical_path = "2026/2026-01-27/img_20260127_deadbeef.png"
+            os.makedirs(os.path.join(tmpdir, "2026", "2026-01-27"), exist_ok=True)
+            with open(os.path.join(tmpdir, canonical_path), "wb") as handle:
+                handle.write(b"valid-photo")
+            conn.execute(
+                """
+                INSERT INTO photos (
+                    original_filename, current_path, date_taken, content_hash,
+                    file_size, file_type, width, height
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "img.png",
+                    canonical_path,
+                    "2026:01:27 12:00:00",
+                    "deadbeef" * 8,
+                    11,
+                    "photo",
+                    1,
+                    1,
+                ),
+            )
+            conn.commit()
+
+            fake_png = os.path.join(tmpdir, "03_fake-png.png")
+            with open(fake_png, "w", encoding="utf-8") as handle:
+                handle.write("not really a png")
+
+            orphan_jpg = os.path.join(tmpdir, "incoming", "orphan.jpg")
+            os.makedirs(os.path.dirname(orphan_jpg), exist_ok=True)
+            with open(orphan_jpg, "wb") as handle:
+                handle.write(b"orphan-photo")
+
+            stray_zip = os.path.join(metadata_dir, "photo_library.db.zip")
+            with open(stray_zip, "w", encoding="utf-8") as handle:
+                handle.write("backup bytes")
+
+            def verify_side_effect(path):
+                if path.endswith("orphan.jpg"):
+                    return True, "valid orphan"
+                return real_verify_media_file(path)
+
+            with patch("library_filesystem.verify_media_file", side_effect=verify_side_effect):
+                stats = ensure_blocking_audit_prep(tmpdir, db_conn=conn, reason="test")
+            conn.close()
+
+            self.assertFalse(os.path.exists(fake_png))
+            self.assertFalse(os.path.exists(orphan_jpg))
+            self.assertFalse(os.path.exists(stray_zip))
+            self.assertTrue(os.path.exists(os.path.join(tmpdir, canonical_path)))
+            self.assertEqual(stats.trashed_corrupt, 1)
+            self.assertEqual(stats.trashed_errors, 1)
+            self.assertEqual(stats.trashed_orphans, 2)
+            self.assertEqual(len(stats.quarantined_metadata), 1)
+            self.assertTrue(
+                os.path.exists(
+                    os.path.join(tmpdir, ".trash", "corrupted", "03_fake-png.png")
+                )
+            )
+            self.assertTrue(
+                os.path.exists(
+                    os.path.join(tmpdir, ".trash", "errors", "incoming", "orphan.jpg")
+                )
+            )
+            self.assertTrue(
+                any(path.endswith("photo_library.db.zip") for path in stats.quarantined_metadata)
+            )
 
 
 if __name__ == "__main__":

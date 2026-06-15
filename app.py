@@ -96,7 +96,9 @@ from library_layout import (
 from media_finalization import finalize_mutated_media
 from media_dates import write_and_verify_media_date
 from library_filesystem import (
+    ensure_blocking_audit_prep,
     iter_layout_cleanup_passes,
+    move_file_to_category_trash,
     quarantine_root_hidden,
     remove_noncanonical_trees,
 )
@@ -514,23 +516,6 @@ def commit_staged_canonical_photo(
         os.remove(source_path)
 
     return photo_id, target_path
-
-
-def move_file_to_category_trash(library_path, trash_dir, source_path, category):
-    """Move a file into a categorized trash folder while preserving its relative path."""
-    rel_path = os.path.relpath(source_path, library_path)
-    target_path = os.path.join(trash_dir, category, rel_path)
-    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-
-    candidate = target_path
-    counter = 1
-    base, ext = os.path.splitext(target_path)
-    while os.path.exists(candidate):
-        candidate = f"{base}_{counter}{ext}"
-        counter += 1
-
-    shutil.move(source_path, candidate)
-    return candidate
 
 
 def categorize_processing_error(error):
@@ -4979,6 +4964,30 @@ def terraform_library():
                 },
             )
             yield f"event: phase\ndata: {json.dumps({'phase': 'compliance', 'status': 'complete', 'files_fixed': compliance_stats.files_fixed})}\n\n"
+
+            print("🧹 Running pre-audit blocking cleanup...")
+            log_manifest('blocking_cleanup_started', {})
+            yield f"event: phase\ndata: {json.dumps({'phase': 'cleanup', 'status': 'starting'})}\n\n"
+
+            cleanup_stats = ensure_blocking_audit_prep(
+                library_path,
+                db_conn=conn,
+                trash_dir=trash_dir,
+                reason="convert",
+            )
+
+            log_manifest(
+                'blocking_cleanup_complete',
+                {
+                    'quarantined_metadata': len(cleanup_stats.quarantined_metadata),
+                    'trashed_orphans': cleanup_stats.trashed_orphans,
+                    'trashed_corrupt': cleanup_stats.trashed_corrupt,
+                    'trashed_errors': cleanup_stats.trashed_errors,
+                    'removed_dirs': cleanup_stats.removed_dirs,
+                    'trashed_stragglers': cleanup_stats.trashed_stragglers,
+                },
+            )
+            yield f"event: phase\ndata: {json.dumps({'phase': 'cleanup', 'status': 'complete', 'trashed_orphans': cleanup_stats.trashed_orphans, 'quarantined_metadata': len(cleanup_stats.quarantined_metadata), 'removed_dirs': cleanup_stats.removed_dirs})}\n\n"
 
             # Close DB
             conn.close()
