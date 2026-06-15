@@ -29,12 +29,13 @@ MINF_CHILD_TYPES = frozenset({b"vmhd", b"smhd", b"hmhd", b"nmhd", b"dinf", b"stb
 STBL_CHILD_TYPES = frozenset({b"stsd", b"stts", b"stss", b"ctts", b"stsc", b"stsz", b"stco", b"co64", b"sgpd", b"sbgp"})
 EDTS_CHILD_TYPES = frozenset({b"elst"})
 
-PARENT_SIBLING_STOP_TYPES = {
-    b"trak": MOOV_CHILD_TYPES,
-    b"mdia": TRAK_CHILD_TYPES,
-    b"minf": MDIA_CHILD_TYPES,
-    b"stbl": MINF_CHILD_TYPES,
-    b"edts": TRAK_CHILD_TYPES,
+CONTAINER_CHILD_TYPES = {
+    b"moov": MOOV_CHILD_TYPES,
+    b"trak": TRAK_CHILD_TYPES,
+    b"mdia": MDIA_CHILD_TYPES,
+    b"minf": MINF_CHILD_TYPES,
+    b"stbl": STBL_CHILD_TYPES,
+    b"edts": EDTS_CHILD_TYPES,
 }
 
 
@@ -123,15 +124,24 @@ def _resync_container(data: bytearray, start: int, limit: int) -> int:
     if box_type not in CONTAINER_TYPES:
         return box_end
 
-    parent_sibling_types = PARENT_SIBLING_STOP_TYPES.get(box_type, frozenset())
+    allowed_children = CONTAINER_CHILD_TYPES.get(box_type, frozenset())
     offset = payload_start
     while offset + 8 <= limit:
         try:
             child_end, child_type, _child_payload_start = _read_box_header(data, offset, limit)
         except ValueError:
             break
-        if child_type in parent_sibling_types:
+
+        if offset >= box_end:
+            if child_type not in allowed_children:
+                break
+
+        if box_type == b"edts" and child_type in TRAK_CHILD_TYPES - {b"edts"}:
             break
+
+        if box_type != b"moov" and child_type in MOOV_CHILD_TYPES:
+            break
+
         if child_type in CONTAINER_TYPES:
             child_end = _resync_container(data, offset, limit)
         if child_end <= offset:

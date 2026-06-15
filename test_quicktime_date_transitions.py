@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 from itertools import product
 from tempfile import TemporaryDirectory
 
 from media_dates import read_media_date, read_video_creation_time, write_and_verify_media_date
-from quicktime_date_atoms import read_mvhd_canonical_date
+from quicktime_date_atoms import _iter_boxes, _scan_top_level, read_mvhd_canonical_date
 
 CORNER_DATES = (
     "1900:01:02 00:00:00",
@@ -21,14 +22,52 @@ CORNER_DATES = (
     "2100:01:01 00:00:00",
 )
 
-REAL_FIXTURE_CANDIDATES = (
-    "/Users/erichenry/Desktop/Photo Library/2060/2060-01-02/img_20600102_9b99df1f.mov",
+REAL_FIXTURE_SOURCE_CANDIDATES = (
+    "/Users/erichenry/Desktop/_photos-test-files/_colors/img_20600102_a8aa6960.mov",
     "/Users/erichenry/Desktop/_colors/img_20600102_a8aa6960.mov",
+    "/Users/erichenry/Desktop/Photo Library/2060/2060-01-02/img_20600102_9b99df1f.mov",
 )
+
+REAL_FIXTURE_CANDIDATES = REAL_FIXTURE_SOURCE_CANDIDATES
 
 
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+
+
+def _moov_direct_children(file_path: str) -> list[tuple[bytes, int]]:
+    with open(file_path, "rb") as handle:
+        data = handle.read()
+    layout = _scan_top_level(data)
+    if layout.moov is None:
+        return []
+    moov = data[layout.moov.start : layout.moov.end]
+    return [
+        (box.box_type, box.end - box.start)
+        for box in _iter_boxes(moov, 8, len(moov))
+    ]
+
+
+def _avfoundation_video_track_count(file_path: str) -> tuple[bool, float, int]:
+    escaped_path = file_path.replace("\\", "\\\\").replace('"', '\\"')
+    script = f"""
+import AVFoundation
+let asset = AVURLAsset(url: URL(fileURLWithPath: "{escaped_path}"))
+let playable = asset.isPlayable
+let duration = CMTimeGetSeconds(asset.duration)
+let tracks = asset.tracks(withMediaType: .video).count
+print(playable, duration, tracks)
+"""
+    result = subprocess.run(
+        ["swift", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or result.stdout)
+    playable_text, duration_text, tracks_text = result.stdout.strip().split()
+    return playable_text == "true", float(duration_text), int(tracks_text)
 
 
 def _build_minimal_mov(path: str) -> None:
@@ -100,7 +139,7 @@ class QuickTimeRealFixtureTransitionTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.fixture_path = next(
-            (path for path in REAL_FIXTURE_CANDIDATES if os.path.isfile(path)),
+            (path for path in REAL_FIXTURE_SOURCE_CANDIDATES if os.path.isfile(path)),
             None,
         )
 
@@ -112,6 +151,32 @@ class QuickTimeRealFixtureTransitionTest(unittest.TestCase):
 
     def tearDown(self):
         self._tmpdir.cleanup()
+
+    def test_real_mov_patch_preserves_moov_siblings(self):
+        shutil.copy2(self.fixture_path, self.work_path)
+        before = _moov_direct_children(self.work_path)
+        if not any(box_type == b"udta" for box_type, _size in before):
+            self.skipTest("fixture has no udta atom; sibling-preservation not applicable")
+
+        write_and_verify_media_date(self.work_path, "2060:01:02 00:00:00")
+        after = _moov_direct_children(self.work_path)
+        self.assertEqual(
+            [box_type for box_type, _size in before],
+            [box_type for box_type, _size in after],
+        )
+        before_sizes = {box_type: size for box_type, size in before}
+        after_sizes = {box_type: size for box_type, size in after}
+        self.assertEqual(before_sizes[b"trak"], after_sizes[b"trak"])
+        self.assertEqual(before_sizes[b"udta"], after_sizes[b"udta"])
+
+    @unittest.skipUnless(sys.platform == "darwin", "AVFoundation integration requires macOS")
+    def test_real_mov_patch_stays_avfoundation_playable(self):
+        shutil.copy2(self.fixture_path, self.work_path)
+        write_and_verify_media_date(self.work_path, "2060:01:02 00:00:00")
+        playable, duration, tracks = _avfoundation_video_track_count(self.work_path)
+        self.assertTrue(playable)
+        self.assertGreater(duration, 0.0)
+        self.assertEqual(tracks, 1)
 
     def test_real_mov_2060_to_1900_to_2026(self):
         shutil.copy2(self.fixture_path, self.work_path)
