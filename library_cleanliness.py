@@ -69,6 +69,15 @@ SUPPORTED_METADATA_DATE_FORMATS = (
     "%Y:%m:%d %H:%M:%S%z",
     "%Y-%m-%dT%H:%M:%S",
 )
+RAW_PHOTO_EXTENSIONS = frozenset(
+    {
+        ".raw",
+        ".cr2",
+        ".nef",
+        ".arw",
+        ".dng",
+    }
+)
 PHOTO_MEDIA_EXTENSIONS = frozenset(
     {
         ".jpg",
@@ -82,11 +91,7 @@ PHOTO_MEDIA_EXTENSIONS = frozenset(
         ".webp",
         ".avif",
         ".jp2",
-        ".raw",
-        ".cr2",
-        ".nef",
-        ".arw",
-        ".dng",
+        *RAW_PHOTO_EXTENSIONS,
     }
 )
 VIDEO_MEDIA_EXTENSIONS = frozenset(

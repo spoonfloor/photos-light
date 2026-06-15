@@ -166,7 +166,7 @@ User-visible display bugs on a **single** serve/preview pipeline. Prefer extendi
 
 **Priority:** 🔴 CRITICAL (product)  
 **Estimated effort:** 2–3 hours  
-**Status:** NOT STARTED
+**Status:** DONE (2026-06-15)
 
 **Issue:** RAW format doesn't show in lightbox
 
@@ -177,11 +177,15 @@ User-visible display bugs on a **single** serve/preview pipeline. Prefer extendi
 
 **Impact:** RAW photos are common in photo libraries; prevents viewing a significant portion of the library.
 
-**Fix approach:**
+**Fix (shipped):**
 
-- Extend `get_photo_file` / `BROWSER_CONVERT_EXTENSIONS` (or a sibling RAW preview helper) to generate JPEG proxies for RAW — same pattern as HEIC/TIF, not a parallel lightbox-only path
-- Browsers cannot display RAW bytes from `send_from_directory`; Status 200 with unloadable body matches current repro
-- Add error handling and user feedback for unsupported formats
+- `RAW_PHOTO_EXTENSIONS` in `library_cleanliness.py` (`.raw`, `.cr2`, `.nef`, `.arw`, `.dng`) merged into `BROWSER_CONVERT_EXTENSIONS` in `image_pixels.py`
+- `get_photo_file` serves RAW via `still_image_to_jpeg_buffer()` + `convert_to_rgb_properly()` — same on-the-fly JPEG path as HEIC/TIF
+- RAW decode routes through **sips first** on macOS (`SIPS_FIRST_DECODE_EXTENSIONS`); PIL alone returns embedded DNG/RAW previews (~256px) and caused blurry lightbox
+- Lightbox `img.onerror` shows toast when HTTP 200 but browser cannot decode
+- Tests: `test_image_pixels.py` extension assertions + optional macOS RAW integration (skips without fixture)
+
+**Manual smoke:** Library with `.cr2` / `.dng` → grid thumb unchanged; lightbox shows JPEG preview via `/api/photo/<id>/file`. Rebuild `.app` before packaged verification.
 
 ---
 
@@ -189,7 +193,7 @@ User-visible display bugs on a **single** serve/preview pipeline. Prefer extendi
 
 **Priority:** 🔴 CRITICAL (product)  
 **Estimated effort:** 2–3 hours  
-**Status:** NOT STARTED
+**Status:** DONE (2026-06-15)
 
 **Issue:** .mov doesn't show in lightbox
 
@@ -200,13 +204,15 @@ User-visible display bugs on a **single** serve/preview pipeline. Prefer extendi
 
 **Impact:** MOV is a very common video format; prevents viewing videos in lightbox.
 
-**Fix approach:**
+**Fix (shipped):**
 
-- Diagnose codec/MIME at the single serve endpoint — may need transcode to MP4/WebM (reuse or extend `generate_video_preview` patterns from thumbnail path)
-- Verify `<video src="/api/photo/<id>/file">` loading and surface codec errors in UI
-- Add codec detection and error handling
+- `get_photo_file` remuxes/transcodes non-browser videos to fragmented MP4 (`video/mp4`) via `video_to_browser_mp4_buffer()` in `image_pixels.py`
+- `.mov` (and other non-direct extensions) always proxied; H.264 remuxed with `-c copy`, exotic codecs transcoded to H.264/AAC
+- Browser-direct `.mp4`/`.m4v`/`.webm` with playable codec still served from disk with explicit MIME
+- Lightbox video: `playsInline`, relayout on `loadedmetadata`, toast on undecodable playback
+- Tests: `test_video_playback.py` policy + optional macOS MOV integration (skips without fixture)
 
-**Pair smoke:** Verify RAW and MOV together after serve-path changes — one PR if the root cause is shared.
+**Manual smoke:** Library `.mov` → lightbox shows video (not black); `.mp4` unchanged; pair-smoke with RAW stills. Rebuild `.app` before packaged verification.
 
 ---
 
@@ -247,7 +253,7 @@ User-visible display bugs on a **single** serve/preview pipeline. Prefer extendi
 | Bucket | Items | Status | Est. effort |
 |--------|-------|--------|-------------|
 | 1 — Bedrock architecture | Metadata compliance · Unified flow controller | NOT STARTED | 3–5 days |
-| 2 — Preview / serve | Lightbox RAW · Lightbox MOV | NOT STARTED | 4–6 hours |
+| 2 — Preview / serve | Lightbox RAW · Lightbox MOV | DONE | 4–6 hours |
 | 3 — Research | High-latency perf plan | NOT STARTED | TBD |
 
 **Total estimated (remaining):** ~3–5 days architecture + ~4–6 hours product/research

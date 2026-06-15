@@ -6,6 +6,7 @@ Single source of truth for:
 - Baking HEIC orientation into pixels at ingest
 - Square thumbnail generation and cache paths
 - Lightbox JPEG conversion
+- Lightbox video remux/transcode for browser playback
 """
 
 from __future__ import annotations
@@ -19,8 +20,14 @@ from typing import Callable, Optional, Tuple
 
 from PIL import Image, ImageOps
 
+from library_cleanliness import RAW_PHOTO_EXTENSIONS, VIDEO_MEDIA_EXTENSIONS
+
 HEIF_EXTENSIONS = {".heic", ".heif"}
-BROWSER_CONVERT_EXTENSIONS = HEIF_EXTENSIONS | {".tif", ".tiff"}
+BROWSER_CONVERT_EXTENSIONS = HEIF_EXTENSIONS | {".tif", ".tiff"} | RAW_PHOTO_EXTENSIONS
+SIPS_FIRST_DECODE_EXTENSIONS = HEIF_EXTENSIONS | RAW_PHOTO_EXTENSIONS
+BROWSER_PLAYABLE_VIDEO_CODECS = frozenset({"h264", "vp8", "vp9", "av1"})
+BROWSER_DIRECT_VIDEO_EXTENSIONS = frozenset({".mp4", ".m4v", ".webm"})
+FRAGMENTED_MP4_MOVFLAGS = "frag_keyframe+empty_moov+default_base_moof"
 THUMBNAIL_CACHE_VERSION = "v2"
 DEFAULT_SQUARE_THUMB_SIZE = 400
 DEFAULT_SQUARE_THUMB_QUALITY = 85
@@ -45,8 +52,9 @@ def thumbnail_cache_path(cache_dir: str, content_hash: str, *, mkdir: bool = Fal
 
 
 def should_decode_with_sips(file_path: str) -> bool:
+    """macOS sips decodes HEIC and RAW reliably; PIL often returns embedded previews for RAW."""
     ext = os.path.splitext(file_path)[1].lower()
-    return is_macos() and ext in HEIF_EXTENSIONS
+    return is_macos() and ext in SIPS_FIRST_DECODE_EXTENSIONS
 
 
 def _sips_decode_to_pil(file_path: str) -> Image.Image:
@@ -100,11 +108,18 @@ def open_still_image(file_path: str) -> Image.Image:
         raise
 
 
-def still_image_to_jpeg_buffer(file_path: str, *, quality: int = 95) -> BytesIO:
+def still_image_to_jpeg_buffer(
+    file_path: str,
+    *,
+    quality: int = 95,
+    to_rgb: Optional[RgbConverter] = None,
+) -> BytesIO:
     """Convert a still image to JPEG bytes for in-browser display."""
     image = open_still_image(file_path)
     try:
-        if image.mode != "RGB":
+        if to_rgb is not None:
+            image = to_rgb(image)
+        elif image.mode != "RGB":
             image = image.convert("RGB")
         buffer = BytesIO()
         image.save(buffer, format="JPEG", quality=quality)
@@ -263,16 +278,138 @@ def generate_video_square_thumbnail(
             os.remove(temp_frame_path)
 
 
+def preview_decode_error_message(file_path: str, error: Exception) -> str:
+    """Return a user-facing hint when a picker/lightbox preview cannot be decoded."""
+    try:
+        with open(file_path, "rb") as handle:
+            head = handle.read(128).lstrip().lower()
+    except OSError:
+        head = b""
+
+    if head.startswith(b"<!doctype") or head.startswith(b"<html"):
+        return "File appears to be HTML or text, not a valid image"
+
+    message = str(error).strip()
+    if message:
+        return f"Cannot decode image preview: {message}"
+    return "Cannot decode image preview"
+
+
+def get_video_codec_name(file_path: str) -> Optional[str]:
+    """Return the primary video stream codec name, if ffprobe can read it."""
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            file_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return None
+    codec = (result.stdout or "").strip().lower()
+    return codec or None
+
+
+def video_mimetype_for_extension(ext: str) -> str:
+    ext = ext.lower()
+    if ext in {".mp4", ".m4v"}:
+        return "video/mp4"
+    if ext == ".webm":
+        return "video/webm"
+    if ext == ".mov":
+        return "video/quicktime"
+    return "application/octet-stream"
+
+
+def needs_browser_video_proxy(file_path: str) -> bool:
+    """
+    Decide whether /api/photo/<id>/file should remux/transcode for <video> playback.
+
+    Chromium often fails to render common iPhone MOV files even when the codec is
+    H.264, while fragmented MP4 is reliably playable.
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext not in VIDEO_MEDIA_EXTENSIONS:
+        return False
+    if ext in BROWSER_DIRECT_VIDEO_EXTENSIONS:
+        codec = get_video_codec_name(file_path)
+        return codec not in BROWSER_PLAYABLE_VIDEO_CODECS
+    return True
+
+
+def video_playback_error_message(file_path: str, error: Exception) -> str:
+    message = str(error).strip()
+    if message:
+        return f"Cannot prepare video preview: {message}"
+    return "Cannot prepare video preview"
+
+
+def video_to_browser_mp4_buffer(file_path: str, *, timeout: int = 300) -> BytesIO:
+    """Remux or transcode a library video into fragmented MP4 bytes for browser playback."""
+    codec = get_video_codec_name(file_path)
+    if codec == "h264":
+        encode_args = ["-c", "copy"]
+    else:
+        encode_args = [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+        ]
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        file_path,
+        *encode_args,
+        "-movflags",
+        FRAGMENTED_MP4_MOVFLAGS,
+        "-f",
+        "mp4",
+        "pipe:1",
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    if result.returncode != 0 or not result.stdout:
+        stderr = (result.stderr or b"").decode(errors="replace").strip()
+        raise RuntimeError(stderr or "ffmpeg failed to prepare browser video")
+
+    buffer = BytesIO(result.stdout)
+    buffer.seek(0)
+    return buffer
+
+
 def generate_preview_jpeg_buffer(
     file_path: str,
     *,
     max_size: int = 80,
     quality: int = 75,
+    to_rgb: Optional[RgbConverter] = None,
 ) -> BytesIO:
     """Small aspect-preserving preview for the photo picker."""
     image = open_still_image(file_path)
     try:
-        if image.mode != "RGB":
+        if to_rgb is not None:
+            image = to_rgb(image)
+        elif image.mode != "RGB":
             image = image.convert("RGB")
         image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         buffer = BytesIO()

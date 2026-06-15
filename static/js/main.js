@@ -5399,26 +5399,39 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
     video.src = `/api/photo/${photo.id}/file`;
     video.controls = true;
     video.autoplay = true;
+    video.playsInline = true;
     applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
     video.style.backgroundColor = '#2a2a2a';
+
+    video.addEventListener('loadedmetadata', () => {
+      setLightboxVisualState(photo.id, video, 0);
+      applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
+    });
 
     video.addEventListener('loadeddata', () => {
       if (placeholder.parentNode) {
         placeholder.parentNode.removeChild(placeholder);
       }
       setLightboxVisualState(photo.id, video, 0);
+      applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
       video.style.backgroundColor = 'transparent';
     });
 
     video.addEventListener('error', async () => {
+      console.error(`❌ Video ${photo.id} failed to load`);
       try {
         const response = await fetch(`/api/photo/${photo.id}/file`);
-        if (response.status !== 404) return;
-
-        const data = await response.json().catch(() => ({}));
-        if (data.error === 'Photo not found') {
-          await handleStalePhoto(photo.id);
+        if (!response.ok) {
+          if (response.status === 404) {
+            const data = await response.json().catch(() => ({}));
+            if (data.error === 'Photo not found') {
+              await handleStalePhoto(photo.id);
+            }
+          }
+          return;
         }
+
+        showToast('Preview unavailable for this video', null);
       } catch (error) {
         console.error('❌ Error checking video availability:', error);
       }
@@ -5499,6 +5512,8 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
                 return;
               }
             }
+          } else {
+            showToast('Preview unavailable for this format', null);
           }
         } catch (e) {
           console.error('🔍 Error checking for corruption:', e);

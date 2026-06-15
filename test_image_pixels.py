@@ -8,11 +8,14 @@ from unittest import mock
 
 from PIL import Image
 
+from library_cleanliness import RAW_PHOTO_EXTENSIONS
+
 from image_pixels import (
     BROWSER_CONVERT_EXTENSIONS,
     THUMBNAIL_CACHE_VERSION,
     bake_heic_orientation_in_place,
     open_still_image,
+    preview_decode_error_message,
     should_decode_with_sips,
     still_image_to_jpeg_buffer,
     thumbnail_cache_filename,
@@ -26,6 +29,12 @@ class ImagePixelsRoutingTests(unittest.TestCase):
             self.assertTrue(should_decode_with_sips("/tmp/photo.HEIF"))
             self.assertFalse(should_decode_with_sips("/tmp/photo.jpg"))
 
+    def test_raw_routes_to_sips_on_macos(self):
+        with mock.patch("image_pixels.is_macos", return_value=True):
+            for ext in RAW_PHOTO_EXTENSIONS:
+                self.assertTrue(should_decode_with_sips(f"/tmp/photo{ext}"))
+            self.assertFalse(should_decode_with_sips("/tmp/photo.tif"))
+
     def test_heic_does_not_route_to_sips_off_macos(self):
         with mock.patch("image_pixels.is_macos", return_value=False):
             self.assertFalse(should_decode_with_sips("/tmp/photo.heic"))
@@ -33,6 +42,21 @@ class ImagePixelsRoutingTests(unittest.TestCase):
     def test_browser_convert_extensions_include_heic_and_tiff(self):
         self.assertIn(".heic", BROWSER_CONVERT_EXTENSIONS)
         self.assertIn(".tiff", BROWSER_CONVERT_EXTENSIONS)
+
+    def test_browser_convert_extensions_include_raw_formats(self):
+        for ext in RAW_PHOTO_EXTENSIONS:
+            self.assertIn(ext, BROWSER_CONVERT_EXTENSIONS)
+        self.assertNotIn(".jpg", BROWSER_CONVERT_EXTENSIONS)
+
+    def test_preview_decode_error_message_detects_html_masquerading(self):
+        with tempfile.NamedTemporaryFile(suffix=".dng", delete=False) as handle:
+            temp_path = handle.name
+            handle.write(b"<!DOCTYPE html><html><body>not an image</body></html>")
+        try:
+            message = preview_decode_error_message(temp_path, RuntimeError("sips failed"))
+            self.assertIn("HTML", message)
+        finally:
+            os.remove(temp_path)
 
     def test_thumbnail_cache_version_bumps_legacy_cache(self):
         self.assertEqual(thumbnail_cache_filename("abc123"), f"abc123.{THUMBNAIL_CACHE_VERSION}.jpg")
@@ -90,6 +114,52 @@ class ImagePixelsDecodeTests(unittest.TestCase):
         buffer.seek(0)
         with Image.open(buffer) as image:
             self.assertEqual(image.format, "JPEG")
+
+    def test_still_image_to_jpeg_buffer_produces_jpeg_for_raw_on_macos(self):
+        if sys.platform != "darwin":
+            self.skipTest("sips integration test requires macOS")
+
+        candidates = [
+            "/Users/erichenry/Desktop/_photos-test-files/raw-files/sample1.dng",
+            "/Users/erichenry/Desktop/import me/sample1.dng",
+            "/Volumes/eric_files/photo_library/2026",
+            os.path.expanduser("~/Desktop/photos-light/test_fixtures"),
+        ]
+        sample = None
+        for root in candidates:
+            if os.path.isfile(root) and os.path.splitext(root)[1].lower() in RAW_PHOTO_EXTENSIONS:
+                sample = root
+                break
+            if not os.path.isdir(root):
+                continue
+            for dirpath, _, filenames in os.walk(root):
+                for name in filenames:
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext in RAW_PHOTO_EXTENSIONS:
+                        sample = os.path.join(dirpath, name)
+                        break
+                if sample:
+                    break
+            if sample:
+                break
+
+        if not sample:
+            self.skipTest("sample RAW not available")
+
+        image = open_still_image(sample)
+        try:
+            self.assertGreater(image.width, 1000)
+            self.assertGreater(image.height, 1000)
+        finally:
+            image.close()
+
+        buffer = still_image_to_jpeg_buffer(sample)
+        self.assertGreater(len(buffer.getvalue()), 100000)
+        buffer.seek(0)
+        with Image.open(buffer) as image:
+            self.assertEqual(image.format, "JPEG")
+            self.assertGreater(image.width, 1000)
+            self.assertGreater(image.height, 1000)
 
     def test_pil_fallback_still_used_for_jpeg(self):
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as handle:

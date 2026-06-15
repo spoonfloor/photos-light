@@ -127,8 +127,13 @@ from image_pixels import (
     generate_preview_jpeg_buffer,
     generate_still_square_thumbnail,
     generate_video_square_thumbnail,
+    needs_browser_video_proxy,
+    preview_decode_error_message,
     still_image_to_jpeg_buffer,
     thumbnail_cache_path,
+    video_mimetype_for_extension,
+    video_playback_error_message,
+    video_to_browser_mp4_buffer,
 )
 
 # Register HEIF/HEIC support for PIL
@@ -1541,7 +1546,7 @@ def get_photo_thumbnail(photo_id):
 @app.route('/api/photo/<int:photo_id>/file')
 @handle_db_corruption
 def get_photo_file(photo_id):
-    """Serve the actual photo/video file (convert HEIC to JPEG on-the-fly)"""
+    """Serve photo/video for lightbox (on-the-fly JPEG for stills, MP4 proxy for videos)."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -1560,13 +1565,25 @@ def get_photo_file(photo_id):
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
         
-        # HEIC/TIF and similar — convert to JPEG for browser display
         ext = os.path.splitext(full_path)[1].lower()
         if ext in BROWSER_CONVERT_EXTENSIONS:
-            buffer = still_image_to_jpeg_buffer(full_path, quality=95)
+            buffer = still_image_to_jpeg_buffer(
+                full_path,
+                quality=95,
+                to_rgb=convert_to_rgb_properly,
+            )
             return send_file(buffer, mimetype='image/jpeg')
+
+        if ext in VIDEO_EXTENSIONS:
+            if needs_browser_video_proxy(full_path):
+                try:
+                    buffer = video_to_browser_mp4_buffer(full_path)
+                except Exception as e:
+                    print(f"Error preparing browser video for photo {photo_id}: {e}")
+                    return jsonify({'error': video_playback_error_message(full_path, e)}), 422
+                return send_file(buffer, mimetype='video/mp4')
+            return send_file(full_path, mimetype=video_mimetype_for_extension(ext))
         
-        # For other formats, serve directly
         directory = os.path.dirname(full_path)
         filename = os.path.basename(full_path)
         
@@ -3780,11 +3797,14 @@ def preview_thumbnail():
 def generate_photo_preview(file_path):
     """Generate photo thumbnail (80x80px for 2x retina display at 40x40)"""
     try:
-        buffer = generate_preview_jpeg_buffer(file_path)
+        buffer = generate_preview_jpeg_buffer(
+            file_path,
+            to_rgb=convert_to_rgb_properly,
+        )
         return send_file(buffer, mimetype='image/jpeg')
     except Exception as e:
         print(f"❌ Photo preview error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': preview_decode_error_message(file_path, e)}), 422
 
 
 def generate_video_preview(file_path):
