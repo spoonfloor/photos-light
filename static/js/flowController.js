@@ -1,6 +1,14 @@
 /**
  * Unified flow controller — shared lifecycle for Add, Clean, and Convert.
- * Delegates overlay/SSE/ticker plumbing to Tier 2 helpers in main.js (injected via init).
+ *
+ * Public API (used by main.js flow adapters):
+ * - init(deps) — inject hideFlowOverlay
+ * - registerFlow(key, { overlayIds, adapter })
+ * - syncOverlayPhase(flowKey, overlayPhase)
+ * - cancelRecovery(flowKey, { reloadGrid?, skipConfirm?, resolveValue? })
+ * - dismissOverlay(flowKey, { reloadGrid? })
+ * - hideRegisteredOverlays(flowKey)
+ * - getLifecyclePhase(flowKey) / getActiveFlowKey()
  */
 const FlowController = (() => {
   /** @typedef {'idle' | 'preflight' | 'inflight' | 'complete'} LifecyclePhase */
@@ -16,6 +24,11 @@ const FlowController = (() => {
   const DEFAULT_OVERLAY_PHASE_MAP = {
     scanning: 'preflight',
     preflight: 'preflight',
+    interrupted: 'preflight',
+    eta: 'preflight',
+    'legacy-audit': 'preflight',
+    confirm: 'preflight',
+    warning: 'preflight',
     inflight: 'inflight',
     working: 'inflight',
     complete: 'complete',
@@ -47,6 +60,7 @@ const FlowController = (() => {
    * @property {() => void} [scheduleGridRefresh]
    * @property {(importedCount: number) => void} [showCancelToast]
    * @property {() => Promise<boolean>} [confirmCancel]
+   * @property {() => Promise<void>} [restoreShellAfterCancel]
    * @property {Record<string, LifecyclePhase>} [overlayPhaseMap]
    */
 
@@ -139,7 +153,7 @@ const FlowController = (() => {
   /**
    * Single cancel / go-back recovery entry for all flows.
    * @param {string} [flowKey]
-   * @param {{ reloadGrid?: boolean, skipConfirm?: boolean }} [options]
+   * @param {{ reloadGrid?: boolean, skipConfirm?: boolean, resolveValue?: * }} [options]
    */
   async function cancelRecovery(flowKey = activeFlowKey, options = {}) {
     if (!flowKey) {
@@ -155,14 +169,15 @@ const FlowController = (() => {
     const reloadGrid = options.reloadGrid;
 
     if (adapter.isPreflightPending?.()) {
-      adapter.resolvePreflight?.(false);
       if (adapter.hideOverlay) {
         await adapter.hideOverlay({ reloadGrid: reloadGrid ?? false });
       } else {
         hideRegisteredOverlays(flowKey);
       }
-      adapter.resetSession?.();
       syncOverlayPhase(flowKey, null);
+      await adapter.restoreShellAfterCancel?.();
+      adapter.resolvePreflight?.(options.resolveValue ?? false);
+      adapter.resetSession?.();
       return;
     }
 
@@ -194,8 +209,9 @@ const FlowController = (() => {
     } else {
       hideRegisteredOverlays(flowKey);
     }
-    adapter.resetSession?.();
     syncOverlayPhase(flowKey, null);
+    await adapter.restoreShellAfterCancel?.();
+    adapter.resetSession?.();
   }
 
   /**

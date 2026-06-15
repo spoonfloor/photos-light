@@ -122,18 +122,22 @@ Two independent tracks remain open (plus metadata compliance, shipped). May land
 
 **Priority:** 🔴 CRITICAL (architecture)  
 **Estimated effort:** 2–3 days  
-**Status:** IN PROGRESS (PR 1 — controller skeleton + Add flow)  
+**Status:** DONE (PR 1–4 — unified flow controller for Add/Clean/Convert)  
 **Risk:** High — regression surface across Add, Clean, and Convert; requires dedicated smoke plan
 
 **Issue:** Three parallel frontend state machines — `importState`, `cleanLibraryState`, `terraformProgressState` (all in `main.js`) — duplicate overlay phase logic, cancel/recovery wiring, and preflight/inflight transitions. Tier 2 extracted shared helpers but not the controller layer.
 
-**Codebase (verified):** Helpers are shared (`consumeSseStream`, `loadFlowOverlayFragment`, `recoverLibraryUiAfterFlowCancel`, etc.) but each flow still owns its own state object and phase wiring. **PR 1 shipped:** `static/js/flowController.js` — lifecycle phase machine (`idle | preflight | inflight | complete`), `registerFlow`, `cancelRecovery`, `dismissOverlay`. Add flow wired via `wireAddFlowController()` in `main.js` (`cancelImport`, `closeImportOverlay`, overlay phase sync through `setImportOverlayPhase`). Clean and Convert still on legacy paths (PR 2–3).
+**Codebase (verified):** `static/js/flowController.js` owns lifecycle for all three flows. `wireFlowControllers()` registers Add/Clean/Convert adapters. Shell restore via `restoreLibraryShellAfterFlowDismiss`. Dead helpers removed (`showImportComplete`, `hideCleanLibraryStats`, `closeCleanLibraryOverlay`, `recoverLibraryUiAfterFlowCancel`, `hideConvertFlowOverlays`).
+
+**Smoke:** Add/Clean/Convert manual smoke pass; `node --check` required after changes.
+
+**PR 1 smoke (Add):** pass. Packaged `.app` smoke pending full rebuild.
 
 **Fix shape:**
 
 1. Single flow controller (or thin facade) owning phase machine, overlay handoff registry, and cancel/recovery entry points
 2. Flow-specific modules supply step configs and SSE handlers; controller owns shared lifecycle
-3. Reuse shipped helpers — do not reimplement: `consumeSseStream`, `createInflightRemainingTicker`, `loadFlowOverlayFragment`, `recoverLibraryUiAfterFlowCancel`, `handoffFlowOverlays`
+3. Reuse shipped helpers — do not reimplement: `consumeSseStream`, `createInflightRemainingTicker`, `loadFlowOverlayFragment`, `FlowController.cancelRecovery`, `handoffFlowOverlays`
 4. One slice per PR with flow smoke after each (Add → Clean → Convert)
 
 **Acceptance:**
@@ -142,7 +146,9 @@ Two independent tracks remain open (plus metadata compliance, shipped). May land
 - Cancel/go-back on all three flows clears overlays and restores grid or empty state through one path
 - Debug and production flows share the same controller (no debug-only sync helpers)
 
-**PR 1 smoke (Add):** preflight → inflight → complete; cancel during preflight/inflight; `node --check` passes. Packaged `.app` smoke pending full rebuild.
+**PR 2 smoke (Clean):** inventory preflight → Continue → working + ETA; cancel mid-run; resume checkpoint; complete → Done → grid.
+
+**PR 1 smoke (Add):** pass. Packaged `.app` smoke pending full rebuild.
 
 **Out of scope for this bucket:** Backend metadata compliance (shipped); Convert pre-audit blocking cleanup (parallel track above); lightbox; perf.
 
@@ -266,7 +272,7 @@ PR-sized deduplication and shared helpers — one batch, shipped after Tier 1.
 - Clean working-subtitle ETA + SSE `estimated_remaining_seconds`
 - Convert scan ETA — backend `estimate_convert_duration_seconds`
 - Overlay plumbing — `hideFlowOverlay`, `handoffFlowOverlays`, `wireFlowDetailsToggle`
-- Cancel recovery — `recoverLibraryUiAfterFlowCancel`
+- Cancel recovery — `FlowController.cancelRecovery` + `restoreLibraryShellAfterFlowDismiss`
 
 **Overlay loader factory / progress dialog template:**
 
@@ -355,7 +361,7 @@ Includes histogram mutation sync (`syncGridAfterHistogramChange`), Phase A→B h
 
 ### Terraforming — Cancel/Go Back stalled state — 2026-06-13
 
-**Fix:** `recoverLibraryUiAfterFlowCancel()` on convert cancel — clears transition/handoff overlays and reloads grid or empty state.
+**Fix:** Unified in `FlowController.cancelRecovery('convert')` + `restoreLibraryShellAfterFlowDismiss` (2026-06 PR 3–4).
 
 ---
 

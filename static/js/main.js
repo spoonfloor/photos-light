@@ -1,12 +1,12 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v428';
+const MAIN_JS_VERSION = 'v437';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '433';
+const STATIC_ASSET_VERSION = '438';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -7275,6 +7275,26 @@ let terraformProgressState = {
   abortController: null,
 };
 
+const convertFlowState = {
+  overlayPhase: null,
+  preflightResolve: null,
+};
+
+function setConvertOverlayPhase(phase) {
+  convertFlowState.overlayPhase = phase;
+  FlowController.syncOverlayPhase('convert', phase);
+}
+
+function resolveConvertPreflightChoice(value) {
+  if (!convertFlowState.preflightResolve) {
+    return;
+  }
+  const resolve = convertFlowState.preflightResolve;
+  convertFlowState.preflightResolve = null;
+  setConvertOverlayPhase(null);
+  resolve(value);
+}
+
 const importInflightRemainingTicker = createInflightRemainingTicker({
   getElement: () => document.getElementById('importSecondaryStatus'),
   getTimingState: () => ({
@@ -7625,7 +7645,7 @@ function wireImportOverlay() {
 
   if (cancelBtn) {
     cancelBtn.addEventListener('click', () => {
-      cancelImport();
+      void cancelImport();
     });
   }
 
@@ -7740,7 +7760,10 @@ async function closeImportOverlay() {
     return;
   }
 
-  await FlowController.cancelRecovery('add');
+  const overlay = document.getElementById('importOverlay');
+  if (isFlowOverlayVisible(overlay)) {
+    await FlowController.cancelRecovery('add');
+  }
 }
 
 /**
@@ -7777,58 +7800,6 @@ function scrollToImportedPhoto(photoIds) {
     setTimeout(() => {
       element.style.outline = '';
     }, 2000);
-  }
-}
-
-/**
- * Show import complete UI (show details, done, undo buttons)
- */
-async function showImportComplete() {
-  const cancelBtn = document.getElementById('importCancelBtn');
-  const doneBtn = document.getElementById('importDoneBtn');
-  const undoBtn = document.getElementById('importUndoBtn');
-  const detailsSection = document.getElementById('importDetailsSection');
-  const actionsSection = document.querySelector('.import-actions');
-
-  if (cancelBtn) cancelBtn.style.display = 'none';
-  if (doneBtn) doneBtn.style.display = 'block';
-  if (undoBtn && importState.importedCount > 0) undoBtn.style.display = 'block';
-  if (detailsSection) detailsSection.style.display = 'block';
-
-  // Show actions section in results state
-  if (actionsSection) actionsSection.style.display = 'flex';
-
-  // Populate details list
-  populateImportDetails();
-
-  // Sync grid to show new photos
-  await syncGridAfterHistogramChange();
-
-  // Scroll to first imported photo based on sort order
-  if (
-    importState.importedPhotoIds.length > 0 &&
-    importState.results.length > 0
-  ) {
-    // Get the date of the first successfully imported photo
-    const firstImported = importState.results.find(
-      (r) => r.status === 'success' && r.photo_id,
-    );
-
-    if (firstImported && firstImported.date) {
-      // Extract month from date (YYYY:MM:DD HH:MM:SS -> YYYY-MM)
-      const dateStr = firstImported.date.replace(/:/g, '-');
-      const monthStr = dateStr.substring(0, 7); // YYYY-MM
-
-      // Wait for grid to render, then scroll to the month section
-      setTimeout(() => {
-        const monthSection = document.getElementById(`month-${monthStr}`);
-        if (monthSection) {
-          const appBarHeight = 60;
-          const targetY = monthSection.offsetTop - appBarHeight - 20;
-          window.scrollTo({ top: targetY, behavior: 'smooth' });
-        }
-      }, 500);
-    }
   }
 }
 
@@ -7882,9 +7853,7 @@ async function cancelImport() {
   await FlowController.cancelRecovery('add');
 }
 
-function wireAddFlowController() {
-  FlowController.init({ hideFlowOverlay });
-
+function registerAddFlowAdapter() {
   FlowController.registerFlow('add', {
     overlayIds: ['importOverlay'],
     adapter: {
@@ -7905,9 +7874,12 @@ function wireAddFlowController() {
       resetSession: () => {
         importState.preflight = null;
         importState.preflightResolve = null;
-        setImportOverlayPhase(null);
+        if (importState.overlayPhase) {
+          setImportOverlayPhase(null);
+        }
       },
       hideOverlay: (options = {}) => hideImportOverlay(options.reloadGrid !== false),
+      restoreShellAfterCancel: restoreLibraryShellAfterFlowDismiss,
       scheduleGridRefresh: () => scheduleImportRefresh(),
       showCancelToast: (importedCount) => {
         showToast(
@@ -7933,8 +7905,6 @@ function wireAddFlowController() {
     },
   });
 }
-
-wireAddFlowController();
 
 /**
  * Undo import - delete all imported photos
@@ -8264,7 +8234,11 @@ function wireCleanLibraryOverlay() {
   if (startOverBtn) {
     startOverBtn.addEventListener('click', handleCleanLibraryStartOverClick);
   }
-  if (doneBtn) doneBtn.addEventListener('click', closeCleanLibraryOverlay);
+  if (doneBtn) {
+    doneBtn.addEventListener('click', () => {
+      void FlowController.dismissOverlay('clean', { reloadGrid: false });
+    });
+  }
 
   wireFlowDetailsToggle('clean');
 }
@@ -8423,6 +8397,7 @@ function setCleanLibraryOverlayPhase(phase) {
   if (cleanLibraryState) {
     cleanLibraryState.overlayPhase = phase;
   }
+  FlowController.syncOverlayPhase('clean', phase);
   syncCleanLibraryScoreboards();
   assertCleanLibraryPhaseUi(phase);
 }
@@ -9529,7 +9504,6 @@ async function openCleanLibraryOverlay() {
     if (checkpoint?.resumable) {
       const choice = await showCleanLibraryInterruptedGate();
       if (choice === 'cancel') {
-        closeCleanLibraryOverlayImmediate();
         return;
       }
       if (choice === 'start-over') {
@@ -9584,8 +9558,10 @@ async function executeCleanLibrary() {
 
     if (result?.status === 'CANCELLED') {
       cleanLibraryState.resumeIntent = null;
-      showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
-      closeCleanLibraryOverlayImmediate();
+      if (isFlowOverlayVisible(document.getElementById('cleanLibraryOverlay'))) {
+        await FlowController.cancelRecovery('clean', { reloadGrid: true });
+        showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
+      }
       return;
     }
 
@@ -9597,8 +9573,10 @@ async function executeCleanLibrary() {
   } catch (error) {
     if (error?.name === 'AbortError' || cleanLibraryState?.cancelRequested) {
       cleanLibraryState.resumeIntent = null;
-      showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
-      closeCleanLibraryOverlayImmediate();
+      if (isFlowOverlayVisible(document.getElementById('cleanLibraryOverlay'))) {
+        await FlowController.cancelRecovery('clean', { reloadGrid: true });
+        showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
+      }
       return;
     }
     console.error('❌ Failed to clean library:', error);
@@ -9715,15 +9693,6 @@ function showCleanLibraryStats() {
     setCleanLibraryOverlayPhase('legacy-audit');
   } else {
     syncCleanLibraryScoreboards();
-  }
-}
-
-/**
- * Hide legacy audit scoreboard (visibility follows overlayPhase via sync).
- */
-function hideCleanLibraryStats() {
-  if (cleanLibraryState?.overlayPhase === 'legacy-audit') {
-    setCleanLibraryOverlayPhase('eta');
   }
 }
 
@@ -10044,33 +10013,85 @@ async function confirmStopCleanLibraryRun() {
 }
 
 async function handleCleanLibraryCancelClick() {
-  if (cleanLibraryState?.onInterruptedChoice) {
-    cleanLibraryState.onInterruptedChoice('cancel');
-    return;
-  }
-
-  if (cleanLibraryState?.isRunning) {
-    const confirmed = await confirmStopCleanLibraryRun();
-    if (!confirmed) {
-      return;
-    }
-    cleanLibraryState.cancelRequested = true;
-    cleanLibraryState.abortController?.abort();
-    return;
-  }
-
-  closeCleanLibraryOverlayImmediate();
+  const inflight =
+    cleanLibraryState?.isRunning && cleanLibraryState?.abortController;
+  await FlowController.cancelRecovery('clean', { reloadGrid: inflight });
 }
 
-function closeCleanLibraryOverlay() {
-  void handleCleanLibraryCancelClick();
+function registerCleanFlowAdapter() {
+  FlowController.registerFlow('clean', {
+    overlayIds: ['cleanLibraryOverlay'],
+    adapter: {
+      overlayPhaseMap: {
+        scanning: 'preflight',
+        interrupted: 'preflight',
+        eta: 'preflight',
+        'legacy-audit': 'preflight',
+        working: 'inflight',
+        finished: 'complete',
+      },
+      isPreflightPending: () => Boolean(cleanLibraryState?.onInterruptedChoice),
+      resolvePreflight: (shouldContinue) => {
+        if (!cleanLibraryState?.onInterruptedChoice) {
+          return;
+        }
+        cleanLibraryState.onInterruptedChoice(shouldContinue ? 'continue' : 'cancel');
+      },
+      isInflightActive: () =>
+        Boolean(
+          cleanLibraryState?.isRunning && cleanLibraryState?.abortController,
+        ),
+      abortInflight: () => {
+        cleanLibraryState.cancelRequested = true;
+        cleanLibraryState.abortController?.abort();
+      },
+      stopInflightUi: () => {
+        endCleanLibraryWorkingUi();
+        resetCleanLibraryRunEtaState();
+        cleanLibraryRunUiPaused = false;
+        clearCleanLibraryWorkingStepState();
+      },
+      finishSession: () => {
+        cleanLibraryRunUiPaused = false;
+        if (cleanLibraryState) {
+          cleanLibraryState.isRunning = false;
+          cleanLibraryState.abortController = null;
+          cleanLibraryState.cancelRequested = false;
+          cleanLibraryState.workingPhaseActive = false;
+        }
+        cleanLibraryRunEtaState = null;
+      },
+      resetSession: () => {
+        if (cleanLibraryState) {
+          cleanLibraryState.onInterruptedChoice = null;
+          cleanLibraryState.preflight = null;
+          cleanLibraryState.resumeIntent = null;
+          if (cleanLibraryState.overlayPhase) {
+            setCleanLibraryOverlayPhase(null);
+          }
+        }
+      },
+      hideOverlay: async (options = {}) => {
+        closeCleanLibraryOverlayImmediate();
+        if (options.reloadGrid !== false) {
+          await syncGridAfterHistogramChange();
+        }
+      },
+      restoreShellAfterCancel: restoreLibraryShellAfterFlowDismiss,
+      scheduleGridRefresh: () => {
+        syncGridAfterHistogramChange().catch((error) => {
+          console.warn('Clean library grid sync after cancel:', error);
+        });
+      },
+      showCancelToast: () => {
+        showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
+      },
+      confirmCancel: () => confirmStopCleanLibraryRun(),
+    },
+  });
 }
 
 // =====================
-// INITIALIZATION
-// =====================
-
-// =============================
 // REBUILD DATABASE OVERLAY
 // =============================
 
@@ -11021,6 +11042,7 @@ async function prepareTerraformPreviewScanningShell(path) {
   if (pathEl) {
     pathEl.textContent = path;
   }
+  setConvertOverlayPhase('scanning');
   setTerraformPreviewPhase('scanning');
   setTerraformPreflightCounts(0, 0, 0);
   setTerraformPreviewActionButtons({ continueDisabled: true });
@@ -11054,6 +11076,9 @@ function endTerraformProgressUi() {
   terraformProgressState.totalFiles = 0;
   terraformProgressState.inflightDoneCount = 0;
   terraformProgressState.remainingUiLocked = false;
+  if (convertFlowState.overlayPhase === 'inflight') {
+    setConvertOverlayPhase(null);
+  }
 }
 
 function beginTerraformProgressUi(preflight = {}) {
@@ -11082,17 +11107,12 @@ function beginTerraformProgressUi(preflight = {}) {
 
   startTerraformProgressRemainingTicker();
 
+  setConvertOverlayPhase('inflight');
+
   const cancelBtn = document.getElementById('terraformProgressCancelBtn');
   if (cancelBtn) {
     cancelBtn.onclick = () => {
-      if (terraformProgressState.abortController) {
-        terraformProgressState.abortController.abort();
-      }
-      endTerraformProgressUi();
-      const progressOverlay = document.getElementById('terraformProgressOverlay');
-      if (progressOverlay) {
-        progressOverlay.style.display = 'none';
-      }
+      void FlowController.cancelRecovery('convert', { reloadGrid: true });
     };
   }
 }
@@ -11118,6 +11138,7 @@ async function showTerraformPreviewDialog(options = {}) {
     const totalCount = photoCount + videoCount;
 
     document.getElementById('terraformPreviewPath').textContent = options.path;
+    setConvertOverlayPhase('scanning');
     setTerraformPreviewPhase('scanning');
     setTerraformPreflightCounts(0, 0, 0);
     setTerraformPreviewActionButtons({ continueDisabled: true });
@@ -11132,18 +11153,24 @@ async function showTerraformPreviewDialog(options = {}) {
     const goBackBtn = document.getElementById('terraformPreviewGoBackBtn');
     const continueBtn = document.getElementById('terraformPreviewContinueBtn');
 
+    convertFlowState.preflightResolve = resolve;
+
     const handleCancel = () => {
-      hideFlowOverlay(overlay);
-      resolve(false);
+      void FlowController.cancelRecovery('convert', {
+        reloadGrid: false,
+        resolveValue: false,
+      });
     };
 
     const handleGoBack = () => {
-      hideFlowOverlay(overlay);
-      resolve('back_to_picker');
+      void FlowController.cancelRecovery('convert', {
+        reloadGrid: false,
+        resolveValue: 'back_to_picker',
+      });
     };
 
     const handleContinue = () => {
-      resolve(true);
+      resolveConvertPreflightChoice(true);
     };
 
     closeBtn.onclick = handleCancel;
@@ -11162,6 +11189,7 @@ async function showTerraformPreviewDialog(options = {}) {
       CLEAN_LIBRARY_PREFLIGHT_COUNT_ANIMATION_MS,
     );
 
+    setConvertOverlayPhase('confirm');
     setTerraformPreviewPhase('confirm');
     setTerraformPreflightCounts(photoCount, videoCount, totalCount);
     setTerraformPreviewActionButtons({ continueDisabled: false });
@@ -11189,7 +11217,6 @@ async function loadTerraformWarningOverlay() {
  */
 async function showTerraformWarningDialog(options = {}, handoffFromEl = null) {
   return new Promise(async (resolve) => {
-    // Load overlay if needed
     const overlay = await loadTerraformWarningOverlay();
     if (!overlay) {
       resolve(false);
@@ -11210,24 +11237,25 @@ async function showTerraformWarningDialog(options = {}, handoffFromEl = null) {
     const continueBtn = document.getElementById('terraformWarningContinueBtn');
     const backBtn = document.getElementById('terraformWarningBackBtn');
 
+    convertFlowState.preflightResolve = resolve;
+    setConvertOverlayPhase('warning');
+
     const handleClose = () => {
-      hideFlowOverlay(overlay);
-      if (handoffFromEl) {
-        hideFlowOverlay(handoffFromEl);
-      }
-      resolve(false);
+      void FlowController.cancelRecovery('convert', {
+        reloadGrid: false,
+        resolveValue: false,
+      });
     };
 
     const handleContinue = () => {
-      resolve(true);
+      resolveConvertPreflightChoice(true);
     };
 
     const handleBack = () => {
-      hideFlowOverlay(overlay);
-      if (handoffFromEl) {
-        hideFlowOverlay(handoffFromEl);
-      }
-      resolve('back_to_picker');
+      void FlowController.cancelRecovery('convert', {
+        reloadGrid: false,
+        resolveValue: 'back_to_picker',
+      });
     };
 
     closeBtn.onclick = handleClose;
@@ -11335,12 +11363,13 @@ async function showTerraformCompleteDialog(results = {}, handoffFromEl = null) {
           : Number(terraformProgressState.estimatedSeconds) || 0,
     });
     showTerraformCompleteDetailsSection(true);
+    setConvertOverlayPhase('complete');
 
     const closeBtn = document.getElementById('terraformCompleteCloseBtn');
     const doneBtn = document.getElementById('terraformCompleteDoneBtn');
 
     const handleDone = () => {
-      hideFlowOverlay(overlay);
+      void FlowController.dismissOverlay('convert', { reloadGrid: false });
       resolve();
     };
 
@@ -11413,34 +11442,113 @@ async function showTerraformPoorCandidateDialog(_warning = {}) {
 }
 
 /**
- * Restore main UI after convert/terraform or library flow is cancelled mid-handoff.
+ * Restore grid or empty-state shell after a flow overlay is dismissed without changes.
  */
-async function recoverLibraryUiAfterFlowCancel() {
-  hideLibraryTransitionOverlay();
+async function restoreLibraryShellAfterFlowDismiss() {
   setOpenLibraryModalHandoffShellHidden(false);
-  endTerraformProgressUi();
-  for (const id of [
-    'terraformPreviewOverlay',
-    'terraformWarningOverlay',
-    'terraformProgressOverlay',
-  ]) {
-    hideFlowOverlay(document.getElementById(id));
-  }
+  hideLibraryTransitionOverlay();
   flushPendingPhotoContainerMount();
 
+  const photoCount = Math.max(
+    state.photos?.length ?? 0,
+    Number(state.photoTotalCount) || 0,
+  );
+
   if (state.hasDatabase) {
-    try {
-      await loadAndRenderPhotos(false);
-    } catch (error) {
-      console.warn('Grid reload after flow cancel:', error);
-      enableAppBarButtons();
+    if (photoCount > 0) {
+      const container = document.getElementById('photoContainer');
+      const hasMountedGrid =
+        container &&
+        (VirtualGrid.isActive() ||
+          container.querySelector('[data-month]') ||
+          container.classList.contains('grid-root'));
+      if (hasMountedGrid) {
+        enableAppBarButtons();
+        return;
+      }
+      try {
+        await loadAndRenderPhotos(false);
+      } catch (error) {
+        console.warn('Shell restore after flow dismiss:', error);
+        enableAppBarButtons();
+      }
+      return;
     }
+
+    if (VirtualGrid.isActive()) {
+      VirtualGrid.destroy();
+    }
+    renderEmptyLibraryState();
+    enableAppBarButtons();
     return;
   }
 
+  if (VirtualGrid.isActive()) {
+    VirtualGrid.destroy();
+  }
   renderFirstRunEmptyState();
   enableAppBarButtons();
 }
+
+function registerConvertFlowAdapter() {
+  FlowController.registerFlow('convert', {
+    overlayIds: [
+      'terraformPreviewOverlay',
+      'terraformWarningOverlay',
+      'terraformProgressOverlay',
+      'terraformCompleteOverlay',
+    ],
+    adapter: {
+      overlayPhaseMap: {
+        scanning: 'preflight',
+        confirm: 'preflight',
+        warning: 'preflight',
+        inflight: 'inflight',
+        complete: 'complete',
+      },
+      isPreflightPending: () => Boolean(convertFlowState.preflightResolve),
+      resolvePreflight: (value) => resolveConvertPreflightChoice(value),
+      isInflightActive: () =>
+        Boolean(
+          terraformProgressState.active && terraformProgressState.abortController,
+        ),
+      abortInflight: () => {
+        terraformProgressState.abortController?.abort();
+      },
+      stopInflightUi: () => {
+        stopTerraformProgressRemainingTicker();
+        endTerraformProgressUi();
+      },
+      finishSession: () => {
+        endTerraformProgressUi();
+      },
+      resetSession: () => {
+        convertFlowState.preflightResolve = null;
+        if (convertFlowState.overlayPhase) {
+          setConvertOverlayPhase(null);
+        }
+      },
+      hideOverlay: async (options = {}) => {
+        endTerraformProgressUi();
+        resetFlowActivityFeed('convert');
+        FlowController.hideRegisteredOverlays('convert');
+        if (options.reloadGrid !== false) {
+          await syncGridAfterHistogramChange();
+        }
+      },
+      restoreShellAfterCancel: restoreLibraryShellAfterFlowDismiss,
+    },
+  });
+}
+
+function wireFlowControllers() {
+  FlowController.init({ hideFlowOverlay });
+  registerAddFlowAdapter();
+  registerCleanFlowAdapter();
+  registerConvertFlowAdapter();
+}
+
+wireFlowControllers();
 
 /**
  * Execute terraform conversion (preflight → bad-folder speedbump → warning → convert → complete)
@@ -11477,6 +11585,7 @@ async function executeTerraformFlow(options = {}) {
     const mediaCount = Number(preflight.media_count) || 0;
     if (mediaCount <= 0) {
       hideFlowOverlay(previewOverlayRef.current);
+      setConvertOverlayPhase(null);
       showToast('No supported photos or videos found in this folder.');
       return false;
     }
@@ -11501,11 +11610,11 @@ async function executeTerraformFlow(options = {}) {
         preflight.convert_folder_warning,
       );
       if (candidateChoice === 'back_to_picker') {
-        hideFlowOverlay(previewOverlayRef.current);
+        await FlowController.cancelRecovery('convert', { reloadGrid: false });
         return 'back_to_picker';
       }
       if (candidateChoice !== 'continue') {
-        hideFlowOverlay(previewOverlayRef.current);
+        await FlowController.cancelRecovery('convert', { reloadGrid: false });
         return false;
       }
     }
@@ -11730,10 +11839,17 @@ async function executeTerraformFlow(options = {}) {
     // Step 5: Switch to this library
     return await switchToLibrary(path, dbPath);
   } catch (error) {
-    console.error('❌ Terraform failed:', error);
-    if (error?.name !== 'AbortError') {
-      showToast(`Convert failed: ${error.message}`);
+    if (error?.name === 'AbortError') {
+      endTerraformProgressUi();
+      const progressOverlay = document.getElementById('terraformProgressOverlay');
+      if (isFlowOverlayVisible(progressOverlay)) {
+        await FlowController.cancelRecovery('convert', { reloadGrid: true });
+      }
+      return false;
     }
+
+    console.error('❌ Terraform failed:', error);
+    showToast(`Convert failed: ${error.message}`);
 
     endTerraformProgressUi();
     const progressOverlay = document.getElementById('terraformProgressOverlay');
@@ -12494,14 +12610,14 @@ async function convertToLibrary() {
         continue;
       }
       if (!result) {
-        await recoverLibraryUiAfterFlowCancel();
+        await FlowController.cancelRecovery('convert', { reloadGrid: false });
         return false;
       }
       return result;
     }
   } catch (error) {
     console.error('❌ Failed to convert to library:', error);
-    await recoverLibraryUiAfterFlowCancel();
+    await FlowController.cancelRecovery('convert', { reloadGrid: false });
     showToast(`Error: ${error.message}`);
     return false;
   }
@@ -13677,7 +13793,6 @@ async function runImportPreflightInOverlay(paths) {
   setImportOverlayPhase(null);
 
   if (!confirmed) {
-    await closeImportOverlay();
     return null;
   }
 

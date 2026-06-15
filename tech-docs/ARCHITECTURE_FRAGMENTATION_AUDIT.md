@@ -130,7 +130,7 @@ Unified patterns per `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` — not tactical p
 | **Catalog reset tier** | `LIBRARY_CATALOG_REVISION` + `rehydrateLibraryCatalog()` after Clean / DB rebuild / library switch; bumps invalidate month-index and total-count caches |
 | **Empty startup** | Removed `restore_library_session_from_config()` from `launcher.py` / `app.py`; config kept for `/api/library/last-used` only; missing folder → `reset_to_welcome_state()` → `not_configured` |
 | **Clean scoreboards** | `setCleanLibraryOverlayPhase()` + `syncCleanLibraryScoreboards()` — one row visible per phase (preflight / inflight / legacy-audit); no stale Processed/Duplicates row on reopen |
-| **Convert cancel** | `recoverLibraryUiAfterFlowCancel()` on convert/terraform cancel — clears handoff overlays, reloads grid or empty state |
+| **Convert cancel** | `FlowController.cancelRecovery('convert')` — hides convert overlays, restores grid or empty state |
 
 **Docs:** `tech-docs/GRID_HYDRATION_BUGS.md` (fixed), `docs/GRID_OPTIMIZATION_ARCHITECTURE.md` § Catalog reset, `bugs-to-be-fixed.md` tier-1 closed.
 
