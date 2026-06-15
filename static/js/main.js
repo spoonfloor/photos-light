@@ -1,12 +1,12 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v427';
+const MAIN_JS_VERSION = 'v428';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '432';
+const STATIC_ASSET_VERSION = '433';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -7259,6 +7259,11 @@ let importState = {
   estimatedDisplay: null,
 };
 
+function setImportOverlayPhase(phase) {
+  importState.overlayPhase = phase;
+  FlowController.syncOverlayPhase('add', phase);
+}
+
 let terraformProgressState = {
   active: false,
   runStartedAtMs: null,
@@ -7396,7 +7401,7 @@ function finishImportSession() {
   importState.isImporting = false;
   importState.abortController = null;
   importState.cancelRequested = false;
-  importState.overlayPhase = null;
+  setImportOverlayPhase(null);
   stopImportInflightRemainingTicker();
 }
 
@@ -7426,7 +7431,7 @@ function startImportInflightRemainingTicker() {
 }
 
 function beginImportInflightUi() {
-  importState.overlayPhase = 'inflight';
+  setImportOverlayPhase('inflight');
   importState.runStartedAtMs = Date.now();
 
   const explainerEl = document.getElementById('importExplainer');
@@ -7476,7 +7481,7 @@ function maybeAppendImportProgressMilestone(current, total) {
 
 function renderImportCompleteUi({ hasErrors = false, logPath = null } = {}) {
   stopImportInflightRemainingTicker();
-  importState.overlayPhase = 'complete';
+  setImportOverlayPhase('complete');
 
   const explainerEl = document.getElementById('importExplainer');
   if (explainerEl) {
@@ -7635,7 +7640,7 @@ function wireImportOverlay() {
       if (window.importedPhotoIds && window.importedPhotoIds.length > 0) {
         scrollToImportedPhoto(window.importedPhotoIds);
       }
-      await hideImportOverlay(false);
+      await FlowController.dismissOverlay('add', { reloadGrid: false });
     });
   }
 
@@ -7726,8 +7731,7 @@ async function hideImportOverlay(reloadPhotos = true) {
  */
 async function closeImportOverlay() {
   if (importState.preflightResolve) {
-    resolveImportPreflight(false);
-    await hideImportOverlay(false);
+    await FlowController.cancelRecovery('add', { reloadGrid: false });
     return;
   }
 
@@ -7736,7 +7740,7 @@ async function closeImportOverlay() {
     return;
   }
 
-  await hideImportOverlay();
+  await FlowController.cancelRecovery('add');
 }
 
 /**
@@ -7872,54 +7876,65 @@ function populateImportDetails() {
 }
 
 /**
- * Cancel import in progress
+ * Cancel import in progress (delegates to unified flow controller).
  */
 async function cancelImport() {
-  if (importState.preflightResolve) {
-    resolveImportPreflight(false);
-    await hideImportOverlay(false);
-    return;
-  }
-
-  if (!importState.isImporting || !importState.abortController) {
-    await hideImportOverlay();
-    return;
-  }
-
-  let confirmed = true;
-  if (IMPORT_CANCEL_CONFIRMATION_ENABLED) {
-    confirmed = await showDialog(
-      'Stop import',
-      'Stop importing now? Photos already imported will stay in the library.',
-      [
-        { text: 'Keep importing', value: false, secondary: true },
-        { text: 'Stop import', value: true, primary: true },
-      ],
-    );
-  }
-
-  if (!confirmed) {
-    return;
-  }
-
-  const importedCount = importState.importedCount;
-  const controller = importState.abortController;
-
-  importState.cancelRequested = true;
-  importState.isImporting = false;
-  importState.abortController = null;
-
-  controller.abort();
-  await hideImportOverlay();
-  scheduleImportRefresh();
-
-  showToast(
-    `Import stopped after ${importedCount} image${
-      importedCount === 1 ? '' : 's'
-    }`,
-    null,
-  );
+  await FlowController.cancelRecovery('add');
 }
+
+function wireAddFlowController() {
+  FlowController.init({ hideFlowOverlay });
+
+  FlowController.registerFlow('add', {
+    overlayIds: ['importOverlay'],
+    adapter: {
+      isPreflightPending: () => Boolean(importState.preflightResolve),
+      resolvePreflight: (shouldContinue) => resolveImportPreflight(shouldContinue),
+      isInflightActive: () =>
+        importState.isImporting && Boolean(importState.abortController),
+      getImportedCount: () => importState.importedCount || 0,
+      abortInflight: () => {
+        const controller = importState.abortController;
+        importState.cancelRequested = true;
+        importState.isImporting = false;
+        importState.abortController = null;
+        controller?.abort();
+      },
+      stopInflightUi: () => stopImportInflightRemainingTicker(),
+      finishSession: () => finishImportSession(),
+      resetSession: () => {
+        importState.preflight = null;
+        importState.preflightResolve = null;
+        setImportOverlayPhase(null);
+      },
+      hideOverlay: (options = {}) => hideImportOverlay(options.reloadGrid !== false),
+      scheduleGridRefresh: () => scheduleImportRefresh(),
+      showCancelToast: (importedCount) => {
+        showToast(
+          `Import stopped after ${importedCount} image${
+            importedCount === 1 ? '' : 's'
+          }`,
+          null,
+        );
+      },
+      confirmCancel: async () => {
+        if (!IMPORT_CANCEL_CONFIRMATION_ENABLED) {
+          return true;
+        }
+        return showDialog(
+          'Stop import',
+          'Stop importing now? Photos already imported will stay in the library.',
+          [
+            { text: 'Keep importing', value: false, secondary: true },
+            { text: 'Stop import', value: true, primary: true },
+          ],
+        );
+      },
+    },
+  });
+}
+
+wireAddFlowController();
 
 /**
  * Undo import - delete all imported photos
@@ -13562,7 +13577,7 @@ async function prepareImportPreflightOverlay() {
     throw new Error('Import overlay unavailable');
   }
 
-  importState.overlayPhase = 'scanning';
+  setImportOverlayPhase('scanning');
   setImportOverlayTitle();
 
   const explainerEl = document.getElementById('importExplainer');
@@ -13641,7 +13656,7 @@ async function runImportPreflightInOverlay(paths) {
   importState.preflight = scanResult;
   importState.estimatedDisplay = getImportEstimateDisplay(scanResult);
   importState.estimatedSeconds = Number(scanResult.estimated_seconds) || null;
-  importState.overlayPhase = 'preflight';
+  setImportOverlayPhase('preflight');
 
   const statusEl = document.getElementById('importStatusText');
   if (statusEl) {
@@ -13659,7 +13674,7 @@ async function runImportPreflightInOverlay(paths) {
 
   importState.preflightResolve = null;
   importState.preflight = null;
-  importState.overlayPhase = null;
+  setImportOverlayPhase(null);
 
   if (!confirmed) {
     await closeImportOverlay();

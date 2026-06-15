@@ -122,12 +122,12 @@ Two independent tracks remain open (plus metadata compliance, shipped). May land
 
 **Priority:** 🔴 CRITICAL (architecture)  
 **Estimated effort:** 2–3 days  
-**Status:** NOT STARTED  
+**Status:** IN PROGRESS (PR 1 — controller skeleton + Add flow)  
 **Risk:** High — regression surface across Add, Clean, and Convert; requires dedicated smoke plan
 
 **Issue:** Three parallel frontend state machines — `importState`, `cleanLibraryState`, `terraformProgressState` (all in `main.js`) — duplicate overlay phase logic, cancel/recovery wiring, and preflight/inflight transitions. Tier 2 extracted shared helpers but not the controller layer.
 
-**Codebase (verified):** Helpers are shared (`consumeSseStream`, `loadFlowOverlayFragment`, `recoverLibraryUiAfterFlowCancel`, etc.) but each flow still owns its own state object and phase wiring. No unified controller module or facade exists.
+**Codebase (verified):** Helpers are shared (`consumeSseStream`, `loadFlowOverlayFragment`, `recoverLibraryUiAfterFlowCancel`, etc.) but each flow still owns its own state object and phase wiring. **PR 1 shipped:** `static/js/flowController.js` — lifecycle phase machine (`idle | preflight | inflight | complete`), `registerFlow`, `cancelRecovery`, `dismissOverlay`. Add flow wired via `wireAddFlowController()` in `main.js` (`cancelImport`, `closeImportOverlay`, overlay phase sync through `setImportOverlayPhase`). Clean and Convert still on legacy paths (PR 2–3).
 
 **Fix shape:**
 
@@ -141,6 +141,8 @@ Two independent tracks remain open (plus metadata compliance, shipped). May land
 - No new per-flow phase/toggle/reset helpers outside the controller
 - Cancel/go-back on all three flows clears overlays and restores grid or empty state through one path
 - Debug and production flows share the same controller (no debug-only sync helpers)
+
+**PR 1 smoke (Add):** preflight → inflight → complete; cancel during preflight/inflight; `node --check` passes. Packaged `.app` smoke pending full rebuild.
 
 **Out of scope for this bucket:** Backend metadata compliance (shipped); Convert pre-audit blocking cleanup (parallel track above); lightbox; perf.
 
