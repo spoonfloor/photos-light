@@ -117,6 +117,151 @@ class RepairFileResult:
         return self.status == "moved"
 
 
+@dataclass
+class MetadataComplianceResult:
+    """Outcome of auto-fixable metadata compliance work on one media file."""
+
+    fixed: bool
+    content_hash: Optional[str] = None
+    file_size: Optional[int] = None
+    log_events: List[RepairLogEvent] = field(default_factory=list)
+
+
+def file_needs_metadata_compliance(
+    full_path: str,
+    ext: str,
+    *,
+    get_orientation_flag: Callable[[str], Optional[int]],
+    can_bake_losslessly: Callable[[str], bool],
+    extract_exif_rating: Callable[[str], Optional[int]],
+    lossless_rotation_extensions: frozenset[str],
+) -> bool:
+    """Return True when ``run_fast_library_audit`` would flag auto-fixable metadata."""
+    file_type = media_kind_for_extension(ext) or "photo"
+    orientation = get_orientation_flag(full_path)
+    if file_type == "photo":
+        if orientation not in (None, 1) and can_bake_losslessly(full_path):
+            return True
+    elif orientation not in (None, 1) and ext in lossless_rotation_extensions:
+        return True
+    return extract_exif_rating(full_path) == 0
+
+
+def _photo_repair_log_events(
+    canonical_photo: Any,
+    *,
+    full_path: str,
+    ext: str,
+    deps: RepairScanDependencies,
+) -> List[RepairLogEvent]:
+    log_events: List[RepairLogEvent] = []
+    if canonical_photo.orientation_baked:
+        log_events.append(
+            RepairLogEvent("orientation_baked", {"message": "canonicalized"})
+        )
+    else:
+        orientation = deps.get_orientation_flag(full_path)
+        if orientation not in (None, 1) and ext in deps.lossless_rotation_extensions:
+            log_events.append(
+                RepairLogEvent("orientation_kept", {"message": str(orientation)})
+            )
+    if canonical_photo.rating_stripped:
+        log_events.append(RepairLogEvent("rating_stripped"))
+    if canonical_photo.metadata_changed and not (
+        canonical_photo.orientation_baked or canonical_photo.rating_stripped
+    ):
+        log_events.append(
+            RepairLogEvent(
+                "date_metadata_canonicalized",
+                {"date": canonical_photo.date_taken},
+            )
+        )
+    return log_events
+
+
+def repair_file_metadata_compliance(
+    full_path: str,
+    *,
+    ext: str,
+    deps: RepairScanDependencies,
+) -> MetadataComplianceResult:
+    """
+    Apply auto-fixable metadata compliance fixes for one in-library media file.
+
+    Matches the metadata slice used during Clean scan/repair and shared with
+    Convert's pre-audit compliance pass. Only mutates files that would fail
+    ``run_fast_library_audit`` metadata checks.
+    """
+    if not file_needs_metadata_compliance(
+        full_path,
+        ext,
+        get_orientation_flag=deps.get_orientation_flag,
+        can_bake_losslessly=deps.can_bake_losslessly,
+        extract_exif_rating=deps.extract_exif_rating,
+        lossless_rotation_extensions=deps.lossless_rotation_extensions,
+    ):
+        return MetadataComplianceResult(fixed=False)
+
+    file_type = media_kind_for_extension(ext) or "photo"
+    log_events: List[RepairLogEvent] = []
+
+    if file_type == "photo":
+        canonical_photo = deps.canonicalize_photo_file(
+            full_path,
+            extract_exif_date=deps.extract_exif_date,
+            bake_orientation=deps.bake_orientation,
+            get_dimensions=lambda path: deps.read_dimensions(path),
+            compute_hash=lambda path: deps.hash_cache.get_hash(path)[0],
+            write_photo_exif=deps.write_photo_date_metadata,
+            extract_exif_rating=deps.extract_exif_rating,
+            strip_exif_rating=deps.strip_exif_rating,
+        )
+
+        if not canonical_photo.metadata_changed:
+            return MetadataComplianceResult(fixed=False, log_events=log_events)
+
+        log_events = _photo_repair_log_events(
+            canonical_photo,
+            full_path=full_path,
+            ext=ext,
+            deps=deps,
+        )
+        return MetadataComplianceResult(
+            fixed=True,
+            content_hash=canonical_photo.content_hash,
+            file_size=getattr(canonical_photo, "file_size", None)
+            or os.path.getsize(full_path),
+            log_events=log_events,
+        )
+
+    orientation = deps.get_orientation_flag(full_path)
+    metadata_changed = False
+    if orientation not in (None, 1) and ext in deps.lossless_rotation_extensions:
+        baked, message, baked_orientation = deps.bake_orientation(full_path)
+        if baked:
+            metadata_changed = True
+            log_events.append(RepairLogEvent("orientation_baked", {"message": message}))
+        elif baked_orientation is not None:
+            log_events.append(RepairLogEvent("orientation_kept", {"message": message}))
+
+    if deps.extract_exif_rating(full_path) == 0:
+        if not deps.strip_exif_rating(full_path):
+            raise RepairFileError(f"Failed to strip rating=0 from {full_path}")
+        metadata_changed = True
+        log_events.append(RepairLogEvent("rating_stripped"))
+
+    if not metadata_changed:
+        return MetadataComplianceResult(fixed=False, log_events=log_events)
+
+    content_hash, _cache_hit = deps.hash_cache.get_hash(full_path)
+    return MetadataComplianceResult(
+        fixed=True,
+        content_hash=content_hash,
+        file_size=os.path.getsize(full_path),
+        log_events=log_events,
+    )
+
+
 def _issue_paths_for_record(record: Any, source_rel_path: str, target_rel_path: str) -> Dict[str, List[str]]:
     issue_paths: Dict[str, List[str]] = {}
     if source_rel_path != target_rel_path:
@@ -262,15 +407,21 @@ def normalize_repair_scan_identity(
     this identity into its orchestration-specific record type.
     """
     file_type = media_kind_for_extension(ext) or "photo"
-    log_events: List[RepairLogEvent] = []
 
     if file_type == "photo":
-        original_orientation = deps.get_orientation_flag(full_path)
-        original_rating = deps.extract_exif_rating(full_path)
-        has_metadata_cleanup_signal = (
-            original_orientation not in (None, 1)
-            and deps.can_bake_losslessly(full_path)
-        ) or original_rating == 0
+        has_metadata_cleanup_signal = file_needs_metadata_compliance(
+            full_path,
+            ext,
+            get_orientation_flag=deps.get_orientation_flag,
+            can_bake_losslessly=deps.can_bake_losslessly,
+            extract_exif_rating=deps.extract_exif_rating,
+            lossless_rotation_extensions=deps.lossless_rotation_extensions,
+        )
+        compliance = repair_file_metadata_compliance(
+            full_path,
+            ext=ext,
+            deps=deps,
+        )
 
         canonical_photo = deps.canonicalize_photo_file(
             full_path,
@@ -283,29 +434,12 @@ def normalize_repair_scan_identity(
             strip_exif_rating=deps.strip_exif_rating,
         )
 
-        if canonical_photo.orientation_baked:
-            log_events.append(
-                RepairLogEvent("orientation_baked", {"message": "canonicalized"})
-            )
-        else:
-            orientation = deps.get_orientation_flag(full_path)
-            if orientation not in (None, 1) and ext in deps.lossless_rotation_extensions:
-                log_events.append(
-                    RepairLogEvent("orientation_kept", {"message": str(orientation)})
-                )
-
-        if canonical_photo.rating_stripped:
-            log_events.append(RepairLogEvent("rating_stripped"))
-
-        if canonical_photo.metadata_changed and not (
-            canonical_photo.orientation_baked or canonical_photo.rating_stripped
-        ):
-            log_events.append(
-                RepairLogEvent(
-                    "date_metadata_canonicalized",
-                    {"date": canonical_photo.date_taken},
-                )
-            )
+        log_events = _photo_repair_log_events(
+            canonical_photo,
+            full_path=full_path,
+            ext=ext,
+            deps=deps,
+        )
 
         duplicate_key = duplicate_key_for_file(
             full_path,
@@ -323,34 +457,30 @@ def normalize_repair_scan_identity(
             width=canonical_photo.width,
             height=canonical_photo.height,
             rating=canonical_photo.rating,
-            metadata_cleaned=canonical_photo.metadata_changed,
+            metadata_cleaned=canonical_photo.metadata_changed or compliance.fixed,
             has_metadata_cleanup_signal=has_metadata_cleanup_signal,
             log_events=log_events,
         )
 
-    orientation = deps.get_orientation_flag(full_path)
-    has_metadata_cleanup_signal = (
-        orientation not in (None, 1)
-        and ext in deps.lossless_rotation_extensions
+    has_metadata_cleanup_signal = file_needs_metadata_compliance(
+        full_path,
+        ext,
+        get_orientation_flag=deps.get_orientation_flag,
+        can_bake_losslessly=deps.can_bake_losslessly,
+        extract_exif_rating=deps.extract_exif_rating,
+        lossless_rotation_extensions=deps.lossless_rotation_extensions,
     )
-    metadata_cleaned = False
-    if orientation not in (None, 1) and ext in deps.lossless_rotation_extensions:
-        baked, message, baked_orientation = deps.bake_orientation(full_path)
-        if baked:
-            metadata_cleaned = True
-            log_events.append(RepairLogEvent("orientation_baked", {"message": message}))
-        elif baked_orientation is not None:
-            log_events.append(RepairLogEvent("orientation_kept", {"message": message}))
-
-    rating = deps.extract_exif_rating(full_path)
-    if rating == 0:
-        has_metadata_cleanup_signal = True
-        if not deps.strip_exif_rating(full_path):
-            raise RepairFileError(f"Failed to strip rating=0 from {full_path}")
-        metadata_cleaned = True
-        log_events.append(RepairLogEvent("rating_stripped"))
+    compliance = repair_file_metadata_compliance(
+        full_path,
+        ext=ext,
+        deps=deps,
+    )
+    log_events = list(compliance.log_events)
+    metadata_cleaned = compliance.fixed
 
     content_hash, _cache_hit = deps.hash_cache.get_hash(full_path)
+    if compliance.content_hash:
+        content_hash = compliance.content_hash
     if not content_hash:
         return None
     duplicate_key = duplicate_key_for_file(full_path, fallback_hash=content_hash)

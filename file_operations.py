@@ -16,6 +16,7 @@ import json
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
 from library_cleanliness import VIDEO_MEDIA_EXTENSIONS
+from media_dates import read_embedded_media_date
 
 register_heif_opener()
 
@@ -62,60 +63,16 @@ def _dimensions_from_exiftool(file_path):
 
 def extract_exif_date(file_path):
     """
-    Extract EXIF/metadata date using exiftool (photos) or ffprobe (videos).
-    
-    Args:
-        file_path: Path to photo or video file
-    
-    Returns:
-        str: Date in format 'YYYY:MM:DD HH:MM:SS' or None if not found
+    Extract raw embedded metadata date (photos via exiftool, videos via ffprobe).
+
+    For resolved dates including basename and ingest fallbacks, use
+    ``media_dates.read_media_date`` instead.
     """
     try:
-        # Determine file type
-        ext = os.path.splitext(file_path)[1].lower()
-
-        if ext in VIDEO_MEDIA_EXTENSIONS:
-            # Use ffprobe for video files
-            result = subprocess.run([
-                'ffprobe',
-                '-v', 'quiet',
-                '-print_format', 'json',
-                '-show_entries', 'format_tags=creation_time',
-                file_path
-            ], capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                if 'format' in data and 'tags' in data['format']:
-                    creation_time = data['format']['tags'].get('creation_time')
-                    if creation_time:
-                        # Parse ISO 8601 format: 2024-03-15T14:30:45.000000Z
-                        # Convert to EXIF format: 2024:03:15 14:30:45
-                        creation_time = creation_time.replace('T', ' ').split('.')[0]
-                        creation_time = creation_time.replace('-', ':', 2)  # Only first two dashes
-                        return creation_time
-        else:
-            # Use exiftool for photo files
-            result = subprocess.run([
-                'exiftool',
-                '-DateTimeOriginal',
-                '-CreateDate',
-                '-ModifyDate',
-                '-j',
-                file_path
-            ], capture_output=True, text=True, timeout=30)
-            
-            if result.returncode == 0:
-                data = json.loads(result.stdout)[0]
-                # Try DateTimeOriginal first (most reliable)
-                date_taken = data.get('DateTimeOriginal') or data.get('CreateDate') or data.get('ModifyDate')
-                if date_taken:
-                    return date_taken
-    
+        return read_embedded_media_date(file_path)
     except Exception as e:
         print(f"⚠️  Error extracting EXIF date from {file_path}: {e}")
-    
-    return None
+        return None
 
 
 def get_dimensions(file_path):

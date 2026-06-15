@@ -416,6 +416,17 @@ body.filter-chip-rail-visible {
 .grid-root {
   position: relative;
   width: 100%;
+  --grid-header-height-px: 44px;
+  --grid-header-gap-px: 12px;
+  --grid-header-band-px: calc(
+    var(--grid-header-height-px) + var(--grid-header-gap-px)
+  );
+  --grid-month-section-margin-px: 48px;
+  --grid-gap-px: 4px;
+  --grid-min-col-px: 200px;
+  --grid-comfort-full-rows: 12;
+  --grid-comfort-partial-col-offset: 2;
+  --grid-comfort-partial-min-cols: 1;
 }
 
 .grid-spacer {
@@ -458,7 +469,10 @@ body.filter-chip-rail-visible {
 }
 
 /* Provisional section headers stay hidden; anchor truth section (limit=1) stays visible. */
-.grid-root.grid-labels-gated .grid-content-layer .virtual-month-section .month-header {
+.grid-root.grid-labels-gated
+  .grid-content-layer
+  .virtual-month-section
+  .month-header {
   visibility: hidden;
 }
 
@@ -480,6 +494,13 @@ body.filter-chip-rail-visible {
 
 .grid-tile-header-gap {
   width: 100%;
+  height: var(--grid-header-band-px, 56px);
+  flex-shrink: 0;
+}
+
+.grid-tile-section-gap {
+  height: var(--grid-month-section-margin-px, 48px);
+  flex-shrink: 0;
 }
 
 .grid-tile-grid {
@@ -490,7 +511,10 @@ body.filter-chip-rail-visible {
 
 .grid-tile-row {
   display: grid;
-  grid-template-columns: repeat(var(--grid-cols, 3), var(--grid-cell-px, 200px));
+  grid-template-columns: repeat(
+    var(--grid-cols, 3),
+    var(--grid-cell-px, 200px)
+  );
   gap: var(--grid-gap-px, 4px);
   height: var(--grid-cell-px, 200px);
 }
@@ -499,6 +523,28 @@ body.filter-chip-rail-visible {
   width: var(--grid-cell-px, 200px);
   height: var(--grid-cell-px, 200px);
   background: var(--placeholder-bg);
+}
+
+.grid-root .month-header-band {
+  height: var(--grid-header-band-px, 56px);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.grid-root.grid-paged .month-section {
+  margin-bottom: var(--grid-month-section-margin-px, 48px);
+}
+
+.grid-root.grid-paged .photo-grid {
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(var(--grid-min-col-px, 200px), 1fr)
+  );
+}
+
+.grid-root .month-header-band .month-header {
+  height: var(--grid-header-height-px, 44px);
+  margin-bottom: 0;
 }
 
 .grid-content-layer .month-section,
@@ -512,7 +558,10 @@ body.filter-chip-rail-visible {
 
 .grid-root .photo-grid {
   display: grid;
-  grid-template-columns: repeat(var(--grid-cols, 3), var(--grid-cell-px, 200px));
+  grid-template-columns: repeat(
+    var(--grid-cols, 3),
+    var(--grid-cell-px, 200px)
+  );
   gap: var(--grid-gap-px, 4px);
 }
 

@@ -1,12 +1,12 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v416';
+const MAIN_JS_VERSION = 'v427';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '420';
+const STATIC_ASSET_VERSION = '432';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -16,6 +16,26 @@ async function apiFetchJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
   return { response, data };
+}
+
+function formatConvertAuditIssueLine(issue = {}) {
+  const kind = issue.kind ? `${issue.kind}` : 'issue';
+  const path = issue.path ? ` — ${issue.path}` : '';
+  const detail = issue.detail ? ` (${issue.detail})` : '';
+  return `${kind}${path}${detail}`;
+}
+
+function appendConvertAuditIssuesToActivityFeed(issues = []) {
+  if (!issues.length) {
+    return;
+  }
+  appendFlowActivityLine(
+    'convert',
+    `Final verification found ${issues.length} issue(s):`,
+  );
+  for (const issue of issues.slice(0, 8)) {
+    appendFlowActivityLine('convert', formatConvertAuditIssueLine(issue));
+  }
 }
 
 async function consumeSseStream(response, options = {}) {
@@ -1066,6 +1086,37 @@ function parsePhotoDate(photo) {
   }
 
   return inferPhotoDateFromCanonicalPath(photo);
+}
+
+function setDateEditorSelectValue(select, value) {
+  if (!select) return false;
+  const normalized = String(value);
+  select.value = normalized;
+  if (select.value === normalized) {
+    return true;
+  }
+
+  for (const option of select.options) {
+    if (option.value === normalized) {
+      option.selected = true;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function populateDateEditorYearOptions(maxYear = 2100, minYear = 1900) {
+  const yearSelect = document.getElementById('dateEditorYear');
+  if (!yearSelect) return;
+
+  yearSelect.innerHTML = '';
+  for (let year = maxYear; year >= minYear; year--) {
+    const option = document.createElement('option');
+    option.value = String(year);
+    option.textContent = String(year);
+    yearSelect.appendChild(option);
+  }
 }
 
 // ============================================================================
@@ -2320,6 +2371,170 @@ function handoffFlowOverlays(nextEl, ...previousEls) {
   }
 }
 
+/**
+ * Idempotent HTML fragment loader for flow overlays (fetch, insert, wire, initial hide).
+ * @param {{ overlayId: string, fragmentPath: string, mountId?: string|null, insertPosition?: string, wire?: () => void, logLabel?: string }} options
+ * @returns {Promise<HTMLElement|null>}
+ */
+async function loadFlowOverlayFragment({
+  overlayId,
+  fragmentPath,
+  mountId = null,
+  insertPosition = 'beforeend',
+  wire = null,
+  logLabel = 'overlay',
+}) {
+  const existing = document.getElementById(overlayId);
+  if (existing) {
+    return existing;
+  }
+
+  const mount = mountId ? document.getElementById(mountId) : document.body;
+  if (!mount) {
+    console.error(`❌ ${logLabel} mount not found`);
+    return null;
+  }
+
+  try {
+    const response = await fetch(versionedStaticUrl(fragmentPath));
+    if (!response.ok) {
+      throw new Error(`Failed to load ${logLabel} (${response.status})`);
+    }
+
+    const html = await response.text();
+    mount.insertAdjacentHTML(insertPosition, html);
+
+    if (typeof wire === 'function') {
+      wire();
+    }
+
+    const overlay = document.getElementById(overlayId);
+    if (overlay) {
+      hideFlowOverlay(overlay);
+    }
+    return overlay;
+  } catch (error) {
+    console.error(`❌ ${logLabel} load failed:`, error);
+    return null;
+  }
+}
+
+/**
+ * Interval ticker for inflight "time remaining" secondary status.
+ * @param {{ getElement: () => HTMLElement|null, getTimingState: () => object, mode: 'linear' | 'ratio' | 'velocity', intervalMs?: number }} options
+ */
+function createInflightRemainingTicker({
+  getElement,
+  getTimingState,
+  mode,
+  intervalMs = 400,
+}) {
+  let timer = null;
+  let remainingLabelState = createInflightRemainingLabelState();
+
+  function resetRemainingLabelState() {
+    remainingLabelState = createInflightRemainingLabelState();
+  }
+
+  function stop() {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+
+  function setRemainingLine(remainingSec) {
+    const formatted = formatInflightRemainingLine(remainingSec, remainingLabelState);
+    remainingLabelState = formatted.state;
+    return formatted.line;
+  }
+
+  function sync() {
+    const secondaryEl = getElement();
+    if (!secondaryEl) {
+      return;
+    }
+
+    const state = getTimingState();
+    if (state.skipRemainingSync) {
+      return;
+    }
+
+    const totalSec = Number(state.estimatedSeconds);
+    const runStartedAtMs = state.runStartedAtMs;
+
+    if (mode === 'ratio') {
+      if (!runStartedAtMs || !Number.isFinite(totalSec) || totalSec <= 0) {
+        secondaryEl.style.display = 'none';
+        return;
+      }
+      const elapsed = (Date.now() - runStartedAtMs) / 1000;
+      const done =
+        typeof state.getDoneCount === 'function' ? state.getDoneCount() : 0;
+      const total = Math.max(1, state.totalFiles || 1);
+      const ratio = done / total;
+      const remainingSec = Math.max(
+        5,
+        totalSec * (1 - ratio) - Math.min(elapsed, totalSec * ratio),
+      );
+      secondaryEl.style.display = 'block';
+      secondaryEl.textContent = setRemainingLine(remainingSec);
+      return;
+    }
+
+    if (mode === 'velocity') {
+      if (!runStartedAtMs) {
+        secondaryEl.style.display = 'none';
+        return;
+      }
+      const done =
+        typeof state.getDoneCount === 'function' ? state.getDoneCount() : 0;
+      const total = Math.max(1, state.totalFiles || 1);
+      const elapsed = (Date.now() - runStartedAtMs) / 1000;
+      const minSamples = Math.max(3, Math.ceil(total * 0.02));
+
+      let remainingSec;
+      if (done >= total) {
+        remainingSec = 15;
+      } else if (done >= minSamples && elapsed > 0) {
+        remainingSec = (total - done) * (elapsed / done);
+      } else if (Number.isFinite(totalSec) && totalSec > 0) {
+        const ratio = done / total;
+        remainingSec = Math.max(
+          5,
+          totalSec * (1 - ratio) - Math.min(elapsed, totalSec * ratio),
+        );
+      } else {
+        secondaryEl.style.display = 'block';
+        secondaryEl.textContent = `Estimated time: ${state.estimatedDisplay || 'calculating...'}`;
+        return;
+      }
+
+      secondaryEl.style.display = 'block';
+      secondaryEl.textContent = setRemainingLine(remainingSec);
+      return;
+    }
+
+    if (!runStartedAtMs || !Number.isFinite(totalSec) || totalSec <= 0) {
+      secondaryEl.style.display = 'block';
+      secondaryEl.textContent = `Estimated time: ${state.estimatedDisplay || 'calculating...'}`;
+      return;
+    }
+    const elapsed = (Date.now() - runStartedAtMs) / 1000;
+    secondaryEl.style.display = 'block';
+    secondaryEl.textContent = setRemainingLine(Math.max(5, totalSec - elapsed));
+  }
+
+  function start() {
+    stop();
+    resetRemainingLabelState();
+    sync();
+    timer = setInterval(sync, intervalMs);
+  }
+
+  return { start, stop, sync, resetRemainingLabelState };
+}
+
 function isFlowOverlayVisible(el) {
   return !!el && el.style.display === 'flex';
 }
@@ -3377,10 +3592,20 @@ function getRecoveryFailureCopy(stage, hasSwitchedLibrary) {
 /**
  * Load date editor fragment
  */
+let dateEditorReadyPromise = null;
+
 function loadDateEditor() {
+  if (document.getElementById('dateEditorOverlay')?.dataset.wired === 'true') {
+    return Promise.resolve();
+  }
+
+  if (dateEditorReadyPromise) {
+    return dateEditorReadyPromise;
+  }
+
   const mount = document.getElementById('dateEditorMount');
 
-  return fetch(versionedStaticUrl('fragments/dateEditor.html')) // Sequence with interval
+  dateEditorReadyPromise = fetch(versionedStaticUrl('fragments/dateEditor.html')) // Sequence with interval
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load date editor (${r.status})`);
       return r.text();
@@ -3390,8 +3615,11 @@ function loadDateEditor() {
       wireDateEditor();
     })
     .catch((err) => {
+      dateEditorReadyPromise = null;
       console.error('❌ Date editor load failed:', err);
     });
+
+  return dateEditorReadyPromise;
 }
 
 /**
@@ -3404,16 +3632,11 @@ function wireDateEditor() {
   const saveBtn = document.getElementById('dateEditorSaveBtn');
 
   // Populate year options (1900-2100)
-  const yearSelect = document.getElementById('dateEditorYear');
-  for (let year = 2100; year >= 1900; year--) {
-    const option = document.createElement('option');
-    option.value = year;
-    option.textContent = year;
-    yearSelect.appendChild(option);
-  }
+  populateDateEditorYearOptions();
 
   // Populate month options
   const monthSelect = document.getElementById('dateEditorMonth');
+  monthSelect.innerHTML = '';
   const monthNames = [
     'January',
     'February',
@@ -3437,6 +3660,7 @@ function wireDateEditor() {
 
   // Populate day options (1-31)
   const daySelect = document.getElementById('dateEditorDay');
+  daySelect.innerHTML = '';
   for (let day = 1; day <= 31; day++) {
     const option = document.createElement('option');
     option.value = day;
@@ -3486,6 +3710,7 @@ function wireDateEditor() {
 
   // Populate hour options (1-12)
   const hourSelect = document.getElementById('dateEditorHour');
+  hourSelect.innerHTML = '';
   for (let hour = 1; hour <= 12; hour++) {
     const option = document.createElement('option');
     option.value = hour;
@@ -3495,6 +3720,7 @@ function wireDateEditor() {
 
   // Populate minute options (00-59)
   const minuteSelect = document.getElementById('dateEditorMinute');
+  minuteSelect.innerHTML = '';
   for (let minute = 0; minute < 60; minute++) {
     const option = document.createElement('option');
     option.value = minute;
@@ -3527,6 +3753,7 @@ function wireDateEditor() {
   // ESC to close (handled by global keyboard handler, not here)
   // Click outside (on overlay, not on editor card) to close
   if (overlay) {
+    overlay.dataset.wired = 'true';
     overlay.addEventListener('click', (e) => {
       // Only close if clicking directly on overlay (not on the editor card)
       if (e.target === overlay) {
@@ -3540,7 +3767,9 @@ function wireDateEditor() {
  * Open date editor for a photo or multiple photos
  * @param {number|number[]} photoIdOrIds - Single photo ID or array of IDs for bulk edit
  */
-function openDateEditor(photoIdOrIds) {
+async function openDateEditor(photoIdOrIds) {
+  await loadDateEditor();
+
   const overlay = document.getElementById('dateEditorOverlay');
   if (!overlay) return;
 
@@ -3562,9 +3791,18 @@ function openDateEditor(photoIdOrIds) {
     return;
   }
 
-  // Populate fields
-  document.getElementById('dateEditorYear').value = date.getFullYear();
-  document.getElementById('dateEditorMonth').value = date.getMonth() + 1;
+  populateDateEditorYearOptions();
+
+  const yearSelect = document.getElementById('dateEditorYear');
+  const monthSelect = document.getElementById('dateEditorMonth');
+  const daySelect = document.getElementById('dateEditorDay');
+
+  if (!setDateEditorSelectValue(yearSelect, date.getFullYear())) {
+    console.warn(
+      `⚠️  Date editor could not select year ${date.getFullYear()} for photo ${firstPhotoId}`,
+    );
+  }
+  setDateEditorSelectValue(monthSelect, date.getMonth() + 1);
 
   // Update day options based on selected month/year before setting day
   if (window.updateDateEditorDayOptions) {
@@ -3577,8 +3815,8 @@ function openDateEditor(photoIdOrIds) {
   const ampm = hours >= 12 ? 'PM' : 'AM';
   hours = hours % 12 || 12;
 
-  document.getElementById('dateEditorHour').value = hours;
-  document.getElementById('dateEditorMinute').value = date.getMinutes(); // Set as number, not padded string
+  setDateEditorSelectValue(document.getElementById('dateEditorHour'), hours);
+  setDateEditorSelectValue(document.getElementById('dateEditorMinute'), date.getMinutes());
   document.getElementById('dateEditorAmPm').value = ampm;
 
   // Update current date display
@@ -3614,6 +3852,11 @@ function openDateEditor(photoIdOrIds) {
 
   // Show overlay
   overlay.style.display = 'flex';
+  requestAnimationFrame(() => {
+    setDateEditorSelectValue(yearSelect, date.getFullYear());
+    setDateEditorSelectValue(monthSelect, date.getMonth() + 1);
+    document.getElementById('dateEditorDay').value = date.getDate();
+  });
 }
 
 /**
@@ -3840,6 +4083,7 @@ async function finalizeDateChangeSuccess({
   }
 
   await syncGridAfterHistogramChange(scrollTargetMonth);
+  await populateDatePicker();
 
   hideDateChangeProgressOverlay();
 
@@ -6333,6 +6577,8 @@ function renderFirstRunEmptyState() {
   const container = document.getElementById('photoContainer');
   if (!container) return;
 
+  setPagedGridContainerMode(container, false);
+
   container.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
       <div style="text-align: center;">
@@ -6373,6 +6619,8 @@ function renderFilterEmptyState() {
   const container = document.getElementById('photoContainer');
   if (!container) return;
 
+  setPagedGridContainerMode(container, false);
+
   container.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
       <div style="text-align: center;">
@@ -6395,6 +6643,8 @@ function renderEmptyLibraryState() {
   const container = document.getElementById('photoContainer');
   if (!container) return;
 
+  setPagedGridContainerMode(container, false);
+
   const heading = escapeHtml(getEmptyLibraryHeading());
 
   container.innerHTML = `
@@ -6413,6 +6663,20 @@ function renderEmptyLibraryState() {
   `;
 }
 
+function setPagedGridContainerMode(container, enabled) {
+  if (!container) {
+    return;
+  }
+  if (enabled) {
+    container.classList.add('grid-root', 'grid-paged');
+    container.classList.remove('grid-labels-gated');
+  } else {
+    container.classList.remove('grid-root', 'grid-paged', 'grid-labels-gated');
+  }
+  container.style.removeProperty('--grid-cols');
+  container.style.removeProperty('--grid-cell-px');
+}
+
 /**
  * Render photo grid with real data
  */
@@ -6426,6 +6690,7 @@ function renderPhotoGrid(photos, append = false) {
 
   if (!photos || photos.length === 0) {
     if (!append) {
+      setPagedGridContainerMode(container, false);
       if (state.photos.length > 0 && hasActivePhotoFilters()) {
         renderFilterEmptyState();
       } else if (state.hasDatabase) {
@@ -6436,6 +6701,8 @@ function renderPhotoGrid(photos, append = false) {
     }
     return;
   }
+
+  setPagedGridContainerMode(container, true);
 
   // Group photos by month (O(n) index map — avoid findIndex per photo on large libraries)
   const libraryIndexById = buildPhotoLibraryIndexMap();
@@ -6505,9 +6772,11 @@ function renderPhotoGrid(photos, append = false) {
       // Create new month section (with select circle in header)
       html += `
         <div class="month-section" id="month-${month}" data-month="${month}">
-          <div class="month-header">
-            <span class="month-label">${monthLabel}</span>
-            <div class="month-select-circle"></div>
+          <div class="month-header-band">
+            <div class="month-header">
+              <span class="month-label">${monthLabel}</span>
+              <div class="month-select-circle"></div>
+            </div>
           </div>
           <div class="photo-grid">
       `;
@@ -6988,7 +7257,6 @@ let importState = {
   runStartedAtMs: null,
   estimatedSeconds: null,
   estimatedDisplay: null,
-  inflightRemainingTimer: null,
 };
 
 let terraformProgressState = {
@@ -6996,9 +7264,62 @@ let terraformProgressState = {
   runStartedAtMs: null,
   estimatedSeconds: null,
   estimatedDisplay: null,
-  remainingTimer: null,
+  totalFiles: 0,
+  inflightDoneCount: 0,
+  remainingUiLocked: false,
   abortController: null,
 };
+
+const importInflightRemainingTicker = createInflightRemainingTicker({
+  getElement: () => document.getElementById('importSecondaryStatus'),
+  getTimingState: () => ({
+    runStartedAtMs: importState.runStartedAtMs,
+    estimatedSeconds: importState.estimatedSeconds,
+    totalFiles: importState.totalFiles,
+    getDoneCount: () =>
+      Math.min(
+        importState.totalFiles || 0,
+        (importState.importedCount || 0) +
+          (importState.duplicateCount || 0) +
+          (importState.errorCount || 0),
+      ),
+  }),
+  mode: 'ratio',
+});
+
+const terraformProgressRemainingTicker = createInflightRemainingTicker({
+  getElement: () => document.getElementById('terraformProgressSecondaryStatus'),
+  getTimingState: () => ({
+    runStartedAtMs: terraformProgressState.runStartedAtMs,
+    estimatedSeconds: terraformProgressState.estimatedSeconds,
+    estimatedDisplay: terraformProgressState.estimatedDisplay,
+    totalFiles: terraformProgressState.totalFiles,
+    getDoneCount: () => terraformProgressState.inflightDoneCount,
+    skipRemainingSync: terraformProgressState.remainingUiLocked,
+  }),
+  mode: 'velocity',
+});
+
+function syncTerraformInflightProgressCounts(data = {}) {
+  if (data.total !== undefined) {
+    const total = Number(data.total);
+    if (Number.isFinite(total) && total > 0) {
+      terraformProgressState.totalFiles = total;
+    }
+  }
+  if (
+    data.processed !== undefined ||
+    data.duplicates !== undefined ||
+    data.errors !== undefined
+  ) {
+    terraformProgressState.inflightDoneCount =
+      Number(data.processed ?? 0) +
+      Number(data.duplicates ?? 0) +
+      Number(data.errors ?? 0);
+  } else if (data.current !== undefined) {
+    terraformProgressState.inflightDoneCount = Number(data.current) || 0;
+  }
+}
 
 // Toggle this on if cancelling an import should require confirmation.
 const IMPORT_CANCEL_CONFIRMATION_ENABLED = false;
@@ -7093,45 +7414,15 @@ function setImportInflightCounts(imported, duplicates, skipped) {
 }
 
 function stopImportInflightRemainingTicker() {
-  if (importState.inflightRemainingTimer) {
-    clearInterval(importState.inflightRemainingTimer);
-    importState.inflightRemainingTimer = null;
-  }
+  importInflightRemainingTicker.stop();
 }
 
 function syncImportInflightRemainingDisplay() {
-  const secondaryEl = document.getElementById('importSecondaryStatus');
-  if (!secondaryEl) {
-    return;
-  }
-  const totalSec = Number(importState.estimatedSeconds);
-  if (!importState.runStartedAtMs || !Number.isFinite(totalSec) || totalSec <= 0) {
-    secondaryEl.style.display = 'none';
-    return;
-  }
-  const elapsed = (Date.now() - importState.runStartedAtMs) / 1000;
-  const done = Math.min(
-    importState.totalFiles || 0,
-    (importState.importedCount || 0) +
-      (importState.duplicateCount || 0) +
-      (importState.errorCount || 0),
-  );
-  const total = Math.max(1, importState.totalFiles || 1);
-  const ratio = done / total;
-  const remainingSec = Math.max(5, totalSec * (1 - ratio));
-  secondaryEl.style.display = 'block';
-  secondaryEl.textContent = `Total time remaining: ${formatAboutDurationFromSeconds(
-    Math.max(5, remainingSec - Math.min(elapsed, totalSec * ratio)),
-  )}`;
+  importInflightRemainingTicker.sync();
 }
 
 function startImportInflightRemainingTicker() {
-  stopImportInflightRemainingTicker();
-  syncImportInflightRemainingDisplay();
-  importState.inflightRemainingTimer = setInterval(
-    syncImportInflightRemainingDisplay,
-    400,
-  );
+  importInflightRemainingTicker.start();
 }
 
 function beginImportInflightUi() {
@@ -7301,28 +7592,13 @@ function scheduleImportRefresh(delayMs = 1500) {
  * Load import overlay fragment
  */
 async function loadImportOverlay() {
-  if (document.getElementById('importOverlay')) {
-    return;
-  }
-
-  const mount = document.getElementById('importOverlayMount');
-  if (!mount) {
-    console.error('❌ Import overlay mount not found');
-    return;
-  }
-
-  try {
-    const response = await fetch(versionedStaticUrl('fragments/importOverlay.html'));
-    if (!response.ok)
-      throw new Error(`Failed to load import overlay (${response.status})`);
-
-    const html = await response.text();
-    mount.insertAdjacentHTML('beforeend', html);
-    wireImportOverlay();
-    hideFlowOverlay(document.getElementById('importOverlay'));
-  } catch (error) {
-    console.error('❌ Import overlay load failed:', error);
-  }
+  await loadFlowOverlayFragment({
+    overlayId: 'importOverlay',
+    fragmentPath: 'fragments/importOverlay.html',
+    mountId: 'importOverlayMount',
+    wire: wireImportOverlay,
+    logLabel: 'Import overlay',
+  });
 }
 
 /**
@@ -7934,62 +8210,60 @@ let cleanLibraryState = {
   runStartedAtMs: null,
   estimatedSeconds: 0,
   estimatedDisplay: '',
+  serverRemainingSeconds: null,
+  inflightRemainingLabelState: null,
   onInterruptedChoice: null,
 };
+
+/**
+ * Wire Clean Library overlay event handlers (called once after fragment load).
+ */
+function wireCleanLibraryOverlay() {
+  validateCleanLibraryOverlayWiring('overlay load');
+
+  const closeBtn = requireCleanLibraryElement(
+    'cleanLibraryCloseBtn',
+    'overlay wiring',
+  );
+  const cancelBtn = requireCleanLibraryElement(
+    'cleanLibraryCancelBtn',
+    'overlay wiring',
+  );
+  const proceedBtn = requireCleanLibraryElement(
+    'cleanLibraryProceedBtn',
+    'overlay wiring',
+  );
+  const doneBtn = requireCleanLibraryElement(
+    'cleanLibraryDoneBtn',
+    'overlay wiring',
+  );
+  const startOverBtn = requireCleanLibraryElement(
+    'cleanLibraryStartOverBtn',
+    'overlay wiring',
+  );
+  requireCleanLibraryElement('cleanLibraryDetailsToggle', 'overlay wiring');
+
+  if (closeBtn) closeBtn.addEventListener('click', handleCleanLibraryCancelClick);
+  if (cancelBtn) cancelBtn.addEventListener('click', handleCleanLibraryCancelClick);
+  if (proceedBtn) proceedBtn.addEventListener('click', handleCleanLibraryProceedClick);
+  if (startOverBtn) {
+    startOverBtn.addEventListener('click', handleCleanLibraryStartOverClick);
+  }
+  if (doneBtn) doneBtn.addEventListener('click', closeCleanLibraryOverlay);
+
+  wireFlowDetailsToggle('clean');
+}
 
 /**
  * Load Clean Library overlay fragment
  */
 async function loadCleanLibraryOverlay() {
-  // Check if already loaded
-  if (document.getElementById('cleanLibraryOverlay')) {
-    return;
-  }
-
-  try {
-    const response = await fetch(versionedStaticUrl('fragments/cleanLibraryOverlay.html'));
-    if (!response.ok) throw new Error('Failed to load Clean Library overlay');
-
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-    validateCleanLibraryOverlayWiring('overlay load');
-
-    // Wire up buttons
-    const closeBtn = requireCleanLibraryElement(
-      'cleanLibraryCloseBtn',
-      'overlay wiring',
-    );
-    const cancelBtn = requireCleanLibraryElement(
-      'cleanLibraryCancelBtn',
-      'overlay wiring',
-    );
-    const proceedBtn = requireCleanLibraryElement(
-      'cleanLibraryProceedBtn',
-      'overlay wiring',
-    );
-    const doneBtn = requireCleanLibraryElement(
-      'cleanLibraryDoneBtn',
-      'overlay wiring',
-    );
-    const startOverBtn = requireCleanLibraryElement(
-      'cleanLibraryStartOverBtn',
-      'overlay wiring',
-    );
-    requireCleanLibraryElement('cleanLibraryDetailsToggle', 'overlay wiring');
-
-    if (closeBtn) closeBtn.addEventListener('click', handleCleanLibraryCancelClick);
-    if (cancelBtn) cancelBtn.addEventListener('click', handleCleanLibraryCancelClick);
-    if (proceedBtn) proceedBtn.addEventListener('click', handleCleanLibraryProceedClick);
-    if (startOverBtn) {
-      startOverBtn.addEventListener('click', handleCleanLibraryStartOverClick);
-    }
-    if (doneBtn) doneBtn.addEventListener('click', closeCleanLibraryOverlay);
-
-    wireFlowDetailsToggle('clean');
-    hideFlowOverlay(document.getElementById('cleanLibraryOverlay'));
-  } catch (error) {
-    console.error(`${CLEAN_LIBRARY_LOG_PREFIX} Failed to load overlay:`, error);
-  }
+  await loadFlowOverlayFragment({
+    overlayId: 'cleanLibraryOverlay',
+    fragmentPath: 'fragments/cleanLibraryOverlay.html',
+    wire: wireCleanLibraryOverlay,
+    logLabel: `${CLEAN_LIBRARY_LOG_PREFIX} Clean Library overlay`,
+  });
 }
 
 function setImportPreflightCounts(photoCount, videoCount, totalCount) {
@@ -8336,6 +8610,101 @@ function resetCleanLibraryRunEtaState() {
   };
 }
 
+const INFLIGHT_REMAINING_LABEL_DWELL_MS = 1500;
+const INFLIGHT_REMAINING_BIG_JUMP_SEC = 60;
+const INFLIGHT_REMAINING_BIG_JUMP_RATIO = 0.2;
+const INFLIGHT_REMAINING_HYSTERESIS_MIN_SEC = 15;
+const INFLIGHT_REMAINING_HYSTERESIS_RATIO = 0.1;
+
+function createInflightRemainingLabelState() {
+  return {
+    displayedLabel: null,
+    labelShownAtMs: 0,
+    referenceSec: null,
+  };
+}
+
+function inflightRemainingLabelSortIndex(label) {
+  if (label === 'less than a minute') {
+    return 0;
+  }
+  const minuteMatch = label.match(/^about (\d+) minute/);
+  if (minuteMatch) {
+    return Number(minuteMatch[1]);
+  }
+  const hourMatch = label.match(/^about (\d+) hour/);
+  if (hourMatch) {
+    return 100 + Number(hourMatch[1]);
+  }
+  return 0;
+}
+
+/**
+ * Stable inflight ETA label — hysteresis + dwell; big jumps update immediately.
+ */
+function formatInflightRemainingLabel(computedSec, state = null) {
+  const seconds = Math.max(5, Number(computedSec) || 0);
+  const candidate = formatAboutDurationFromSeconds(seconds);
+  const now = Date.now();
+  let nextState = state || createInflightRemainingLabelState();
+
+  if (!nextState.displayedLabel) {
+    nextState = {
+      displayedLabel: candidate,
+      labelShownAtMs: now,
+      referenceSec: seconds,
+    };
+    return { label: candidate, state: nextState };
+  }
+
+  if (candidate === nextState.displayedLabel) {
+    nextState.referenceSec = seconds;
+    return { label: candidate, state: nextState };
+  }
+
+  const referenceSec = Number(nextState.referenceSec) || seconds;
+  const delta = Math.abs(seconds - referenceSec);
+  const ratio = referenceSec > 0 ? delta / referenceSec : 1;
+  const bigJump =
+    delta >= INFLIGHT_REMAINING_BIG_JUMP_SEC ||
+    ratio >= INFLIGHT_REMAINING_BIG_JUMP_RATIO;
+  const margin = Math.max(
+    INFLIGHT_REMAINING_HYSTERESIS_MIN_SEC,
+    referenceSec * INFLIGHT_REMAINING_HYSTERESIS_RATIO,
+  );
+
+  const candidateIdx = inflightRemainingLabelSortIndex(candidate);
+  const displayedIdx = inflightRemainingLabelSortIndex(nextState.displayedLabel);
+  let hysteresisOk = true;
+  if (candidateIdx < displayedIdx) {
+    hysteresisOk = seconds <= referenceSec - margin;
+  } else if (candidateIdx > displayedIdx) {
+    hysteresisOk = seconds >= referenceSec + margin;
+  }
+
+  const dwellOk =
+    bigJump || now - nextState.labelShownAtMs >= INFLIGHT_REMAINING_LABEL_DWELL_MS;
+
+  if (bigJump || (hysteresisOk && dwellOk)) {
+    nextState = {
+      displayedLabel: candidate,
+      labelShownAtMs: now,
+      referenceSec: seconds,
+    };
+    return { label: candidate, state: nextState };
+  }
+
+  return { label: nextState.displayedLabel, state: nextState };
+}
+
+function formatInflightRemainingLine(computedSec, labelState) {
+  const { label, state } = formatInflightRemainingLabel(computedSec, labelState);
+  return {
+    line: `Total time remaining: ${label}`,
+    state,
+  };
+}
+
 function formatAboutDurationFromSeconds(totalSeconds) {
   const seconds = Math.max(0, Number(totalSeconds) || 0);
   if (seconds < 45) return 'less than a minute';
@@ -8387,6 +8756,63 @@ function estimateCleanRunRemainingSeconds(processed, total, elapsedSec, phase) {
     remaining *= CLEAN_LIBRARY_SCAN_TAIL_RATIO;
   }
   return remaining;
+}
+
+/**
+ * Run-level progress (0–1) from completed steps plus current phase file progress.
+ */
+function computeCleanWorkingRunProgressFraction(state) {
+  if (!state || state.stepNumber === null) {
+    return 0;
+  }
+  const stepsTotal = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS.length;
+  const phase = state.phase;
+  let fraction = (state.stepNumber - 1) / stepsTotal;
+
+  if (
+    phase &&
+    CLEAN_LIBRARY_STEP_PROGRESS_PHASES.has(phase) &&
+    state.progress?.[phase]?.total > 0
+  ) {
+    const { processed, total } = state.progress[phase];
+    fraction += (processed / total) / stepsTotal;
+  }
+
+  return Math.min(1, Math.max(0, fraction));
+}
+
+/**
+ * Working-overlay subtitle ETA — progress-aware across all six steps (not preflight − elapsed).
+ */
+function estimateCleanWorkingRemainingSeconds() {
+  const serverSec = Number(cleanLibraryState?.serverRemainingSeconds);
+  if (Number.isFinite(serverSec) && serverSec > 0) {
+    return serverSec;
+  }
+
+  const state = cleanLibraryWorkingStepState;
+  const runStartedAtMs = cleanLibraryState?.runStartedAtMs;
+  if (!state || !runStartedAtMs) {
+    return null;
+  }
+
+  const runFraction = computeCleanWorkingRunProgressFraction(state);
+  const elapsed = (Date.now() - runStartedAtMs) / 1000;
+  const preflightSec = Number(cleanLibraryState.estimatedSeconds) || 0;
+
+  if (runFraction >= 1) {
+    return 15;
+  }
+
+  if (runFraction > 0.05 && elapsed > 0) {
+    return Math.max(5, (elapsed * (1 - runFraction)) / runFraction);
+  }
+
+  if (preflightSec > 0) {
+    return Math.max(5, preflightSec * (1 - runFraction));
+  }
+
+  return null;
 }
 
 function storeCleanLibraryPreflightEstimate(scanResult) {
@@ -8567,6 +8993,12 @@ function handleCleanLibraryWorkingProgressEvent(event = {}) {
   if (event.type !== 'progress' || !event.phase) {
     return;
   }
+  if (event.estimated_remaining_seconds != null) {
+    const serverSec = Number(event.estimated_remaining_seconds);
+    if (Number.isFinite(serverSec) && serverSec >= 0) {
+      cleanLibraryState.serverRemainingSeconds = serverSec;
+    }
+  }
   updateCleanLibraryWorkingProgress(event.phase, event.processed, event.total);
   syncCleanLibraryInflightFromProgress(event);
   maybeAppendFlowProgressMilestone(
@@ -8596,6 +9028,8 @@ function handleCleanLibraryWorkingProgressEvent(event = {}) {
 function beginCleanLibraryWorkingUi() {
   cleanLibraryState.workingPhaseActive = true;
   cleanLibraryState.runStartedAtMs = Date.now();
+  cleanLibraryState.serverRemainingSeconds = null;
+  cleanLibraryState.inflightRemainingLabelState = createInflightRemainingLabelState();
   resetCleanLibraryWorkingStepState();
   resetCleanLibraryOverlayTitle();
   showCleanLibraryWorkingBody();
@@ -8617,15 +9051,17 @@ function endCleanLibraryWorkingUi() {
 }
 
 function syncCleanLibraryWorkingRemainingDisplay() {
-  const totalSec = Number(cleanLibraryState.estimatedSeconds) || 0;
-  if (!cleanLibraryState.runStartedAtMs || totalSec <= 0) {
+  const remainingSec = estimateCleanWorkingRemainingSeconds();
+  if (remainingSec === null) {
     setCleanLibrarySecondaryStatus('Total time remaining: estimating…');
     return;
   }
-  const elapsed = (Date.now() - cleanLibraryState.runStartedAtMs) / 1000;
-  setCleanLibrarySecondaryStatus(
-    `Total time remaining: ${formatAboutDurationFromSeconds(Math.max(5, totalSec - elapsed))}`,
+  const { label, state } = formatInflightRemainingLabel(
+    Math.max(5, remainingSec),
+    cleanLibraryState.inflightRemainingLabelState,
   );
+  cleanLibraryState.inflightRemainingLabelState = state;
+  setCleanLibrarySecondaryStatus(`Total time remaining: ${label}`);
 }
 
 function trackCleanLibraryRunManifest(event = {}) {
@@ -8739,15 +9175,13 @@ async function loadCleanLibraryManifestTail(manifestPath, lines = 40) {
   }
   const url =
     `/api/library/make-perfect/manifest-tail?path=${encodeURIComponent(manifestPath)}&lines=${lines}`;
-  const response = await fetch(url);
+  const { response, data } = await apiFetchJson(url);
   if (response.status === 404) {
     return;
   }
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
     throw new Error(data.error || `Manifest tail failed (${response.status})`);
   }
-  const data = await response.json();
   for (const line of data.lines || []) {
     const formatted = formatCleanLibraryManifestLine(line);
     if (formatted) {
@@ -8946,12 +9380,10 @@ async function runCleanLibraryPreflightScan() {
   showPreflightScoreboardZeros();
 
   const orientStartedAt = Date.now();
-  const response = await fetch('/api/library/make-perfect/scan');
+  const { response, data: scanResult } = await apiFetchJson('/api/library/make-perfect/scan');
   if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error || `Scan failed (${response.status})`);
+    throw new Error(scanResult.error || `Scan failed (${response.status})`);
   }
-  const scanResult = await response.json();
 
   await waitPreflightScoreboardOrientDelay(orientStartedAt);
 
@@ -9781,17 +10213,8 @@ function formatCompactLibraryLocationPath(parentPath, rawName) {
 async function suggestUniqueLibraryName(parentPath, baseName = 'Photo Library') {
   const sanitizedBase = sanitizeLibraryFolderName(baseName) || 'Photo Library';
   try {
-    const response = await fetch('/api/filesystem/list-directory', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: parentPath }),
-    });
-    if (!response.ok) {
-      return sanitizedBase;
-    }
-
-    const data = await response.json();
-    const existingFolders = data.folders.map((f) =>
+    const { folders } = await PickerFilesystem.listDirectory(parentPath);
+    const existingFolders = folders.map((f) =>
       typeof f === 'string' ? f : f.name,
     );
 
@@ -10261,24 +10684,16 @@ async function showNameLibraryDialog(options = {}) {
       // Check if folder exists at parent location (if parentPath provided)
       if (options.parentPath) {
         try {
-          const response = await fetch('/api/filesystem/list-directory', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: options.parentPath }),
-          });
+          const { folders } = await PickerFilesystem.listDirectory(options.parentPath);
+          const existingFolders = folders.map((f) =>
+            typeof f === 'string' ? f : f.name,
+          );
 
-          if (response.ok) {
-            const data = await response.json();
-            const existingFolders = data.folders.map((f) =>
-              typeof f === 'string' ? f : f.name,
-            );
-
-            if (existingFolders.includes(sanitized)) {
-              return {
-                sanitized: null,
-                errorMessage: `A folder named "${sanitized}" already exists here`,
-              };
-            }
+          if (existingFolders.includes(sanitized)) {
+            return {
+              sanitized: null,
+              errorMessage: `A folder named "${sanitized}" already exists here`,
+            };
           }
         } catch (error) {
           // If validation fails, allow it (don't block user)
@@ -10501,13 +10916,11 @@ async function fetchCurrentLibraryInfo() {
  * Load terraform choice overlay
  */
 async function loadTerraformChoiceOverlay() {
-  try {
-    const response = await fetch('/fragments/terraformChoiceOverlay.html');
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-  } catch (error) {
-    console.error('❌ Failed to load terraform choice overlay:', error);
-  }
+  return loadFlowOverlayFragment({
+    overlayId: 'terraformChoiceOverlay',
+    fragmentPath: 'fragments/terraformChoiceOverlay.html',
+    logLabel: 'Convert choice overlay',
+  });
 }
 
 /**
@@ -10518,10 +10931,10 @@ async function loadTerraformChoiceOverlay() {
 async function showTerraformChoiceDialog(options = {}) {
   return new Promise(async (resolve) => {
     // Load overlay if needed
-    let overlay = document.getElementById('terraformChoiceOverlay');
+    const overlay = await loadTerraformChoiceOverlay();
     if (!overlay) {
-      await loadTerraformChoiceOverlay();
-      overlay = document.getElementById('terraformChoiceOverlay');
+      resolve(null);
+      return;
     }
 
     // Set values
@@ -10564,22 +10977,15 @@ async function showTerraformChoiceDialog(options = {}) {
  * Load terraform preview overlay
  */
 async function loadTerraformPreviewOverlay() {
-  try {
-    const response = await fetch(versionedStaticUrl('/fragments/terraformPreviewOverlay.html'));
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-  } catch (error) {
-    console.error('❌ Failed to load terraform preview overlay:', error);
-  }
+  return loadFlowOverlayFragment({
+    overlayId: 'terraformPreviewOverlay',
+    fragmentPath: 'fragments/terraformPreviewOverlay.html',
+    logLabel: 'Convert preview overlay',
+  });
 }
 
 async function ensureTerraformPreviewOverlay() {
-  let overlay = document.getElementById('terraformPreviewOverlay');
-  if (!overlay) {
-    await loadTerraformPreviewOverlay();
-    overlay = document.getElementById('terraformPreviewOverlay');
-  }
-  return overlay;
+  return loadTerraformPreviewOverlay();
 }
 
 async function preloadConvertFlowOverlays() {
@@ -10615,47 +11021,24 @@ async function prepareTerraformPreviewScanningShell(path) {
 }
 
 function stopTerraformProgressRemainingTicker() {
-  if (terraformProgressState.remainingTimer) {
-    clearInterval(terraformProgressState.remainingTimer);
-    terraformProgressState.remainingTimer = null;
-  }
+  terraformProgressRemainingTicker.stop();
 }
 
 function syncTerraformProgressRemainingDisplay() {
-  const secondaryEl = document.getElementById('terraformProgressSecondaryStatus');
-  if (!secondaryEl) {
-    return;
-  }
-  const totalSec = Number(terraformProgressState.estimatedSeconds);
-  if (
-    !terraformProgressState.runStartedAtMs ||
-    !Number.isFinite(totalSec) ||
-    totalSec <= 0
-  ) {
-    secondaryEl.style.display = 'block';
-    secondaryEl.textContent = `Estimated time: ${terraformProgressState.estimatedDisplay || 'calculating...'}`;
-    return;
-  }
-  const elapsed = (Date.now() - terraformProgressState.runStartedAtMs) / 1000;
-  secondaryEl.style.display = 'block';
-  secondaryEl.textContent = `Total time remaining: ${formatAboutDurationFromSeconds(
-    Math.max(5, totalSec - elapsed),
-  )}`;
+  terraformProgressRemainingTicker.sync();
 }
 
 function startTerraformProgressRemainingTicker() {
-  stopTerraformProgressRemainingTicker();
-  syncTerraformProgressRemainingDisplay();
-  terraformProgressState.remainingTimer = setInterval(
-    syncTerraformProgressRemainingDisplay,
-    400,
-  );
+  terraformProgressRemainingTicker.start();
 }
 
 function endTerraformProgressUi() {
   terraformProgressState.active = false;
   stopTerraformProgressRemainingTicker();
   terraformProgressState.abortController = null;
+  terraformProgressState.totalFiles = 0;
+  terraformProgressState.inflightDoneCount = 0;
+  terraformProgressState.remainingUiLocked = false;
 }
 
 function beginTerraformProgressUi(preflight = {}) {
@@ -10663,6 +11046,9 @@ function beginTerraformProgressUi(preflight = {}) {
   terraformProgressState.runStartedAtMs = Date.now();
   terraformProgressState.estimatedSeconds = Number(preflight.estimated_seconds) || null;
   terraformProgressState.estimatedDisplay = preflight.estimated_display || null;
+  terraformProgressState.totalFiles = Number(preflight.media_count) || 0;
+  terraformProgressState.inflightDoneCount = 0;
+  terraformProgressState.remainingUiLocked = false;
 
   const explainerEl = document.getElementById('terraformProgressExplainer');
   if (explainerEl) {
@@ -10676,7 +11062,7 @@ function beginTerraformProgressUi(preflight = {}) {
 
   const statusEl = document.getElementById('terraformProgressStatus');
   if (statusEl) {
-    setImportSpinnerStatus(statusEl, 'Step 1 of 3: Converting files');
+    setImportSpinnerStatus(statusEl, 'Step 1 of 4: Converting files');
   }
 
   startTerraformProgressRemainingTicker();
@@ -10774,13 +11160,11 @@ async function showTerraformPreviewDialog(options = {}) {
  * Load terraform warning overlay
  */
 async function loadTerraformWarningOverlay() {
-  try {
-    const response = await fetch(versionedStaticUrl('/fragments/terraformWarningOverlay.html'));
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-  } catch (error) {
-    console.error('❌ Failed to load terraform warning overlay:', error);
-  }
+  return loadFlowOverlayFragment({
+    overlayId: 'terraformWarningOverlay',
+    fragmentPath: 'fragments/terraformWarningOverlay.html',
+    logLabel: 'Convert warning overlay',
+  });
 }
 
 /**
@@ -10791,11 +11175,7 @@ async function loadTerraformWarningOverlay() {
 async function showTerraformWarningDialog(options = {}, handoffFromEl = null) {
   return new Promise(async (resolve) => {
     // Load overlay if needed
-    let overlay = document.getElementById('terraformWarningOverlay');
-    if (!overlay) {
-      await loadTerraformWarningOverlay();
-      overlay = document.getElementById('terraformWarningOverlay');
-    }
+    const overlay = await loadTerraformWarningOverlay();
     if (!overlay) {
       resolve(false);
       return;
@@ -10844,20 +11224,22 @@ async function showTerraformWarningDialog(options = {}, handoffFromEl = null) {
 }
 
 /**
+ * Wire Convert progress overlay (details toggle only; cancel wired at inflight start).
+ */
+function wireTerraformProgressOverlay() {
+  wireFlowDetailsToggle('convert');
+}
+
+/**
  * Load terraform progress overlay
  */
 async function loadTerraformProgressOverlay() {
-  if (document.getElementById('terraformProgressOverlay')) {
-    return;
-  }
-  try {
-    const response = await fetch(versionedStaticUrl('/fragments/terraformProgressOverlay.html'));
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-    wireFlowDetailsToggle('convert');
-  } catch (error) {
-    console.error('❌ Failed to load terraform progress overlay:', error);
-  }
+  await loadFlowOverlayFragment({
+    overlayId: 'terraformProgressOverlay',
+    fragmentPath: 'fragments/terraformProgressOverlay.html',
+    wire: wireTerraformProgressOverlay,
+    logLabel: 'Convert progress overlay',
+  });
 }
 
 /**
@@ -10882,18 +11264,17 @@ function populateTerraformCompleteActivityFeed({
   });
 }
 
+function wireTerraformCompleteOverlay() {
+  wireFlowDetailsToggle('convertComplete');
+}
+
 async function loadTerraformCompleteOverlay() {
-  if (document.getElementById('terraformCompleteOverlay')) {
-    return;
-  }
-  try {
-    const response = await fetch(versionedStaticUrl('/fragments/terraformCompleteOverlay.html'));
-    const html = await response.text();
-    document.body.insertAdjacentHTML('beforeend', html);
-    wireFlowDetailsToggle('convertComplete');
-  } catch (error) {
-    console.error('❌ Failed to load terraform complete overlay:', error);
-  }
+  await loadFlowOverlayFragment({
+    overlayId: 'terraformCompleteOverlay',
+    fragmentPath: 'fragments/terraformCompleteOverlay.html',
+    wire: wireTerraformCompleteOverlay,
+    logLabel: 'Convert complete overlay',
+  });
 }
 
 /**
@@ -10955,10 +11336,13 @@ async function showTerraformCompleteDialog(results = {}, handoffFromEl = null) {
   });
 }
 
+const TERRAFORM_PHASE_STEP_COUNT = 4;
+
 const TERRAFORM_PHASE_STEPS = {
   convert: { step: 1, label: 'Converting files' },
   folders: { step: 2, label: 'Cleaning folders' },
-  audit: { step: 3, label: 'Final verification' },
+  compliance: { step: 3, label: 'Fixing metadata' },
+  audit: { step: 4, label: 'Final verification' },
 };
 
 function formatTerraformStepStatus(phase, payload = {}) {
@@ -10973,9 +11357,9 @@ function formatTerraformStepStatus(phase, payload = {}) {
     suffix = ` (${Number(payload.current).toLocaleString()} / ${Number(payload.total).toLocaleString()})`;
   }
   if (phase === 'audit' && payload.status === 'failed') {
-    return `Step ${step.step} of 3: ${step.label} failed`;
+    return `Step ${step.step} of ${TERRAFORM_PHASE_STEP_COUNT}: ${step.label} failed`;
   }
-  return `Step ${step.step} of 3: ${step.label}${suffix}`;
+  return `Step ${step.step} of ${TERRAFORM_PHASE_STEP_COUNT}: ${step.label}${suffix}`;
 }
 
 const CONVERT_OS_PRIMARY_MESSAGE =
@@ -11152,16 +11536,29 @@ async function executeTerraformFlow(options = {}) {
     const terraformAbort = new AbortController();
     terraformProgressState.abortController = terraformAbort;
 
-    // Start SSE
+    // Start SSE (raw fetch — body must stay unread for consumeSseStream)
     const response = await fetch('/api/library/terraform', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ library_path: path }),
       signal: terraformAbort.signal,
     });
-    if (!response.ok || !response.body) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || 'Failed to start conversion');
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      let errorMessage = `Failed to start conversion (${response.status})`;
+      if (contentType.includes('application/json')) {
+        const payload = await response.json().catch(() => ({}));
+        errorMessage = payload.error || errorMessage;
+      } else {
+        const text = await response.text().catch(() => '');
+        if (text.trim()) {
+          errorMessage = text.trim();
+        }
+      }
+      throw new Error(errorMessage);
+    }
+    if (!response.body) {
+      throw new Error('Failed to start conversion');
     }
 
     let processed = 0;
@@ -11177,6 +11574,8 @@ async function executeTerraformFlow(options = {}) {
         const data = JSON.parse(dataText);
 
         if (eventType === 'error') {
+          const issues = Array.isArray(data.issues) ? data.issues : [];
+          appendConvertAuditIssuesToActivityFeed(issues);
           throw new Error(data.error || 'Conversion failed');
         }
 
@@ -11199,18 +11598,42 @@ async function executeTerraformFlow(options = {}) {
               formatTerraformStepStatus(data.phase, data),
             );
           }
+          if (
+            data.phase === 'convert' &&
+            data.status === 'complete' &&
+            terraformProgressState.totalFiles > 0
+          ) {
+            terraformProgressState.inflightDoneCount = terraformProgressState.totalFiles;
+            syncTerraformProgressRemainingDisplay();
+          }
           const secondaryStatus = document.getElementById(
             'terraformProgressSecondaryStatus',
           );
           if (secondaryStatus && data.phase === 'audit') {
-            secondaryStatus.textContent =
-              data.status === 'complete'
-                ? 'Final verification complete'
-                : 'Verifying converted library before opening it…';
+            terraformProgressState.remainingUiLocked = true;
+            stopTerraformProgressRemainingTicker();
+            if (data.status === 'failed') {
+              secondaryStatus.textContent = `Final verification failed (${Number(data.issue_count) || 0} issue(s))`;
+            } else {
+              secondaryStatus.textContent =
+                data.status === 'complete'
+                  ? 'Final verification complete'
+                  : 'Verifying converted library before opening it…';
+            }
           } else {
             syncTerraformProgressRemainingDisplay();
           }
           return null;
+        }
+
+        if (eventType === 'start') {
+          syncTerraformInflightProgressCounts(data);
+          syncTerraformProgressRemainingDisplay();
+          return null;
+        }
+
+        if (eventType === 'progress') {
+          syncTerraformInflightProgressCounts(data);
         }
 
         // Update progress UI
@@ -11229,6 +11652,20 @@ async function executeTerraformFlow(options = {}) {
           document.getElementById('terraformProgressSkipped').textContent =
             errors.toLocaleString();
         }
+        if (
+          data.processed !== undefined ||
+          data.duplicates !== undefined ||
+          data.errors !== undefined ||
+          data.current !== undefined
+        ) {
+          syncTerraformInflightProgressCounts({
+            processed,
+            duplicates,
+            errors,
+            total: data.total,
+            current: data.current,
+          });
+        }
         if (data.log_path) {
           log_path = data.log_path;
         }
@@ -11238,7 +11675,7 @@ async function executeTerraformFlow(options = {}) {
 
         if (eventType === 'complete') {
           completed = true;
-        } else if (data.total) {
+        } else if (data.total || data.processed !== undefined) {
           const statusEl = document.getElementById('terraformProgressStatus');
           setImportSpinnerStatus(
             statusEl,
@@ -11280,13 +11717,14 @@ async function executeTerraformFlow(options = {}) {
   } catch (error) {
     console.error('❌ Terraform failed:', error);
     if (error?.name !== 'AbortError') {
-      showToast(`Terraform failed: ${error.message}`);
+      showToast(`Convert failed: ${error.message}`);
     }
 
     endTerraformProgressUi();
     const progressOverlay = document.getElementById('terraformProgressOverlay');
     if (progressOverlay) {
-      progressOverlay.style.display = 'none';
+      showFlowOverlay(progressOverlay);
+      showTerraformCompleteDetailsSection(true);
     }
 
     return false;
@@ -12498,14 +12936,8 @@ async function libraryFolderNameExistsAtParent(parentPath, rawName) {
   const sanitized = sanitizeFolderName(rawName);
   if (!sanitized) return false;
   try {
-    const response = await fetch('/api/filesystem/list-directory', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: parentPath }),
-    });
-    if (!response.ok) return false;
-    const data = await response.json();
-    const existingFolders = data.folders.map((f) =>
+    const { folders } = await PickerFilesystem.listDirectory(parentPath);
+    const existingFolders = folders.map((f) =>
       typeof f === 'string' ? f : f.name,
     );
     return existingFolders.includes(sanitized);

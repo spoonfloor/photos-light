@@ -567,6 +567,79 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         self.assertEqual(result["status"], "CLEAN")
         self.assertEqual(result["summary"]["issue_count"], 0)
 
+    def test_convert_audit_green_when_compliance_strips_video_rating_zero(self):
+        """Convert video path leaves rating=0 on disk; compliance must fix before audit."""
+        payload = b"convert-video-rating-zero"
+        library_path, _source_path = self._make_convert_library(
+            "convert-rating-zero-mov",
+            "clip.mov",
+            payload,
+            1_700_000_000,
+        )
+
+        stripped_paths = set()
+
+        def extract_rating(path):
+            return None if path in stripped_paths else 0
+
+        def strip_rating(path):
+            stripped_paths.add(path)
+            return True
+
+        def fake_write_video_metadata(file_path, target_date):
+            with open(file_path, "ab") as handle:
+                handle.write(b"|video-date|" + target_date.encode("utf-8"))
+
+        with patch.object(photo_app, "extract_exif_rating", side_effect=extract_rating), patch.object(
+            photo_app,
+            "strip_exif_rating",
+            side_effect=strip_rating,
+        ), patch(
+            "library_metadata_compliance.extract_exif_rating",
+            side_effect=extract_rating,
+        ), patch(
+            "library_metadata_compliance.strip_exif_rating",
+            side_effect=strip_rating,
+        ), patch(
+            "clean_library_fast_audit.extract_exif_rating",
+            side_effect=extract_rating,
+        ), patch.object(
+            photo_app,
+            "extract_exif_date",
+            return_value="2026:01:27 12:00:00",
+        ), patch.object(
+            photo_app,
+            "bake_orientation",
+            return_value=(False, "No orientation flag", None),
+        ), patch.object(
+            photo_app,
+            "get_image_dimensions",
+            return_value=(640, 480),
+        ), patch.object(
+            photo_app,
+            "write_video_metadata",
+            side_effect=fake_write_video_metadata,
+        ), patch(
+            "clean_library_fast_audit.verify_media_file",
+            return_value=(True, "mock"),
+        ), patch(
+            "library_metadata_compliance.verify_media_file",
+            return_value=(True, "mock"),
+        ), patch("app.subprocess.run", return_value=self.fake_subprocess_result):
+            response = self.client.post(
+                "/api/library/terraform",
+                json={"library_path": library_path},
+                buffered=True,
+            )
+
+        response_text = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"phase": "compliance"', response_text)
+        self.assertIn("event: complete", response_text)
+        self.assertNotIn("final verification failed", response_text.lower())
+        self.assertTrue(stripped_paths)
+        self.assertEqual(len(self._read_rows(canonical_db_path(library_path))), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

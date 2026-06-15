@@ -24,6 +24,7 @@ HIDDEN_IMPORTS = [
     "normalization_convert",
     "normalization_ingest",
     "normalization_repair",
+    "library_metadata_compliance",
     "normalization_core",
     "normalization_contract",
     "photo_canonicalization",
@@ -34,6 +35,8 @@ HIDDEN_IMPORTS = [
     "picker_sort",
     "image_pixels",
     "rotation_utils",
+    "media_dates",
+    "quicktime_date_atoms",
     "migrate_db",
     "init_db",
 ]

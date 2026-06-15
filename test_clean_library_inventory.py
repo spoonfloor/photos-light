@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 
 from clean_library_inventory import (
     estimate_clean_duration_seconds,
+    estimate_convert_duration_seconds,
     estimate_remaining_duration_seconds,
     format_about_duration,
     inventory_media_library,
@@ -44,6 +45,43 @@ class CleanLibraryInventoryTest(unittest.TestCase):
             scan_completed_count=50,
         )
         self.assertAlmostEqual(half, 500.0, delta=1.0)
+
+    def test_estimate_remaining_scales_with_audit_progress(self):
+        inventory = {
+            "media_count": 174,
+            "estimated_seconds": 600.0,
+        }
+        early = estimate_remaining_duration_seconds(
+            inventory,
+            phase="audit",
+            audit_processed=40,
+        )
+        late = estimate_remaining_duration_seconds(
+            inventory,
+            phase="audit",
+            audit_processed=170,
+        )
+        self.assertGreater(early, late)
+        self.assertLess(late, 60.0)
+
+    def test_convert_estimate_is_faster_than_clean_scan(self):
+        photo_count = 400
+        video_count = 10
+        photo_bytes = photo_count * 2_000_000
+        video_bytes = video_count * 5_000_000
+        clean_sec = estimate_clean_duration_seconds(
+            photo_count=photo_count,
+            video_count=video_count,
+            photo_bytes=photo_bytes,
+            video_bytes=video_bytes,
+        )
+        convert_sec = estimate_convert_duration_seconds(
+            photo_count=photo_count,
+            video_count=video_count,
+            photo_bytes=photo_bytes,
+            video_bytes=video_bytes,
+        )
+        self.assertGreater(clean_sec, convert_sec * 2)
 
 
 if __name__ == "__main__":

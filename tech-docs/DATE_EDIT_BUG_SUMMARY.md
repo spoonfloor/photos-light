@@ -1,7 +1,7 @@
 # Date Edit Bug Investigation Summary
 
 **Date:** January 23, 2026  
-**Status:** Root cause identified, fix ready to implement  
+**Status:** ✅ Resolved — shared rulebook in `media_dates.py` (2026-06-14). See `bugs-to-be-fixed.md` § Completed work · Media Date Truth.  
 **Affected Feature:** Date editing with file operations (EXIF write + rename + move)
 
 ---

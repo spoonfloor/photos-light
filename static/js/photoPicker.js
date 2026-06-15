@@ -19,36 +19,10 @@ const PhotoPicker = (() => {
   let lastClickedIndex = null; // For shift-select range selection
   let activeItemKey = null; // Keyboard-highlighted row in the visible list
 
-  // ===========================================================================
-  // API Calls
-  // ===========================================================================
+  const { getLocations } = PickerFilesystem;
 
-  async function getLocations() {
-    const response = await fetch('/api/filesystem/get-locations');
-    if (!response.ok) {
-      throw new Error('Failed to get locations');
-    }
-    const data = await response.json();
-    return data.locations;
-  }
-
-  async function listDirectory(path) {
-    const response = await fetch('/api/filesystem/list-directory', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, include_files: true }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error || 'Failed to list directory');
-    }
-
-    const data = await response.json();
-    return {
-      folders: data.folders || [],
-      files: data.files || [],
-    };
+  function listDirectory(path) {
+    return PickerFilesystem.listDirectory(path, { includeFiles: true });
   }
 
   // ===========================================================================

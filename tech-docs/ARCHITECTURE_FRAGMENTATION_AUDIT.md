@@ -226,6 +226,7 @@ Fixes for ghost-folder Clean → broken grid and hard-refresh duplicate top row 
 
 | Issue | Resolution |
 |-------|------------|
+| Media date read/write drift across ingest, edit, clean, rebuild | `media_dates.py` — `read_media_date`, `write_and_verify_media_date`, `metadata_write_policy`; wired through all mutators and `library_sync`; contract tests in `test_media_date_contract.py` (2026-06-14) |
 | Import after date edit served stale `month_index` until server restart | Server `invalidate_grid_read_caches()` on import complete/cancel; client `syncGridAfterHistogramChange` |
 | Clean / hard refresh ghost rows (provisional + refined DOM) | `clearProvisionalArtifacts`, anchor/month selector split, `remount: wasProvisional`, Clean awaits rehydrate before finished UI |
 | `loadAndRenderPhotosCommitted` false success on provisional grid | `hasCommittedPhotoRender()` gate |

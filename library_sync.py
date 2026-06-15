@@ -15,6 +15,7 @@ from library_cleanliness import (
     is_supported_media_extension,
     media_kind_for_extension,
 )
+from media_dates import read_media_date
 
 
 def count_media_files(library_path):
@@ -95,7 +96,7 @@ def estimate_duration(file_count):
         return (minutes, f"{int(hours)}-{int(hours * 1.3)} hours")
 
 
-def synchronize_library_generator(library_path, db_connection, extract_exif_date_func, 
+def synchronize_library_generator(library_path, db_connection,
                                    get_image_dimensions_func, mode='incremental'):
     """
     Core library synchronization with streaming progress.
@@ -103,7 +104,6 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
     Args:
         library_path: Path to photo library folder
         db_connection: Active database connection
-        extract_exif_date_func: Function to extract EXIF dates
         get_image_dimensions_func: Function to get image dimensions
         mode: 'incremental' (diff and sync) or 'full' (rebuild from scratch)
     
@@ -208,8 +208,8 @@ def synchronize_library_generator(library_path, db_connection, extract_exif_date
                     print(f"  ⚠️  Failed to hash {mole_path}")
                     continue
                 
-                # Extract EXIF date
-                date_taken = extract_exif_date_func(full_path)
+                # Resolve date via shared read rulebook (no ingest-only mtime fallback)
+                date_taken = read_media_date(full_path, allow_mtime_fallback=False)
                 
                 # Get dimensions
                 dimensions = get_image_dimensions_func(full_path)

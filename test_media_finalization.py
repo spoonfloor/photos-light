@@ -94,6 +94,38 @@ class MediaFinalizationTest(unittest.TestCase):
         self.assertEqual(row["width"], 480)
         self.assertEqual(row["height"], 640)
 
+    def test_finalize_mutated_media_removes_quicktime_patch_artifacts_on_move(self):
+        photo_id, old_full_path = self._insert_photo(
+            current_path="2026/2026-04-12/img_20260412_oldhash.mov",
+            content_hash="oldhash1",
+            original_filename="clip.mov",
+        )
+        with open(f"{old_full_path}.bak", "wb") as handle:
+            handle.write(b"rollback")
+
+        result = finalize_mutated_media(
+            conn=self.conn,
+            photo_id=photo_id,
+            library_path=self.library_path,
+            current_rel_path="2026/2026-04-12/img_20260412_oldhash.mov",
+            date_taken="1900:04:12 09:30:15",
+            old_hash="oldhash1",
+            build_canonical_path=build_canonical_photo_path,
+            compute_hash=lambda _: "newhash8",
+            get_dimensions=lambda _: (480, 640),
+            delete_thumbnail_for_hash=self.deleted_thumbnails.append,
+        )
+        self.conn.commit()
+
+        expected_rel_path = "1900/1900-04-12/img_19000412_newhash8.mov"
+        self.assertEqual(result.status, "finalized")
+        self.assertEqual(result.current_path, expected_rel_path)
+        self.assertFalse(os.path.exists(f"{old_full_path}.bak"))
+        self.assertFalse(os.path.exists(old_full_path))
+        old_dir = os.path.dirname(old_full_path)
+        if os.path.isdir(old_dir):
+            self.assertEqual(os.listdir(old_dir), [])
+
     def test_finalize_mutated_media_trashes_duplicate_and_deletes_row(self):
         duplicate_id, _ = self._insert_photo(
             current_path="2026/2026-04-12/img_20260412_dupehash.jpg",

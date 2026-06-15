@@ -32,6 +32,11 @@ PHOTO_SEC_PER_FILE = 1.7
 VIDEO_SEC_PER_MB = 0.024
 POST_SCAN_OVERHEAD_RATIO = 0.05
 
+# Convert/terraform canonicalization — observed ~0.45–0.5 s/photo vs clean inventory walk.
+CONVERT_PHOTO_SEC_PER_FILE = 0.5
+CONVERT_VIDEO_SEC_PER_MB = 0.01
+CONVERT_POST_OVERHEAD_RATIO = 0.08
+
 
 def format_about_duration(total_seconds: float) -> Tuple[float, str]:
     """Return (seconds, display) as a single approximate duration string."""
@@ -127,12 +132,29 @@ def estimate_clean_duration_seconds(
     return subtotal * (1.0 + POST_SCAN_OVERHEAD_RATIO)
 
 
+def estimate_convert_duration_seconds(
+    *,
+    photo_count: int,
+    video_count: int,
+    photo_bytes: int = 0,
+    video_bytes: int = 0,
+) -> float:
+    """Type/size-weighted Convert preflight estimate (canonicalization, not clean scan)."""
+    _ = photo_bytes  # count + video bytes capture cost; photo bytes kept for callers.
+    _ = video_count
+    photo_sec = max(0, photo_count) * CONVERT_PHOTO_SEC_PER_FILE
+    video_sec = (max(0, video_bytes) / (1024 * 1024)) * CONVERT_VIDEO_SEC_PER_MB
+    subtotal = photo_sec + video_sec
+    return subtotal * (1.0 + CONVERT_POST_OVERHEAD_RATIO)
+
+
 def estimate_remaining_duration_seconds(
     inventory: Dict[str, Any],
     *,
     phase: str,
     scan_completed_count: int = 0,
     canonicalize_index: int = 0,
+    audit_processed: int = 0,
 ) -> float:
     """Estimate remaining seconds for a resumed run."""
     total = max(int(inventory.get("media_count") or 0), 1)
@@ -155,5 +177,11 @@ def estimate_remaining_duration_seconds(
 
     if phase == "rebuild_db":
         return full_sec * 0.01
+
+    if phase == "audit":
+        audit_total = max(int(inventory.get("media_count") or 0), 1)
+        audit_done = max(0, min(audit_processed, audit_total))
+        tail = full_sec * 0.05
+        return tail * max(0, audit_total - audit_done) / audit_total
 
     return full_sec * 0.05

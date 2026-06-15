@@ -27,8 +27,12 @@ from PIL import Image, ImageOps
 
 from db_schema import create_database_schema
 from file_operations import extract_exif_date, extract_exif_rating, strip_exif_rating
+from media_dates import read_media_date
 from hash_cache import HashCache, compute_hash_legacy
-from rotation_utils import bake_orientation as shared_bake_orientation
+from rotation_utils import (
+    bake_orientation as shared_bake_orientation,
+    LOSSLESS_ROTATION_EXTENSIONS,
+)
 from library_cleanliness import (
     ALL_MEDIA_EXTENSIONS,
     CANONICAL_DB_DATE_FORMAT,
@@ -77,6 +81,7 @@ from clean_library_fast_audit import (
     run_fast_library_audit,
 )
 from clean_library_inventory import (
+    estimate_clean_duration_seconds,
     estimate_remaining_duration_seconds,
     format_about_duration,
     inventory_media_library,
@@ -88,10 +93,15 @@ from normalization_repair import (
     RepairPhaseDependencies,
     RepairPhaseState,
     RepairScanDependencies,
+    file_needs_metadata_compliance,
     iter_repair_events,
     normalize_repair_file,
     normalize_repair_scan_identity,
     plan_repair_duplicate_decisions,
+)
+from library_metadata_compliance import (
+    MetadataComplianceCancelled,
+    ensure_library_metadata_compliant,
 )
 from photo_canonicalization import (
     UNKNOWN_PHOTO_DATE_TAKEN,
@@ -103,7 +113,6 @@ from photo_canonicalization import (
 PHOTO_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS
 VIDEO_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS
 SUPPORTED_MEDIA_EXTENSIONS = ALL_MEDIA_EXTENSIONS
-LOSSLESS_ROTATION_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif"}
 
 CLEAN_LIBRARY_SIGNAL_KEYS = (
     "misfiled_media",
@@ -473,10 +482,8 @@ def _compute_audit_media_identity(
     if not current_hash:
         raise RuntimeError(f"Missing audit hash for {full_path}")
 
-    date_taken, date_obj = parse_metadata_datetime(
-        extract_exif_date(full_path),
-        stat_result.st_mtime,
-    )
+    date_taken = read_media_date(full_path, allow_mtime_fallback=False)
+    date_obj = datetime.strptime(date_taken, CANONICAL_DB_DATE_FORMAT)
     return AuditMediaIdentity(
         canonical_hash=current_hash,
         duplicate_key=current_hash,
@@ -859,6 +866,59 @@ class LibraryCleaner:
         self._files_since_checkpoint = 0
         self._checkpoint_records_snapshot: Optional[List[MediaRecord]] = None
         self._cancel_check: Optional[Callable[[], bool]] = None
+        self._run_inventory: Optional[Dict[str, Any]] = None
+
+    def _seed_run_inventory_estimate(self, media_count: int, photo_count: int = 0, video_count: int = 0) -> None:
+        count = max(int(media_count) or 0, 1)
+        photos = max(int(photo_count) or 0, 0)
+        videos = max(int(video_count) or 0, 0)
+        if photos + videos == 0:
+            photos = count
+        estimated_seconds = estimate_clean_duration_seconds(
+            photo_count=photos,
+            video_count=videos,
+        )
+        _seconds, estimated_display = format_about_duration(estimated_seconds)
+        self._run_inventory = {
+            "media_count": count,
+            "photo_count": photos,
+            "video_count": videos,
+            "estimated_seconds": round(estimated_seconds, 1),
+            "estimated_display": estimated_display,
+        }
+
+    def _refresh_run_inventory_from_records(self, records: List[MediaRecord]) -> None:
+        photo_count = sum(1 for record in records if record.file_type == "photo")
+        video_count = sum(1 for record in records if record.file_type == "video")
+        self._seed_run_inventory_estimate(len(records), photo_count, video_count)
+
+    def _progress_eta_fields(self, phase: str, processed: int) -> Dict[str, Any]:
+        if not self._run_inventory:
+            return {}
+        media_total = max(int(self._run_inventory.get("media_count") or 0), 1)
+        scan_completed = processed if phase == "scan" else media_total
+        canonicalize_index = processed if phase == "canonicalize" else self._canonicalize_index
+        audit_processed = processed if phase == "audit" else 0
+        remaining_sec = estimate_remaining_duration_seconds(
+            self._run_inventory,
+            phase=phase,
+            scan_completed_count=scan_completed,
+            canonicalize_index=canonicalize_index,
+            audit_processed=audit_processed,
+        )
+        _seconds, remaining_display = format_about_duration(remaining_sec)
+        return {
+            "estimated_remaining_seconds": round(remaining_sec, 1),
+            "estimated_remaining_display": remaining_display,
+        }
+
+    def _enrich_progress_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        enriched = dict(payload)
+        if enriched.get("type") == "progress" and enriched.get("phase"):
+            phase = str(enriched.get("phase"))
+            processed = int(enriched.get("processed") or 0)
+            enriched.update(self._progress_eta_fields(phase, processed))
+        return enriched
 
     def _cancel_requested(self) -> bool:
         return bool(self._cancel_check and self._cancel_check())
@@ -869,7 +929,7 @@ class LibraryCleaner:
 
     def _emit(self, payload: Dict[str, Any]) -> None:
         if self._progress_callback:
-            self._progress_callback(dict(payload))
+            self._progress_callback(self._enrich_progress_payload(payload))
 
     def _build_operation_plan(self) -> Dict[str, Any]:
         saved_db_conn = self.db_conn
@@ -1061,7 +1121,15 @@ class LibraryCleaner:
         resume: Optional[bool] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
-        self._progress_callback = progress_callback
+        user_callback = progress_callback
+        self._run_inventory = None
+
+        def _wrapped_progress_callback(ev: Dict[str, Any]) -> None:
+            payload = self._enrich_progress_payload(dict(ev))
+            if user_callback:
+                user_callback(payload)
+
+        self._progress_callback = _wrapped_progress_callback
         self._cancel_check = cancel_check
         resumed_from: Optional[Dict[str, Any]] = None
         try:
@@ -1123,10 +1191,13 @@ class LibraryCleaner:
 
             resume_phase = str(self._resume_checkpoint.get("phase") or "setup") if self._resume_checkpoint else "setup"
             records = _load_records_jsonl(self._records_jsonl_path or "")
+            if not self._phase_is_before(resume_phase, "scan_complete") and records:
+                self._refresh_run_inventory_from_records(records)
 
             if self._phase_is_before(resume_phase, "scan_complete"):
                 self._raise_if_cancelled()
                 candidate_total = self._count_walk_files()
+                self._seed_run_inventory_estimate(candidate_total)
                 self._current_phase = "scan"
                 self._flush_checkpoint()
                 self._emit(
@@ -1153,6 +1224,7 @@ class LibraryCleaner:
                         "records": len(records),
                     }
                 )
+                self._refresh_run_inventory_from_records(records)
                 self._emit_stats_feedback()
                 self._raise_if_cancelled()
 
@@ -1185,6 +1257,26 @@ class LibraryCleaner:
                 self._raise_if_cancelled()
                 self._current_phase = "audit"
                 self._flush_checkpoint(records=canonicalized)
+                try:
+                    compliance_stats = ensure_library_metadata_compliant(
+                        self.library_path,
+                        db_path=self.db_path,
+                        db_conn=self.db_conn,
+                        hash_cache=self.hash_cache,
+                        progress_callback=self._progress_callback,
+                        cancel_check=self._cancel_requested if self._cancel_check else None,
+                        progress_total=len(canonicalized),
+                    )
+                except MetadataComplianceCancelled:
+                    raise CleanLibraryCancelled()
+                if compliance_stats.errors:
+                    raise CleanLibraryError(
+                        "Metadata compliance failed: " + "; ".join(compliance_stats.errors[:5])
+                    )
+                if compliance_stats.files_fixed:
+                    self.stats["metadata_fixed"] = (
+                        int(self.stats.get("metadata_fixed", 0)) + compliance_stats.files_fixed
+                    )
                 try:
                     issues = self.final_audit(audit_progress_total=len(canonicalized))
                 except FastAuditCancelled:
@@ -1251,6 +1343,7 @@ class LibraryCleaner:
         finally:
             self._progress_callback = None
             self._cancel_check = None
+            self._run_inventory = None
             if self.hash_cache is not None:
                 try:
                     self.hash_cache.cleanup_stale_entries(self.library_path)
@@ -1544,13 +1637,14 @@ class LibraryCleaner:
         return datetime.strptime(date_taken, CANONICAL_DB_DATE_FORMAT)
 
     def _needs_metadata_work(self, full_path: str, ext: str) -> bool:
-        orientation = get_orientation_flag(full_path)
-        if orientation not in (None, 1):
-            if ext in LOSSLESS_ROTATION_EXTENSIONS:
-                return True
-            if ext in PHOTO_EXTENSIONS and can_bake_losslessly(full_path):
-                return True
-        return extract_exif_rating(full_path) == 0
+        return file_needs_metadata_compliance(
+            full_path,
+            ext,
+            get_orientation_flag=get_orientation_flag,
+            can_bake_losslessly=can_bake_losslessly,
+            extract_exif_rating=extract_exif_rating,
+            lossless_rotation_extensions=frozenset(LOSSLESS_ROTATION_EXTENSIONS),
+        )
 
     def _try_skip_unchanged_media_record(self, full_path: str) -> Optional[MediaRecord]:
         rel_path = os.path.relpath(full_path, self.library_path)

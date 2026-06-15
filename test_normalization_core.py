@@ -48,11 +48,11 @@ class NormalizationCoreTest(unittest.TestCase):
         )
 
     def test_video_identity_uses_shared_duplicate_key_and_canonical_path(self):
-        date_taken = "2026:04:12 09:30:15"
+        date_taken = "2026:04:12 00:00:00"
         content_hash = "def67890" + ("1" * 56)
 
         with TemporaryDirectory() as tmpdir:
-            source_path = os.path.join(tmpdir, "clip.MOV")
+            source_path = os.path.join(tmpdir, "img_20260412_def67890.mov")
             with open(source_path, "wb") as handle:
                 handle.write(b"video-bytes")
 

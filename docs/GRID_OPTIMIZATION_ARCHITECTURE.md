@@ -136,19 +136,42 @@ n = floor((width + gap) / (200 + gap))
 cellSize = (width - (n - 1) * gap) / n
 ```
 
-Constants from `gridLayout.js`: `GRID_GAP = 4`, `GRID_MIN_COL = 200`, `MONTH_HEADER_HEIGHT = 44`, `MONTH_SECTION_MARGIN = 48`, `HEADER_BAND_HEIGHT = 64` (44 + 20 px margin below label). Comfort header gap and real month section height both use **64 px** band for top alignment.
+Constants on `.grid-root` in `styles.css` (CSS owns rhythm; JS owns column layout):
+
+| Token | Default | Role |
+|-------|---------|------|
+| `--grid-gap-px` | 4 | Cell gap (real + comfort) |
+| `--grid-min-col-px` | 200 | Column floor for `computeColumnLayout` |
+| `--grid-header-height-px` | 44 | Month label band |
+| `--grid-header-gap-px` | 20 | Space below label before grid |
+| `--grid-header-band-px` | calc(height + gap) | Shared header spacer (real + comfort) |
+| `--grid-month-section-margin-px` | 48 | Section tail margin |
+| `--grid-comfort-full-rows` | 12 | Comfort repeat chunk rows |
+| `--grid-comfort-partial-col-offset` | 2 | Partial row = cols − offset |
+| `--grid-comfort-partial-min-cols` | 1 | Partial row floor |
+
+JS reads tokens once per layout pass via `readGridRhythmTokens(container)` (`getComputedStyle`). `monthSectionHeight`, `tileChunkHeight`, and `computeColumnLayout` use those values — not hardcoded JS constants.
+
+**Column formula (canonical):**
+
+```text
+n = floor((width + gap) / (minCol + gap))
+cellSize = (width - (n - 1) * gap) / n
+```
+
+Comfort header gap and real month section height both use **`--grid-header-band-px`** for top alignment at scroll 0.
 
 **Rules:**
 
 - Timeline path must **not** use CSS `repeat(auto-fill, minmax(200px, 1fr))`.
-- Publish snapshot to the container as CSS variables once per pass:
+- JS publishes **only dynamic geometry** to the container once per pass:
 
   ```text
   --grid-cols
   --grid-cell-px
-  --grid-gap-px
   ```
 
+- Do **not** `setProperty` static rhythm tokens after mount — CSS is the authority.
 - Cell grid uses fixed px from the engine: `repeat(n, var(--grid-cell-px))`.
 
 ### GridView DOM structure

@@ -132,7 +132,16 @@ def finalize_mutated_media(
         os.makedirs(os.path.dirname(new_full_path), exist_ok=True)
         if os.path.exists(new_full_path):
             raise RuntimeError(f"Canonical path collision after mutation: {new_rel_path}")
+        old_full_path_before_move = full_path
+        old_dir_before_move = os.path.dirname(old_full_path_before_move)
         shutil.move(full_path, new_full_path)
+        from quicktime_date_atoms import (
+            cleanup_orphan_patch_artifacts_in_dir,
+            remove_quicktime_patch_artifacts,
+        )
+
+        remove_quicktime_patch_artifacts(old_full_path_before_move)
+        cleanup_orphan_patch_artifacts_in_dir(old_dir_before_move)
         full_path = new_full_path
         current_rel_path = new_rel_path
 

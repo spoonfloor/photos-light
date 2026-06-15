@@ -17,8 +17,8 @@ from library_cleanliness import (
     VIDEO_MEDIA_EXTENSIONS,
     build_canonical_photo_path,
     media_kind_for_extension,
-    parse_metadata_datetime,
 )
+from media_dates import read_media_date
 from normalization_contract import (
     compute_duplicate_key,
     expected_canonical_rel_path_from_db_date,
@@ -97,10 +97,7 @@ def build_video_identity(
     if content_hash is None:
         return None
 
-    date_taken, _date_obj = parse_metadata_datetime(
-        deps.extract_exif_date(source_path),
-        os.path.getmtime(source_path),
-    )
+    date_taken = read_media_date(source_path, allow_mtime_fallback=True)
     relative_path, _canonical_name = build_canonical_photo_path(date_taken, content_hash, ext)
     duplicate_key = duplicate_key_for_file(source_path, fallback_hash=content_hash)
     if not duplicate_key:

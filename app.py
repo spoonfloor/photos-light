@@ -77,7 +77,11 @@ from library_sync import (
     count_media_files_by_type,
     estimate_duration,
 )
-from clean_library_inventory import estimate_clean_duration_seconds, format_about_duration
+from clean_library_inventory import (
+    estimate_clean_duration_seconds,
+    estimate_convert_duration_seconds,
+    format_about_duration,
+)
 from library_layout import (
     LIBRARY_METADATA_DIR,
     ROOT_INFRASTRUCTURE_DIRS,
@@ -90,7 +94,7 @@ from library_layout import (
     resolve_db_path,
 )
 from media_finalization import finalize_mutated_media
-from media_dates import write_and_verify_video_date
+from media_dates import write_and_verify_media_date
 from library_filesystem import (
     iter_layout_cleanup_passes,
     quarantine_root_hidden,
@@ -105,7 +109,6 @@ from normalization_ingest import IngestDependencies, iter_ingest_events
 from photo_canonicalization import (
     CanonicalizedPhoto,
     canonicalize_photo_file,
-    write_photo_date_metadata,
 )
 from make_library_perfect import _compute_photo_duplicate_key, verify_media_file
 from picker_sort import sort_picker_items
@@ -368,12 +371,12 @@ def write_photo_exif(file_path, new_date):
     """Write canonical photo date metadata using the shared helper."""
     print(f"🔧 Writing EXIF to: {os.path.basename(file_path)}")
     print(f"   Target date: {new_date}")
-    write_photo_date_metadata(file_path, new_date)
+    write_and_verify_media_date(file_path, new_date)
     print("   ✅ EXIF write verified")
 
 def write_video_metadata(file_path, new_date):
     """Write and verify video metadata using the shared fail-closed policy."""
-    write_and_verify_video_date(file_path, new_date)
+    write_and_verify_media_date(file_path, new_date)
 
 
 @dataclass
@@ -605,15 +608,7 @@ class DateEditTransaction:
                     old_date = details['old_date']
                     
                     if os.path.exists(file_path):
-                        # Determine file type
-                        ext = os.path.splitext(file_path)[1].lower()
-                        # v223: Use EXIF-writable subset (no RAW, no ambiguous lossy formats)
-                        
-                        if ext in EXIF_WRITABLE_PHOTO_EXTENSIONS:
-                            write_photo_exif(file_path, old_date)
-                        else:
-                            write_video_metadata(file_path, old_date)
-                        
+                        write_and_verify_media_date(file_path, old_date)
                         print(f"  ↩️  Restored EXIF: {os.path.basename(file_path)}")
             
             except Exception as e:
@@ -624,7 +619,14 @@ class DateEditTransaction:
 def cleanup_empty_date_folders(old_full_path):
     """Remove empty date/year folders left behind after a successful move."""
     try:
+        from quicktime_date_atoms import (
+            cleanup_orphan_patch_artifacts_in_dir,
+            remove_quicktime_patch_artifacts,
+        )
+
         old_dir = os.path.dirname(old_full_path)
+        remove_quicktime_patch_artifacts(old_full_path)
+        cleanup_orphan_patch_artifacts_in_dir(old_dir)
         if os.path.isdir(old_dir) and not os.listdir(old_dir):
             os.rmdir(old_dir)
             year_dir = os.path.dirname(old_dir)
@@ -3300,7 +3302,6 @@ def execute_rebuild_database():
             for event in synchronize_library_generator(
                 LIBRARY_PATH,
                 conn,
-                extract_exif_date,
                 get_image_dimensions,
                 mode='full',
             ):
@@ -4554,7 +4555,7 @@ def scan_terraform_library():
                 photo_count += 1
                 photo_bytes += size_bytes
 
-        estimated_seconds = estimate_clean_duration_seconds(
+        estimated_seconds = estimate_convert_duration_seconds(
             photo_count=photo_count,
             video_count=video_count,
             photo_bytes=photo_bytes,
@@ -4925,6 +4926,40 @@ def terraform_library():
             )
             yield f"event: phase\ndata: {json.dumps({'phase': 'folders', 'status': 'complete', 'removed': removed_count, 'trashed_stragglers': trashed_stragglers})}\n\n"
             
+            print("🔧 Ensuring metadata compliance...")
+            log_manifest('metadata_compliance_started', {'media_count': processed_count})
+            yield f"event: phase\ndata: {json.dumps({'phase': 'compliance', 'status': 'starting', 'total': max(processed_count, 1)})}\n\n"
+            from library_metadata_compliance import ensure_library_metadata_compliant
+
+            compliance_stats = ensure_library_metadata_compliant(
+                library_path,
+                db_conn=conn,
+                hash_cache=hash_cache,
+                progress_total=max(processed_count, 1),
+            )
+            if compliance_stats.errors:
+                preview = compliance_stats.errors[:10]
+                log_manifest(
+                    'metadata_compliance_failed',
+                    {'error_count': len(compliance_stats.errors), 'errors': preview},
+                )
+                yield f"event: phase\ndata: {json.dumps({'phase': 'compliance', 'status': 'failed', 'error_count': len(compliance_stats.errors)})}\n\n"
+                log_file.close()
+                yield f"event: error\ndata: {json.dumps({'error': f'Metadata compliance failed with {len(compliance_stats.errors)} error(s)', 'errors': preview})}\n\n"
+                return
+
+            log_manifest(
+                'metadata_compliance_complete',
+                {
+                    'files_scanned': compliance_stats.files_scanned,
+                    'files_fixed': compliance_stats.files_fixed,
+                    'rating_stripped': compliance_stats.rating_stripped,
+                    'orientation_baked': compliance_stats.orientation_baked,
+                    'db_rows_updated': compliance_stats.db_rows_updated,
+                },
+            )
+            yield f"event: phase\ndata: {json.dumps({'phase': 'compliance', 'status': 'complete', 'files_fixed': compliance_stats.files_fixed})}\n\n"
+
             # Close DB
             conn.close()
             conn = None

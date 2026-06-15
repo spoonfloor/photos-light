@@ -1,26 +1,104 @@
 /**
  * Virtual grid layout — pixel-aligned height model for month-grouped photo grid.
+ * Static rhythm tokens live on `.grid-root` in CSS; JS reads via getComputedStyle.
  */
 const GridLayout = (() => {
-  const GRID_GAP = 4;
-  const GRID_MIN_COL = 200;
-  const MONTH_HEADER_HEIGHT = 44;
-  const MONTH_SECTION_MARGIN = 48;
-  const HEADER_BAND_HEIGHT = MONTH_HEADER_HEIGHT + 20;
+  const DEFAULT_RHYTHM = {
+    headerHeight: 44,
+    headerGap: 12,
+    headerBand: 56,
+    sectionMargin: 48,
+    gap: 4,
+    minCol: 200,
+    comfortFullRows: 12,
+    comfortPartialColOffset: 2,
+    comfortPartialMinCols: 1,
+  };
 
-  function computeColumnLayout(containerWidth) {
-    const width = Math.max(0, containerWidth);
-    const columns = Math.max(
-      1,
-      Math.floor((width + GRID_GAP) / (GRID_MIN_COL + GRID_GAP)),
+  let rhythmCache = null;
+  let rhythmCacheContainer = null;
+
+  function parseTokenPx(value, fallback) {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  function parseTokenInt(value, fallback) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  function readGridRhythmTokens(container) {
+    if (!container) {
+      return { ...DEFAULT_RHYTHM };
+    }
+    if (rhythmCacheContainer === container && rhythmCache) {
+      return rhythmCache;
+    }
+
+    const style = getComputedStyle(container);
+    const headerHeight = parseTokenPx(
+      style.getPropertyValue('--grid-header-height-px'),
+      DEFAULT_RHYTHM.headerHeight,
     );
-    const trackWidth = Math.floor((width - (columns - 1) * GRID_GAP) / columns);
+    const headerGap = parseTokenPx(
+      style.getPropertyValue('--grid-header-gap-px'),
+      DEFAULT_RHYTHM.headerGap,
+    );
+    const headerBand = parseTokenPx(
+      style.getPropertyValue('--grid-header-band-px'),
+      headerHeight + headerGap,
+    );
+
+    rhythmCache = {
+      headerHeight,
+      headerGap,
+      headerBand,
+      sectionMargin: parseTokenPx(
+        style.getPropertyValue('--grid-month-section-margin-px'),
+        DEFAULT_RHYTHM.sectionMargin,
+      ),
+      gap: parseTokenPx(style.getPropertyValue('--grid-gap-px'), DEFAULT_RHYTHM.gap),
+      minCol: parseTokenPx(
+        style.getPropertyValue('--grid-min-col-px'),
+        DEFAULT_RHYTHM.minCol,
+      ),
+      comfortFullRows: parseTokenInt(
+        style.getPropertyValue('--grid-comfort-full-rows'),
+        DEFAULT_RHYTHM.comfortFullRows,
+      ),
+      comfortPartialColOffset: parseTokenInt(
+        style.getPropertyValue('--grid-comfort-partial-col-offset'),
+        DEFAULT_RHYTHM.comfortPartialColOffset,
+      ),
+      comfortPartialMinCols: parseTokenInt(
+        style.getPropertyValue('--grid-comfort-partial-min-cols'),
+        DEFAULT_RHYTHM.comfortPartialMinCols,
+      ),
+    };
+    rhythmCacheContainer = container;
+    return rhythmCache;
+  }
+
+  function invalidateRhythmTokenCache() {
+    rhythmCache = null;
+    rhythmCacheContainer = null;
+  }
+
+  function computeColumnLayout(container) {
+    const width = Math.max(0, container?.clientWidth ?? 0);
+    const rhythm = readGridRhythmTokens(container);
+    const gap = rhythm.gap;
+    const minCol = rhythm.minCol;
+    const columns = Math.max(1, Math.floor((width + gap) / (minCol + gap)));
+    const trackWidth = Math.floor((width - (columns - 1) * gap) / columns);
     return {
       containerWidth: width,
       columns,
       trackWidth,
       cellHeight: trackWidth,
-      gap: GRID_GAP,
+      gap,
+      rhythm,
       gridTemplateColumns: `repeat(${columns}, 1fr)`,
     };
   }
@@ -40,7 +118,8 @@ const GridLayout = (() => {
     if (!photoCount) {
       return 0;
     }
-    return HEADER_BAND_HEIGHT + gridHeight + MONTH_SECTION_MARGIN;
+    const rhythm = columnLayout.rhythm || DEFAULT_RHYTHM;
+    return rhythm.headerBand + gridHeight + rhythm.sectionMargin;
   }
 
   /**
@@ -316,7 +395,7 @@ const GridLayout = (() => {
     }
     const columns = layout.columnLayout?.columns ?? 1;
     const cellSize = layout.columnLayout?.trackWidth ?? 0;
-    const gap = layout.columnLayout?.gap ?? GRID_GAP;
+    const gap = layout.columnLayout?.gap ?? DEFAULT_RHYTHM.gap;
     return {
       ...layout,
       columns,
@@ -333,10 +412,6 @@ const GridLayout = (() => {
     container.style.setProperty(
       '--grid-cell-px',
       `${snapshot.cellSize ?? snapshot.columnLayout?.trackWidth ?? 0}px`,
-    );
-    container.style.setProperty(
-      '--grid-gap-px',
-      `${snapshot.gap ?? snapshot.columnLayout?.gap ?? GRID_GAP}px`,
     );
   }
 
@@ -422,17 +497,24 @@ const GridLayout = (() => {
   function tileChunkHeight(columnLayout) {
     const cellSize = columnLayout.trackWidth;
     const gap = columnLayout.gap;
-    const fullRowsHeight = 12 * cellSize + 11 * gap;
+    const rhythm = columnLayout.rhythm || DEFAULT_RHYTHM;
+    const fullRows = rhythm.comfortFullRows;
+    const fullRowsHeight = fullRows * cellSize + Math.max(0, fullRows - 1) * gap;
     const partialRowHeight = cellSize;
-    return HEADER_BAND_HEIGHT + fullRowsHeight + partialRowHeight + MONTH_SECTION_MARGIN;
+    return rhythm.headerBand + fullRowsHeight + partialRowHeight + rhythm.sectionMargin;
+  }
+
+  function comfortPartialCellCount(columnLayout) {
+    const rhythm = columnLayout.rhythm || DEFAULT_RHYTHM;
+    return Math.max(
+      rhythm.comfortPartialMinCols,
+      columnLayout.columns - rhythm.comfortPartialColOffset,
+    );
   }
 
   return {
-    GRID_GAP,
-    GRID_MIN_COL,
-    MONTH_HEADER_HEIGHT,
-    MONTH_SECTION_MARGIN,
-    HEADER_BAND_HEIGHT,
+    readGridRhythmTokens,
+    invalidateRhythmTokenCache,
     toLayoutSnapshot,
     publishCssVars,
     layoutGeometryChanged,
@@ -442,6 +524,7 @@ const GridLayout = (() => {
     patchPhotoMonthMove,
     patchPhotoDeletes,
     tileChunkHeight,
+    comfortPartialCellCount,
     computeColumnLayout,
     monthGridHeight,
     monthSectionHeight,

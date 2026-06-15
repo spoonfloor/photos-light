@@ -142,6 +142,19 @@ const VirtualGrid = (() => {
     ThumbnailQueue.syncStrictViewport();
   }
 
+  function buildMonthHeaderBand(monthKey) {
+    const band = document.createElement('div');
+    band.className = 'month-header-band';
+    const header = document.createElement('div');
+    header.className = 'month-header';
+    header.innerHTML = `
+      <span class="month-label">${GridLayout.monthLabel(monthKey)}</span>
+      <div class="month-select-circle"></div>
+    `;
+    band.appendChild(header);
+    return band;
+  }
+
   function buildPlaceholderMonthSection(section, { pending = false } = {}) {
     const monthKey = section.month;
     const wrapper = document.createElement('div');
@@ -154,13 +167,7 @@ const VirtualGrid = (() => {
     wrapper.dataset.month = monthKey;
     wrapper.style.top = `${section.yStart}px`;
 
-    const header = document.createElement('div');
-    header.className = 'month-header';
-    header.innerHTML = `
-      <span class="month-label">${GridLayout.monthLabel(monthKey)}</span>
-      <div class="month-select-circle"></div>
-    `;
-    wrapper.appendChild(header);
+    wrapper.appendChild(buildMonthHeaderBand(monthKey));
 
     const grid = document.createElement('div');
     grid.className = 'photo-grid';
@@ -244,13 +251,7 @@ const VirtualGrid = (() => {
     wrapper.dataset.month = monthKey;
     wrapper.style.top = `${section.yStart}px`;
 
-    const header = document.createElement('div');
-    header.className = 'month-header';
-    header.innerHTML = `
-      <span class="month-label">${GridLayout.monthLabel(monthKey)}</span>
-      <div class="month-select-circle"></div>
-    `;
-    wrapper.appendChild(header);
+    wrapper.appendChild(buildMonthHeaderBand(monthKey));
     wrapper.appendChild(buildHydratedGrid(section, photos, hooks.filterPhoto));
 
     contentLayer.appendChild(wrapper);
@@ -393,13 +394,7 @@ const VirtualGrid = (() => {
     wrapper.dataset.gridAnchorTruth = 'true';
     wrapper.style.top = '0px';
 
-    const header = document.createElement('div');
-    header.className = 'month-header';
-    header.innerHTML = `
-      <span class="month-label">${GridLayout.monthLabel(monthKey)}</span>
-      <div class="month-select-circle"></div>
-    `;
-    wrapper.appendChild(header);
+    wrapper.appendChild(buildMonthHeaderBand(monthKey));
     return wrapper;
   }
 
@@ -542,8 +537,9 @@ const VirtualGrid = (() => {
 
   function buildTileChunk(yStart, columnLayout) {
     const columns = columnLayout.columns;
-    const gap = columnLayout.gap;
-    const partialCells = Math.max(1, columns - 2);
+    const rhythm = columnLayout.rhythm || GridLayout.readGridRhythmTokens(getContainer());
+    const fullRows = rhythm.comfortFullRows;
+    const partialCells = GridLayout.comfortPartialCellCount(columnLayout);
 
     const chunk = document.createElement('div');
     chunk.className = 'grid-tile-chunk';
@@ -551,12 +547,11 @@ const VirtualGrid = (() => {
 
     const headerGap = document.createElement('div');
     headerGap.className = 'grid-tile-header-gap';
-    headerGap.style.height = `${GridLayout.HEADER_BAND_HEIGHT}px`;
     chunk.appendChild(headerGap);
 
     const fullGrid = document.createElement('div');
     fullGrid.className = 'grid-tile-grid';
-    for (let row = 0; row < 12; row += 1) {
+    for (let row = 0; row < fullRows; row += 1) {
       fullGrid.appendChild(buildTileRow(columns));
     }
     chunk.appendChild(fullGrid);
@@ -568,7 +563,6 @@ const VirtualGrid = (() => {
 
     const sectionGap = document.createElement('div');
     sectionGap.className = 'grid-tile-section-gap';
-    sectionGap.style.height = `${GridLayout.MONTH_SECTION_MARGIN}px`;
     chunk.appendChild(sectionGap);
 
     return chunk;
@@ -696,13 +690,13 @@ const VirtualGrid = (() => {
     }
   }
 
-  function rebuildLayoutFromIndex(indexPayload, containerWidth, options = {}) {
+  function rebuildLayoutFromIndex(indexPayload, container, options = {}) {
     if (layout?.provisional && !options.keepMounted) {
       clearMountedMonths();
     }
     monthIndex = indexPayload;
     sortOrder = indexPayload?.sort || sortOrder;
-    const columnLayout = GridLayout.computeColumnLayout(containerWidth);
+    const columnLayout = GridLayout.computeColumnLayout(container);
     const nextLayout = GridLayout.buildVirtualLayout(
       indexPayload?.months || [],
       columnLayout,
@@ -720,6 +714,8 @@ const VirtualGrid = (() => {
     }
 
     container.classList.add('grid-root');
+    container.classList.remove('grid-paged');
+    GridLayout.invalidateRhythmTokenCache();
     container.innerHTML = `
       <div class="grid-spacer" aria-hidden="true"></div>
       <div class="grid-canvas">
@@ -740,13 +736,14 @@ const VirtualGrid = (() => {
       resizeObserver.disconnect();
     }
     resizeObserver = new ResizeObserver(() => {
+      GridLayout.invalidateRhythmTokenCache();
       const width = container.clientWidth;
       if (monthIndex) {
-        const columnLayout = GridLayout.computeColumnLayout(width);
+        const columnLayout = GridLayout.computeColumnLayout(container);
         const nextLayout = GridLayout.toLayoutSnapshot(
           GridLayout.buildVirtualLayout(monthIndex.months || [], columnLayout),
         );
-        rebuildLayoutFromIndex(monthIndex, width, {
+        rebuildLayoutFromIndex(monthIndex, container, {
           remount: GridLayout.layoutGeometryChanged(layout, nextLayout),
         });
         return;
@@ -760,7 +757,7 @@ const VirtualGrid = (() => {
           GridLayout.buildProvisionalLayout(
             layout.totalPhotos,
             years,
-            GridLayout.computeColumnLayout(width),
+            GridLayout.computeColumnLayout(container),
             sortOrder,
           ),
           { remount: true },
@@ -788,7 +785,7 @@ const VirtualGrid = (() => {
     provisionalYears = plan.provisionalYears || [];
     anchorMonthKey = plan.anchorMonth || null;
 
-    const columnLayout = GridLayout.computeColumnLayout(container.clientWidth);
+    const columnLayout = GridLayout.computeColumnLayout(container);
     GridLayout.publishCssVars(
       container,
       GridLayout.toLayoutSnapshot({ columnLayout, sections: [], totalHeight: 0 }),
@@ -837,7 +834,7 @@ const VirtualGrid = (() => {
     if (wasProvisional) {
       clearProvisionalArtifacts();
     }
-    rebuildLayoutFromIndex(indexPayload, container.clientWidth, {
+    rebuildLayoutFromIndex(indexPayload, container, {
       remount: wasProvisional,
     });
     scheduleSync();
@@ -1021,11 +1018,11 @@ const VirtualGrid = (() => {
     }
     const container = getContainer();
     if (container) {
-      container.classList.remove('grid-root', 'grid-labels-gated');
+      container.classList.remove('grid-root', 'grid-paged', 'grid-labels-gated');
       container.style.removeProperty('--grid-cols');
       container.style.removeProperty('--grid-cell-px');
-      container.style.removeProperty('--grid-gap-px');
     }
+    GridLayout.invalidateRhythmTokenCache();
     if (canvas) {
       canvas.style.removeProperty('height');
     }
@@ -1140,7 +1137,7 @@ const VirtualGrid = (() => {
     monthInflight.clear();
     hydratedMonths = new Set();
     clearMountedMonths();
-    rebuildLayoutFromIndex(indexPayload, container.clientWidth, { remount: true });
+    rebuildLayoutFromIndex(indexPayload, container, { remount: true });
     if (hooks.onIndexReady) {
       hooks.onIndexReady(indexPayload);
     }

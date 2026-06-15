@@ -14,8 +14,8 @@ from datetime import datetime
 from typing import Callable, Optional, Tuple
 
 from library_cleanliness import build_canonical_photo_path, parse_metadata_datetime
+from media_dates import UNKNOWN_PHOTO_DATE_TAKEN, normalize_raw_metadata_date, read_media_date
 
-UNKNOWN_PHOTO_DATE_TAKEN = "1900:01:01 00:00:00"
 UNKNOWN_PHOTO_DATE_OBJ = datetime(1900, 1, 1, 0, 0, 0)
 
 
@@ -99,12 +99,11 @@ def canonicalize_photo_file(
     """
 
     raw_date = extract_exif_date(file_path)
-    current_normalized_date = None
-    if raw_date:
-        current_normalized_date, _ = parse_metadata_datetime(raw_date, 0)
+    current_normalized_date = normalize_raw_metadata_date(raw_date)
 
     if forced_date_taken is None:
-        date_taken, date_obj = canonicalize_photo_date(raw_date)
+        date_taken = read_media_date(file_path, allow_mtime_fallback=False)
+        date_obj = datetime.strptime(date_taken, "%Y:%m:%d %H:%M:%S")
     else:
         date_taken, date_obj = parse_metadata_datetime(forced_date_taken, 0)
 

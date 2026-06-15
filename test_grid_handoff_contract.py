@@ -9,6 +9,8 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parent
 MAIN_JS = REPO_ROOT / "static" / "js" / "main.js"
 VIRTUAL_GRID_JS = REPO_ROOT / "static" / "js" / "virtualGrid.js"
+GRID_LAYOUT_JS = REPO_ROOT / "static" / "js" / "gridLayout.js"
+STYLES_CSS = REPO_ROOT / "static" / "css" / "styles.css"
 APP_PY = REPO_ROOT / "app.py"
 
 
@@ -35,6 +37,8 @@ class TestGridHandoffContract(unittest.TestCase):
     def setUp(self):
         self.main_js = MAIN_JS.read_text()
         self.virtual_grid_js = VIRTUAL_GRID_JS.read_text()
+        self.grid_layout_js = GRID_LAYOUT_JS.read_text()
+        self.styles_css = STYLES_CSS.read_text()
         self.app_py = APP_PY.read_text()
 
     def test_clean_completion_waits_for_catalog_rehydrate(self):
@@ -88,6 +92,105 @@ class TestGridHandoffContract(unittest.TestCase):
         ):
             body = _function_body(self.virtual_grid_js, name)
             self.assertIn("getMountedMonthSection(monthKey)", body)
+
+    def test_grid_rhythm_tokens_shared_between_layout_css_and_virtual_grid(self):
+        self.assertIn("function readGridRhythmTokens(container)", self.grid_layout_js)
+        self.assertIn("getComputedStyle(container)", self.grid_layout_js)
+        self.assertNotIn("const MONTH_HEADER_GAP = 20;", self.grid_layout_js)
+        publish_body = _function_body(self.grid_layout_js, "publishCssVars")
+        self.assertNotIn("'--grid-header-band-px'", publish_body)
+        rhythm_body = _function_body(self.grid_layout_js, "readGridRhythmTokens")
+        self.assertIn("'--grid-header-band-px'", rhythm_body)
+        self.assertIn("function buildMonthHeaderBand(monthKey)", self.virtual_grid_js)
+        self.assertIn("month-header-band", self.virtual_grid_js)
+        self.assertNotIn(
+            "headerGap.style.height = `${GridLayout.HEADER_BAND_HEIGHT}px`",
+            self.virtual_grid_js,
+        )
+        self.assertIn(".month-header-band", self.styles_css)
+        self.assertIn("--grid-header-band-px: calc(", self.styles_css)
+        self.assertIn("height: var(--grid-header-band-px", self.styles_css)
+        for token in (
+            "--grid-gap-px:",
+            "--grid-min-col-px:",
+            "--grid-comfort-full-rows:",
+            "--grid-comfort-partial-col-offset:",
+            "--grid-comfort-partial-min-cols:",
+        ):
+            self.assertIn(token, self.styles_css)
+
+    def test_publish_css_vars_sets_only_dynamic_geometry(self):
+        body = _function_body(self.grid_layout_js, "publishCssVars")
+        self.assertIn("'--grid-cols'", body)
+        self.assertIn("'--grid-cell-px'", body)
+        for static_token in (
+            "'--grid-header-height-px'",
+            "'--grid-header-gap-px'",
+            "'--grid-month-section-margin-px'",
+            "'--grid-gap-px'",
+            "'--grid-header-band-px'",
+        ):
+            self.assertNotIn(static_token, body)
+
+    def test_layout_math_reads_rhythm_tokens_not_js_constants(self):
+        month_section_body = _function_body(self.grid_layout_js, "monthSectionHeight")
+        chunk_body = _function_body(self.grid_layout_js, "tileChunkHeight")
+        column_body = _function_body(self.grid_layout_js, "computeColumnLayout")
+        self.assertIn("rhythm.headerBand", month_section_body)
+        self.assertIn("rhythm.headerBand", chunk_body)
+        self.assertIn("rhythm.comfortFullRows", chunk_body)
+        self.assertIn("readGridRhythmTokens(container)", column_body)
+        self.assertNotIn("HEADER_BAND_HEIGHT", month_section_body)
+        self.assertNotIn("12 * cellSize", chunk_body)
+
+    def test_comfort_chunk_builder_reads_repeat_pattern_tokens(self):
+        body = _function_body(self.virtual_grid_js, "buildTileChunk")
+        self.assertIn("rhythm.comfortFullRows", body)
+        self.assertIn("comfortPartialCellCount", body)
+        self.assertNotIn("row < 12", body)
+        self.assertNotIn("columns - 2", body)
+
+    def test_paged_grid_uses_css_rhythm_tokens(self):
+        body = _function_body(self.main_js, "renderPhotoGrid")
+        self.assertIn("setPagedGridContainerMode(container, true)", body)
+        self.assertIn("month-header-band", body)
+        self.assertIn(".grid-root.grid-paged .month-section", self.styles_css)
+        self.assertIn(".grid-root.grid-paged .photo-grid", self.styles_css)
+        self.assertIn("headerGap: 12", self.grid_layout_js)
+        self.assertIn("headerBand: 56", self.grid_layout_js)
+        self.assertIn("--grid-header-gap-px:", self.styles_css)
+        rhythm_body = _function_body(self.grid_layout_js, "readGridRhythmTokens")
+        self.assertIn("'--grid-header-gap-px'", rhythm_body)
+        self.assertIn("'--grid-header-band-px'", rhythm_body)
+        month_section_body = _function_body(self.grid_layout_js, "monthSectionHeight")
+        self.assertIn("rhythm.headerBand", month_section_body)
+
+    def test_healthy_open_library_skips_recovery_scan_before_switch(self):
+        body = _function_body(self.main_js, "openLibraryFromBrowseUnified")
+        healthy_match = re.search(
+            r"if \(checkResult\.has_openable_db\) \{(.+?)\n\s*\}",
+            body,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(healthy_match, "has_openable_db fast path not found")
+        healthy_branch = healthy_match.group(1)
+        self.assertIn("switchToLibrary", healthy_branch)
+        self.assertNotIn("/api/library/make-perfect/scan", healthy_branch)
+        self.assertNotIn("/api/library/recover-database", healthy_branch)
+        self.assertNotIn("runLibraryRecoveryJourney", healthy_branch)
+
+    def test_open_existing_library_uses_direct_switch_without_probe_scan(self):
+        body = _function_body(self.main_js, "openExistingLibrary")
+        self.assertIn("switchToLibrary", body)
+        self.assertNotIn("/api/library/check", body)
+        self.assertNotIn("/api/library/make-perfect/scan", body)
+        self.assertNotIn("runLibraryRecoveryJourney", body)
+
+    def test_switch_to_library_loads_grid_without_blocking_normalize_scan(self):
+        body = _function_body(self.main_js, "switchToLibrary")
+        self.assertIn("loadAndRenderPhotos", body)
+        self.assertNotIn("/api/library/make-perfect/scan", body)
+        self.assertNotIn("switchToLibraryWithBlockingNormalize", body)
 
     def test_import_complete_invalidates_grid_caches_before_sse_complete(self):
         complete_branch = self.app_py.split("elif event_name == 'complete':", 1)[1]

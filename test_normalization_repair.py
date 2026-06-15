@@ -11,10 +11,12 @@ from normalization_repair import (
     RepairPhaseDependencies,
     RepairPhaseState,
     RepairScanDependencies,
+    file_needs_metadata_compliance,
     iter_repair_events,
     normalize_repair_file,
     normalize_repair_scan_identity,
     plan_repair_duplicate_decisions,
+    repair_file_metadata_compliance,
 )
 
 
@@ -267,6 +269,51 @@ class NormalizationRepairTest(unittest.TestCase):
         self.assertEqual(identity.date_taken, "2026:04:12 09:30:15")
         self.assertEqual((identity.width, identity.height), (640, 480))
 
+    def test_repair_file_metadata_compliance_video_strips_rating(self):
+        content_hash = "video123" + ("0" * 56)
+        with TemporaryDirectory() as tmpdir:
+            full_path = os.path.join(tmpdir, "clip.mov")
+            with open(full_path, "wb") as handle:
+                handle.write(b"video")
+
+            result = repair_file_metadata_compliance(
+                full_path,
+                ext=".mov",
+                deps=_scan_deps(
+                    hash_cache=_HashCache(content_hash),
+                    extract_exif_rating=lambda _path: 0,
+                    strip_exif_rating=lambda _path: True,
+                ),
+            )
+
+            self.assertTrue(result.fixed)
+            self.assertEqual(result.content_hash, content_hash)
+            self.assertEqual([event.action for event in result.log_events], ["rating_stripped"])
+
+    def test_normalize_repair_scan_identity_delegates_video_rating_to_compliance(self):
+        content_hash = "video123" + ("0" * 56)
+        with TemporaryDirectory() as tmpdir:
+            full_path = os.path.join(tmpdir, "clip.mov")
+            with open(full_path, "wb") as handle:
+                handle.write(b"video")
+
+            identity = normalize_repair_scan_identity(
+                full_path,
+                ext=".mov",
+                stat_result=os.stat(full_path),
+                deps=_scan_deps(
+                    hash_cache=_HashCache(content_hash),
+                    extract_exif_rating=lambda _path: 0,
+                    strip_exif_rating=lambda _path: True,
+                ),
+            )
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertTrue(identity.metadata_cleaned)
+        self.assertTrue(identity.has_metadata_cleanup_signal)
+        self.assertEqual([event.action for event in identity.log_events], ["rating_stripped"])
+
     def test_normalize_repair_file_moves_misfiled_record_to_canonical_path(self):
         content_hash = "abc12345" + ("0" * 56)
         with TemporaryDirectory() as tmpdir:
@@ -353,6 +400,23 @@ class NormalizationRepairTest(unittest.TestCase):
 
             with self.assertRaises(RepairFileError):
                 normalize_repair_file(record, RepairDependencies(library_path=tmpdir))
+
+    def test_file_needs_metadata_compliance_false_when_rating_absent(self):
+        with TemporaryDirectory() as tmpdir:
+            full_path = os.path.join(tmpdir, "photo.jpg")
+            with open(full_path, "wb") as handle:
+                handle.write(b"photo")
+
+            self.assertFalse(
+                file_needs_metadata_compliance(
+                    full_path,
+                    ".jpg",
+                    get_orientation_flag=lambda _path: 1,
+                    can_bake_losslessly=lambda _path: False,
+                    extract_exif_rating=lambda _path: None,
+                    lossless_rotation_extensions=frozenset({".jpg"}),
+                )
+            )
 
 
 if __name__ == "__main__":
