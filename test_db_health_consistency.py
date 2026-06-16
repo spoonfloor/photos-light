@@ -681,6 +681,25 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertFalse(payload["has_openable_db"])
         self.assertEqual(payload["current_path"], library_path)
 
+    def test_list_directory_picker_folder_name_filters(self):
+        parent_path = self._make_library("desktop-like")
+        os.makedirs(os.path.join(parent_path, "Archive"))
+        os.makedirs(os.path.join(parent_path, "Backups of MacBook"))
+        os.makedirs(os.path.join(parent_path, "photo-backups"))
+        os.makedirs(os.path.join(parent_path, "Time Machine"))
+
+        response = self.client.post(
+            "/api/filesystem/list-directory",
+            json={"path": parent_path, "include_files": True},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        folder_names = [folder["name"] for folder in response.get_json()["folders"]]
+        self.assertIn("Archive", folder_names)
+        self.assertIn("Backups of MacBook", folder_names)
+        self.assertIn("photo-backups", folder_names)
+        self.assertNotIn("Time Machine", folder_names)
+
 
 class FolderWarningHeuristicTest(unittest.TestCase):
     def setUp(self):

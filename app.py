@@ -3694,10 +3694,9 @@ def list_directory():
             if item.startswith('.'):
                 continue
             
-            # Skip backup and archive folders
+            # Skip Time Machine folders
             item_lower = item.lower()
-            backup_patterns = ['backup', 'backups', 'archive', 'archives', 'time machine', 'time_machine']
-            if any(pattern in item_lower for pattern in backup_patterns):
+            if 'time machine' in item_lower or 'time_machine' in item_lower:
                 continue
 
             item_path = os.path.join(path, item)
@@ -3883,20 +3882,14 @@ def get_locations():
                         continue
                     
                     # Skip system volumes
-                    system_volumes = ['Macintosh HD', 'Macintosh SSD', 'Data', 'Preboot', 'Recovery', 'VM']
-                    if volume in system_volumes:
+                    if volume in ('Macintosh HD', 'Macintosh SSD'):
                         continue
                     
-                    # Skip backup volumes
                     volume_lower = volume.lower()
-                    if volume.startswith('Backups of') or 'backup' in volume_lower or 'time machine' in volume_lower:
+                    if 'time machine' in volume_lower or 'time_machine' in volume_lower:
                         continue
                     
                     volume_path = os.path.join(volumes_path, volume)
-                    # Skip symlinks (like Macintosh HD -> /)
-                    if os.path.islink(volume_path):
-                        continue
-                    
                     if os.path.isdir(volume_path):
                         locations.append({
                             'name': volume,
