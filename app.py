@@ -2866,8 +2866,17 @@ def scan_import_paths():
         photo_bytes = 0
         video_bytes = 0
 
+        def path_is_hidden(location):
+            for component in os.path.normpath(location).split(os.sep):
+                if component and component not in ('.', '..') and component.startswith('.'):
+                    return True
+            return False
+
         def add_media_file(full_path):
             nonlocal photo_count, video_count, photo_bytes, video_bytes
+
+            if path_is_hidden(full_path):
+                return False
 
             _, ext = os.path.splitext(full_path)
             ext_lower = ext.lower()
@@ -2899,12 +2908,19 @@ def scan_import_paths():
                     files_count += 1
             
             elif os.path.isdir(path):
+                if path_is_hidden(path):
+                    print(f"  ⏭️  Skipping hidden folder: {path}")
+                    continue
+
                 # Folder - scan recursively
                 folders_count += 1
                 print(f"  📁 Scanning folder: {path}")
                 
-                for root, dirs, files in os.walk(path):
+                for root, dirs, files in os.walk(path, followlinks=False):
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
                     for filename in files:
+                        if filename.startswith('.'):
+                            continue
                         full_path = os.path.join(root, filename)
                         add_media_file(full_path)
         

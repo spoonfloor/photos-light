@@ -165,6 +165,31 @@ class CleanLibraryApiTest(unittest.TestCase):
         self.assertGreater(payload["estimated_seconds"], 0)
         self.assertTrue(payload["estimated_display"])
 
+    def test_import_scan_paths_skips_hidden_folders_and_files(self):
+        source_dir = os.path.join(self.tmpdir.name, "import-source")
+        hidden_dir = os.path.join(source_dir, ".hidden-album")
+        os.makedirs(hidden_dir, exist_ok=True)
+        visible_photo = os.path.join(source_dir, "photo.jpg")
+        hidden_photo = os.path.join(hidden_dir, "secret.jpg")
+        hidden_dotfile = os.path.join(source_dir, ".secret.jpg")
+
+        with open(visible_photo, "wb") as handle:
+            handle.write(b"visible")
+        with open(hidden_photo, "wb") as handle:
+            handle.write(b"hidden")
+        with open(hidden_dotfile, "wb") as handle:
+            handle.write(b"dotfile")
+
+        response = self.client.post(
+            "/api/import/scan-paths",
+            json={"paths": [source_dir]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["files"], [visible_photo])
+
 
 if __name__ == "__main__":
     unittest.main()
