@@ -1,8 +1,9 @@
 /**
  * Library write sync — intent-first settlement for row mutations.
  *
- * v1: star toggle via per-photo intent slots + capped write drain.
- * Future: date/bulk plug into enqueueGenericJob or extend slots.
+ * Star: per-photo intent slots + capped write drain.
+ * Date / rotate: per-photo mutation slots + date SSE jobs.
+ * Generic queue: delete, restore, and other batch flows (optimism at enqueue).
  */
 const LibraryMutation = (() => {
   /** @type {Map<number, { confirmedRating: number|null, targetRating: number|null|undefined, inFlight: boolean, generation: number, inFlightGeneration: number|null }>} */
@@ -10,6 +11,23 @@ const LibraryMutation = (() => {
   /** @type {number[]} */
   const pendingPhotoIds = [];
   const queuedPhotoIds = new Set();
+
+  /** @type {Map<number, object>} */
+  const photoMutationSlots = new Map();
+  /** @type {number[]} */
+  const pendingMutationPhotoIds = [];
+  const queuedMutationPhotoIds = new Set();
+  /** @type {Set<number>} */
+  const activeMutationWrites = new Set();
+
+  /** @type {Array<object>} */
+  const pendingDateJobs = [];
+  /** @type {object|null} */
+  let activeDateJob = null;
+
+  /** @type {Map<number, { resolve: Function, reject: Function, waiters: Set<number> }>} */
+  const photoMutationPromises = new Map();
+
   /** @type {Array<{ options: object, resolve: Function, reject: Function }>} */
   const genericQueue = [];
   /** @type {Set<number>} */
@@ -23,6 +41,7 @@ const LibraryMutation = (() => {
 
   const HISTOGRAM_SYNC_MS = 300;
   const MAX_CONCURRENT_STAR_WRITES = 4;
+  const MAX_CONCURRENT_MUTATION_WRITES = 4;
 
   function init(nextHooks) {
     hooks = nextHooks || {};
@@ -38,6 +57,11 @@ const LibraryMutation = (() => {
 
   function isStarred(rating) {
     return normalizeRating(rating) === 5;
+  }
+
+  function normalizeRotationDegrees(degrees) {
+    const normalized = ((degrees % 360) + 360) % 360;
+    return normalized;
   }
 
   function effectiveTarget(slot) {
@@ -124,9 +148,20 @@ const LibraryMutation = (() => {
     }, HISTOGRAM_SYNC_MS);
   }
 
+  function countPendingWork() {
+    return (
+      genericQueue.length +
+      (genericInFlight ? 1 : 0) +
+      queuedPhotoIds.size +
+      queuedMutationPhotoIds.size +
+      activeMutationWrites.size +
+      pendingDateJobs.length +
+      (activeDateJob ? 1 : 0)
+    );
+  }
+
   function updatePendingCount() {
-    const nextCount =
-      genericQueue.length + queuedPhotoIds.size + (genericInFlight ? 1 : 0);
+    const nextCount = countPendingWork();
     if (nextCount === pendingCount) {
       return;
     }
@@ -152,6 +187,55 @@ const LibraryMutation = (() => {
     updatePendingCount();
   }
 
+  function enqueueMutationPhotoId(photoId) {
+    if (!queuedMutationPhotoIds.has(photoId)) {
+      queuedMutationPhotoIds.add(photoId);
+      pendingMutationPhotoIds.push(photoId);
+    }
+    updatePendingCount();
+    scheduleDrain();
+  }
+
+  function removeMutationPhotoFromQueue(photoId) {
+    queuedMutationPhotoIds.delete(photoId);
+    const index = pendingMutationPhotoIds.indexOf(photoId);
+    if (index !== -1) {
+      pendingMutationPhotoIds.splice(index, 1);
+    }
+    updatePendingCount();
+  }
+
+  function trackPhotoMutationPromise(photoId) {
+    let entry = photoMutationPromises.get(photoId);
+    if (!entry) {
+      entry = {
+        waiters: new Set(),
+        resolve: null,
+        reject: null,
+        promise: null,
+      };
+      entry.promise = new Promise((resolve, reject) => {
+        entry.resolve = resolve;
+        entry.reject = reject;
+      });
+      photoMutationPromises.set(photoId, entry);
+    }
+    return entry.promise;
+  }
+
+  function settlePhotoMutationPromise(photoId, error = null) {
+    const entry = photoMutationPromises.get(photoId);
+    if (!entry) {
+      return;
+    }
+    photoMutationPromises.delete(photoId);
+    if (error) {
+      entry.reject(error);
+    } else {
+      entry.resolve(true);
+    }
+  }
+
   function togglePhotoStar(photoId) {
     if (!photoId) {
       return;
@@ -173,11 +257,70 @@ const LibraryMutation = (() => {
   }
 
   function enqueueGenericJob(options) {
+    options.applyOptimistic?.();
     return new Promise((resolve, reject) => {
       genericQueue.push({ options, resolve, reject });
       updatePendingCount();
       scheduleDrain();
     });
+  }
+
+  function enqueueDateEditJob(options) {
+    options.applyOptimistic?.();
+    return new Promise((resolve, reject) => {
+      pendingDateJobs.push({ ...options, resolve, reject });
+      updatePendingCount();
+      scheduleDrain();
+    });
+  }
+
+  function getOrCreateRotateSlot(photoId) {
+    const session = hooks.getRotationSession?.(photoId);
+    if (!session) {
+      return null;
+    }
+
+    let slot = photoMutationSlots.get(photoId);
+    if (!slot || slot.kind !== 'rotate') {
+      slot = {
+        kind: 'rotate',
+        confirmedRotation: session.persistedRotation,
+        targetRotation: session.displayRotation,
+        inFlight: false,
+        generation: 0,
+        inFlightGeneration: null,
+      };
+      photoMutationSlots.set(photoId, slot);
+      return slot;
+    }
+
+    slot.targetRotation = session.displayRotation;
+    return slot;
+  }
+
+  function rotationDelta(slot) {
+    return normalizeRotationDegrees(slot.targetRotation - slot.confirmedRotation);
+  }
+
+  function enqueuePhotoRotate(photoId) {
+    if (!photoId) {
+      return Promise.resolve(true);
+    }
+
+    const session = hooks.getRotationSession?.(photoId);
+    if (!session || hooks.getRotationStillNeeded?.(photoId) === 0) {
+      return Promise.resolve(true);
+    }
+
+    const slot = getOrCreateRotateSlot(photoId);
+    if (!slot) {
+      return Promise.resolve(true);
+    }
+
+    slot.targetRotation = session.displayRotation;
+    slot.generation += 1;
+    enqueueMutationPhotoId(photoId);
+    return trackPhotoMutationPromise(photoId);
   }
 
   async function settlePhotoStar(photoId) {
@@ -268,10 +411,211 @@ const LibraryMutation = (() => {
     hooks.showToast?.(error.message || 'Failed to update star', null);
   }
 
+  async function settlePhotoRotate(photoId) {
+    const slot = photoMutationSlots.get(photoId);
+    if (!slot || slot.kind !== 'rotate' || slot.inFlight) {
+      return;
+    }
+
+    const session = hooks.getRotationSession?.(photoId);
+    if (session) {
+      slot.targetRotation = session.displayRotation;
+    }
+
+    const attemptDelta = rotationDelta(slot);
+    if (attemptDelta === 0) {
+      removeMutationPhotoFromQueue(photoId);
+      photoMutationSlots.delete(photoId);
+      settlePhotoMutationPromise(photoId);
+      return;
+    }
+
+    slot.inFlight = true;
+    slot.inFlightGeneration = slot.generation;
+    updatePendingCount();
+
+    const attemptGeneration = slot.inFlightGeneration;
+
+    try {
+      const response = await fetch(`/api/photo/${photoId}/rotate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          degrees_ccw: attemptDelta,
+          commit_lossy: true,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok || !result.committed) {
+        throw new Error(result.error || 'Failed to save rotation');
+      }
+      await handleRotateSuccess(photoId, slot, result, attemptGeneration, attemptDelta);
+    } catch (error) {
+      handleRotateFailure(photoId, slot, error, attemptGeneration);
+    } finally {
+      slot.inFlight = false;
+      slot.inFlightGeneration = null;
+      updatePendingCount();
+    }
+  }
+
+  async function handleRotateSuccess(
+    photoId,
+    slot,
+    result,
+    attemptGeneration,
+    attemptDelta,
+  ) {
+    const session = hooks.getRotationSession?.(photoId);
+
+    if (result.duplicate_removed) {
+      photoMutationSlots.delete(photoId);
+      removeMutationPhotoFromQueue(photoId);
+      settlePhotoMutationPromise(photoId);
+      await hooks.onRotateDuplicateRemoved?.(photoId, result);
+      return;
+    }
+
+    slot.confirmedRotation = normalizeRotationDegrees(
+      slot.confirmedRotation + attemptDelta,
+    );
+    if (session) {
+      session.persistedRotation = slot.confirmedRotation;
+    }
+
+    if (result.photo) {
+      hooks.applyCommittedPhotoUpdate?.(result.photo, {
+        deferThumbnailRefresh: Boolean(result.reconcile_pending),
+      });
+    }
+
+    if (session) {
+      slot.targetRotation = session.displayRotation;
+    }
+
+    const stillNeeded = rotationDelta(slot);
+    const isSettled =
+      slot.generation === attemptGeneration && stillNeeded === 0;
+
+    if (!isSettled) {
+      enqueueMutationPhotoId(photoId);
+      return;
+    }
+
+    photoMutationSlots.delete(photoId);
+    removeMutationPhotoFromQueue(photoId);
+    if (session && hooks.getRotationStillNeeded?.(photoId) === 0) {
+      hooks.cleanupRotationSession?.(photoId);
+    }
+    settlePhotoMutationPromise(photoId);
+  }
+
+  function handleRotateFailure(photoId, slot, error, attemptGeneration) {
+    if (slot.generation !== attemptGeneration) {
+      enqueueMutationPhotoId(photoId);
+      return;
+    }
+
+    const session = hooks.getRotationSession?.(photoId);
+    if (session) {
+      session.displayRotation = slot.confirmedRotation;
+      session.mode = null;
+      hooks.applyLightboxPreviewRotation?.();
+      hooks.cleanupRotationSession?.(photoId);
+    }
+
+    photoMutationSlots.delete(photoId);
+    removeMutationPhotoFromQueue(photoId);
+    settlePhotoMutationPromise(photoId, error);
+    hooks.showToast?.(error.message || 'Failed to save rotation', null);
+  }
+
+  function runDateEditSse(job) {
+    return new Promise((resolve, reject) => {
+      const eventSource = new EventSource(job.sseUrl);
+      const confirmedPhotos = new Map();
+
+      const finish = (error, result) => {
+        eventSource.close();
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result);
+        }
+      };
+
+      eventSource.addEventListener('progress', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          job.onProgress?.(data);
+          if (data.duplicate_removed && data.photo_id) {
+            job.onDuplicateRemoved?.(data);
+          } else if (data.photo_id && data.photo) {
+            confirmedPhotos.set(Number(data.photo_id), data.photo);
+          }
+        } catch (parseError) {
+          console.error('Date edit SSE progress parse error:', parseError);
+        }
+      });
+
+      eventSource.addEventListener('complete', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.photo_id) {
+            if (data.duplicate_removed) {
+              job.onDuplicateRemoved?.({ photo_id: data.photo_id, ...data });
+            } else if (data.photo) {
+              confirmedPhotos.set(Number(data.photo_id), data.photo);
+            }
+          }
+          finish(null, {
+            data,
+            confirmedPhotoIds: [...confirmedPhotos.keys()],
+            confirmedPhotos,
+          });
+        } catch (parseError) {
+          finish(parseError);
+        }
+      });
+
+      eventSource.addEventListener('error', (event) => {
+        let errorMsg = job.failureToast || 'Failed to update date';
+        try {
+          if (event.data) {
+            const data = JSON.parse(event.data);
+            errorMsg = data.error || errorMsg;
+          }
+        } catch {
+          /* ignore parse errors */
+        }
+        finish(new Error(errorMsg));
+      });
+    });
+  }
+
+  async function settleDateJob(job) {
+    activeDateJob = job;
+    updatePendingCount();
+
+    try {
+      const result = await runDateEditSse(job);
+      await job.onSuccess?.(result);
+      job.resolve(result);
+    } catch (error) {
+      job.revertOptimistic?.();
+      hooks.showToast?.(error.message || job.failureToast || 'Operation failed', null);
+      job.onFailure?.(error);
+      job.reject(error);
+    } finally {
+      activeDateJob = null;
+      updatePendingCount();
+      scheduleDrain();
+    }
+  }
+
   async function runGenericJob(job) {
     const { options } = job;
     try {
-      options.applyOptimistic?.();
       const result = await options.execute();
       if (!result.ok) {
         throw new Error(result.error || 'Mutation failed');
@@ -306,10 +650,28 @@ const LibraryMutation = (() => {
 
   function pumpDrain() {
     startStarSettlements();
+    startMutationSettlements();
 
     if (
       pendingPhotoIds.length === 0 &&
       activeStarWrites.size === 0 &&
+      pendingMutationPhotoIds.length === 0 &&
+      activeMutationWrites.size === 0 &&
+      !activeDateJob &&
+      pendingDateJobs.length > 0
+    ) {
+      void settleDateJob(pendingDateJobs.shift());
+      updatePendingCount();
+      return;
+    }
+
+    if (
+      pendingPhotoIds.length === 0 &&
+      activeStarWrites.size === 0 &&
+      pendingMutationPhotoIds.length === 0 &&
+      activeMutationWrites.size === 0 &&
+      !activeDateJob &&
+      pendingDateJobs.length === 0 &&
       genericQueue.length > 0 &&
       !genericInFlight
     ) {
@@ -349,6 +711,43 @@ const LibraryMutation = (() => {
     }
   }
 
+  function startMutationSettlements() {
+    for (
+      let index = 0;
+      index < pendingMutationPhotoIds.length &&
+      activeMutationWrites.size < MAX_CONCURRENT_MUTATION_WRITES;
+      index += 1
+    ) {
+      const photoId = pendingMutationPhotoIds[index];
+      const slot = photoMutationSlots.get(photoId);
+
+      if (!slot) {
+        removeMutationPhotoFromQueue(photoId);
+        index -= 1;
+        continue;
+      }
+
+      if (slot.inFlight) {
+        continue;
+      }
+
+      if (slot.kind === 'rotate') {
+        const session = hooks.getRotationSession?.(photoId);
+        if (session) {
+          slot.targetRotation = session.displayRotation;
+        }
+        if (rotationDelta(slot) === 0) {
+          removeMutationPhotoFromQueue(photoId);
+          photoMutationSlots.delete(photoId);
+          settlePhotoMutationPromise(photoId);
+          index -= 1;
+          continue;
+        }
+        startRotateSettlement(photoId);
+      }
+    }
+  }
+
   function startStarSettlement(photoId) {
     activeStarWrites.add(photoId);
     updatePendingCount();
@@ -363,6 +762,16 @@ const LibraryMutation = (() => {
         slot.targetRating = undefined;
         removePhotoFromQueue(photoId);
       }
+      updatePendingCount();
+      scheduleDrain();
+    });
+  }
+
+  function startRotateSettlement(photoId) {
+    activeMutationWrites.add(photoId);
+    updatePendingCount();
+    void settlePhotoRotate(photoId).finally(() => {
+      activeMutationWrites.delete(photoId);
       updatePendingCount();
       scheduleDrain();
     });
@@ -385,6 +794,8 @@ const LibraryMutation = (() => {
     init,
     togglePhotoStar,
     enqueueGenericJob,
+    enqueueDateEditJob,
+    enqueuePhotoRotate,
     isLightboxStarFilled,
     getPendingCount: () => pendingCount,
   };

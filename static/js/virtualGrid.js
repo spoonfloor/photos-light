@@ -1188,6 +1188,47 @@ const VirtualGrid = (() => {
     return null;
   }
 
+  function monthIndexCount(monthKey) {
+    return (
+      (monthIndex?.months || []).find((entry) => entry.month === monthKey)
+        ?.count || 0
+    );
+  }
+
+  function sortMonthPhotos(photos) {
+    if (!photos?.length || typeof hooks.comparePhotos !== 'function') {
+      return photos ? [...photos] : [];
+    }
+    return [...photos].sort(hooks.comparePhotos);
+  }
+
+  function insertPhotoInMonthCache(monthKey, photo) {
+    const existing = monthCache.get(monthKey) || [];
+    const without = existing.filter((entry) => entry.id !== photo.id);
+    const next = sortMonthPhotos([...without, photo]);
+    monthCache.set(monthKey, next);
+    return next;
+  }
+
+  async function fetchMonthPhotosFresh(monthKey) {
+    monthCache.delete(monthKey);
+    monthInflight.delete(monthKey);
+    return fetchMonthPhotos(monthKey);
+  }
+
+  async function hydrateDestinationMonthAfterMove(newMonth, movedPhoto, photoId) {
+    try {
+      const serverPhotos = await fetchMonthPhotosFresh(newMonth);
+      const without = serverPhotos.filter((entry) => entry.id !== photoId);
+      monthCache.set(newMonth, sortMonthPhotos([...without, movedPhoto]));
+    } catch (error) {
+      console.error(`Failed to hydrate ${newMonth} after month move:`, error);
+      monthCache.set(newMonth, [movedPhoto]);
+    }
+    rebuildMountedHydratedMonth(newMonth);
+    scheduleSync();
+  }
+
   function applyLayoutGeometryFromIndex(indexPayload) {
     const container = getContainer();
     if (!container || !indexPayload) {
@@ -1457,6 +1498,187 @@ const VirtualGrid = (() => {
 
     affectedMonths.forEach(rebuildMountedHydratedMonth);
     return true;
+  }
+
+  function applyDateMonthMove(photoId, oldMonth, newMonth, updatedPhoto = {}) {
+    if (!layout || !monthIndex || !oldMonth || !newMonth || oldMonth === newMonth) {
+      return null;
+    }
+
+    const id = Number(photoId);
+    let sourceMonth = oldMonth;
+    let sourcePhotos = monthCache.get(oldMonth) || [];
+    let sourceIndex = sourcePhotos.findIndex((photo) => photo.id === id);
+
+    if (sourceIndex === -1) {
+      const cached = findCachedPhoto(id);
+      if (!cached) {
+        return null;
+      }
+      sourceMonth = cached.monthKey;
+      sourcePhotos = cached.photos;
+      sourceIndex = sourcePhotos.findIndex((photo) => photo.id === id);
+      if (sourceIndex === -1) {
+        return null;
+      }
+    }
+
+    const beforeOldPhotos = [...sourcePhotos];
+    const movedPhoto = { ...sourcePhotos[sourceIndex], ...updatedPhoto };
+    const afterOldPhotos = sourcePhotos.filter((photo) => photo.id !== id);
+    monthCache.set(sourceMonth, afterOldPhotos);
+
+    const newMonthPhotos = monthCache.get(newMonth) || [];
+    const beforeNewPhotos = [...newMonthPhotos];
+    const destCountBefore = monthIndexCount(newMonth);
+    let destHydrateAsync = false;
+
+    if (monthCache.has(newMonth)) {
+      insertPhotoInMonthCache(newMonth, movedPhoto);
+    } else if (destCountBefore === 0) {
+      monthCache.set(newMonth, [movedPhoto]);
+    } else {
+      destHydrateAsync = true;
+    }
+
+    const token = {
+      moves: [
+        {
+          photoId: id,
+          oldMonth: sourceMonth,
+          newMonth,
+          movedPhoto: beforeOldPhotos[sourceIndex],
+          oldMonthBeforePhotos: beforeOldPhotos,
+          newMonthBeforePhotos: beforeNewPhotos,
+        },
+      ],
+    };
+
+    const visibleRemoved = isPhotoVisibleInCurrentIndex(beforeOldPhotos[sourceIndex])
+      ? 1
+      : 0;
+    const visibleAdded = isPhotoVisibleInCurrentIndex(movedPhoto) ? 1 : 0;
+    let patchedIndex = monthIndex;
+
+    if (visibleRemoved > 0) {
+      patchedIndex = GridLayout.patchMonthIndexDelta(
+        patchedIndex,
+        sourceMonth,
+        -visibleRemoved,
+      );
+    }
+    if (visibleAdded > 0) {
+      patchedIndex = GridLayout.patchMonthIndexDelta(
+        patchedIndex,
+        newMonth,
+        visibleAdded,
+      );
+    }
+
+    if (visibleRemoved > 0 || visibleAdded > 0) {
+      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+        monthCache.set(sourceMonth, beforeOldPhotos);
+        monthCache.set(newMonth, beforeNewPhotos);
+        return null;
+      }
+    } else {
+      scheduleSync();
+    }
+
+    rebuildMountedHydratedMonth(sourceMonth);
+    if (destHydrateAsync) {
+      void hydrateDestinationMonthAfterMove(newMonth, movedPhoto, id);
+    } else {
+      rebuildMountedHydratedMonth(newMonth);
+    }
+    return token;
+  }
+
+  function resortMonthCachePhoto(photoId) {
+    const cached = findCachedPhoto(Number(photoId));
+    if (!cached) {
+      return false;
+    }
+    monthCache.set(cached.monthKey, sortMonthPhotos(cached.photos));
+    return rebuildMountedHydratedMonth(cached.monthKey);
+  }
+
+  function restoreDateMonthMove(token, photoIds) {
+    if (!token?.moves?.length || !layout || !monthIndex) {
+      return false;
+    }
+
+    const idSet = new Set(
+      (photoIds?.length
+        ? photoIds
+        : token.moves.map((entry) => entry.photoId)
+      ).map((id) => Number(id)),
+    );
+    if (!idSet.size) {
+      return false;
+    }
+
+    const monthCounts = new Map();
+    const affectedMonths = new Set();
+
+    token.moves.forEach(
+      ({
+        photoId,
+        oldMonth,
+        newMonth,
+        movedPhoto,
+        oldMonthBeforePhotos,
+      }) => {
+        if (!idSet.has(photoId)) {
+          return;
+        }
+
+        const currentNewPhotos = monthCache.get(newMonth) || [];
+        monthCache.set(
+          newMonth,
+          currentNewPhotos.filter((photo) => photo.id !== photoId),
+        );
+        monthCache.set(oldMonth, [...oldMonthBeforePhotos]);
+        affectedMonths.add(oldMonth);
+        affectedMonths.add(newMonth);
+
+        if (isPhotoVisibleInCurrentIndex(movedPhoto)) {
+          monthCounts.set(newMonth, (monthCounts.get(newMonth) || 0) - 1);
+          monthCounts.set(oldMonth, (monthCounts.get(oldMonth) || 0) + 1);
+        }
+      },
+    );
+
+    if (!affectedMonths.size) {
+      return false;
+    }
+
+    if (monthCounts.size) {
+      let patchedIndex = monthIndex;
+      monthCounts.forEach((delta, monthKey) => {
+        patchedIndex = GridLayout.patchMonthIndexDelta(
+          patchedIndex,
+          monthKey,
+          delta,
+        );
+      });
+      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+        return false;
+      }
+    } else {
+      scheduleSync();
+    }
+
+    affectedMonths.forEach(rebuildMountedHydratedMonth);
+    return true;
+  }
+
+  function rebuildMountedMonthForPhoto(photoId) {
+    const cached = findCachedPhoto(Number(photoId));
+    if (!cached) {
+      return false;
+    }
+    return rebuildMountedHydratedMonth(cached.monthKey);
   }
 
   function invalidateAllMonths() {
@@ -1738,6 +1960,10 @@ const VirtualGrid = (() => {
     applyFilterRowChange,
     applyPhotoDeletes,
     restorePhotoDeletes,
+    applyDateMonthMove,
+    restoreDateMonthMove,
+    rebuildMountedMonthForPhoto,
+    resortMonthCachePhoto,
     refreshMonthIndex,
     setFilterPhoto,
     applyFilterLayout,

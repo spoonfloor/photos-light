@@ -213,10 +213,10 @@ body.trash-view-active.filter-chip-rail-visible {
 .trash-chrome-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0px;
   width: 100%;
   height: var(--trash-chrome-height);
-  padding: 0 20px;
+  padding: 0 12px;
   background: var(--body-bg);
   color: var(--text-primary);
 }
@@ -244,7 +244,8 @@ body.trash-view-active.filter-chip-rail-visible {
 }
 
 .trash-chrome-title {
-  font-size: var(--app-bar-title-size);
+  /* font-size: var(--app-bar-title-size); */
+  font-size: 18px;
   font-weight: 300;
 }
 
@@ -2453,6 +2454,7 @@ body.library-recovery-active .library-recovery-dock {
 .folder-list {
   flex: 1;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 16px 24px;
   background: #232323;
 }
@@ -2582,6 +2584,7 @@ body.library-recovery-active .library-recovery-dock {
   padding: 16px 20px 12px 20px;
   background: #1f1f1f;
   flex-shrink: 0;
+  min-height: 104px;
 }
 
 .selected-path p {

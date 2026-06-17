@@ -39,11 +39,7 @@ function appendConvertAuditIssuesToActivityFeed(issues = []) {
 }
 
 async function consumeSseStream(response, options = {}) {
-  const {
-    isAborted = () => false,
-    onMessage,
-    onStop = null,
-  } = options;
+  const { isAborted = () => false, onMessage, onStop = null } = options;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -199,14 +195,24 @@ const libraryRecoveryState = {
 
 const CLEANER_SIGNAL_DEFS = [
   { key: 'misfiled_media', label: 'MOVE/RENAME', detailKey: 'misfiled_media' },
-  { key: 'unsupported_files', label: 'UNSUPPORTED', detailKey: 'unsupported_files' },
+  {
+    key: 'unsupported_files',
+    label: 'UNSUPPORTED',
+    detailKey: 'unsupported_files',
+  },
   { key: 'duplicates', label: 'DUPLICATES', detailKey: 'duplicates' },
   { key: 'metadata_cleanup', label: 'METADATA', detailKey: 'metadata_cleanup' },
   { key: 'folder_cleanup', label: 'Cleanup', detailKey: 'folder_cleanup' },
-  { key: 'database_repairs', label: 'DB REPAIRS', detailKey: 'database_repairs' },
+  {
+    key: 'database_repairs',
+    label: 'DB REPAIRS',
+    detailKey: 'database_repairs',
+  },
 ];
 
-const CLEANER_SIGNAL_KEYS = CLEANER_SIGNAL_DEFS.map((signalDef) => signalDef.key);
+const CLEANER_SIGNAL_KEYS = CLEANER_SIGNAL_DEFS.map(
+  (signalDef) => signalDef.key,
+);
 
 const DEFAULT_CLEANER_SCORECARD_VIEW = CLEANER_SIGNAL_DEFS.map((signalDef) => ({
   key: signalDef.key,
@@ -268,12 +274,7 @@ function createOpenFolderRecoveryBucketReducer(
       ? null
       : Math.max(0, Number(initialDuplicateCount));
   let preflightWinnerCount = null;
-  if (
-    m !== null &&
-    Number.isFinite(m) &&
-    d0 !== null &&
-    Number.isFinite(d0)
-  ) {
+  if (m !== null && Number.isFinite(m) && d0 !== null && Number.isFinite(d0)) {
     preflightWinnerCount = Math.max(0, m - d0);
   }
   return (signalCounts) =>
@@ -284,7 +285,9 @@ function createOpenFolderRecoveryBucketReducer(
 }
 
 function getOpenFolderRecoveryPendingTotal(signalCounts = {}) {
-  return Number(normalizeCleanerSignalCounts(signalCounts).operation_count || 0);
+  return Number(
+    normalizeCleanerSignalCounts(signalCounts).operation_count || 0,
+  );
 }
 
 let currentPhotoLoad = null;
@@ -348,7 +351,8 @@ const IMPORT_OVERLAY_TITLE = 'Add photos';
 // ============================================================================
 const FLOW_INFLIGHT_BODY = {
   add: 'Adding photos and videos to your library.',
-  clean: 'Checking media files, repairing issues, and updating library database.',
+  clean:
+    'Checking media files, repairing issues, and updating library database.',
   convert: 'Converting files and organizing your library.',
 };
 
@@ -406,9 +410,7 @@ function formatFlowLogPointer(logPath) {
 function appendFlowFinishFeedLines(flowKey, finishedAt, elapsedSec) {
   const feed = getFlowActivityLogFeed(flowKey);
   feed.append(`Finished: ${formatCleanLibraryFeedTimestamp(finishedAt)}`);
-  feed.append(
-    `Total time: ${formatPreciseDurationFromSeconds(elapsedSec)}`,
-  );
+  feed.append(`Total time: ${formatPreciseDurationFromSeconds(elapsedSec)}`);
 }
 
 function appendFlowLogPointer(flowKey, logPath) {
@@ -465,7 +467,9 @@ function createFlowActivityLogFeed(flowKey) {
       return trimCleanLibraryFeedLines(nextLines);
     }
     const overflow = nextLines.length - config.maxLines;
-    const startLine = nextLines[0]?.startsWith('Started:') ? nextLines[0] : null;
+    const startLine = nextLines[0]?.startsWith('Started:')
+      ? nextLines[0]
+      : null;
     if (startLine) {
       return [startLine, ...nextLines.slice(1 + overflow)];
     }
@@ -611,15 +615,15 @@ function shouldUseFlowActivityFeed(flowKey) {
   if (flowKey === 'add') {
     return Boolean(
       importState.isImporting ||
-        importState.overlayPhase === 'inflight' ||
-        importState.overlayPhase === 'complete',
+      importState.overlayPhase === 'inflight' ||
+      importState.overlayPhase === 'complete',
     );
   }
   if (flowKey === 'clean') {
     return Boolean(
       cleanLibraryState?.workingPhaseActive ||
-        cleanLibraryState?.overlayPhase === 'working' ||
-        cleanLibraryState?.overlayPhase === 'finished',
+      cleanLibraryState?.overlayPhase === 'working' ||
+      cleanLibraryState?.overlayPhase === 'finished',
     );
   }
   if (flowKey === 'convert' || flowKey === 'convertComplete') {
@@ -666,7 +670,9 @@ function flowActivityMilestoneKey(flowKey, phaseKey = '') {
 
 function resetFlowActivityMilestones(flowKey, phaseKey = '') {
   if (phaseKey) {
-    flowActivityMilestoneState.delete(flowActivityMilestoneKey(flowKey, phaseKey));
+    flowActivityMilestoneState.delete(
+      flowActivityMilestoneKey(flowKey, phaseKey),
+    );
     return;
   }
   for (const key of [...flowActivityMilestoneState.keys()]) {
@@ -780,11 +786,7 @@ function canWriteFlowActivityFeed(flowKey, { allowInactive = false } = {}) {
   return shouldUseFlowActivityFeed(flowKey);
 }
 
-function appendFlowActivityLine(
-  flowKey,
-  line,
-  { allowInactive = false } = {},
-) {
+function appendFlowActivityLine(flowKey, line, { allowInactive = false } = {}) {
   if (!canWriteFlowActivityFeed(flowKey, { allowInactive })) {
     return;
   }
@@ -874,7 +876,10 @@ function maybeAppendFlowProgressMilestone(
       marker = bucket;
     } else if (prior.lastEmittedAtMs === null) {
       prior.lastEmittedAtMs = now;
-    } else if (now - prior.lastEmittedAtMs >= FLOW_ACTIVITY_FEED_TIME_FALLBACK_MS) {
+    } else if (
+      now - prior.lastEmittedAtMs >=
+      FLOW_ACTIVITY_FEED_TIME_FALLBACK_MS
+    ) {
       const timeBucket =
         Math.floor(done / FLOW_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT) *
         FLOW_ACTIVITY_FEED_TIME_FALLBACK_INCREMENT;
@@ -937,11 +942,7 @@ function completeFlowActivityFeed(
 function handoffFlowActivityFeed(
   fromFlowKey,
   toFlowKey,
-  {
-    finishedAt = new Date(),
-    elapsedSec = 0,
-    logPath = null,
-  } = {},
+  { finishedAt = new Date(), elapsedSec = 0, logPath = null } = {},
 ) {
   const priorExpanded = getFlowActivityLogFeed(fromFlowKey).isExpanded();
   resetFlowDetailsPanel(toFlowKey);
@@ -1162,7 +1163,10 @@ function loadAppBar() {
       // Cache it with version
       try {
         sessionStorage.setItem('photoViewer_appBarShell', html);
-        sessionStorage.setItem('photoViewer_appBarVersion', STATIC_ASSET_VERSION);
+        sessionStorage.setItem(
+          'photoViewer_appBarVersion',
+          STATIC_ASSET_VERSION,
+        );
       } catch (e) {
         // Ignore cache errors
       }
@@ -1579,7 +1583,10 @@ function updateDeleteButtonVisibility() {
     }
   }
 
-  if (editDateBtn && !(typeof TrashView !== 'undefined' && TrashView.isActive())) {
+  if (
+    editDateBtn &&
+    !(typeof TrashView !== 'undefined' && TrashView.isActive())
+  ) {
     if (state.selectedPhotos.size > 0) {
       editDateBtn.style.opacity = '1';
       editDateBtn.style.pointerEvents = 'auto';
@@ -2248,7 +2255,10 @@ function showDialog(title, message, buttons, options = {}) {
       return;
     }
 
-    overlay.classList.toggle('dialog-overlay--over-import', Boolean(options.overImport));
+    overlay.classList.toggle(
+      'dialog-overlay--over-import',
+      Boolean(options.overImport),
+    );
 
     titleEl.textContent = title;
     if (options.htmlMessage) {
@@ -2337,7 +2347,9 @@ async function loadLibraryRecoveryDock() {
   }
 
   try {
-    const response = await fetch(versionedStaticUrl('fragments/libraryRecoveryDock.html'));
+    const response = await fetch(
+      versionedStaticUrl('fragments/libraryRecoveryDock.html'),
+    );
     if (!response.ok) {
       throw new Error(
         `Failed to load library recovery dock (${response.status})`,
@@ -2476,7 +2488,10 @@ function createInflightRemainingTicker({
   }
 
   function setRemainingLine(remainingSec) {
-    const formatted = formatInflightRemainingLine(remainingSec, remainingLabelState);
+    const formatted = formatInflightRemainingLine(
+      remainingSec,
+      remainingLabelState,
+    );
     remainingLabelState = formatted.state;
     return formatted.line;
   }
@@ -2634,7 +2649,9 @@ function setLibraryRecoveryWinnersLine({
     winnersEl.textContent = '';
     return;
   }
-  const safeFiled = Number.isFinite(filed) ? Math.max(0, Math.min(filed, total)) : 0;
+  const safeFiled = Number.isFinite(filed)
+    ? Math.max(0, Math.min(filed, total))
+    : 0;
   winnersEl.textContent = `winners (${safeFiled}/${total})`;
   winnersEl.style.display = 'block';
 }
@@ -2757,7 +2774,10 @@ function createScorecardController({ statsEl, statusEl, debugEl } = {}) {
   };
 
   return {
-    setWinnersProgress({ winnersFiled = 0, winnersToFile: nextWinnersToFile = null } = {}) {
+    setWinnersProgress({
+      winnersFiled = 0,
+      winnersToFile: nextWinnersToFile = null,
+    } = {}) {
       if (!debugEl || destroyed) {
         return;
       }
@@ -2795,7 +2815,11 @@ function createScorecardController({ statsEl, statusEl, debugEl } = {}) {
       if (!Number.isFinite(cap) || cap < 1 || !Number.isFinite(processed)) {
         return;
       }
-      if (!winnersTotalLocked || winnersToFile === null || winnersToFile !== cap) {
+      if (
+        !winnersTotalLocked ||
+        winnersToFile === null ||
+        winnersToFile !== cap
+      ) {
         winnersToFile = cap;
         winnersTotalLocked = true;
       }
@@ -2863,7 +2887,10 @@ function createScorecardController({ statsEl, statusEl, debugEl } = {}) {
       ) {
         ensureMetric(key, {
           ...options.metric,
-          value: round && Number.isFinite(endValue) ? Math.round(endValue) : nextValue,
+          value:
+            round && Number.isFinite(endValue)
+              ? Math.round(endValue)
+              : nextValue,
         });
         render();
         return Promise.resolve(nextValue);
@@ -3062,10 +3089,7 @@ function createOpenFolderRecoveryRuntime({
     if (total <= 0) {
       return 0;
     }
-    return Math.max(
-      0,
-      Math.min(1, Number(phase.processed || 0) / total),
-    );
+    return Math.max(0, Math.min(1, Number(phase.processed || 0) / total));
   };
 
   const winnerProgressFraction = () => {
@@ -3114,12 +3138,11 @@ function createOpenFolderRecoveryRuntime({
       return;
     }
     const metrics = OPEN_FOLDER_RECOVERY_METRIC_ORDER.map((key) => {
-      const metric =
-        displayState.get(key) || {
-          label: OPEN_FOLDER_RECOVERY_METRIC_LABELS[key] || key,
-          display: 0,
-          target: 0,
-        };
+      const metric = displayState.get(key) || {
+        label: OPEN_FOLDER_RECOVERY_METRIC_LABELS[key] || key,
+        display: 0,
+        target: 0,
+      };
       return {
         key,
         label: metric.label,
@@ -3309,7 +3332,9 @@ function normalizeCleanerScorecardView(view = null) {
   return rawBuckets
     .map((bucket, index) => {
       const signals = Array.isArray(bucket?.signals)
-        ? bucket.signals.filter((signal) => CLEANER_SIGNAL_KEYS.includes(signal))
+        ? bucket.signals.filter((signal) =>
+            CLEANER_SIGNAL_KEYS.includes(signal),
+          )
         : [];
       if (!signals.length) {
         return null;
@@ -3637,7 +3662,9 @@ function loadDateEditor() {
 
   const mount = document.getElementById('dateEditorMount');
 
-  dateEditorReadyPromise = fetch(versionedStaticUrl('fragments/dateEditor.html')) // Sequence with interval
+  dateEditorReadyPromise = fetch(
+    versionedStaticUrl('fragments/dateEditor.html'),
+  ) // Sequence with interval
     .then((r) => {
       if (!r.ok) throw new Error(`Failed to load date editor (${r.status})`);
       return r.text();
@@ -3851,7 +3878,10 @@ async function openDateEditor(photoIdOrIds) {
   hours = hours % 12 || 12;
 
   setDateEditorSelectValue(document.getElementById('dateEditorHour'), hours);
-  setDateEditorSelectValue(document.getElementById('dateEditorMinute'), date.getMinutes());
+  setDateEditorSelectValue(
+    document.getElementById('dateEditorMinute'),
+    date.getMinutes(),
+  );
   document.getElementById('dateEditorAmPm').value = ampm;
 
   // Update current date display
@@ -4005,6 +4035,262 @@ function updateDateChangeProgress(current, total) {
   }
 
   // Status text stays static (no updates during progress)
+}
+
+function parseExifDateString(dateStr) {
+  if (!dateStr) {
+    return null;
+  }
+  const match = dateStr.match(
+    /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/,
+  );
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  return new Date(year, month - 1, day, hour, minute, second);
+}
+
+function formatExifDateString(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}:${pad(date.getMonth() + 1)}:${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function monthKeyFromExifDate(dateStr) {
+  if (!dateStr) {
+    return 'undated';
+  }
+  return dateStr.replace(/^(\d{4}):(\d{2})/, '$1-$2').slice(0, 7);
+}
+
+function computePhotoDateEditMap(
+  photoIds,
+  newDate,
+  mode,
+  intervalOptions = {},
+) {
+  const map = new Map();
+  if (!photoIds?.length || !newDate) {
+    return map;
+  }
+
+  if (mode === 'same' || photoIds.length === 1) {
+    photoIds.forEach((photoId) => map.set(photoId, newDate));
+    return map;
+  }
+
+  if (mode === 'shift') {
+    const anchorPhoto = state.photos.find((photo) => photo.id === photoIds[0]);
+    const anchorDate = parseExifDateString(anchorPhoto?.date);
+    const targetDate = parseExifDateString(newDate);
+    if (!anchorDate || !targetDate) {
+      return map;
+    }
+    const offsetMs = targetDate.getTime() - anchorDate.getTime();
+    photoIds.forEach((photoId) => {
+      const photo = state.photos.find((entry) => entry.id === photoId);
+      const photoDate = parseExifDateString(photo?.date);
+      if (!photoDate) {
+        return;
+      }
+      map.set(
+        photoId,
+        formatExifDateString(new Date(photoDate.getTime() + offsetMs)),
+      );
+    });
+    return map;
+  }
+
+  if (mode === 'sequence') {
+    const intervalAmount = Number(intervalOptions.intervalAmount) || 5;
+    const intervalUnit = intervalOptions.intervalUnit || 'minutes';
+    let intervalMs = intervalAmount * 60 * 1000;
+    if (intervalUnit === 'seconds') {
+      intervalMs = intervalAmount * 1000;
+    } else if (intervalUnit === 'hours') {
+      intervalMs = intervalAmount * 60 * 60 * 1000;
+    }
+
+    const sequenced = photoIds
+      .map((photoId) => {
+        const photo = state.photos.find((entry) => entry.id === photoId);
+        const photoDate = parseExifDateString(photo?.date);
+        return photoDate ? { photoId, photoDate } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.photoDate - b.photoDate);
+
+    const baseDate = parseExifDateString(newDate);
+    if (!baseDate) {
+      return map;
+    }
+
+    sequenced.forEach(({ photoId }, index) => {
+      map.set(
+        photoId,
+        formatExifDateString(new Date(baseDate.getTime() + intervalMs * index)),
+      );
+    });
+  }
+
+  return map;
+}
+
+function buildPhotoDateEdits(photoIds, newDate, mode, intervalOptions = {}) {
+  const dateMap = computePhotoDateEditMap(
+    photoIds,
+    newDate,
+    mode,
+    intervalOptions,
+  );
+  const edits = [];
+
+  photoIds.forEach((photoId) => {
+    const targetDate = dateMap.get(photoId);
+    if (!targetDate) {
+      return;
+    }
+    const photo = state.photos.find((entry) => entry.id === photoId);
+    if (!photo) {
+      return;
+    }
+    edits.push({
+      photoId,
+      oldFields: {
+        date: photo.date,
+        month: photo.month,
+      },
+      newFields: {
+        date: targetDate,
+        month: monthKeyFromExifDate(targetDate),
+      },
+      oldMonth: photo.month,
+      newMonth: monthKeyFromExifDate(targetDate),
+    });
+  });
+
+  return edits;
+}
+
+function createDateEditOptimisticSnapshot(edits) {
+  return {
+    edits: edits.map((edit) => ({
+      photoId: edit.photoId,
+      oldFields: { ...edit.oldFields },
+      newFields: { ...edit.newFields },
+      oldMonth: edit.oldMonth,
+      newMonth: edit.newMonth,
+    })),
+    virtualPatches: [],
+    deletePatches: [],
+    processedDuplicateIds: new Set(),
+  };
+}
+
+function applyDateEditOptimistically(snapshot) {
+  let scrollTargetMonth = null;
+
+  snapshot.edits.forEach((edit) => {
+    patchLibraryPhotoFields(edit.photoId, edit.newFields);
+
+    if (!VirtualGrid.isActive()) {
+      return;
+    }
+
+    if (edit.oldMonth && edit.newMonth && edit.oldMonth !== edit.newMonth) {
+      const token = VirtualGrid.applyDateMonthMove(
+        edit.photoId,
+        edit.oldMonth,
+        edit.newMonth,
+        edit.newFields,
+      );
+      if (token) {
+        snapshot.virtualPatches.push({ photoId: edit.photoId, token });
+      } else {
+        VirtualGrid.invalidateMonth(edit.oldMonth);
+        VirtualGrid.invalidateMonth(edit.newMonth);
+        VirtualGrid.scheduleSync();
+      }
+      if (!scrollTargetMonth) {
+        scrollTargetMonth = edit.newMonth;
+      }
+      return;
+    }
+
+    VirtualGrid.rebuildMountedMonthForPhoto(edit.photoId);
+    VirtualGrid.resortMonthCachePhoto(edit.photoId);
+  });
+
+  if (scrollTargetMonth && VirtualGrid.isActive()) {
+    VirtualGrid.scrollToMonth(scrollTargetMonth);
+  }
+
+  return scrollTargetMonth;
+}
+
+function restoreDateEditOptimism(snapshot, photoIds = null) {
+  if (!snapshot?.edits?.length) {
+    return false;
+  }
+
+  const idSet = photoIds
+    ? new Set(photoIds.map((id) => Number(id)))
+    : new Set(snapshot.edits.map((edit) => edit.photoId));
+
+  snapshot.edits.forEach((edit) => {
+    if (!idSet.has(edit.photoId)) {
+      return;
+    }
+    patchLibraryPhotoFields(edit.photoId, edit.oldFields);
+  });
+
+  snapshot.virtualPatches.forEach(({ photoId, token }) => {
+    if (idSet.has(photoId)) {
+      VirtualGrid.restoreDateMonthMove(token, [photoId]);
+    }
+  });
+
+  snapshot.deletePatches?.forEach(({ photoId, snapshot: deleteSnapshot }) => {
+    if (idSet.has(photoId)) {
+      restoreDeleteOptimism(deleteSnapshot, [photoId]);
+    }
+  });
+
+  return true;
+}
+
+function applyDateEditDuplicateOptimistic(photoId, snapshot) {
+  const normalizedId = Number(photoId);
+  if (snapshot.processedDuplicateIds.has(normalizedId)) {
+    return;
+  }
+  snapshot.processedDuplicateIds.add(normalizedId);
+
+  const deleteSnapshot = createDeleteOptimisticSnapshot([normalizedId]);
+  applyDeleteOptimistically(deleteSnapshot);
+  snapshot.deletePatches.push({
+    photoId: normalizedId,
+    snapshot: deleteSnapshot,
+  });
+}
+
+function confirmDateEditFromServer(confirmedPhotos) {
+  confirmedPhotos.forEach((photo, photoId) => {
+    patchLibraryPhotoFields(photoId, {
+      date: photo.date,
+      month: photo.month,
+      path: photo.path,
+    });
+    applyCommittedPhotoUpdate(photo, { skipMediaRefresh: true });
+    if (VirtualGrid.isActive()) {
+      VirtualGrid.resortMonthCachePhoto(photoId);
+    }
+  });
 }
 
 async function applyDateEditPatch(data) {
@@ -4176,9 +4462,11 @@ function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
   }
 
   if (exhaustedScope === 'library' || exhaustedScope === 'timeline') {
-    if (!reconcileTrashCatalogEmptyState()
-      && state.photoTotalCount === 0
-      && state.photos.length === 0) {
+    if (
+      !reconcileTrashCatalogEmptyState() &&
+      state.photoTotalCount === 0 &&
+      state.photos.length === 0
+    ) {
       showEmptyLibraryState();
     }
     return;
@@ -4270,10 +4558,17 @@ function initLibraryMutationEngine() {
       }
       await syncGridAfterHistogramChange();
       showToast(
-        result.message ||
-          'Photo became a duplicate and was moved to trash',
+        result.message || 'Photo became a duplicate and was moved to trash',
         null,
       );
+    },
+    getRotationSession: (photoId) => getLightboxRotationSession(photoId),
+    getRotationStillNeeded: (photoId) => getRotationStillNeeded(photoId),
+    applyLightboxPreviewRotation: () => applyCurrentLightboxPreviewRotation(),
+    cleanupRotationSession: (photoId) =>
+      cleanupLightboxRotationSession(photoId),
+    onRotateDuplicateRemoved: async (photoId, result) => {
+      await handleDuplicateRemovedRotation(photoId, result.message);
     },
     onPendingCountChange: (count) => {
       state.libraryMutationPending = count;
@@ -4350,6 +4645,44 @@ async function syncGridAfterSortChange() {
   await loadAndRenderPhotos(false);
 }
 
+async function finalizeDateEditSettlement(result, options = {}) {
+  const {
+    snapshot,
+    originalDates,
+    clearSelection = false,
+    message = null,
+  } = options;
+  const { data, confirmedPhotos } = result;
+
+  if (data?.duplicate_removed && data.photo_id) {
+    applyDateEditDuplicateOptimistic(data.photo_id, snapshot);
+  } else if (data?.photo && data.photo_id) {
+    confirmedPhotos.set(Number(data.photo_id), data.photo);
+  }
+
+  confirmDateEditFromServer(confirmedPhotos);
+  await populateDatePicker();
+  hideDateChangeProgressOverlay();
+
+  if (clearSelection) {
+    deselectAllPhotos();
+  }
+
+  let toastMessage = message;
+  if (!toastMessage) {
+    const updatedCount = data?.updated_count ?? confirmedPhotos.size;
+    toastMessage = `Updated ${updatedCount} photo${updatedCount !== 1 ? 's' : ''}`;
+    if (data?.duplicate_count > 0) {
+      toastMessage += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
+    }
+  }
+
+  showToast(toastMessage, () => undoDateEdit(originalDates));
+}
+
+/**
+ * @deprecated Legacy helper — prefer finalizeDateEditSettlement.
+ */
 async function finalizeDateChangeSuccess({
   message,
   originalDates,
@@ -4409,7 +4742,6 @@ async function saveDateEdit() {
   const photoIds = JSON.parse(overlay.dataset.photoIds || '[]');
   const isBulk = overlay.dataset.isBulk === 'true';
 
-  // Get values
   const year = document.getElementById('dateEditorYear').value;
   const month = String(
     document.getElementById('dateEditorMonth').value,
@@ -4424,18 +4756,14 @@ async function saveDateEdit() {
   ).padStart(2, '0');
   const ampm = document.getElementById('dateEditorAmPm').value;
 
-  // Convert to 24-hour format
   if (ampm === 'PM' && hour !== 12) {
     hour += 12;
   } else if (ampm === 'AM' && hour === 12) {
     hour = 0;
   }
   const hour24 = String(hour).padStart(2, '0');
-
-  // Format as EXIF format (YYYY:MM:DD HH:MM:SS)
   const newDate = `${year}:${month}:${day} ${hour24}:${minute}:00`;
 
-  // Capture original dates BEFORE edit for undo
   const originalDates = photoIds.map((id) => {
     const photo = state.photos.find((p) => p.id === id);
     return {
@@ -4444,132 +4772,92 @@ async function saveDateEdit() {
     };
   });
 
-  // Close date editor immediately
-  closeDateEditor();
-  if (state.lightboxOpen) closeLightbox();
+  const mode = isBulk
+    ? document.querySelector('input[name="dateEditorMode"]:checked')?.value ||
+      'same'
+    : 'same';
+  const intervalOptions = isBulk
+    ? {
+        intervalAmount: document.getElementById('dateEditorIntervalAmount')
+          ?.value,
+        intervalUnit: document.getElementById('dateEditorIntervalUnit')?.value,
+      }
+    : {};
 
-  // Show progress dialog immediately (instant feedback!)
+  const edits = buildPhotoDateEdits(photoIds, newDate, mode, intervalOptions);
+  if (!edits.length) {
+    showToast('No photos to update', null);
+    return;
+  }
+
+  const snapshot = createDateEditOptimisticSnapshot(edits);
+
+  closeDateEditor();
+  if (state.lightboxOpen) {
+    await closeLightbox();
+  }
+
   if (!document.getElementById('dateChangeProgressOverlay')) {
     await loadDateChangeProgressOverlay();
   }
   showDateChangeProgressOverlay(photoIds.length);
 
-  try {
-    // Build query parameters for SSE (EventSource only supports GET)
-    const params = new URLSearchParams();
-
-    if (isBulk) {
-      // Bulk edit mode
-      const mode = document.querySelector(
-        'input[name="dateEditorMode"]:checked',
-      ).value;
-
-      params.append('photo_ids', JSON.stringify(photoIds));
-      params.append('new_date', newDate);
-      params.append('mode', mode);
-
-      // Add interval data if sequence mode
-      if (mode === 'sequence') {
-        params.append(
-          'interval_amount',
-          document.getElementById('dateEditorIntervalAmount').value,
-        );
-        params.append(
-          'interval_unit',
-          document.getElementById('dateEditorIntervalUnit').value,
-        );
-      }
-
-      // Use SSE for bulk updates
-      const eventSource = new EventSource(
-        '/api/photos/bulk_update_date/execute?' + params.toString(),
-      );
-
-      eventSource.addEventListener('progress', (e) => {
-        const data = JSON.parse(e.data);
-
-        updateDateChangeProgress(data.current, data.total);
-
-        if (data.duplicate_removed || data.photo) {
-          void applyDateEditPatch(data);
-        }
-      });
-
-      eventSource.addEventListener('complete', async (e) => {
-        const data = JSON.parse(e.data);
-
-        eventSource.close();
-
-        let message = `Updated ${data.updated_count} photo${data.updated_count !== 1 ? 's' : ''}`;
-        if (data.duplicate_count > 0) {
-          message += `, ${data.duplicate_count} duplicate${data.duplicate_count !== 1 ? 's' : ''} moved to trash`;
-        }
-
-        await finalizeDateChangeSuccess({
-          message,
-          originalDates,
-          clearSelection: true,
-        });
-      });
-
-      eventSource.addEventListener('error', (e) => {
-        console.error('❌ Bulk date update failed:', e);
-
-        let errorMsg = 'Failed to update dates';
-        try {
-          const data = JSON.parse(e.data);
-          errorMsg = data.error || errorMsg;
-        } catch (err) {
-          // Ignore parse errors
-        }
-
-        showDateChangeError(errorMsg);
-        eventSource.close();
-      });
-    } else {
-      // Single photo edit
-      params.append('photo_id', photoIds[0]);
-      params.append('new_date', newDate);
-
-      // Use SSE for single photo update
-      const eventSource = new EventSource(
-        '/api/photo/update_date/execute?' + params.toString(),
-      );
-
-      eventSource.addEventListener('progress', (e) => {
-        const data = JSON.parse(e.data);
-
-        updateDateChangeProgress(data.current || 0, data.total || 1);
-      });
-
-      eventSource.addEventListener('complete', async (e) => {
-        const data = JSON.parse(e.data);
-
-        eventSource.close();
-
-        await finalizeDateChangeSuccess({
-          message: 'Date updated',
-          originalDates,
-          clearSelection: false,
-          patchResults: [data],
-        });
-      });
-
-      eventSource.addEventListener('error', (e) => {
-        console.error('❌ Date update failed:', e);
-
-        let errorMsg = 'Failed to update date';
-        try {
-          const data = JSON.parse(e.data);
-          errorMsg = data.error || errorMsg;
-        } catch (err) {
-          // Ignore parse errors
-        }
-
-        showDateChangeError(errorMsg);
-        eventSource.close();
-      });
+  const params = new URLSearchParams();
+  if (isBulk) {
+    params.append('photo_ids', JSON.stringify(photoIds));
+    params.append('new_date', newDate);
+    params.append('mode', mode);
+    if (mode === 'sequence') {
+      params.append('interval_amount', intervalOptions.intervalAmount);
+      params.append('interval_unit', intervalOptions.intervalUnit);
     }
+  } else {
+    params.append('photo_id', photoIds[0]);
+    params.append('new_date', newDate);
+  }
+
+  const sseUrl = isBulk
+    ? `/api/photos/bulk_update_date/execute?${params.toString()}`
+    : `/api/photo/update_date/execute?${params.toString()}`;
+
+  try {
+    await LibraryMutation.enqueueDateEditJob({
+      snapshot,
+      sseUrl,
+      failureToast: isBulk ? 'Failed to update dates' : 'Failed to update date',
+      applyOptimistic: () => {
+        applyDateEditOptimistically(snapshot);
+      },
+      revertOptimistic: () => {
+        restoreDateEditOptimism(snapshot);
+      },
+      onProgress: (data) => {
+        updateDateChangeProgress(
+          data.current || 0,
+          data.total || photoIds.length,
+        );
+      },
+      onDuplicateRemoved: (data) => {
+        if (data.photo_id) {
+          applyDateEditDuplicateOptimistic(data.photo_id, snapshot);
+        }
+      },
+      onSuccess: async (result) => {
+        await finalizeDateEditSettlement(result, {
+          snapshot,
+          originalDates,
+          clearSelection: isBulk,
+          message: isBulk
+            ? null
+            : result.data?.duplicate_removed
+              ? null
+              : 'Date updated',
+        });
+      },
+      onFailure: (error) => {
+        showDateChangeError(error.message || 'Failed to update date');
+      },
+    });
   } catch (error) {
     console.error('❌ Error updating date:', error);
     showDateChangeError(error.message || 'Unknown error');
@@ -5267,16 +5555,10 @@ async function handleDuplicateRemovedRotation(photoId, message) {
     ? computeLightboxSuccessorBeforeRemove(photoId)
     : null;
 
-  if (removePhotosFromState([photoId]) && state.photoTotalCount > 0) {
-    state.photoTotalCount -= 1;
-  }
-  state.hasMore = state.photos.length < state.photoTotalCount;
-
-  await syncGridAfterHistogramChange();
-
-  if (wasViewingInLightbox) {
-    await applyLightboxSuccessorAfterRemove(successor, [photoId]);
-  }
+  const deleteSnapshot = createDeleteOptimisticSnapshot([photoId], {
+    fromLightbox: wasViewingInLightbox,
+  });
+  applyDeleteOptimistically(deleteSnapshot, { lightboxSuccessor: successor });
 
   showToast(message || 'Photo became a duplicate and was moved to trash');
 }
@@ -5294,58 +5576,15 @@ async function commitPendingLightboxRotations() {
     return true;
   }
 
-  for (const [photoIdString, session] of pendingEntries) {
-    const photoId = Number(photoIdString);
-    const degrees = getRotationStillNeeded(photoId);
-    const saved = await enqueueLibraryMutation({
-      applyOptimistic: () => {},
-      revertOptimistic: () => {},
-      execute: async () => {
-        const response = await fetch(`/api/photo/${photoId}/rotate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            degrees_ccw: degrees,
-            commit_lossy: true,
-          }),
-        });
+  const results = await Promise.all(
+    pendingEntries.map(([photoIdString]) =>
+      LibraryMutation.enqueuePhotoRotate(Number(photoIdString)).catch(
+        () => false,
+      ),
+    ),
+  );
 
-        const result = await response.json();
-        if (!response.ok || !result.ok || !result.committed) {
-          return {
-            ok: false,
-            error: result.error || 'Failed to save rotation',
-          };
-        }
-        return { ok: true, ...result, photoId };
-      },
-      onSuccess: async (result) => {
-        if (result.duplicate_removed) {
-          await handleDuplicateRemovedRotation(photoId, result.message);
-          return;
-        }
-
-        applyCommittedPhotoUpdate(result.photo, {
-          deferThumbnailRefresh: Boolean(result.reconcile_pending),
-        });
-        delete state.lightboxRotationSessions[photoId];
-        await syncGridAfterHistogramChange();
-      },
-      failureToast: 'Failed to save rotation',
-      onFailure: () => {
-        session.displayRotation = session.persistedRotation;
-        session.mode = null;
-        applyCurrentLightboxPreviewRotation();
-        cleanupLightboxRotationSession(photoId);
-      },
-    }).catch(() => false);
-
-    if (saved === false) {
-      return false;
-    }
-  }
-
-  return true;
+  return results.every(Boolean);
 }
 
 async function handleLightboxRotate() {
@@ -5379,7 +5618,9 @@ function wireLightbox() {
   const nextBtn = document.getElementById('lightboxNextBtn');
 
   if (backBtn) {
-    backBtn.addEventListener('click', () => closeLightbox({ commitRotations: true }));
+    backBtn.addEventListener('click', () =>
+      closeLightbox({ commitRotations: true }),
+    );
   }
 
   if (prevBtn) {
@@ -5892,6 +6133,7 @@ async function openLightbox(photoIndex) {
   syncLightboxStarButton(photo);
 
   // Update info panel with photo details
+  refreshLibraryMutationControls();
   updateLightboxRotateButtonState(photo);
 
   const infoDate = document.getElementById('infoDate');
@@ -6013,12 +6255,14 @@ async function closeLightbox({ commitRotations = true } = {}) {
   if (state.lightboxClosing) return;
 
   state.lightboxClosing = true;
+  refreshLibraryMutationControls();
   updateLightboxRotateButtonState();
 
   if (commitRotations) {
     const saved = await commitPendingLightboxRotations();
     if (!saved) {
       state.lightboxClosing = false;
+      refreshLibraryMutationControls();
       updateLightboxRotateButtonState();
 
       return;
@@ -6080,6 +6324,7 @@ async function closeLightbox({ commitRotations = true } = {}) {
   }
 
   state.lightboxClosing = false;
+  refreshLibraryMutationControls();
 }
 
 /**
@@ -6100,7 +6345,10 @@ function buildOrderedNavPhotoIds(predicate) {
  * Snapshot the pseudo-library the lightbox browses (selection, filter, or full grid).
  */
 function captureLightboxNavContext(anchorPhoto) {
-  if (state.selectedPhotos.size > 0 && state.selectedPhotos.has(anchorPhoto.id)) {
+  if (
+    state.selectedPhotos.size > 0 &&
+    state.selectedPhotos.has(anchorPhoto.id)
+  ) {
     state.lightboxNavMode = 'selection';
     state.lightboxNavPhotoIds = buildOrderedNavPhotoIds((id) =>
       state.selectedPhotos.has(id),
@@ -6161,7 +6409,9 @@ function computeLightboxSuccessorBeforeRemove(deletedPhotoId) {
       globalIndex,
       layout.totalPhotos,
     );
-    return targetGlobal === null ? null : { mode: 'timeline', globalIndex: targetGlobal };
+    return targetGlobal === null
+      ? null
+      : { mode: 'timeline', globalIndex: targetGlobal };
   }
 
   const targetPhotoId = resolveLightboxSuccessorPhotoId(
@@ -6342,10 +6592,7 @@ function updateLightboxArrowStates() {
       prevBtn.classList.remove('inactive');
     }
 
-    if (
-      globalIndex === null ||
-      globalIndex >= layout.totalPhotos - 1
-    ) {
+    if (globalIndex === null || globalIndex >= layout.totalPhotos - 1) {
       nextBtn.classList.add('inactive');
     } else {
       nextBtn.classList.remove('inactive');
@@ -6528,6 +6775,12 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
         : '/api/years',
     getGeneration: () => generation,
     mergePhotos: mergePhotosIntoVirtualState,
+    comparePhotos: (a, b) =>
+      comparePhotosForLibrarySort(
+        a,
+        b,
+        sortOrder ?? state.currentSortOrder,
+      ),
     filterPhoto: getActiveVirtualGridFilterPhoto(),
     deferContainerMount: state.libraryTransitionActive,
     onPhaseAAnchor: (preview) => {
@@ -6667,8 +6920,7 @@ function updatePhotoWindowFromPage(data, { append = false } = {}) {
   if (typeof data.has_more === 'boolean') {
     state.hasMore = data.has_more;
   } else {
-    state.hasMore =
-      Boolean(data.next_cursor) || state.photos.length < total;
+    state.hasMore = Boolean(data.next_cursor) || state.photos.length < total;
   }
   state.hasDatabase = true;
   return pagePhotos;
@@ -6684,7 +6936,9 @@ function scrollToMonthSection(targetMonth, behavior = 'instant') {
   window.scrollTo({ top: targetY, behavior });
 }
 
-function ensureScrollSentinel(container = document.getElementById('photoContainer')) {
+function ensureScrollSentinel(
+  container = document.getElementById('photoContainer'),
+) {
   if (!container) {
     return null;
   }
@@ -6885,11 +7139,9 @@ async function loadAndRenderPhotos(append = false, options = {}) {
   if (externalSignal?.aborted) {
     abortController.abort();
   } else if (externalSignal) {
-    externalSignal.addEventListener(
-      'abort',
-      () => abortController.abort(),
-      { once: true },
-    );
+    externalSignal.addEventListener('abort', () => abortController.abort(), {
+      once: true,
+    });
   }
   currentPhotoLoadAbortController = abortController;
   state.loading = true;
@@ -6929,7 +7181,8 @@ async function loadAndRenderPhotos(append = false, options = {}) {
       const isExpectedAbort =
         error.name === 'AbortError' || abortController.signal.aborted;
       const isStaleError =
-        loadId !== photoLoadRequestId || !isCurrentLibraryGeneration(generation);
+        loadId !== photoLoadRequestId ||
+        !isCurrentLibraryGeneration(generation);
 
       if (isExpectedAbort || isStaleError) {
         return false;
@@ -7025,10 +7278,8 @@ async function syncServerCatalogRevision() {
  * Row mutations update state during SSE; timeline sync is refreshMonthIndex on complete.
  */
 async function rehydrateLibraryCatalog(options = {}) {
-  const {
-    throwOnError = true,
-    generation = advanceLibraryGeneration(),
-  } = options;
+  const { throwOnError = true, generation = advanceLibraryGeneration() } =
+    options;
 
   if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
     VirtualGrid.destroy();
@@ -7148,8 +7399,7 @@ function updateFilterChipUI() {
 function updateFilterChipRailVisibility() {
   const rail = document.getElementById('filterChipRailMount');
   const shouldShow =
-    state.hasDatabase &&
-    (state.photoTotalCount > 0 || state.photos.length > 0);
+    state.hasDatabase && (state.photoTotalCount > 0 || state.photos.length > 0);
   if (!rail) {
     document.body.classList.toggle('filter-chip-rail-visible', shouldShow);
     return;
@@ -7176,7 +7426,9 @@ async function applyPhotoFiltersAsync() {
   if (VirtualGrid.isActive()) {
     VirtualGrid.setFilterPhoto(getActiveVirtualGridFilterPhoto());
     try {
-      const result = await VirtualGrid.applyFilterLayout(getGridFilterOptions());
+      const result = await VirtualGrid.applyFilterLayout(
+        getGridFilterOptions(),
+      );
       if (result === 'empty') {
         showZeroMatchGridState();
         return;
@@ -7315,7 +7567,6 @@ function renderEmptyTrashState() {
       </div>
       <div style="display: flex; gap: 12px;">
         <button class="btn btn-primary" onclick="void TrashView.exit()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
-          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">arrow_back</span>
           <span>Back to library</span>
         </button>
       </div>
@@ -7792,7 +8043,10 @@ function removePhotosFromState(photoIds) {
   return true;
 }
 
-function createDeleteOptimisticSnapshot(photoIds, { fromLightbox = false } = {}) {
+function createDeleteOptimisticSnapshot(
+  photoIds,
+  { fromLightbox = false } = {},
+) {
   const normalizedIds = [...new Set(photoIds.map((id) => Number(id)))];
   const idSet = new Set(normalizedIds);
   return {
@@ -7814,7 +8068,10 @@ function createDeleteOptimisticSnapshot(photoIds, { fromLightbox = false } = {})
   };
 }
 
-function applyDeleteOptimistically(snapshot, { lightboxSuccessor = null } = {}) {
+function applyDeleteOptimistically(
+  snapshot,
+  { lightboxSuccessor = null } = {},
+) {
   if (!snapshot?.photoIds?.length) {
     return false;
   }
@@ -7837,7 +8094,10 @@ function applyDeleteOptimistically(snapshot, { lightboxSuccessor = null } = {}) 
   state.hasMore = state.photos.length < state.photoTotalCount;
 
   if (snapshot.fromLightbox) {
-    void applyLightboxSuccessorAfterRemove(lightboxSuccessor, snapshot.photoIds);
+    void applyLightboxSuccessorAfterRemove(
+      lightboxSuccessor,
+      snapshot.photoIds,
+    );
   } else if (state.lightboxOpen) {
     void closeLightbox({ commitRotations: false });
   }
@@ -7945,7 +8205,10 @@ function parseDeleteResultErrors(errors) {
 /**
  * Photo exists in client state but not on server (already deleted / stale cache).
  */
-async function handleStalePhoto(photoId, { closeLightbox: forceClose = false } = {}) {
+async function handleStalePhoto(
+  photoId,
+  { closeLightbox: forceClose = false } = {},
+) {
   const wasViewingInLightbox =
     state.lightboxOpen &&
     state.lightboxPhotoIndex !== null &&
@@ -8259,7 +8522,9 @@ function setImportActionButtons({
   const continueBtn = document.getElementById('importContinueBtn');
   const doneBtn = document.getElementById('importDoneBtn');
   const undoBtn = document.getElementById('importUndoBtn');
-  const actionsSection = document.querySelector('#importOverlay .import-actions');
+  const actionsSection = document.querySelector(
+    '#importOverlay .import-actions',
+  );
 
   if (cancelBtn) {
     cancelBtn.style.display = showCancel ? 'block' : 'none';
@@ -8334,7 +8599,8 @@ function setImportInflightCounts(imported, duplicates, skipped) {
   if (preflightEl) preflightEl.style.display = 'none';
   if (statsEl) statsEl.style.display = 'grid';
   if (importedEl) importedEl.textContent = Number(imported).toLocaleString();
-  if (duplicateEl) duplicateEl.textContent = Number(duplicates).toLocaleString();
+  if (duplicateEl)
+    duplicateEl.textContent = Number(duplicates).toLocaleString();
   if (skippedEl) skippedEl.textContent = Number(skipped).toLocaleString();
 }
 
@@ -8427,11 +8693,7 @@ function renderImportCompleteUi({ hasErrors = false, logPath = null } = {}) {
     }
   }
 
-  setImportInflightCounts(
-    imported,
-    importState.duplicateCount || 0,
-    skipped,
-  );
+  setImportInflightCounts(imported, importState.duplicateCount || 0, skipped);
 
   const finishedAt = new Date();
   const elapsedSec = importState.runStartedAtMs
@@ -8485,7 +8747,12 @@ function animatePreflightNumericCounts(
   });
 }
 
-function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, durationMs) {
+function animateTerraformPreflightCounts(
+  photoTarget,
+  videoTarget,
+  totalTarget,
+  durationMs,
+) {
   return animatePreflightNumericCounts(
     photoTarget,
     videoTarget,
@@ -8495,7 +8762,12 @@ function animateTerraformPreflightCounts(photoTarget, videoTarget, totalTarget, 
   );
 }
 
-function animateImportPreflightCounts(photoTarget, videoTarget, totalTarget, durationMs) {
+function animateImportPreflightCounts(
+  photoTarget,
+  videoTarget,
+  totalTarget,
+  durationMs,
+) {
   return animatePreflightNumericCounts(
     photoTarget,
     videoTarget,
@@ -8691,9 +8963,9 @@ function scrollToImportedPhoto(photoIds) {
     }
   }
 
-  const element = document.querySelector(
-    `[data-id="${firstVisibleId}"]`,
-  ) || document.querySelector(`[data-photo-id="${firstVisibleId}"]`);
+  const element =
+    document.querySelector(`[data-id="${firstVisibleId}"]`) ||
+    document.querySelector(`[data-photo-id="${firstVisibleId}"]`);
   if (element) {
     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     element.style.outline = '3px solid #6366f1';
@@ -8758,7 +9030,8 @@ function registerAddFlowAdapter() {
     overlayIds: ['importOverlay'],
     adapter: {
       isPreflightPending: () => Boolean(importState.preflightResolve),
-      resolvePreflight: (shouldContinue) => resolveImportPreflight(shouldContinue),
+      resolvePreflight: (shouldContinue) =>
+        resolveImportPreflight(shouldContinue),
       isInflightActive: () =>
         importState.isImporting && Boolean(importState.abortController),
       getImportedCount: () => importState.importedCount || 0,
@@ -8778,7 +9051,8 @@ function registerAddFlowAdapter() {
           setImportOverlayPhase(null);
         }
       },
-      hideOverlay: (options = {}) => hideImportOverlay(options.reloadGrid !== false),
+      hideOverlay: (options = {}) =>
+        hideImportOverlay(options.reloadGrid !== false),
       restoreShellAfterCancel: restoreLibraryShellAfterFlowDismiss,
       scheduleGridRefresh: () => scheduleImportRefresh(),
       showCancelToast: (importedCount) => {
@@ -8853,7 +9127,9 @@ async function loadUtilitiesMenu() {
   if (utilitiesMenuLoaded) return;
 
   try {
-    const response = await fetch(versionedStaticUrl('fragments/utilitiesMenu.html'));
+    const response = await fetch(
+      versionedStaticUrl('fragments/utilitiesMenu.html'),
+    );
     if (!response.ok) throw new Error('Failed to load utilities menu');
 
     const html = await response.text();
@@ -9167,9 +9443,12 @@ function wireCleanLibraryOverlay() {
   );
   requireCleanLibraryElement('cleanLibraryDetailsToggle', 'overlay wiring');
 
-  if (closeBtn) closeBtn.addEventListener('click', handleCleanLibraryCancelClick);
-  if (cancelBtn) cancelBtn.addEventListener('click', handleCleanLibraryCancelClick);
-  if (proceedBtn) proceedBtn.addEventListener('click', handleCleanLibraryProceedClick);
+  if (closeBtn)
+    closeBtn.addEventListener('click', handleCleanLibraryCancelClick);
+  if (cancelBtn)
+    cancelBtn.addEventListener('click', handleCleanLibraryCancelClick);
+  if (proceedBtn)
+    proceedBtn.addEventListener('click', handleCleanLibraryProceedClick);
   if (startOverBtn) {
     startOverBtn.addEventListener('click', handleCleanLibraryStartOverClick);
   }
@@ -9225,8 +9504,12 @@ function setTerraformPreflightCounts(photoCount, videoCount, totalCount) {
 }
 
 function setTerraformPreviewPhase(phase) {
-  const scanningSection = document.getElementById('terraformPreviewScanningSection');
-  const confirmSection = document.getElementById('terraformPreviewConfirmSection');
+  const scanningSection = document.getElementById(
+    'terraformPreviewScanningSection',
+  );
+  const confirmSection = document.getElementById(
+    'terraformPreviewConfirmSection',
+  );
   const isScanning = phase === 'scanning';
 
   if (scanningSection) {
@@ -9262,8 +9545,7 @@ function setTerraformPreviewActionButtons({ continueDisabled = false } = {}) {
 
 const CLEAN_LIBRARY_OVERLAY_TITLE = 'Clean library';
 const CLEAN_LIBRARY_CONTINUE_TITLE = 'Continue cleanup';
-const CLEAN_LIBRARY_PAUSE_TOAST =
-  'Cleanup paused. You can continue it later.';
+const CLEAN_LIBRARY_PAUSE_TOAST = 'Cleanup paused. You can continue it later.';
 const CLEAN_LIBRARY_PREFLIGHT_EXPLAINER =
   'This will organize your library, remove duplicates and corrupted media, and fix any database issues.';
 const CLEAN_LIBRARY_WORKING_BODY =
@@ -9477,7 +9759,11 @@ function getCleanLibraryPreflightTotal(scanResult, photos, videos) {
   );
 }
 
-function setCleanLibraryPreflightCounts(photoCount, videoCount, totalCount = null) {
+function setCleanLibraryPreflightCounts(
+  photoCount,
+  videoCount,
+  totalCount = null,
+) {
   const total = totalCount ?? photoCount + videoCount;
   showCleanLibraryPreflightStats({
     summary: {
@@ -9603,7 +9889,9 @@ function formatInflightRemainingLabel(computedSec, state = null) {
   );
 
   const candidateIdx = inflightRemainingLabelSortIndex(candidate);
-  const displayedIdx = inflightRemainingLabelSortIndex(nextState.displayedLabel);
+  const displayedIdx = inflightRemainingLabelSortIndex(
+    nextState.displayedLabel,
+  );
   let hysteresisOk = true;
   if (candidateIdx < displayedIdx) {
     hysteresisOk = seconds <= referenceSec - margin;
@@ -9612,7 +9900,8 @@ function formatInflightRemainingLabel(computedSec, state = null) {
   }
 
   const dwellOk =
-    bigJump || now - nextState.labelShownAtMs >= INFLIGHT_REMAINING_LABEL_DWELL_MS;
+    bigJump ||
+    now - nextState.labelShownAtMs >= INFLIGHT_REMAINING_LABEL_DWELL_MS;
 
   if (bigJump || (hysteresisOk && dwellOk)) {
     nextState = {
@@ -9627,7 +9916,10 @@ function formatInflightRemainingLabel(computedSec, state = null) {
 }
 
 function formatInflightRemainingLine(computedSec, labelState) {
-  const { label, state } = formatInflightRemainingLabel(computedSec, labelState);
+  const { label, state } = formatInflightRemainingLabel(
+    computedSec,
+    labelState,
+  );
   return {
     line: `Total time remaining: ${label}`,
     state,
@@ -9704,7 +9996,7 @@ function computeCleanWorkingRunProgressFraction(state) {
     state.progress?.[phase]?.total > 0
   ) {
     const { processed, total } = state.progress[phase];
-    fraction += (processed / total) / stepsTotal;
+    fraction += processed / total / stepsTotal;
   }
 
   return Math.min(1, Math.max(0, fraction));
@@ -9748,11 +10040,13 @@ function storeCleanLibraryPreflightEstimate(scanResult) {
   if (scanResult.status === 'RESUME') {
     cleanLibraryState.estimatedSeconds =
       Number(scanResult.estimated_remaining_seconds) || 0;
-    cleanLibraryState.estimatedDisplay = scanResult.estimated_remaining_display || '';
+    cleanLibraryState.estimatedDisplay =
+      scanResult.estimated_remaining_display || '';
   } else {
     cleanLibraryState.estimatedSeconds =
-      Number(scanResult.estimated_seconds ?? scanResult.inventory?.estimated_seconds) ||
-      0;
+      Number(
+        scanResult.estimated_seconds ?? scanResult.inventory?.estimated_seconds,
+      ) || 0;
     cleanLibraryState.estimatedDisplay =
       scanResult.estimated_display ||
       scanResult.inventory?.estimated_display ||
@@ -9811,7 +10105,8 @@ function formatCleanLibraryWorkingProgressSuffix(phase) {
 }
 
 function buildCleanLibraryWorkingStepText(stepNumber, phase) {
-  const stepLabel = CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1] || 'Working';
+  const stepLabel =
+    CLEAN_LIBRARY_PREVIEW_WORKING_STEPS[stepNumber - 1] || 'Working';
   return `Step ${stepNumber} of 6: ${stepLabel}${formatCleanLibraryWorkingProgressSuffix(phase)}`;
 }
 
@@ -9958,7 +10253,8 @@ function beginCleanLibraryWorkingUi() {
   cleanLibraryState.workingPhaseActive = true;
   cleanLibraryState.runStartedAtMs = Date.now();
   cleanLibraryState.serverRemainingSeconds = null;
-  cleanLibraryState.inflightRemainingLabelState = createInflightRemainingLabelState();
+  cleanLibraryState.inflightRemainingLabelState =
+    createInflightRemainingLabelState();
   resetCleanLibraryWorkingStepState();
   resetCleanLibraryOverlayTitle();
   showCleanLibraryWorkingBody();
@@ -10075,20 +10371,27 @@ async function reconcileCleanLibraryStreamResume() {
 }
 
 async function probeCleanLibraryCheckpoint() {
-  const { response, data } = await apiFetchJson('/api/library/make-perfect/checkpoint');
+  const { response, data } = await apiFetchJson(
+    '/api/library/make-perfect/checkpoint',
+  );
   if (response.status === 404) {
     return { status: 'NONE', resumable: false };
   }
   if (!response.ok) {
-    throw new Error(data.error || `Checkpoint probe failed (${response.status})`);
+    throw new Error(
+      data.error || `Checkpoint probe failed (${response.status})`,
+    );
   }
   return data;
 }
 
 async function abandonCleanLibraryCheckpoint() {
-  const { response, data } = await apiFetchJson('/api/library/make-perfect/checkpoint/abandon', {
-    method: 'POST',
-  });
+  const { response, data } = await apiFetchJson(
+    '/api/library/make-perfect/checkpoint/abandon',
+    {
+      method: 'POST',
+    },
+  );
   if (response.status === 404) {
     return { ok: true, abandoned: false };
   }
@@ -10102,8 +10405,7 @@ async function loadCleanLibraryManifestTail(manifestPath, lines = 40) {
   if (!manifestPath) {
     return;
   }
-  const url =
-    `/api/library/make-perfect/manifest-tail?path=${encodeURIComponent(manifestPath)}&lines=${lines}`;
+  const url = `/api/library/make-perfect/manifest-tail?path=${encodeURIComponent(manifestPath)}&lines=${lines}`;
   const { response, data } = await apiFetchJson(url);
   if (response.status === 404) {
     return;
@@ -10211,7 +10513,11 @@ function updateCleanLibraryStatusForPhase(event = {}) {
       handleCleanLibraryWorkingProgressEvent(event);
       const stepNumber = CLEAN_LIBRARY_PHASE_STEP_INDEX[event.phase] || 1;
       const state = cleanLibraryWorkingStepState;
-      if (state && state.stepNumber !== null && state.stepNumber !== stepNumber) {
+      if (
+        state &&
+        state.stepNumber !== null &&
+        state.stepNumber !== stepNumber
+      ) {
         requestCleanLibraryWorkingStep(event.phase);
       }
     }
@@ -10309,7 +10615,9 @@ async function runCleanLibraryPreflightScan() {
   showPreflightScoreboardZeros();
 
   const orientStartedAt = Date.now();
-  const { response, data: scanResult } = await apiFetchJson('/api/library/make-perfect/scan');
+  const { response, data: scanResult } = await apiFetchJson(
+    '/api/library/make-perfect/scan',
+  );
   if (!response.ok) {
     throw new Error(scanResult.error || `Scan failed (${response.status})`);
   }
@@ -10497,7 +10805,9 @@ async function executeCleanLibrary() {
 
     if (result?.status === 'CANCELLED') {
       cleanLibraryState.resumeIntent = null;
-      if (isFlowOverlayVisible(document.getElementById('cleanLibraryOverlay'))) {
+      if (
+        isFlowOverlayVisible(document.getElementById('cleanLibraryOverlay'))
+      ) {
         await FlowController.cancelRecovery('clean', { reloadGrid: true });
         showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
       }
@@ -10512,7 +10822,9 @@ async function executeCleanLibrary() {
   } catch (error) {
     if (error?.name === 'AbortError' || cleanLibraryState?.cancelRequested) {
       cleanLibraryState.resumeIntent = null;
-      if (isFlowOverlayVisible(document.getElementById('cleanLibraryOverlay'))) {
+      if (
+        isFlowOverlayVisible(document.getElementById('cleanLibraryOverlay'))
+      ) {
         await FlowController.cancelRecovery('clean', { reloadGrid: true });
         showToast(CLEAN_LIBRARY_PAUSE_TOAST, null);
       }
@@ -10974,7 +11286,9 @@ function registerCleanFlowAdapter() {
         if (!cleanLibraryState?.onInterruptedChoice) {
           return;
         }
-        cleanLibraryState.onInterruptedChoice(shouldContinue ? 'continue' : 'cancel');
+        cleanLibraryState.onInterruptedChoice(
+          shouldContinue ? 'continue' : 'cancel',
+        );
       },
       isInflightActive: () =>
         Boolean(
@@ -11185,7 +11499,10 @@ function formatCompactLibraryLocationPath(parentPath, rawName) {
   return fullPath.replace(/^\//, '');
 }
 
-async function suggestUniqueLibraryName(parentPath, baseName = 'Photo Library') {
+async function suggestUniqueLibraryName(
+  parentPath,
+  baseName = 'Photo Library',
+) {
   const sanitizedBase = sanitizeLibraryFolderName(baseName) || 'Photo Library';
   try {
     const { folders } = await PickerFilesystem.listDirectory(parentPath);
@@ -11311,7 +11628,10 @@ async function showCreateLibraryDialog(options = {}) {
       }
 
       if (parentPath) {
-        const taken = await libraryFolderNameExistsAtParent(parentPath, sanitized);
+        const taken = await libraryFolderNameExistsAtParent(
+          parentPath,
+          sanitized,
+        );
         if (taken) {
           return {
             sanitized: null,
@@ -11659,7 +11979,9 @@ async function showNameLibraryDialog(options = {}) {
       // Check if folder exists at parent location (if parentPath provided)
       if (options.parentPath) {
         try {
-          const { folders } = await PickerFilesystem.listDirectory(options.parentPath);
+          const { folders } = await PickerFilesystem.listDirectory(
+            options.parentPath,
+          );
           const existingFolders = folders.map((f) =>
             typeof f === 'string' ? f : f.name,
           );
@@ -12023,7 +12345,8 @@ function endTerraformProgressUi() {
 function beginTerraformProgressUi(preflight = {}) {
   terraformProgressState.active = true;
   terraformProgressState.runStartedAtMs = Date.now();
-  terraformProgressState.estimatedSeconds = Number(preflight.estimated_seconds) || null;
+  terraformProgressState.estimatedSeconds =
+    Number(preflight.estimated_seconds) || null;
   terraformProgressState.estimatedDisplay = preflight.estimated_display || null;
   terraformProgressState.totalFiles = Number(preflight.media_count) || 0;
   terraformProgressState.inflightDoneCount = 0;
@@ -12033,7 +12356,9 @@ function beginTerraformProgressUi(preflight = {}) {
   if (explainerEl) {
     explainerEl.textContent = FLOW_INFLIGHT_BODY.convert;
   }
-  const detailsSection = document.getElementById('terraformProgressDetailsSection');
+  const detailsSection = document.getElementById(
+    'terraformProgressDetailsSection',
+  );
   if (detailsSection) {
     detailsSection.style.display = 'block';
   }
@@ -12282,8 +12607,9 @@ async function showTerraformCompleteDialog(results = {}, handoffFromEl = null) {
       results.processed.toLocaleString();
     document.getElementById('terraformCompleteDuplicates').textContent =
       results.duplicates.toLocaleString();
-    document.getElementById('terraformCompleteSkipped').textContent =
-      (Number(results.errors) || 0).toLocaleString();
+    document.getElementById('terraformCompleteSkipped').textContent = (
+      Number(results.errors) || 0
+    ).toLocaleString();
 
     const processed = Number(results.processed) || 0;
     const statusEl = document.getElementById('terraformCompleteStatusText');
@@ -12449,7 +12775,8 @@ function registerConvertFlowAdapter() {
       resolvePreflight: (value) => resolveConvertPreflightChoice(value),
       isInflightActive: () =>
         Boolean(
-          terraformProgressState.active && terraformProgressState.abortController,
+          terraformProgressState.active &&
+          terraformProgressState.abortController,
         ),
       abortInflight: () => {
         terraformProgressState.abortController?.abort();
@@ -12508,7 +12835,8 @@ async function executeTerraformFlow(options = {}) {
     if (isFlowOverlayVisible(existingPreview)) {
       previewOverlayRef.current = existingPreview;
     } else {
-      previewOverlayRef.current = await prepareTerraformPreviewScanningShell(path);
+      previewOverlayRef.current =
+        await prepareTerraformPreviewScanningShell(path);
     }
     if (!previewOverlayRef.current) {
       throw new Error('Convert preview overlay unavailable');
@@ -12575,7 +12903,9 @@ async function executeTerraformFlow(options = {}) {
       return false;
     }
 
-    warningOverlayRef.current = document.getElementById('terraformWarningOverlay');
+    warningOverlayRef.current = document.getElementById(
+      'terraformWarningOverlay',
+    );
 
     // Step 3: Execute terraform
 
@@ -12666,7 +12996,8 @@ async function executeTerraformFlow(options = {}) {
             data.status === 'complete' &&
             terraformProgressState.totalFiles > 0
           ) {
-            terraformProgressState.inflightDoneCount = terraformProgressState.totalFiles;
+            terraformProgressState.inflightDoneCount =
+              terraformProgressState.totalFiles;
             syncTerraformProgressRemainingDisplay();
           }
           const secondaryStatus = document.getElementById(
@@ -12780,7 +13111,9 @@ async function executeTerraformFlow(options = {}) {
   } catch (error) {
     if (error?.name === 'AbortError') {
       endTerraformProgressUi();
-      const progressOverlay = document.getElementById('terraformProgressOverlay');
+      const progressOverlay = document.getElementById(
+        'terraformProgressOverlay',
+      );
       if (isFlowOverlayVisible(progressOverlay)) {
         await FlowController.cancelRecovery('convert', { reloadGrid: true });
       }
@@ -13011,7 +13344,10 @@ function enableAppBarButtons() {
 
   // Re-enable add photo button (not available in trash view)
   const addPhotoBtn = document.getElementById('addPhotoBtn');
-  if (addPhotoBtn && !(typeof TrashView !== 'undefined' && TrashView.isActive())) {
+  if (
+    addPhotoBtn &&
+    !(typeof TrashView !== 'undefined' && TrashView.isActive())
+  ) {
     addPhotoBtn.style.opacity = '1';
     addPhotoBtn.style.pointerEvents = 'auto';
   }
@@ -13280,7 +13616,9 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
     const mediaFileLabel = mediaCount === 1 ? 'media file' : 'media files';
     const addClosingPhrase =
       mediaCount === 1 ? 'Add the file' : 'Add the files';
-    const pendingLabel = Number(recoverMediaInfo.pending_total || 0).toLocaleString();
+    const pendingLabel = Number(
+      recoverMediaInfo.pending_total || 0,
+    ).toLocaleString();
     const etaLabel = formatDurationEstimateForItShouldTake(
       recoverMediaInfo.estimated_time,
     );
@@ -13413,7 +13751,10 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
         try {
           await loadAndRenderPhotosCommitted(hydrationGeneration);
         } catch (hydrateErr) {
-          console.error('❌ Failed to show library after recovery error:', hydrateErr);
+          console.error(
+            '❌ Failed to show library after recovery error:',
+            hydrateErr,
+          );
           showToast(`Error: ${hydrateErr.message}`);
         }
       }
@@ -13441,11 +13782,17 @@ async function runLibraryRecoveryJourney(selectedPath, checkResult) {
       ...failureCopy,
       actions,
     });
-    if (recoveryFailureChoice === 'see_library' && hydrationGeneration !== null) {
+    if (
+      recoveryFailureChoice === 'see_library' &&
+      hydrationGeneration !== null
+    ) {
       try {
         await loadAndRenderPhotosCommitted(hydrationGeneration);
       } catch (hydrateErr) {
-        console.error('❌ Failed to show library after recovery error:', hydrateErr);
+        console.error(
+          '❌ Failed to show library after recovery error:',
+          hydrateErr,
+        );
         showToast(`Error: ${hydrateErr.message}`);
       }
     }
@@ -13493,7 +13840,8 @@ async function browseSwitchLibraryLegacyAfterCheck(selectedPath, checkResult) {
 }
 
 if (typeof window !== 'undefined') {
-  window.__browseSwitchLibraryLegacyAfterCheck = browseSwitchLibraryLegacyAfterCheck;
+  window.__browseSwitchLibraryLegacyAfterCheck =
+    browseSwitchLibraryLegacyAfterCheck;
 }
 
 /**
@@ -13535,11 +13883,16 @@ async function loadConvertToLibraryCompleteOverlay() {
   }
 
   try {
-    const response = await fetch('/fragments/convertToLibraryCompleteOverlay.html');
+    const response = await fetch(
+      '/fragments/convertToLibraryCompleteOverlay.html',
+    );
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
   } catch (error) {
-    console.error('❌ Failed to load convert-to-library complete overlay:', error);
+    console.error(
+      '❌ Failed to load convert-to-library complete overlay:',
+      error,
+    );
     throw error;
   }
 }
@@ -13560,7 +13913,9 @@ async function showConvertToLibraryCompleteDialog(options = {}) {
 
     pathEl.textContent = options.path || '';
 
-    const closeBtn = document.getElementById('convertToLibraryCompleteCloseBtn');
+    const closeBtn = document.getElementById(
+      'convertToLibraryCompleteCloseBtn',
+    );
     const doneBtn = document.getElementById('convertToLibraryCompleteDoneBtn');
 
     const handleDone = () => {
@@ -13638,7 +13993,9 @@ async function openExistingLibrary() {
       libraryPath: selectedPath,
       showCancelButton: true,
       onCancel: () => {
-        const statusEl = document.getElementById('libraryTransitionStatusLabel');
+        const statusEl = document.getElementById(
+          'libraryTransitionStatusLabel',
+        );
         if (statusEl) {
           statusEl.textContent = 'Cancelling…';
         }
@@ -13717,11 +14074,11 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
     ],
     showCloseButton: false,
   };
-  const generalPurposeFolderWarningCopy =
-    window.LibraryRecoveryUI?.dialogs?.generalPurposeFolderWarning || {
-      title: 'Use this folder for your library?',
-      body: 'This folder has many non-media files. You can continue, or create a subfolder instead.',
-    };
+  const generalPurposeFolderWarningCopy = window.LibraryRecoveryUI?.dialogs
+    ?.generalPurposeFolderWarning || {
+    title: 'Use this folder for your library?',
+    body: 'This folder has many non-media files. You can continue, or create a subfolder instead.',
+  };
   const folderName = selectedPath.split('/').filter(Boolean).pop() || 'library';
   let dockFlowActive = false;
   let switchedGeneration = null;
@@ -13776,7 +14133,9 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
     const recoverResult = await recoverResponse.json();
 
     if (!recoverResponse.ok) {
-      throw new Error(recoverResult.error || 'Failed to create library database');
+      throw new Error(
+        recoverResult.error || 'Failed to create library database',
+      );
     }
 
     if (recoverAbort.signal.aborted) {
@@ -13807,7 +14166,10 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
           await loadAndRenderPhotosCommitted(switchedGeneration);
         }
       } catch (hydrateErr) {
-        console.error('❌ Failed to show library after scan failure:', hydrateErr);
+        console.error(
+          '❌ Failed to show library after scan failure:',
+          hydrateErr,
+        );
         showToast(`Error: ${hydrateErr.message}`);
       }
       finishDockFlow();
@@ -13821,7 +14183,9 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       const mediaFileLabel = mediaCount === 1 ? 'media file' : 'media files';
       const addClosingPhrase =
         mediaCount === 1 ? 'Add the file' : 'Add the files';
-      const pendingLabel = Number(recoverMediaInfo.pending_total || 0).toLocaleString();
+      const pendingLabel = Number(
+        recoverMediaInfo.pending_total || 0,
+      ).toLocaleString();
       const etaLabel = formatDurationEstimateForItShouldTake(
         recoverMediaInfo.estimated_time,
       );
@@ -13916,7 +14280,11 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
       const statsEl = document.getElementById('libraryRecoveryStats');
       const statusEl = document.getElementById('libraryRecoveryStatus');
       const debugEl = document.getElementById('libraryRecoveryCleanerDebug');
-      const scorecard = createScorecardController({ statsEl, statusEl, debugEl });
+      const scorecard = createScorecardController({
+        statsEl,
+        statusEl,
+        debugEl,
+      });
       const runtime = createOpenFolderRecoveryRuntime({
         scorecard,
         signalCounts: recoverMediaInfo.signal_summary,
@@ -13997,7 +14365,10 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
           await loadAndRenderPhotosCommitted(switchedGeneration);
           return true;
         } catch (hydrateErr) {
-          console.error('❌ Failed to hydrate aborted recovery flow:', hydrateErr);
+          console.error(
+            '❌ Failed to hydrate aborted recovery flow:',
+            hydrateErr,
+          );
           showToast(`Error: ${hydrateErr.message}`);
         }
       }
@@ -14368,7 +14739,9 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
           previousLibrary?.library_path &&
           previousLibrary.library_path !== libraryPath;
         if (state.libraryTransitionActive && shouldAttemptRestore) {
-          const statusEl = document.getElementById('libraryTransitionStatusLabel');
+          const statusEl = document.getElementById(
+            'libraryTransitionStatusLabel',
+          );
           if (statusEl) {
             statusEl.textContent = 'Returning to your previous library.';
           }

@@ -622,7 +622,6 @@ const FolderPicker = (() => {
 
       if (e.target.classList.contains('folder-checkbox')) {
         e.stopPropagation();
-        activeItemKey = item.dataset.itemKey || null;
         selectFolder(folderPath);
         return;
       }
@@ -881,23 +880,30 @@ const FolderPicker = (() => {
     }
   }
 
+  function restoreFolderListScroll(folderList, scrollTop) {
+    if (folderList) {
+      folderList.scrollTop = scrollTop;
+    }
+  }
+
   async function selectFolder(path) {
+    const folderList = pickerEl('folderList');
+    const scrollTop = folderList?.scrollTop ?? 0;
+
     // Toggle behavior - clicking same folder deselects it
     if (selectedPath === path) {
       selectedPath = currentPath; // Revert to current location
       activeItemKey = null;
-      
     } else {
       selectedPath = path; // Select (radio button - clears others)
-      activeItemKey = getFolderItemKey('folder', path);
-      
     }
 
     beginSelectionProbeCycle();
     updateSelectedPath();
-    // Re-render folder list to update checkbox states
-    await updateFolderList();
+    syncFolderPickerState();
+    restoreFolderListScroll(folderList, scrollTop);
     await syncSelectedPathProbe();
+    restoreFolderListScroll(folderList, scrollTop);
     notifyEmbeddedPathChange();
   }
 
