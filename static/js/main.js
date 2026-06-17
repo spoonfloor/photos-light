@@ -167,6 +167,7 @@ const state = {
   lastClickedIndex: null, // For shift-select
   lightboxOpen: false,
   lightboxPhotoIndex: null, // Index of currently viewed photo in lightbox
+  lightboxGlobalIndex: null, // Grid timeline index (virtual grid lightbox nav)
   lightboxUITimeout: null, // Timeout for hiding UI after pointer leaves overlay
   lightboxUIHovered: false, // True while pointer is over the lightbox overlay
   deleteInProgress: false,
@@ -183,6 +184,8 @@ const state = {
   lightboxVisualState: null, // currently mounted lightbox bitmap state
   lightboxReloadToken: 0,
   lightboxClosing: false,
+  lightboxNavMode: null, // 'timeline' | 'selection' | 'filter' | 'library'
+  lightboxNavPhotoIds: null, // Frozen ordered scope captured at lightbox open
 };
 
 const libraryRecoveryState = {
@@ -1254,8 +1257,8 @@ function wireAppBar() {
         sortToggleBtn.title = 'Oldest first';
       }
 
-      // Reload photos with new sort
-      await loadAndRenderPhotos();
+      // Swap sort order in place — keep grid alive (never destroy + re-open).
+      await syncGridAfterSortChange();
     });
   }
 
@@ -1436,7 +1439,7 @@ function syncDatePickerFromScroll() {
   const scrollTop = window.scrollY || document.documentElement.scrollTop;
   let monthKey = null;
 
-  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+  if (VirtualGrid.isActive()) {
     const layout = VirtualGrid.getLayout();
     if (layout?.provisional) {
       return;
@@ -1495,7 +1498,7 @@ function wireDatePicker() {
     const year = yearPicker.value;
     const targetMonth = `${year}-${month}`;
 
-    if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    if (VirtualGrid.isActive()) {
       if (VirtualGrid.jumpToMonth(targetMonth)) {
         return;
       }
@@ -3982,7 +3985,7 @@ async function applyDateEditPatch(data) {
   const oldMonth = index !== -1 ? state.photos[index].month : null;
 
   if (data.duplicate_removed) {
-    if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    if (VirtualGrid.isActive()) {
       removePhotosFromState([photoId]);
       return { duplicateRemoved: true, oldMonth };
     }
@@ -4002,7 +4005,7 @@ async function applyDateEditPatch(data) {
     state.photos[index] = { ...state.photos[index], ...photo };
   }
 
-  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+  if (VirtualGrid.isActive()) {
     return {
       photoId,
       oldMonth,
@@ -4039,6 +4042,81 @@ async function applyDateEditPatch(data) {
   };
 }
 
+async function refreshActiveVirtualGridMonthIndex(options = {}) {
+  const { scrollTargetMonth = null, preserveScroll = true } = options;
+  const result = await VirtualGrid.refreshMonthIndex(state.currentSortOrder, {
+    scrollTargetMonth,
+    preserveScroll,
+    ...getGridFilterOptions(),
+  });
+  if (result === 'empty') {
+    showFilterZeroState();
+    return 'empty';
+  }
+  setupThumbnailLazyLoading();
+  ensureGridInteractionsWired();
+  return result;
+}
+
+function showFilterZeroState() {
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    VirtualGrid.destroy();
+  }
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
+  }
+  renderFilterEmptyState();
+  enableAppBarButtons();
+  updateFilterChipRailVisibility();
+}
+
+function showEmptyLibraryState() {
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    VirtualGrid.destroy();
+  }
+  renderEmptyLibraryState();
+  enableAppBarButtons();
+  updateFilterChipRailVisibility();
+}
+
+/**
+ * After lightbox scope is exhausted or grid sync finds zero matches.
+ */
+function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
+  if (exhaustedScope === 'filter') {
+    showFilterZeroState();
+    return;
+  }
+
+  if (exhaustedScope === 'library' || exhaustedScope === 'timeline') {
+    if (state.photoTotalCount === 0 && state.photos.length === 0) {
+      showEmptyLibraryState();
+    }
+    return;
+  }
+
+  if (hasActivePhotoFilters()) {
+    if (VirtualGrid.isActive()) {
+      const layout = VirtualGrid.getLayout();
+      if ((layout?.totalPhotos ?? 0) === 0) {
+        showFilterZeroState();
+        return;
+      }
+    } else if (
+      state.photos.length > 0 &&
+      getFilteredPhotos(state.photos).length === 0
+    ) {
+      showFilterZeroState();
+      return;
+    }
+  }
+
+  if (state.photoTotalCount === 0 && state.photos.length === 0) {
+    showEmptyLibraryState();
+  }
+}
+
 async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
   if (currentPhotoLoad?.promise) {
     try {
@@ -4048,24 +4126,44 @@ async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
     }
   }
 
-  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+  if (VirtualGrid.isActive()) {
     try {
-      await VirtualGrid.refreshMonthIndex(state.currentSortOrder, {
+      await refreshActiveVirtualGridMonthIndex({
         scrollTargetMonth,
         preserveScroll: !scrollTargetMonth,
       });
-      setupThumbnailLazyLoading();
-      ensureGridInteractionsWired();
     } catch (error) {
       console.error('❌ Failed to sync grid after histogram change:', error);
     }
     return;
   }
 
-  await loadAndRenderPhotos(false, { forcePaged: hasActivePhotoFilters() });
+  await loadAndRenderPhotos(false);
   if (scrollTargetMonth && VirtualGrid.isActive()) {
     VirtualGrid.scrollToMonth(scrollTargetMonth);
   }
+}
+
+async function syncGridAfterSortChange() {
+  if (currentPhotoLoad?.promise) {
+    try {
+      await currentPhotoLoad.promise;
+    } catch {
+      /* in-flight load aborted or failed — continue with sync */
+    }
+  }
+
+  if (VirtualGrid.isActive()) {
+    try {
+      await refreshActiveVirtualGridMonthIndex({ preserveScroll: true });
+      await populateDatePicker();
+    } catch (error) {
+      console.error('❌ Failed to sync grid after sort change:', error);
+    }
+    return;
+  }
+
+  await loadAndRenderPhotos(false);
 }
 
 async function finalizeDateChangeSuccess({
@@ -4915,13 +5013,24 @@ function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
 
 async function handleDuplicateRemovedRotation(photoId, message) {
   delete state.lightboxRotationSessions[photoId];
-  if (
+  const wasViewingInLightbox =
     state.lightboxOpen &&
-    state.photos[state.lightboxPhotoIndex]?.id === photoId
-  ) {
-    await closeLightbox();
+    state.photos[state.lightboxPhotoIndex]?.id === photoId;
+  const successor = wasViewingInLightbox
+    ? computeLightboxSuccessorBeforeRemove(photoId)
+    : null;
+
+  if (removePhotosFromState([photoId]) && state.photoTotalCount > 0) {
+    state.photoTotalCount -= 1;
   }
-  await loadAndRenderPhotos();
+  state.hasMore = state.photos.length < state.photoTotalCount;
+
+  await syncGridAfterHistogramChange();
+
+  if (wasViewingInLightbox) {
+    await applyLightboxSuccessorAfterRemove(successor, [photoId]);
+  }
+
   showToast(message || 'Photo became a duplicate and was moved to trash');
 }
 
@@ -5085,7 +5194,7 @@ function wireLightbox() {
           ) {
             await closeLightbox();
           }
-          await loadAndRenderPhotos();
+          await syncGridAfterHistogramChange();
           showToast(
             result.message || 'Photo became a duplicate and was moved to trash',
             null,
@@ -5537,10 +5646,20 @@ async function openLightbox(photoIndex) {
 
   invalidatePendingLightboxReloads();
   clearLightboxVisualState();
+  const enteringLightbox = !state.lightboxOpen;
   state.lightboxOpen = true;
   state.lightboxPhotoIndex = photoIndex;
 
   const photo = state.photos[photoIndex];
+  if (!photo) {
+    return;
+  }
+
+  if (enteringLightbox) {
+    captureLightboxNavContext(photo);
+  }
+
+  await syncLightboxGlobalIndexForPhoto(photo);
   rebaseLightboxRotationSessionForReload(photo.id);
 
   // Clear previous content
@@ -5649,7 +5768,7 @@ async function openLightbox(photoIndex) {
   }
 
   // Scroll grid to current photo position (instant, behind the lightbox)
-  const card = document.querySelector(`[data-index="${photoIndex}"]`);
+  const card = document.querySelector(`.photo-card[data-id="${photo.id}"]`);
   if (card) {
     card.scrollIntoView({ behavior: 'instant', block: 'center' });
   }
@@ -5669,22 +5788,23 @@ async function openLightbox(photoIndex) {
  */
 function preloadAdjacentImages(currentIndex) {
   const preloadPhoto = (libraryIndex) => {
-    if (libraryIndex < 0 || libraryIndex >= state.photos.length) {
+    if (
+      libraryIndex === null ||
+      libraryIndex < 0 ||
+      libraryIndex >= state.photos.length
+    ) {
       return;
     }
-    const photo = state.photos[libraryIndex];
     const img = new Image();
-    img.src = getPhotoFileUrl(photo.id);
+    img.src = getPhotoFileUrl(state.photos[libraryIndex]?.id);
   };
 
-  if (hasActivePhotoFilters()) {
-    preloadPhoto(getAdjacentLightboxLibraryIndex(-1));
-    preloadPhoto(getAdjacentLightboxLibraryIndex(1));
-    return;
-  }
-
-  preloadPhoto(currentIndex - 1);
-  preloadPhoto(currentIndex + 1);
+  void (async () => {
+    const prev = await resolveAdjacentLightboxTarget(-1);
+    const next = await resolveAdjacentLightboxTarget(1);
+    preloadPhoto(prev?.libraryIndex ?? null);
+    preloadPhoto(next?.libraryIndex ?? null);
+  })();
 }
 
 /**
@@ -5732,6 +5852,9 @@ async function closeLightbox({ commitRotations = true } = {}) {
   clearLightboxVisualState();
   state.lightboxOpen = false;
   state.lightboxPhotoIndex = null;
+  state.lightboxGlobalIndex = null;
+  state.lightboxNavMode = null;
+  state.lightboxNavPhotoIds = null;
   overlay.style.display = 'none';
 
   // Restore body scroll
@@ -5764,6 +5887,242 @@ async function closeLightbox({ commitRotations = true } = {}) {
 }
 
 /**
+ * Virtual grid lightbox nav follows grid timeline order, not state.photos merge order.
+ */
+function usesGridTimelineLightboxNav() {
+  const layout = VirtualGrid.getLayout();
+  return VirtualGrid.isActive() && layout && !layout.provisional;
+}
+
+function buildOrderedNavPhotoIds(predicate) {
+  return state.photos
+    .filter((photo) => predicate(photo.id))
+    .map((photo) => photo.id);
+}
+
+/**
+ * Snapshot the pseudo-library the lightbox browses (selection, filter, or full grid).
+ */
+function captureLightboxNavContext(anchorPhoto) {
+  if (state.selectedPhotos.size > 0 && state.selectedPhotos.has(anchorPhoto.id)) {
+    state.lightboxNavMode = 'selection';
+    state.lightboxNavPhotoIds = buildOrderedNavPhotoIds((id) =>
+      state.selectedPhotos.has(id),
+    );
+    return;
+  }
+
+  if (hasActivePhotoFilters()) {
+    state.lightboxNavMode = 'filter';
+    state.lightboxNavPhotoIds = getFilteredPhotos(state.photos).map(
+      (photo) => photo.id,
+    );
+    return;
+  }
+
+  if (usesGridTimelineLightboxNav()) {
+    state.lightboxNavMode = 'timeline';
+    state.lightboxNavPhotoIds = null;
+    return;
+  }
+
+  state.lightboxNavMode = 'library';
+  state.lightboxNavPhotoIds = state.photos.map((photo) => photo.id);
+}
+
+function resolveLightboxSuccessorPhotoId(deletedPhotoId, navPhotoIds) {
+  const navIds = navPhotoIds || [];
+  const idx = navIds.indexOf(deletedPhotoId);
+  if (idx === -1 || navIds.length <= 1) {
+    return null;
+  }
+  if (idx < navIds.length - 1) {
+    return navIds[idx + 1];
+  }
+  return navIds[idx - 1];
+}
+
+function resolveLightboxSuccessorGlobalIndex(globalIndex, totalPhotos) {
+  if (globalIndex === null || totalPhotos <= 1) {
+    return null;
+  }
+  if (globalIndex < totalPhotos - 1) {
+    return globalIndex;
+  }
+  return globalIndex - 1;
+}
+
+function computeLightboxSuccessorBeforeRemove(deletedPhotoId) {
+  const deletedId = Number(deletedPhotoId);
+
+  if (state.lightboxNavMode === 'timeline') {
+    const globalIndex = getCurrentLightboxGlobalIndex();
+    const layout = VirtualGrid.getLayout();
+    if (globalIndex === null || !layout || layout.totalPhotos <= 1) {
+      return null;
+    }
+    const targetGlobal = resolveLightboxSuccessorGlobalIndex(
+      globalIndex,
+      layout.totalPhotos,
+    );
+    return targetGlobal === null ? null : { mode: 'timeline', globalIndex: targetGlobal };
+  }
+
+  const targetPhotoId = resolveLightboxSuccessorPhotoId(
+    deletedId,
+    state.lightboxNavPhotoIds,
+  );
+  if (!targetPhotoId) {
+    return null;
+  }
+  return { mode: 'id', photoId: targetPhotoId };
+}
+
+async function applyLightboxSuccessorAfterRemove(successor, deletedPhotoIds) {
+  const deletedSet = new Set(deletedPhotoIds.map((id) => Number(id)));
+
+  if (state.lightboxNavPhotoIds) {
+    state.lightboxNavPhotoIds = state.lightboxNavPhotoIds.filter(
+      (id) => !deletedSet.has(id),
+    );
+  }
+
+  deletedPhotoIds.forEach((id) => state.selectedPhotos.delete(Number(id)));
+  updateDeleteButtonVisibility();
+
+  if (!successor) {
+    const exhaustedScope = state.lightboxNavMode;
+    await closeLightbox({ commitRotations: false });
+    state.selectedPhotos.clear();
+    updateDeleteButtonVisibility();
+    reconcileGridEmptyState({ exhaustedScope });
+    return;
+  }
+
+  if (successor.mode === 'timeline') {
+    const photo = await VirtualGrid.resolvePhotoAtGlobalIndex(
+      successor.globalIndex,
+    );
+    if (!photo) {
+      await closeLightbox({ commitRotations: false });
+      return;
+    }
+    const libraryIndex = getPhotoLibraryIndex(photo.id);
+    if (libraryIndex < 0) {
+      await closeLightbox({ commitRotations: false });
+      return;
+    }
+    state.lightboxGlobalIndex = successor.globalIndex;
+    await openLightbox(libraryIndex);
+    return;
+  }
+
+  const libraryIndex = getPhotoLibraryIndex(successor.photoId);
+  if (libraryIndex < 0) {
+    await closeLightbox({ commitRotations: false });
+    return;
+  }
+  await openLightbox(libraryIndex);
+}
+
+async function syncLightboxGlobalIndexForPhoto(photo) {
+  if (
+    state.lightboxNavMode !== 'timeline' ||
+    !usesGridTimelineLightboxNav() ||
+    !photo
+  ) {
+    state.lightboxGlobalIndex = null;
+    return;
+  }
+
+  let globalIndex = VirtualGrid.getGlobalIndexForPhotoId(photo.id);
+  if (globalIndex === null && photo.month) {
+    globalIndex = await VirtualGrid.resolveGlobalIndexForPhotoId(
+      photo.id,
+      photo.month,
+    );
+  }
+  state.lightboxGlobalIndex = globalIndex;
+}
+
+function getCurrentLightboxGlobalIndex() {
+  if (state.lightboxGlobalIndex !== null) {
+    return state.lightboxGlobalIndex;
+  }
+  const photo = state.photos[state.lightboxPhotoIndex];
+  if (!photo) {
+    return null;
+  }
+  return VirtualGrid.getGlobalIndexForPhotoId(photo.id);
+}
+
+async function resolveAdjacentLightboxTarget(direction) {
+  if (state.lightboxNavMode === 'timeline' && usesGridTimelineLightboxNav()) {
+    const currentPhoto = state.photos[state.lightboxPhotoIndex];
+    if (!currentPhoto) {
+      return null;
+    }
+
+    let globalIndex = getCurrentLightboxGlobalIndex();
+    if (globalIndex === null) {
+      globalIndex = await VirtualGrid.resolveGlobalIndexForPhotoId(
+        currentPhoto.id,
+        currentPhoto.month,
+      );
+    }
+    if (globalIndex === null) {
+      return null;
+    }
+
+    const layout = VirtualGrid.getLayout();
+    const nextGlobal = globalIndex + direction;
+    if (nextGlobal < 0 || nextGlobal >= layout.totalPhotos) {
+      return null;
+    }
+
+    const photo = await VirtualGrid.resolvePhotoAtGlobalIndex(nextGlobal);
+    if (!photo) {
+      return null;
+    }
+
+    const libraryIndex = getPhotoLibraryIndex(photo.id);
+    if (libraryIndex < 0) {
+      return null;
+    }
+
+    return { libraryIndex, globalIndex: nextGlobal };
+  }
+
+  const navIds = state.lightboxNavPhotoIds;
+  if (navIds?.length) {
+    const currentPhotoId = state.photos[state.lightboxPhotoIndex]?.id;
+    const navIndex = navIds.indexOf(currentPhotoId);
+    if (navIndex === -1) {
+      return null;
+    }
+
+    const nextNavIndex = navIndex + direction;
+    if (nextNavIndex < 0 || nextNavIndex >= navIds.length) {
+      return null;
+    }
+
+    const libraryIndex = getPhotoLibraryIndex(navIds[nextNavIndex]);
+    if (libraryIndex < 0) {
+      return null;
+    }
+
+    return { libraryIndex, globalIndex: null };
+  }
+
+  const libraryIndex = state.lightboxPhotoIndex + direction;
+  if (libraryIndex < 0 || libraryIndex >= state.photos.length) {
+    return null;
+  }
+
+  return { libraryIndex, globalIndex: null };
+}
+
+/**
  * Update lightbox navigation arrow states based on current position
  */
 function updateLightboxArrowStates() {
@@ -5777,10 +6136,30 @@ function updateLightboxArrowStates() {
     return;
   }
 
-  if (hasActivePhotoFilters()) {
+  if (state.lightboxNavMode === 'timeline' && usesGridTimelineLightboxNav()) {
+    const layout = VirtualGrid.getLayout();
+    const globalIndex = getCurrentLightboxGlobalIndex();
+
+    if (globalIndex === null || globalIndex <= 0) {
+      prevBtn.classList.add('inactive');
+    } else {
+      prevBtn.classList.remove('inactive');
+    }
+
+    if (
+      globalIndex === null ||
+      globalIndex >= layout.totalPhotos - 1
+    ) {
+      nextBtn.classList.add('inactive');
+    } else {
+      nextBtn.classList.remove('inactive');
+    }
+    return;
+  }
+
+  if (state.lightboxNavPhotoIds?.length) {
     const currentPhotoId = state.photos[currentIndex]?.id;
-    const navPhotoIds = getLightboxNavPhotoIds();
-    const navIndex = navPhotoIds.indexOf(currentPhotoId);
+    const navIndex = state.lightboxNavPhotoIds.indexOf(currentPhotoId);
 
     if (navIndex <= 0) {
       prevBtn.classList.add('inactive');
@@ -5788,8 +6167,16 @@ function updateLightboxArrowStates() {
       prevBtn.classList.remove('inactive');
     }
 
-    if (navIndex === -1 || navIndex >= navPhotoIds.length - 1) {
-      nextBtn.classList.add('inactive');
+    if (navIndex === -1 || navIndex >= state.lightboxNavPhotoIds.length - 1) {
+      if (
+        state.lightboxNavMode === 'library' &&
+        !usesGridTimelineLightboxNav() &&
+        state.hasMore
+      ) {
+        nextBtn.classList.remove('inactive');
+      } else {
+        nextBtn.classList.add('inactive');
+      }
     } else {
       nextBtn.classList.remove('inactive');
     }
@@ -5798,16 +6185,14 @@ function updateLightboxArrowStates() {
 
   const totalPhotos = state.photos.length;
 
-  // Dim left arrow if at first photo
   if (currentIndex <= 0) {
     prevBtn.classList.add('inactive');
   } else {
     prevBtn.classList.remove('inactive');
   }
 
-  // Dim right arrow if at last photo
   if (currentIndex >= totalPhotos - 1) {
-    if (state.hasMore && !hasActivePhotoFilters()) {
+    if (state.hasMore) {
       nextBtn.classList.remove('inactive');
     } else {
       nextBtn.classList.add('inactive');
@@ -5823,58 +6208,30 @@ function updateLightboxArrowStates() {
 async function navigateLightbox(direction) {
   if (state.lightboxPhotoIndex === null) return;
 
-  let newIndex;
-  if (hasActivePhotoFilters()) {
-    newIndex = getAdjacentLightboxLibraryIndex(direction);
-    if (newIndex === null) {
-      return;
+  const target = await resolveAdjacentLightboxTarget(direction);
+  if (target) {
+    if (target.globalIndex !== null && target.globalIndex !== undefined) {
+      state.lightboxGlobalIndex = target.globalIndex;
     }
-  } else {
-    newIndex = state.lightboxPhotoIndex + direction;
-    if (newIndex < 0) {
-      return;
-    }
-    if (newIndex >= state.photos.length) {
-      if (direction > 0 && VirtualGrid.isActive() && !hasActivePhotoFilters()) {
-        const currentPhoto = state.photos[state.lightboxPhotoIndex];
-        const currentCard = currentPhoto
-          ? document.querySelector(`[data-id="${currentPhoto.id}"]`)
-          : null;
-        const globalIndex = currentCard
-          ? parseInt(currentCard.dataset.index, 10)
-          : null;
-        if (globalIndex !== null && !Number.isNaN(globalIndex)) {
-          const layout = VirtualGrid.getLayout();
-          const section = GridLayout.findSectionForGlobalIndex(
-            layout,
-            globalIndex + 1,
-          );
-          if (section) {
-            await VirtualGrid.fetchMonthPhotos(section.month);
-            const nextPhoto = state.photos.find(
-              (photo) => photo.month === section.month,
-            );
-            if (nextPhoto) {
-              const nextIndex = getPhotoLibraryIndex(nextPhoto.id);
-              if (nextIndex >= 0) {
-                openLightbox(nextIndex);
-                return;
-              }
-            }
-          }
-        }
-      }
-      if (direction > 0 && state.hasMore) {
-        const loaded = await loadMorePhotos();
-        if (loaded && newIndex < state.photos.length) {
-          openLightbox(newIndex);
-        }
-      }
-      return;
-    }
+    openLightbox(target.libraryIndex);
+    return;
   }
 
-  openLightbox(newIndex);
+  if (
+    direction > 0 &&
+    state.lightboxNavMode === 'library' &&
+    !usesGridTimelineLightboxNav() &&
+    state.hasMore
+  ) {
+    const loaded = await loadMorePhotos();
+    if (loaded) {
+      state.lightboxNavPhotoIds = state.photos.map((photo) => photo.id);
+      const newIndex = state.lightboxPhotoIndex + 1;
+      if (newIndex < state.photos.length) {
+        openLightbox(newIndex);
+      }
+    }
+  }
 }
 
 // =====================
@@ -5950,7 +6307,58 @@ function resetPhotoWindowState() {
 }
 
 function shouldUseVirtualGrid() {
-  return Boolean(state.libraryPath) && !hasActivePhotoFilters();
+  return Boolean(state.libraryPath);
+}
+
+function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
+  return {
+    sortOrder: sortOrder ?? state.currentSortOrder,
+    signal,
+    getGeneration: () => generation,
+    mergePhotos: mergePhotosIntoVirtualState,
+    filterPhoto: getActiveVirtualGridFilterPhoto(),
+    deferContainerMount: state.libraryTransitionActive,
+    onPhaseAAnchor: (preview) => {
+      state.photoTotalCount = preview.total;
+      state.hasDatabase = true;
+      state.hasMore = false;
+      applyDatePickerFromYears(preview.years, preview.anchorMonth);
+      enableAppBarButtons();
+    },
+    onProvisionalReady: () => {
+      updateUtilityMenuAvailability();
+      updateFilterChipRailVisibility();
+      if (state.libraryTransitionActive) {
+        hideLibraryTransitionOverlay();
+      }
+    },
+    onLayoutApplied: (appliedLayout) => {
+      if (appliedLayout?.provisional) {
+        return;
+      }
+      datePickerLastSyncedMonth = null;
+      scheduleDatePickerFromScrollSync();
+    },
+    onIndexReady: (index) => {
+      state.photoTotalCount = index.total;
+      state.hasDatabase = true;
+      state.hasMore = false;
+    },
+    onMonthMounted: () => {
+      setupThumbnailLazyLoading();
+      ensureGridInteractionsWired();
+      if (state.onMonthsRendered) {
+        state.onMonthsRendered();
+      }
+    },
+    onReady: () => {
+      updateUtilityMenuAvailability();
+      updateFilterChipRailVisibility();
+      enableAppBarButtons();
+      datePickerLastSyncedMonth = null;
+      scheduleDatePickerFromScrollSync();
+    },
+  };
 }
 
 function mergePhotosIntoVirtualState(incomingPhotos) {
@@ -5977,53 +6385,9 @@ async function loadAndRenderPhotosVirtual(options = {}) {
   state.lastClickedIndex = null;
 
   try {
-    const ok = await VirtualGrid.init({
-      sortOrder,
-      signal,
-      getGeneration: () => generation,
-      mergePhotos: mergePhotosIntoVirtualState,
-      deferContainerMount: state.libraryTransitionActive,
-      onPhaseAAnchor: (preview) => {
-        state.photoTotalCount = preview.total;
-        state.hasDatabase = true;
-        state.hasMore = false;
-        applyDatePickerFromYears(preview.years, preview.anchorMonth);
-        enableAppBarButtons();
-      },
-      onProvisionalReady: () => {
-        updateUtilityMenuAvailability();
-        updateFilterChipRailVisibility();
-        if (state.libraryTransitionActive) {
-          hideLibraryTransitionOverlay();
-        }
-      },
-      onLayoutApplied: (appliedLayout) => {
-        if (appliedLayout?.provisional) {
-          return;
-        }
-        datePickerLastSyncedMonth = null;
-        scheduleDatePickerFromScrollSync();
-      },
-      onIndexReady: (index) => {
-        state.photoTotalCount = index.total;
-        state.hasDatabase = true;
-        state.hasMore = false;
-      },
-      onMonthMounted: () => {
-        setupThumbnailLazyLoading();
-        ensureGridInteractionsWired();
-        if (state.onMonthsRendered) {
-          state.onMonthsRendered();
-        }
-      },
-      onReady: () => {
-        updateUtilityMenuAvailability();
-        updateFilterChipRailVisibility();
-        enableAppBarButtons();
-        datePickerLastSyncedMonth = null;
-        scheduleDatePickerFromScrollSync();
-      },
-    });
+    const ok = await VirtualGrid.init(
+      buildVirtualGridInitHooks(generation, { sortOrder, signal }),
+    );
 
     const isStale =
       (signal && signal.aborted) || !isCurrentLibraryGeneration(generation);
@@ -6182,7 +6546,7 @@ async function replaceGridAtMonth(targetMonth) {
 
 async function hydrateGridForMonthJump(targetMonth) {
   try {
-    if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+    if (VirtualGrid.isActive()) {
       if (VirtualGrid.jumpToMonth(targetMonth)) {
         return;
       }
@@ -6247,7 +6611,7 @@ async function loadAndRenderPhotosPaged(options = {}) {
 }
 
 /**
- * Load photos — virtual timeline by default; paged fallback when filters are active.
+ * Load photos — virtual timeline by default; paged fallback when forced.
  */
 async function loadAndRenderPhotos(append = false, options = {}) {
   const {
@@ -6479,6 +6843,31 @@ function getFilteredPhotos(photos = state.photos) {
   });
 }
 
+function photoMatchesActiveFilters(photo) {
+  if (!hasActivePhotoFilters()) {
+    return true;
+  }
+  const { starred, video } = state.activeFilters;
+  if (starred && photo.rating !== 5) {
+    return false;
+  }
+  if (video && photo.file_type !== 'video') {
+    return false;
+  }
+  return true;
+}
+
+function getActiveVirtualGridFilterPhoto() {
+  return hasActivePhotoFilters() ? photoMatchesActiveFilters : null;
+}
+
+function getGridFilterOptions() {
+  return {
+    starred: Boolean(state.activeFilters.starred),
+    video: Boolean(state.activeFilters.video),
+  };
+}
+
 function getPhotoLibraryIndex(photoId) {
   return state.photos.findIndex((photo) => photo.id === photoId);
 }
@@ -6492,31 +6881,10 @@ function buildPhotoLibraryIndexMap() {
 }
 
 function getLightboxNavPhotoIds() {
+  if (state.lightboxOpen && state.lightboxNavPhotoIds) {
+    return state.lightboxNavPhotoIds;
+  }
   return getFilteredPhotos(state.photos).map((photo) => photo.id);
-}
-
-function getAdjacentLightboxLibraryIndex(direction) {
-  if (state.lightboxPhotoIndex === null) {
-    return null;
-  }
-
-  const currentPhotoId = state.photos[state.lightboxPhotoIndex]?.id;
-  if (!currentPhotoId) {
-    return null;
-  }
-
-  const navPhotoIds = getLightboxNavPhotoIds();
-  const navIndex = navPhotoIds.indexOf(currentPhotoId);
-  if (navIndex === -1) {
-    return null;
-  }
-
-  const nextNavIndex = navIndex + direction;
-  if (nextNavIndex < 0 || nextNavIndex >= navPhotoIds.length) {
-    return null;
-  }
-
-  return getPhotoLibraryIndex(navPhotoIds[nextNavIndex]);
 }
 
 function updateFilterChipUI() {
@@ -6549,7 +6917,27 @@ function updateFilterChipRailVisibility() {
 function applyPhotoFilters() {
   updateFilterChipUI();
   updateFilterChipRailVisibility();
-  void loadAndRenderPhotos(false, { forcePaged: hasActivePhotoFilters() });
+  void applyPhotoFiltersAsync();
+}
+
+async function applyPhotoFiltersAsync() {
+  if (!VirtualGrid.isActive() && shouldUseVirtualGrid()) {
+    await loadAndRenderPhotos(false);
+  }
+  if (VirtualGrid.isActive()) {
+    VirtualGrid.setFilterPhoto(getActiveVirtualGridFilterPhoto());
+    try {
+      const result = await VirtualGrid.applyFilterLayout(getGridFilterOptions());
+      if (result === 'empty') {
+        showFilterZeroState();
+        return;
+      }
+      setupThumbnailLazyLoading();
+      ensureGridInteractionsWired();
+    } catch (error) {
+      console.error('❌ Failed to apply photo filters:', error);
+    }
+  }
 }
 
 function togglePhotoFilter(filterKey) {
@@ -6882,9 +7270,25 @@ function ensureGridInteractionsWired() {
 }
 
 function handlePhotoCardClick(card, event) {
-  const index = parseInt(card.dataset.index, 10);
+  const photoId = parseInt(card.dataset.id, 10);
+  const selectCircle = card.querySelector('.select-circle');
+  const clickedSelectCircle =
+    selectCircle &&
+    (event.target === selectCircle || selectCircle.contains(event.target));
 
   if (state.selectedPhotos.size > 0) {
+    if (
+      state.selectedPhotos.has(photoId) &&
+      !event.shiftKey &&
+      !clickedSelectCircle
+    ) {
+      const libraryIndex = getPhotoLibraryIndex(photoId);
+      if (libraryIndex >= 0) {
+        openLightbox(libraryIndex);
+      }
+      return;
+    }
+
     togglePhotoSelection(card, event);
     return;
   }
@@ -6895,17 +7299,12 @@ function handlePhotoCardClick(card, event) {
     return;
   }
 
-  const selectCircle = card.querySelector('.select-circle');
-  if (
-    selectCircle &&
-    (event.target === selectCircle || selectCircle.contains(event.target))
-  ) {
+  if (clickedSelectCircle) {
     event.stopPropagation();
     togglePhotoSelection(card, event);
     return;
   }
 
-  const photoId = parseInt(card.dataset.id, 10);
   const libraryIndex = getPhotoLibraryIndex(photoId);
   if (libraryIndex >= 0) {
     openLightbox(libraryIndex);
@@ -7103,7 +7502,7 @@ function removePhotosFromState(photoIds) {
   idSet.forEach((id) => state.selectedPhotos.delete(id));
   state.lastClickedIndex = null;
 
-  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+  if (VirtualGrid.isActive()) {
     VirtualGrid.scheduleSync();
   } else {
     renderPhotoGrid(getFilteredPhotos(state.photos), false);
@@ -7116,17 +7515,26 @@ function removePhotosFromState(photoIds) {
 /**
  * Photo exists in client state but not on server (already deleted / stale cache).
  */
-async function handleStalePhoto(photoId, { closeLightbox = true } = {}) {
+async function handleStalePhoto(photoId, { closeLightbox: forceClose = false } = {}) {
   const wasViewingInLightbox =
     state.lightboxOpen &&
     state.lightboxPhotoIndex !== null &&
     state.photos[state.lightboxPhotoIndex]?.id === photoId;
 
+  const successor =
+    wasViewingInLightbox && !forceClose
+      ? computeLightboxSuccessorBeforeRemove(photoId)
+      : null;
+
   const removed = removePhotosFromState([photoId]);
   if (!removed) return false;
 
-  if (closeLightbox && wasViewingInLightbox) {
-    await closeLightbox({ commitRotations: false });
+  if (wasViewingInLightbox) {
+    if (forceClose || !successor) {
+      await closeLightbox({ commitRotations: false });
+    } else {
+      await applyLightboxSuccessorAfterRemove(successor, [photoId]);
+    }
   }
 
   if (state.photoTotalCount > 0) {
@@ -7144,8 +7552,17 @@ async function deletePhotos(photoIds) {
   if (state.deleteInProgress) return;
   state.deleteInProgress = true;
 
+  const fromLightbox =
+    state.lightboxOpen &&
+    photoIds.length === 1 &&
+    state.photos[state.lightboxPhotoIndex]?.id === Number(photoIds[0]);
+
+  let lightboxSuccessor = null;
+  if (fromLightbox) {
+    lightboxSuccessor = computeLightboxSuccessorBeforeRemove(photoIds[0]);
+  }
+
   try {
-    // Delete immediately from backend (moves to trash + deleted_photos table)
     const response = await fetch('/api/photos/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -7158,14 +7575,14 @@ async function deletePhotos(photoIds) {
 
     const result = await response.json();
 
-    // Clear selection and shift-select anchor
-    state.selectedPhotos.clear();
-    state.lastClickedIndex = null;
-    updateDeleteButtonVisibility();
+    if (!fromLightbox) {
+      state.selectedPhotos.clear();
+      state.lastClickedIndex = null;
+      updateDeleteButtonVisibility();
 
-    // Close lightbox if open
-    if (state.lightboxOpen) {
-      await closeLightbox({ commitRotations: false });
+      if (state.lightboxOpen) {
+        await closeLightbox({ commitRotations: false });
+      }
     }
 
     const deletedCount = result.deleted || 0;
@@ -7177,8 +7594,14 @@ async function deletePhotos(photoIds) {
     if (deletedCount > 0) {
       removePhotosFromState(photoIds);
       await syncGridAfterHistogramChange();
+      if (fromLightbox) {
+        await applyLightboxSuccessorAfterRemove(lightboxSuccessor, photoIds);
+      }
     } else if (notFoundIds.length > 0) {
       removePhotosFromState(notFoundIds);
+      if (fromLightbox) {
+        await applyLightboxSuccessorAfterRemove(lightboxSuccessor, notFoundIds);
+      }
     }
 
     if (deletedCount > 0) {
@@ -7808,7 +8231,7 @@ function scrollToImportedPhoto(photoIds) {
     return;
   }
 
-  if (VirtualGrid.isActive() && !hasActivePhotoFilters()) {
+  if (VirtualGrid.isActive()) {
     const card = document.querySelector(`[data-id="${firstVisibleId}"]`);
     const monthKey = card?.closest('[data-month]')?.dataset?.month;
     if (monthKey && VirtualGrid.scrollToMonth(monthKey)) {

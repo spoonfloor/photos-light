@@ -135,6 +135,68 @@ class GridReadCacheTest(unittest.TestCase):
         fresh_total = self.client.get("/api/photos?sort=newest&limit=1").get_json()["total"]
         self.assertEqual(fresh_total, 2)
 
+    def test_month_index_supports_starred_and_video_filters(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename, current_path, date_taken, content_hash,
+                file_size, file_type, width, height, rating
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "star.jpg",
+                "1900/1900-01-02/star.jpg",
+                "1900:01:02 00:00:00",
+                "hashbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                100,
+                "photo",
+                1,
+                1,
+                5,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename, current_path, date_taken, content_hash,
+                file_size, file_type, width, height, rating
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "clip.mov",
+                "1900/1900-01-03/clip.mov",
+                "1900:01:03 00:00:00",
+                "hashcccccccccccccccccccccccccccc",
+                100,
+                "video",
+                1,
+                1,
+                None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        photo_app.invalidate_grid_read_caches()
+
+        unfiltered = self.client.get("/api/photos/month_index?sort=newest").get_json()
+        self.assertEqual(unfiltered["total"], 3)
+        self.assertFalse(unfiltered["filtered"])
+
+        starred = self.client.get(
+            "/api/photos/month_index?sort=newest&starred=1",
+        ).get_json()
+        self.assertTrue(starred["filtered"])
+        self.assertEqual(starred["total"], 1)
+        self.assertEqual(starred["months"], [{"month": "1900-01", "count": 1}])
+
+        video = self.client.get(
+            "/api/photos/month_index?sort=newest&video=1",
+        ).get_json()
+        self.assertTrue(video["filtered"])
+        self.assertEqual(video["total"], 1)
+        self.assertEqual(video["months"], [{"month": "1900-01", "count": 1}])
+
 
 if __name__ == "__main__":
     unittest.main()

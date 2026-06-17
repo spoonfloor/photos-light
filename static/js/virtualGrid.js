@@ -26,6 +26,8 @@ const VirtualGrid = (() => {
   let anchorSectionEl = null;
   /** Grid DOM mount deferred while library transition overlay is up (legacy no-op). */
   let pendingContainerMount = null;
+  /** Canonical unfiltered month histogram — restored when filters clear. */
+  let unfilteredMonthIndex = null;
 
   function getContainer() {
     return document.getElementById('photoContainer');
@@ -690,10 +692,33 @@ const VirtualGrid = (() => {
     }
   }
 
+  function rememberUnfilteredIndex(indexPayload) {
+    if (indexPayload && !indexPayload.filtered) {
+      unfilteredMonthIndex = indexPayload;
+    }
+  }
+
+  function buildMonthIndexUrl(
+    sortOrderNext,
+    { starred = false, video = false } = {},
+  ) {
+    const params = new URLSearchParams({
+      sort: sortOrderNext || sortOrder,
+    });
+    if (starred) {
+      params.set('starred', '1');
+    }
+    if (video) {
+      params.set('video', '1');
+    }
+    return `/api/photos/month_index?${params.toString()}`;
+  }
+
   function rebuildLayoutFromIndex(indexPayload, container, options = {}) {
     if (layout?.provisional && !options.keepMounted) {
       clearMountedMonths();
     }
+    rememberUnfilteredIndex(indexPayload);
     monthIndex = indexPayload;
     sortOrder = indexPayload?.sort || sortOrder;
     const columnLayout = GridLayout.computeColumnLayout(container);
@@ -1044,6 +1069,7 @@ const VirtualGrid = (() => {
     }
     monthInflight.clear();
     hooks = {};
+    unfilteredMonthIndex = null;
   }
 
   function jumpToMonth(monthKey, options = {}) {
@@ -1107,8 +1133,93 @@ const VirtualGrid = (() => {
     scheduleSync();
   }
 
+  function setFilterPhoto(filterPhoto) {
+    hooks.filterPhoto = typeof filterPhoto === 'function' ? filterPhoto : null;
+  }
+
+  function restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth) {
+    if (preserveMonth) {
+      const resolvedMonth = GridLayout.resolveJumpMonth(
+        layout,
+        preserveMonth,
+        indexPayload,
+        sortOrder,
+      );
+      if (resolvedMonth) {
+        scrollToMonth(resolvedMonth);
+        return;
+      }
+    }
+    const anchor = indexPayload?.months?.[0]?.month || null;
+    if (anchor) {
+      scrollToMonth(anchor);
+    } else {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }
+  }
+
+  /**
+   * Rebuild layout from filtered (or restored unfiltered) month_index — no grid destroy.
+   * Returns 'empty' when the active filter matches zero photos.
+   */
+  async function applyFilterLayout({ starred = false, video = false } = {}) {
+    const container = getContainer();
+    if (!container || !layout) {
+      return false;
+    }
+
+    const hasFilter = Boolean(starred || video);
+    const previousScrollTop = getScrollElement().scrollTop;
+    const preserveMonth = layout.provisional
+      ? null
+      : GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80);
+
+    let indexPayload;
+    if (!hasFilter) {
+      if (unfilteredMonthIndex) {
+        indexPayload = unfilteredMonthIndex;
+      } else {
+        const response = await fetch(
+          buildMonthIndexUrl(sortOrder, { starred: false, video: false }),
+        );
+        indexPayload = await response.json();
+        if (!response.ok) {
+          throw new Error(indexPayload.error || 'Failed to restore month index');
+        }
+      }
+    } else {
+      const response = await fetch(
+        buildMonthIndexUrl(sortOrder, { starred, video }),
+      );
+      indexPayload = await response.json();
+      if (!response.ok) {
+        throw new Error(indexPayload.error || 'Failed to load filtered month index');
+      }
+      if ((indexPayload.total ?? 0) === 0) {
+        return 'empty';
+      }
+    }
+
+    monthCache.clear();
+    monthInflight.clear();
+    hydratedMonths = new Set();
+    clearMountedMonths();
+    rebuildLayoutFromIndex(indexPayload, container, { remount: true });
+    if (hooks.onIndexReady) {
+      hooks.onIndexReady(indexPayload);
+    }
+    scheduleSync();
+    restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
+    return true;
+  }
+
   async function refreshMonthIndex(sortOrderNext = sortOrder, options = {}) {
-    const { scrollTargetMonth = null, preserveScroll = true } = options;
+    const {
+      scrollTargetMonth = null,
+      preserveScroll = true,
+      starred = false,
+      video = false,
+    } = options;
     const container = getContainer();
     if (!container) {
       return false;
@@ -1126,11 +1237,15 @@ const VirtualGrid = (() => {
       null;
 
     const response = await fetch(
-      `/api/photos/month_index?sort=${encodeURIComponent(sortOrderNext)}`,
+      buildMonthIndexUrl(sortOrderNext, { starred, video }),
     );
     const indexPayload = await response.json();
     if (!response.ok) {
       throw new Error(indexPayload.error || 'Failed to refresh month index');
+    }
+    const hasFilter = Boolean(starred || video);
+    if (hasFilter && (indexPayload.total ?? 0) === 0) {
+      return 'empty';
     }
     sortOrder = sortOrderNext;
     monthCache.clear();
@@ -1158,8 +1273,8 @@ const VirtualGrid = (() => {
       } else {
         window.scrollTo({ top: 0, behavior: 'instant' });
       }
-    } else if (preserveMonth && Math.abs(nextHeight - previousHeight) < 200) {
-      scrollToMonth(preserveMonth);
+    } else if (preserveMonth) {
+      restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
     } else if (previousScrollTop > maxScrollTop + 1) {
       const anchor = indexPayload?.months?.[0]?.month || null;
       if (anchor) {
@@ -1170,6 +1285,90 @@ const VirtualGrid = (() => {
     }
 
     return true;
+  }
+
+  function visibleMonthPhotos(photos) {
+    return hooks.filterPhoto ? photos.filter(hooks.filterPhoto) : photos;
+  }
+
+  function globalIndexInSection(section, photos, photoId) {
+    const localIndex = visibleMonthPhotos(photos).findIndex(
+      (photo) => photo.id === photoId,
+    );
+    if (localIndex === -1) {
+      return null;
+    }
+    return section.globalStart + localIndex;
+  }
+
+  /** Grid timeline index for a photo (DOM or loaded month cache). */
+  function getGlobalIndexForPhotoId(photoId) {
+    const card = document.querySelector(`.photo-card[data-id="${photoId}"]`);
+    if (card) {
+      const index = parseInt(card.dataset.index, 10);
+      if (!Number.isNaN(index)) {
+        return index;
+      }
+    }
+    if (!layout?.sections) {
+      return null;
+    }
+    for (const section of layout.sections) {
+      const photos = monthCache.get(section.month);
+      if (!photos) {
+        continue;
+      }
+      const globalIndex = globalIndexInSection(section, photos, photoId);
+      if (globalIndex !== null) {
+        return globalIndex;
+      }
+    }
+    return null;
+  }
+
+  /** Load month if needed, then resolve grid timeline index. */
+  async function resolveGlobalIndexForPhotoId(photoId, monthKey) {
+    const cached = getGlobalIndexForPhotoId(photoId);
+    if (cached !== null) {
+      return cached;
+    }
+    if (!layout?.sections || !monthKey) {
+      return null;
+    }
+    const section = GridLayout.findSectionForMonth(layout, monthKey);
+    if (!section) {
+      return null;
+    }
+    let photos;
+    try {
+      photos = await fetchMonthPhotos(monthKey);
+    } catch {
+      return null;
+    }
+    return globalIndexInSection(section, photos, photoId);
+  }
+
+  /** Photo at a grid timeline index (loads month bucket on demand). */
+  async function resolvePhotoAtGlobalIndex(globalIndex) {
+    if (!layout?.sections || globalIndex < 0 || globalIndex >= layout.totalPhotos) {
+      return null;
+    }
+    const section = GridLayout.findSectionForGlobalIndex(layout, globalIndex);
+    if (!section) {
+      return null;
+    }
+    let photos;
+    try {
+      photos = await fetchMonthPhotos(section.month);
+    } catch {
+      return null;
+    }
+    const visible = visibleMonthPhotos(photos);
+    const localIndex = globalIndex - section.globalStart;
+    if (localIndex < 0 || localIndex >= visible.length) {
+      return null;
+    }
+    return visible[localIndex];
   }
 
   function getLayout() {
@@ -1202,10 +1401,15 @@ const VirtualGrid = (() => {
     invalidateMonth,
     invalidateAllMonths,
     refreshMonthIndex,
+    setFilterPhoto,
+    applyFilterLayout,
     scheduleSync,
     getLayout,
     getPhaseAState,
     isActive,
     fetchMonthPhotos,
+    getGlobalIndexForPhotoId,
+    resolveGlobalIndexForPhotoId,
+    resolvePhotoAtGlobalIndex,
   };
 })();

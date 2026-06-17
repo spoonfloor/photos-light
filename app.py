@@ -1303,11 +1303,39 @@ def _sort_grid_month_keys(month_counts, sort_order):
     return ordered
 
 
-def build_month_index(cursor, sort_order='newest'):
-    """Aggregate photo counts per grid month bucket."""
-    rows = cursor.execute(
-        'SELECT date_taken, current_path FROM photos',
-    ).fetchall()
+def _month_index_cache_key(sort_order, starred=False, video=False):
+    flags = []
+    if starred:
+        flags.append('starred')
+    if video:
+        flags.append('video')
+    suffix = ','.join(flags) if flags else 'all'
+    return f'{sort_order}|{suffix}'
+
+
+def _parse_grid_filter_query_args(starred_arg=None, video_arg=None):
+    """Parse starred/video filter flags from request strings or booleans."""
+    if isinstance(starred_arg, bool):
+        starred = starred_arg
+    else:
+        starred = str(starred_arg or '').lower() in ('1', 'true', 'yes')
+    if isinstance(video_arg, bool):
+        video = video_arg
+    else:
+        video = str(video_arg or '').lower() in ('1', 'true', 'yes')
+    return starred, video
+
+
+def build_month_index(cursor, sort_order='newest', *, starred=False, video=False):
+    """Aggregate photo counts per grid month bucket, optionally filtered."""
+    query = 'SELECT date_taken, current_path FROM photos WHERE 1=1'
+    params = []
+    if starred:
+        query += ' AND rating = 5'
+    if video:
+        query += ' AND file_type = ?'
+        params.append('video')
+    rows = cursor.execute(query, params).fetchall()
     month_counts = defaultdict(int)
     for row in rows:
         month = month_key_for_photo_grid(row['date_taken'], row['current_path'])
@@ -1322,18 +1350,27 @@ def build_month_index(cursor, sort_order='newest'):
         'total': total,
         'undated_count': undated_count,
         'sort': sort_order,
+        'starred': starred,
+        'video': video,
+        'filtered': bool(starred or video),
     }
 
 
-def get_cached_month_index(cursor, sort_order='newest'):
-    """Return month histogram; cached per sort order for the current catalog revision."""
+def get_cached_month_index(cursor, sort_order='newest', *, starred=False, video=False):
+    """Return month histogram; cached per sort + filter for the current catalog revision."""
     global MONTH_INDEX_CACHE, MONTH_INDEX_CACHE_REVISION
     if MONTH_INDEX_CACHE_REVISION != LIBRARY_CATALOG_REVISION:
         MONTH_INDEX_CACHE = {}
         MONTH_INDEX_CACHE_REVISION = LIBRARY_CATALOG_REVISION
-    if sort_order not in MONTH_INDEX_CACHE:
-        MONTH_INDEX_CACHE[sort_order] = build_month_index(cursor, sort_order)
-    return MONTH_INDEX_CACHE[sort_order]
+    cache_key = _month_index_cache_key(sort_order, starred, video)
+    if cache_key not in MONTH_INDEX_CACHE:
+        MONTH_INDEX_CACHE[cache_key] = build_month_index(
+            cursor,
+            sort_order,
+            starred=starred,
+            video=video,
+        )
+    return MONTH_INDEX_CACHE[cache_key]
 
 
 def fetch_photos_for_grid_month(cursor, month_key, sort_order='newest'):
@@ -1391,9 +1428,18 @@ def get_photos_month_index():
     """Month histogram for virtual grid layout (counts per YYYY-MM bucket)."""
     try:
         sort_order = request.args.get('sort', 'newest')
+        starred, video = _parse_grid_filter_query_args(
+            request.args.get('starred'),
+            request.args.get('video'),
+        )
         conn = get_db_connection()
         cursor = conn.cursor()
-        payload = get_cached_month_index(cursor, sort_order)
+        payload = get_cached_month_index(
+            cursor,
+            sort_order,
+            starred=starred,
+            video=video,
+        )
         conn.close()
         return jsonify(attach_catalog_revision(payload))
     except Exception as e:
