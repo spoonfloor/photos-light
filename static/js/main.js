@@ -6,7 +6,7 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '451';
+const STATIC_ASSET_VERSION = '452';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
