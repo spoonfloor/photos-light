@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 
 from db_schema import create_database_schema
 from library_cleanliness import build_canonical_photo_path
-from media_finalization import finalize_mutated_media
+from media_finalization import finalize_mutated_media, rollback_finalize_mutated_media
 
 
 class MediaFinalizationTest(unittest.TestCase):
@@ -199,6 +199,36 @@ class MediaFinalizationTest(unittest.TestCase):
             (photo_id,),
         ).fetchone()
         self.assertIsNone(row)
+
+    def test_rollback_finalize_mutated_media_restores_moved_file(self):
+        photo_id, old_full_path = self._insert_photo(
+            current_path="2026/2026-04-12/img_20260412_oldhash.jpg",
+            content_hash="oldhash1",
+        )
+
+        result = finalize_mutated_media(
+            conn=self.conn,
+            photo_id=photo_id,
+            library_path=self.library_path,
+            current_rel_path="2026/2026-04-12/img_20260412_oldhash.jpg",
+            date_taken="2026:04:12 09:30:15",
+            old_hash="oldhash1",
+            build_canonical_path=build_canonical_photo_path,
+            compute_hash=lambda _: "newhash8",
+            get_dimensions=lambda _: (480, 640),
+            delete_thumbnail_for_hash=self.deleted_thumbnails.append,
+            defer_thumbnail_cleanup=True,
+        )
+        self.conn.rollback()
+        rollback_finalize_mutated_media(result)
+
+        self.assertTrue(os.path.exists(old_full_path))
+        self.assertEqual(self.deleted_thumbnails, [])
+        row = self.conn.execute(
+            "SELECT current_path FROM photos WHERE id = ?",
+            (photo_id,),
+        ).fetchone()
+        self.assertEqual(row["current_path"], "2026/2026-04-12/img_20260412_oldhash.jpg")
 
 
 if __name__ == "__main__":

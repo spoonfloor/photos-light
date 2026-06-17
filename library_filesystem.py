@@ -12,6 +12,7 @@ import os
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Callable, Iterator, List, Optional, Set, Tuple
 
 from clean_library_media_utils import verify_media_file
@@ -61,6 +62,35 @@ def iter_library_walk(library_path: str) -> Iterator[Tuple[str, List[str], List[
             continue
         _filter_walk_dirs(library_path, root, dirs)
         yield root, dirs, files
+
+
+def iter_library_walk_date_range(
+    library_path: str,
+    date_from: date,
+    date_to: date,
+) -> Iterator[Tuple[str, List[str], List[str]]]:
+    """
+    Yield ``(root, dirs, files)`` for canonical day folders within an inclusive date range.
+
+    Only visits ``YYYY/YYYY-MM-DD/`` directories that exist — does not walk the full tree.
+    """
+    if date_to < date_from:
+        return
+    library_path = _abs_library_path(library_path)
+    current = date_from
+    while current <= date_to:
+        year = current.strftime("%Y")
+        month_day = current.strftime("%Y-%m-%d")
+        day_dir = os.path.join(library_path, year, month_day)
+        if os.path.isdir(day_dir):
+            files = [
+                name
+                for name in os.listdir(day_dir)
+                if name not in IGNORED_LIBRARY_FILES
+            ]
+            if files:
+                yield day_dir, [], files
+        current += timedelta(days=1)
 
 
 def partition_library_files(library_path: str) -> LibraryPartition:

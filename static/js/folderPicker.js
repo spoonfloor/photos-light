@@ -55,7 +55,40 @@ const FolderPicker = (() => {
   let selectionProbeRequestId = 0;
   let activeItemKey = null; // Keyboard-highlighted row in the visible list
   let folderListLoading = false;
+  let lastListSignature = null;
+  let embeddedRefreshActive = false;
   const FOLDER_LIST_PLACEHOLDER_COUNT = 6;
+
+  const pickerAutoRefresh = PickerUtils.createPickerAutoRefresh({
+    isVisible: () => {
+      if (embeddedRefreshActive) {
+        return true;
+      }
+      const overlay = document.getElementById('folderPickerOverlay');
+      return !!(overlay && overlay.style.display !== 'none');
+    },
+    onRefresh: () => updateFolderList({ silent: true }),
+  });
+
+  function startPickerAutoRefresh() {
+    pickerAutoRefresh.start();
+  }
+
+  function stopPickerAutoRefresh() {
+    pickerAutoRefresh.stop();
+    lastListSignature = null;
+  }
+
+  async function syncSelectionAfterListChange() {
+    if (
+      selectedPath === currentPath &&
+      (shouldUseOpenLibraryCta() || shouldUseConvertLibraryCta())
+    ) {
+      beginSelectionProbeCycle();
+      await syncSelectedPathProbe();
+    }
+    updateButtonText();
+  }
 
   const DEFAULT_ELEMENT_IDS = {
     breadcrumb: 'folderPickerBreadcrumb',
@@ -472,7 +505,141 @@ const FolderPicker = (() => {
     return setActiveFolderItem(rows[nextIndex].dataset.itemKey, { scroll: true });
   }
 
-  async function updateFolderList() {
+  function renderVirtualRootList(folderList, { preserveScroll = false } = {}) {
+    const scrollTop = preserveScroll ? folderList.scrollTop : 0;
+
+    clearFolderListLoading();
+    currentHasDb = false;
+    currentHasOpenableDb = false;
+    selectedHasOpenableDb = false;
+    selectedHasDb = false;
+    selectedHasMedia = false;
+    selectedConvertBlocked = false;
+    selectionProbePending = false;
+    updateButtonText();
+
+    folderList.innerHTML = PickerUtils.sortPickerItems(topLevelLocations)
+      .map(
+        (loc) => `
+        <div class="folder-item" data-real-path="${loc.path}" data-item-key="${getFolderItemKey('location', loc.path)}" data-item-path="${loc.path}" aria-selected="false">
+          <span class="folder-icon material-symbols-outlined">folder</span>
+          <span class="folder-name">${loc.name}</span>
+          <span class="folder-arrow">→</span>
+        </div>
+      `,
+      )
+      .join('');
+
+    if (folderListClickHandler) {
+      folderList.removeEventListener('click', folderListClickHandler);
+    }
+
+    folderListClickHandler = (e) => {
+      const item = e.target.closest('.folder-item[data-real-path]');
+      if (!item) return;
+      navigateTo(item.dataset.realPath);
+    };
+
+    folderList.addEventListener('click', folderListClickHandler);
+    if (preserveScroll) {
+      folderList.scrollTop = scrollTop;
+    }
+    syncFolderPickerState();
+  }
+
+  function renderDirectoryList(folderList, folders, { preserveScroll = false } = {}) {
+    const scrollTop = preserveScroll ? folderList.scrollTop : 0;
+
+    if (folders.length === 0 && !currentHasDb) {
+      activeItemKey = null;
+      folderList.innerHTML = getFolderListLoadingHtml();
+      return;
+    }
+
+    let html = '';
+
+    folders.forEach((folder) => {
+      const folderPath = currentPath + '/' + folder;
+      const isSelected = selectedPath === folderPath;
+      const iconClass = isSelected ? 'check_box' : 'folder';
+      const selectedClass = isSelected ? 'selected' : '';
+
+      html += `
+          <div class="folder-item" data-folder="${folder}" data-folder-path="${folderPath}" data-item-key="${getFolderItemKey('folder', folderPath)}" data-item-path="${folderPath}" aria-selected="false">
+            <span class="folder-checkbox material-symbols-outlined ${selectedClass}" data-path="${folderPath}">${iconClass}</span>
+            <span class="folder-name">${folder}</span>
+            <span class="folder-arrow">→</span>
+          </div>
+        `;
+    });
+
+    if (currentHasDb) {
+      html += `
+          <div class="folder-item folder-item-db" data-is-db="true" data-item-key="${getFolderItemKey('db', currentPath)}" data-item-path="${currentPath}" aria-selected="false">
+            <span class="folder-icon material-symbols-outlined">description</span>
+            <span class="folder-name">photo_library.db</span>
+          </div>
+        `;
+    }
+
+    folderList.innerHTML = html;
+
+    if (folderListClickHandler) {
+      folderList.removeEventListener('click', folderListClickHandler);
+    }
+
+    folderListClickHandler = async (e) => {
+      const item = e.target.closest('.folder-item[data-folder]');
+      if (!item) {
+        const dbItem = e.target.closest('.folder-item[data-is-db]');
+        if (dbItem) {
+          if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
+            if (shouldUseConvertLibraryCta()) {
+              return;
+            }
+            if (shouldUseOpenLibraryCta() && !currentHasOpenableDb) {
+              return;
+            }
+            activeItemKey = dbItem.dataset.itemKey || null;
+            selectedPath = currentPath;
+            updateSelectedPath();
+            syncFolderPickerState();
+            localStorage.setItem('picker.lastPath', currentPath);
+
+            const overlay = pickerEl('overlay');
+            if (overlay) {
+              overlay.style.display = 'none';
+            }
+            stopPickerAutoRefresh();
+            resolveCallback(currentPath);
+          }
+        }
+        return;
+      }
+
+      const checkbox = item.querySelector('.folder-checkbox');
+      const folderPath = checkbox?.dataset.path;
+
+      if (e.target.classList.contains('folder-checkbox')) {
+        e.stopPropagation();
+        activeItemKey = item.dataset.itemKey || null;
+        selectFolder(folderPath);
+        return;
+      }
+
+      const folder = item.dataset.folder;
+      const newPath = currentPath + '/' + folder;
+      navigateTo(newPath);
+    };
+
+    folderList.addEventListener('click', folderListClickHandler);
+    if (preserveScroll) {
+      folderList.scrollTop = scrollTop;
+    }
+    syncFolderPickerState();
+  }
+
+  async function updateFolderList({ silent = false } = {}) {
     const folderList = pickerEl('folderList');
     if (!folderList) {
       return;
@@ -480,61 +647,54 @@ const FolderPicker = (() => {
     const requestId = ++folderListRequestId;
     const pathForRequest = currentPath;
 
-    // At virtual root, show curated top-level locations
     if (currentPath === VIRTUAL_ROOT) {
+      if (silent) {
+        try {
+          const locations = await getLocations();
+          if (requestId !== folderListRequestId || pathForRequest !== currentPath) {
+            return;
+          }
+          const signature = PickerUtils.buildLocationsSignature(locations);
+          if (signature === lastListSignature) {
+            return;
+          }
+          topLevelLocations = locations;
+          lastListSignature = signature;
+          renderVirtualRootList(folderList, { preserveScroll: true });
+        } catch (error) {
+          console.warn('Folder picker silent refresh failed:', error);
+        }
+        return;
+      }
+
       if (!topLevelLocations.length) {
         showFolderListLoading();
         return;
       }
 
-      clearFolderListLoading();
-      currentHasDb = false;
-      currentHasOpenableDb = false;
-      selectedHasOpenableDb = false;
-      selectedHasDb = false;
-      selectedHasMedia = false;
-      selectedConvertBlocked = false;
-      selectionProbePending = false;
-      updateButtonText();
-
-      folderList.innerHTML = PickerUtils.sortPickerItems(topLevelLocations)
-        .map(
-          (loc) => `
-        <div class="folder-item" data-real-path="${loc.path}" data-item-key="${getFolderItemKey('location', loc.path)}" data-item-path="${loc.path}" aria-selected="false">
-          <span class="folder-icon material-symbols-outlined">folder</span>
-          <span class="folder-name">${loc.name}</span>
-          <span class="folder-arrow">→</span>
-        </div>
-      `
-        )
-        .join('');
-
-      // Remove old event listener if it exists
-      if (folderListClickHandler) {
-        folderList.removeEventListener('click', folderListClickHandler);
-      }
-
-      // Wire up handlers using EVENT DELEGATION for top-level locations
-      folderListClickHandler = (e) => {
-        const item = e.target.closest('.folder-item[data-real-path]');
-        if (!item) return;
-        navigateTo(item.dataset.realPath);
-      };
-      
-      folderList.addEventListener('click', folderListClickHandler);
-      syncFolderPickerState();
+      lastListSignature = PickerUtils.buildLocationsSignature(topLevelLocations);
+      renderVirtualRootList(folderList);
       return;
     }
 
-    // Regular filesystem navigation
-    showFolderListLoading();
+    if (!silent) {
+      showFolderListLoading();
+    }
+
     try {
       const result = await listDirectory(currentPath);
       if (requestId !== folderListRequestId || pathForRequest !== currentPath) {
         return;
       }
       clearFolderListLoading();
+
       const folders = result.folders;
+      const signature = PickerUtils.buildFolderListSignature(currentPath, result);
+      if (silent && signature === lastListSignature) {
+        return;
+      }
+
+      lastListSignature = signature;
       currentHasDb = result.has_db;
       currentHasOpenableDb = result.has_openable_db;
       if (shouldUseOpenLibraryCta() && selectedPath === currentPath) {
@@ -546,106 +706,15 @@ const FolderPicker = (() => {
         selectedHasMedia = false;
         selectedConvertBlocked = false;
       }
-      
-      // Update button based on database presence
-      updateButtonText();
 
-      if (folders.length === 0 && !currentHasDb) {
-        // Show placeholder boxes to fill vertical space without scrolling
-        // Calculated to fit available folder-list height (~350px / 54px per item = 6)
-        activeItemKey = null;
-        folderList.innerHTML = getFolderListLoadingHtml();
-        return;
-      }
-
-      let html = '';
-      
-      // Add folders first
-      folders.forEach((folder) => {
-        const folderPath = currentPath + '/' + folder;
-        const isSelected = selectedPath === folderPath;
-        const iconClass = isSelected ? 'check_box' : 'folder';
-        const selectedClass = isSelected ? 'selected' : '';
-        
-        html += `
-          <div class="folder-item" data-folder="${folder}" data-folder-path="${folderPath}" data-item-key="${getFolderItemKey('folder', folderPath)}" data-item-path="${folderPath}" aria-selected="false">
-            <span class="folder-checkbox material-symbols-outlined ${selectedClass}" data-path="${folderPath}">${iconClass}</span>
-            <span class="folder-name">${folder}</span>
-            <span class="folder-arrow">→</span>
-          </div>
-        `;
-      });
-
-      // Show database file at bottom if it exists
-      if (currentHasDb) {
-        html += `
-          <div class="folder-item folder-item-db" data-is-db="true" data-item-key="${getFolderItemKey('db', currentPath)}" data-item-path="${currentPath}" aria-selected="false">
-            <span class="folder-icon material-symbols-outlined">description</span>
-            <span class="folder-name">photo_library.db</span>
-          </div>
-        `;
-      }
-
-      folderList.innerHTML = html;
-
-      // Remove old event listener if it exists to prevent duplicate handlers
-      if (folderListClickHandler) {
-        folderList.removeEventListener('click', folderListClickHandler);
-      }
-
-      // Wire up handlers using EVENT DELEGATION (single listener on parent)
-      folderListClickHandler = async (e) => {
-        const item = e.target.closest('.folder-item[data-folder]');
-        if (!item) {
-          // Check if database file was clicked
-          const dbItem = e.target.closest('.folder-item[data-is-db]');
-          if (dbItem) {
-            // Same action as clicking "Open" when the library is readable.
-            if (currentPath !== VIRTUAL_ROOT && resolveCallback) {
-            if (shouldUseConvertLibraryCta()) {
-              return;
-            }
-            if (shouldUseOpenLibraryCta() && !currentHasOpenableDb) {
-              return;
-            }
-              activeItemKey = dbItem.dataset.itemKey || null;
-              selectedPath = currentPath;
-              updateSelectedPath();
-              syncFolderPickerState();
-              localStorage.setItem('picker.lastPath', currentPath);
-              
-              
-              const overlay = pickerEl('overlay');
-              if (overlay) {
-                overlay.style.display = 'none';
-              }
-              resolveCallback(currentPath);
-            }
-          }
-          return;
-        }
-
-        const checkbox = item.querySelector('.folder-checkbox');
-        const folderPath = checkbox?.dataset.path;
-
-        // Checkbox clicked - select this folder
-        if (e.target.classList.contains('folder-checkbox')) {
-          e.stopPropagation();
-          activeItemKey = item.dataset.itemKey || null;
-          selectFolder(folderPath);
-          return;
-        }
-
-        // Arrow or folder name clicked - navigate into folder
-        const folder = item.dataset.folder;
-        const newPath = currentPath + '/' + folder;
-        navigateTo(newPath);
-      };
-
-      folderList.addEventListener('click', folderListClickHandler);
-      syncFolderPickerState();
+      renderDirectoryList(folderList, folders, { preserveScroll: silent });
+      await syncSelectionAfterListChange();
     } catch (error) {
       if (requestId !== folderListRequestId || pathForRequest !== currentPath) {
+        return;
+      }
+      if (silent) {
+        console.warn('Folder picker silent refresh failed:', error);
         return;
       }
       clearFolderListLoading();
@@ -1035,6 +1104,9 @@ const FolderPicker = (() => {
     updateSelectedPath();
     notifyEmbeddedPathChange();
 
+    embeddedRefreshActive = true;
+    startPickerAutoRefresh();
+
     if (options.enableKeyboard) {
       embeddedKeyboardHandler = (e) => {
         void handleKeyboard(e);
@@ -1048,6 +1120,9 @@ const FolderPicker = (() => {
   }
 
   function unmountEmbedded() {
+    embeddedRefreshActive = false;
+    stopPickerAutoRefresh();
+
     if (embeddedKeyboardHandler) {
       document.removeEventListener('keydown', embeddedKeyboardHandler);
       embeddedKeyboardHandler = null;
@@ -1099,6 +1174,7 @@ const FolderPicker = (() => {
     const goBackBtn = document.getElementById('folderPickerGoBackBtn');
 
     const handleCancel = () => {
+      stopPickerAutoRefresh();
       overlay.style.display = 'none';
       if (keyboardHandler) {
         document.removeEventListener('keydown', keyboardHandler);
@@ -1109,6 +1185,7 @@ const FolderPicker = (() => {
     };
 
     const handleGoBack = () => {
+      stopPickerAutoRefresh();
       overlay.style.display = 'none';
       if (keyboardHandler) {
         document.removeEventListener('keydown', keyboardHandler);
@@ -1135,11 +1212,13 @@ const FolderPicker = (() => {
       }
       resolveCallback = null;
       if (options.keepVisibleOnChoose) {
+        stopPickerAutoRefresh();
         overlay.style.pointerEvents = 'none';
         resolve(selectedPath);
         return;
       }
 
+      stopPickerAutoRefresh();
       overlay.style.display = 'none';
       resolve(selectedPath);
     };
@@ -1188,6 +1267,7 @@ const FolderPicker = (() => {
         if (savedElementIds) {
           unmountEmbedded();
         }
+        stopPickerAutoRefresh();
         activeElementIds = { ...DEFAULT_ELEMENT_IDS };
 
         wizardActions = !!options.wizardActions;
@@ -1246,6 +1326,7 @@ const FolderPicker = (() => {
 
         try {
           await populateFolderPickerAfterShow(options);
+          startPickerAutoRefresh();
         } catch (error) {
           console.error('Failed to populate folder picker:', error);
           clearFolderListLoading();
@@ -1293,6 +1374,8 @@ const FolderPicker = (() => {
   }
 
   function hide() {
+    stopPickerAutoRefresh();
+    embeddedRefreshActive = false;
     const overlay = document.getElementById('folderPickerOverlay');
     if (overlay) {
       overlay.style.display = 'none';

@@ -696,7 +696,7 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         folder_names = [folder["name"] for folder in response.get_json()["folders"]]
         self.assertIn("Archive", folder_names)
-        self.assertIn("Backups of MacBook", folder_names)
+        self.assertNotIn("Backups of MacBook", folder_names)
         self.assertIn("photo-backups", folder_names)
         self.assertNotIn("Time Machine", folder_names)
 

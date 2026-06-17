@@ -114,15 +114,116 @@ const PickerUtils = (() => {
     });
   }
 
+  const PICKER_REFRESH_INTERVAL_MS = 5000;
+
+  function buildLocationsSignature(locations) {
+    return locations
+      .map((loc) => `${loc.name}\t${loc.path}`)
+      .sort()
+      .join('\n');
+  }
+
+  function buildFolderListSignature(
+    currentPath,
+    { folders, has_db, has_openable_db },
+  ) {
+    const names = folders
+      .map((folder) => (typeof folder === 'string' ? folder : folder.name))
+      .slice()
+      .sort()
+      .join('\n');
+    return `${currentPath}|${names}|db:${has_db ? 1 : 0}|open:${has_openable_db ? 1 : 0}`;
+  }
+
+  function buildPhotoListSignature(currentPath, { folders, files }) {
+    const folderNames = folders
+      .map((folder) => folder.name)
+      .slice()
+      .sort()
+      .join('\n');
+    const fileKeys = files
+      .map((file) => `${file.name}:${file.type}:${file.size ?? 0}`)
+      .slice()
+      .sort()
+      .join('\n');
+    return `${currentPath}|f:${folderNames}|files:${fileKeys}`;
+  }
+
+  function createPickerAutoRefresh({
+    intervalMs = PICKER_REFRESH_INTERVAL_MS,
+    focusDebounceMs = 200,
+    isVisible,
+    onRefresh,
+  }) {
+    let timerId = null;
+    let refreshInFlight = false;
+    let focusTimerId = null;
+
+    async function runRefresh() {
+      if (refreshInFlight) {
+        return;
+      }
+      if (typeof isVisible === 'function' && !isVisible()) {
+        return;
+      }
+      refreshInFlight = true;
+      try {
+        await onRefresh();
+      } catch (error) {
+        console.warn('Picker auto-refresh failed:', error);
+      } finally {
+        refreshInFlight = false;
+      }
+    }
+
+    function onWindowFocus() {
+      if (focusTimerId) {
+        clearTimeout(focusTimerId);
+      }
+      focusTimerId = setTimeout(() => {
+        focusTimerId = null;
+        void runRefresh();
+      }, focusDebounceMs);
+    }
+
+    function start() {
+      stop();
+      timerId = setInterval(() => {
+        void runRefresh();
+      }, intervalMs);
+      window.addEventListener('focus', onWindowFocus);
+    }
+
+    function stop() {
+      if (timerId) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+      if (focusTimerId) {
+        clearTimeout(focusTimerId);
+        focusTimerId = null;
+      }
+      window.removeEventListener('focus', onWindowFocus);
+      refreshInFlight = false;
+    }
+
+    return { start, stop };
+  }
+
   return {
     VIRTUAL_ROOT,
     PICKER_DEFAULT_SORT,
+    PICKER_REFRESH_INTERVAL_MS,
     sortPickerItems,
     getDefaultPath,
     isTypingTarget,
     getNavigableRows,
     getNextFocusIndex,
     scrollRowIntoView,
+    buildLocationsSignature,
+    buildFolderListSignature,
+    buildPhotoListSignature,
+    createPickerAutoRefresh,
   };
 })();
 

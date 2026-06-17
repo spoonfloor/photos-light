@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import traceback
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from PIL import Image, ImageOps
@@ -64,6 +64,7 @@ from library_layout import (
 from library_filesystem import (
     finalize_library_layout,
     iter_library_walk,
+    iter_library_walk_date_range,
     quarantine_root_hidden,
 )
 from clean_library_media_utils import (
@@ -834,10 +835,38 @@ def summarize_clean_library_operations(
     return {"summary": summary, "details": details}
 
 
+def parse_clean_date_range(
+    date_from: str,
+    date_to: str,
+) -> Tuple[date, date]:
+    """Parse inclusive YYYY-MM-DD bounds for date-scoped clean runs."""
+    try:
+        start = datetime.strptime(date_from.strip(), "%Y-%m-%d").date()
+        end = datetime.strptime(date_to.strip(), "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise CleanLibraryError(
+            "date_from and date_to must be YYYY-MM-DD"
+        ) from exc
+    if end < start:
+        raise CleanLibraryError("date_to must be on or after date_from")
+    return start, end
+
+
 class LibraryCleaner:
-    def __init__(self, library_path: str, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        library_path: str,
+        db_path: Optional[str] = None,
+        *,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+    ):
         self.library_path = os.path.abspath(library_path)
         self.db_path = resolve_db_path(self.library_path, db_path)
+        self._date_range_from = date_from
+        self._date_range_to = date_to
+        if (date_from is None) != (date_to is None):
+            raise CleanLibraryError("date_from and date_to must both be set or both omitted")
         self.db_conn: Optional[sqlite3.Connection] = None
         self.hash_cache: Optional[HashCache] = None
         self.manifest = None
@@ -867,6 +896,29 @@ class LibraryCleaner:
         self._checkpoint_records_snapshot: Optional[List[MediaRecord]] = None
         self._cancel_check: Optional[Callable[[], bool]] = None
         self._run_inventory: Optional[Dict[str, Any]] = None
+
+    @property
+    def date_range_active(self) -> bool:
+        return self._date_range_from is not None and self._date_range_to is not None
+
+    def _date_range_sql_bounds(self) -> Tuple[str, str]:
+        assert self._date_range_from is not None and self._date_range_to is not None
+        lower = f"{self._date_range_from.strftime('%Y:%m:%d')} 00:00:00"
+        upper_exclusive = (
+            self._date_range_to + timedelta(days=1)
+        ).strftime("%Y:%m:%d") + " 00:00:00"
+        return lower, upper_exclusive
+
+    def _date_taken_in_range(self, date_taken: str) -> bool:
+        if not self.date_range_active:
+            return True
+        try:
+            taken = self._parse_db_date_taken(str(date_taken or UNKNOWN_PHOTO_DATE_TAKEN))
+        except ValueError:
+            return False
+        taken_date = taken.date()
+        assert self._date_range_from is not None and self._date_range_to is not None
+        return self._date_range_from <= taken_date <= self._date_range_to
 
     def _seed_run_inventory_estimate(self, media_count: int, photo_count: int = 0, video_count: int = 0) -> None:
         count = max(int(media_count) or 0, 1)
@@ -1133,7 +1185,21 @@ class LibraryCleaner:
         self._cancel_check = cancel_check
         resumed_from: Optional[Dict[str, Any]] = None
         try:
-            if resume is False:
+            if self.date_range_active:
+                if resume:
+                    raise CleanLibraryError("Date-range clean does not support resume")
+                existing = find_resumable_clean_library_checkpoint(self.library_path)
+                if existing:
+                    abandon_clean_library_checkpoint(existing["_checkpoint_path"])
+                self._resume_checkpoint = None
+                self._emit(
+                    {
+                        "type": "scope",
+                        "date_from": self._date_range_from.isoformat(),
+                        "date_to": self._date_range_to.isoformat(),
+                    }
+                )
+            elif resume is False:
                 existing = find_resumable_clean_library_checkpoint(self.library_path)
                 if existing:
                     abandon_clean_library_checkpoint(existing["_checkpoint_path"])
@@ -1612,7 +1678,36 @@ class LibraryCleaner:
             )
 
     def active_walk(self) -> Iterable[Tuple[str, List[str], List[str]]]:
+        if self.date_range_active:
+            assert self._date_range_from is not None and self._date_range_to is not None
+            return iter_library_walk_date_range(
+                self.library_path,
+                self._date_range_from,
+                self._date_range_to,
+            )
         return iter_library_walk(self.library_path)
+
+    def _extra_date_range_db_scan_paths(self) -> List[str]:
+        """In-range DB paths that may sit outside canonical day folders (misfiled)."""
+        if not self.date_range_active or self.db_conn is None:
+            return []
+        lower, upper = self._date_range_sql_bounds()
+        rows = self.db_conn.execute(
+            """
+            SELECT current_path FROM photos
+            WHERE date_taken >= ? AND date_taken < ?
+            """,
+            (lower, upper),
+        ).fetchall()
+        paths: List[str] = []
+        for row in rows:
+            rel_path = str(row["current_path"] or "")
+            if not rel_path:
+                continue
+            full_path = os.path.join(self.library_path, rel_path)
+            if os.path.isfile(full_path):
+                paths.append(full_path)
+        return paths
 
     def move_to_trash(self, file_path: str, category: str) -> str:
         rel_path = os.path.relpath(file_path, self.library_path)
@@ -1848,6 +1943,30 @@ class LibraryCleaner:
                 self._files_since_checkpoint += 1
                 self._write_checkpoint(phase="scan")
 
+        for full_path in self._extra_date_range_db_scan_paths():
+            self._raise_if_cancelled()
+            source_rel_path = os.path.relpath(full_path, self.library_path)
+            if source_rel_path in skip_sources:
+                continue
+            if source_rel_path in self._scan_completed_sources:
+                continue
+            processed += 1
+            self._emit(
+                {
+                    "type": "progress",
+                    "phase": "scan",
+                    "processed": processed,
+                    "total": max(candidate_total, 1),
+                }
+            )
+            record = self.normalize_media_file(full_path)
+            self._mark_scan_source_complete(source_rel_path)
+            if record is not None:
+                records.append(record)
+                self._append_scan_record(record)
+            self._files_since_checkpoint += 1
+            self._write_checkpoint(phase="scan")
+
         self.log("scan_complete", media_count=len(records))
         return records
 
@@ -1975,6 +2094,13 @@ class LibraryCleaner:
         return canonicalized
 
     def remove_empty_noncanonical_folders(self) -> None:
+        if self.date_range_active:
+            self.log(
+                "folders_skipped_date_range",
+                date_from=self._date_range_from.isoformat(),
+                date_to=self._date_range_to.isoformat(),
+            )
+            return
         for _pass in range(3):
             self._raise_if_cancelled()
             removed_dirs, stragglers = finalize_library_layout(self.library_path)
@@ -1999,6 +2125,12 @@ class LibraryCleaner:
                 )
 
     def rebuild_photos_table(self, records: List[MediaRecord]) -> None:
+        if self.date_range_active:
+            self._rebuild_photos_table_date_scoped(records)
+            return
+        self._rebuild_photos_table_full(records)
+
+    def _rebuild_photos_table_full(self, records: List[MediaRecord]) -> None:
         assert self.db_conn is not None
         cursor = self.db_conn.cursor()
         existing_rows = cursor.execute(
@@ -2067,6 +2199,121 @@ class LibraryCleaner:
         self.db_conn.commit()
         self.stats["db_rows_rebuilt"] = len(records)
         self.log("photos_table_rebuilt", row_count=len(records))
+
+    def _rebuild_photos_table_date_scoped(self, in_range_records: List[MediaRecord]) -> None:
+        assert self.db_conn is not None
+        cursor = self.db_conn.cursor()
+        lower, upper = self._date_range_sql_bounds()
+
+        preserved_rows = cursor.execute(
+            """
+            SELECT original_filename, current_path, date_taken, content_hash,
+                   file_size, file_type, width, height, rating
+            FROM photos
+            WHERE date_taken < ? OR date_taken >= ? OR date_taken IS NULL
+            """,
+            (lower, upper),
+        ).fetchall()
+
+        in_range_source_paths = {record.source_rel_path for record in in_range_records}
+        repaired_db_paths = set()
+        existing_rows = cursor.execute(
+            "SELECT current_path, content_hash FROM photos"
+        ).fetchall()
+        existing_hash_by_path = {row["current_path"]: row["content_hash"] for row in existing_rows}
+        record_hash_by_source_path = {
+            record.source_rel_path: record.content_hash for record in in_range_records
+        }
+        for current_path, content_hash in existing_hash_by_path.items():
+            if current_path not in in_range_source_paths:
+                continue
+            planned_hash = record_hash_by_source_path.get(current_path)
+            if planned_hash is None or planned_hash != content_hash:
+                repaired_db_paths.add(current_path)
+        for source_rel_path in record_hash_by_source_path:
+            if source_rel_path not in existing_hash_by_path:
+                repaired_db_paths.add(source_rel_path)
+        self._resolve_signal_paths(
+            {"database_repairs": repaired_db_paths},
+            action="rebuild_db",
+        )
+
+        cursor.execute("DELETE FROM photos")
+
+        insert_rows: List[Tuple[Any, ...]] = []
+        for row in preserved_rows:
+            insert_rows.append(
+                (
+                    row["original_filename"],
+                    row["current_path"],
+                    row["date_taken"],
+                    row["content_hash"],
+                    row["file_size"],
+                    row["file_type"],
+                    row["width"],
+                    row["height"],
+                    row["rating"],
+                )
+            )
+
+        sorted_in_range = sorted(
+            in_range_records,
+            key=lambda item: (item.date_taken, item.rel_path.lower()),
+        )
+        total = len(sorted_in_range)
+        for idx, record in enumerate(sorted_in_range, start=1):
+            self._raise_if_cancelled()
+            self._emit(
+                {
+                    "type": "progress",
+                    "phase": "rebuild_db",
+                    "processed": idx,
+                    "total": max(total, 1),
+                }
+            )
+            file_size = os.path.getsize(record.full_path)
+            insert_rows.append(
+                (
+                    record.original_filename,
+                    record.rel_path,
+                    record.date_taken,
+                    record.content_hash,
+                    file_size,
+                    record.file_type,
+                    record.width,
+                    record.height,
+                    record.rating,
+                )
+            )
+
+        insert_rows.sort(key=lambda item: (str(item[2] or ""), str(item[1] or "").lower()))
+        for row in insert_rows:
+            cursor.execute(
+                """
+                INSERT INTO photos (
+                    original_filename,
+                    current_path,
+                    date_taken,
+                    content_hash,
+                    file_size,
+                    file_type,
+                    width,
+                    height,
+                    rating
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                row,
+            )
+
+        self.db_conn.commit()
+        self.stats["db_rows_rebuilt"] = len(insert_rows)
+        self.log(
+            "photos_table_rebuilt_date_scoped",
+            row_count=len(insert_rows),
+            in_range=len(in_range_records),
+            preserved=len(preserved_rows),
+        )
 
     def audit_library_metadata_dir(self) -> List[Dict[str, str]]:
         issues: List[Dict[str, str]] = []
@@ -2154,13 +2401,32 @@ def run_db_normalization_engine(
     *,
     resume: Optional[bool] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> Dict[str, Any]:
-    engine = DBNormalizationEngine(library_path, db_path=db_path)
-    return engine.run(
+    parsed_from: Optional[date] = None
+    parsed_to: Optional[date] = None
+    if date_from is not None or date_to is not None:
+        if not date_from or not date_to:
+            raise CleanLibraryError("date_from and date_to must both be provided")
+        parsed_from, parsed_to = parse_clean_date_range(date_from, date_to)
+    engine = DBNormalizationEngine(
+        library_path,
+        db_path=db_path,
+        date_from=parsed_from,
+        date_to=parsed_to,
+    )
+    result = engine.run(
         progress_callback=progress_callback,
         resume=resume,
         cancel_check=cancel_check,
     )
+    if parsed_from is not None and parsed_to is not None:
+        result["date_range"] = {
+            "from": parsed_from.isoformat(),
+            "to": parsed_to.isoformat(),
+        }
+    return result
 
 
 def make_library_perfect(library_path: str, db_path: Optional[str] = None) -> Dict[str, Any]:

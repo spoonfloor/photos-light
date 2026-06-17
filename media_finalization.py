@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
-from typing import Callable, Literal, Optional
+from dataclasses import dataclass, field
+from typing import Callable, Literal, Optional, Tuple, List
 
 
 DuplicatePolicy = Literal["raise", "delete", "trash"]
@@ -34,6 +34,9 @@ class FinalizeMediaResult:
     height: Optional[int]
     duplicate: Optional[DuplicateMediaMatch] = None
     duplicate_destination: Optional[str] = None
+    # (from_path, to_path) pairs to restore on failed DB commit
+    rollback_moves: List[Tuple[str, str]] = field(default_factory=list)
+    pending_thumbnail_hash: Optional[str] = None
 
 
 def _reserve_destination(target_path: str) -> str:
@@ -44,6 +47,22 @@ def _reserve_destination(target_path: str) -> str:
         candidate = f"{base}_{counter}{ext}"
         counter += 1
     return candidate
+
+
+def rollback_finalize_mutated_media(result: FinalizeMediaResult) -> None:
+    """Reverse on-disk changes from finalize when the DB transaction did not commit."""
+    for from_path, to_path in reversed(result.rollback_moves):
+        if os.path.exists(from_path):
+            os.makedirs(os.path.dirname(to_path), exist_ok=True)
+            shutil.move(from_path, to_path)
+
+
+def apply_pending_thumbnail_cleanup(
+    result: FinalizeMediaResult,
+    delete_thumbnail_for_hash: Callable[[str], None],
+) -> None:
+    if result.pending_thumbnail_hash:
+        delete_thumbnail_for_hash(result.pending_thumbnail_hash)
 
 
 def finalize_mutated_media(
@@ -60,7 +79,11 @@ def finalize_mutated_media(
     delete_thumbnail_for_hash: Callable[[str], None],
     duplicate_policy: DuplicatePolicy = "raise",
     duplicate_trash_dir: Optional[str] = None,
+    precomputed_hash: Optional[str] = None,
+    defer_thumbnail_cleanup: bool = False,
 ) -> FinalizeMediaResult:
+    rollback_moves: List[Tuple[str, str]] = []
+    pending_thumbnail_hash: Optional[str] = None
     full_path = os.path.join(library_path, current_rel_path)
     if not os.path.exists(full_path):
         raise FileNotFoundError(f"Cannot finalize missing file: {current_rel_path}")
@@ -68,7 +91,7 @@ def finalize_mutated_media(
     dimensions = get_dimensions(full_path)
     width, height = dimensions if dimensions else (None, None)
 
-    new_hash = compute_hash(full_path)
+    new_hash = precomputed_hash or compute_hash(full_path)
     if not new_hash:
         raise RuntimeError(f"Failed to compute hash for {current_rel_path}")
 
@@ -106,11 +129,15 @@ def finalize_mutated_media(
                 os.path.join(duplicate_trash_dir, os.path.basename(full_path))
             )
             shutil.move(full_path, duplicate_destination)
+            rollback_moves.append((duplicate_destination, full_path))
         elif duplicate_policy == "delete":
             os.remove(full_path)
 
         if old_hash and old_hash != new_hash:
-            delete_thumbnail_for_hash(old_hash)
+            if defer_thumbnail_cleanup:
+                pending_thumbnail_hash = old_hash
+            else:
+                delete_thumbnail_for_hash(old_hash)
         cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
         return FinalizeMediaResult(
             status="duplicate_removed",
@@ -122,6 +149,8 @@ def finalize_mutated_media(
             height=height,
             duplicate=duplicate,
             duplicate_destination=duplicate_destination,
+            rollback_moves=rollback_moves,
+            pending_thumbnail_hash=pending_thumbnail_hash,
         )
 
     ext = os.path.splitext(full_path)[1]
@@ -135,6 +164,7 @@ def finalize_mutated_media(
         old_full_path_before_move = full_path
         old_dir_before_move = os.path.dirname(old_full_path_before_move)
         shutil.move(full_path, new_full_path)
+        rollback_moves.append((new_full_path, old_full_path_before_move))
         from quicktime_date_atoms import (
             cleanup_orphan_patch_artifacts_in_dir,
             remove_quicktime_patch_artifacts,
@@ -146,7 +176,10 @@ def finalize_mutated_media(
         current_rel_path = new_rel_path
 
     if old_hash and old_hash != new_hash:
-        delete_thumbnail_for_hash(old_hash)
+        if defer_thumbnail_cleanup:
+            pending_thumbnail_hash = old_hash
+        else:
+            delete_thumbnail_for_hash(old_hash)
 
     file_size = os.path.getsize(full_path)
     cursor.execute(
@@ -165,4 +198,6 @@ def finalize_mutated_media(
         file_size=file_size,
         width=width,
         height=height,
+        rollback_moves=rollback_moves,
+        pending_thumbnail_hash=pending_thumbnail_hash,
     )

@@ -484,7 +484,9 @@ Lessons from building and debugging the P0 slice — worth reading before the ne
 
 ## Grid mutation sync (product requirement)
 
-When the user mutates library media, the timeline grid reflects the change **near instantly** without a full catalog reset. Two tiers share one contract:
+When the user mutates library media, the timeline grid reflects the change **near instantly** without a full catalog reset. Two tiers share one contract.
+
+**Full mutation contract** (optimistic UI, file-as-SOT pipeline, client runner, execution order): `tech-docs/LIBRARY_MUTATION_CONTRACT.md`.
 
 ### Row mutation (histogram change, same catalog)
 

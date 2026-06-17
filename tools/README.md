@@ -5,6 +5,22 @@ scan cost, full-run phase timing, and 60k extrapolation.
 
 **Test library:** `/Volumes/public/clean-lib-speed-test` (~400 media files on NAS).
 
+## Date-range clean (partial library)
+
+To run Clean library on one inclusive date span without touching the rest of the catalog:
+
+```bash
+python3 tools/clean_library_date_range.py /Volumes/eric_files/photo_library \
+  --from 2026-05-01 --to 2026-06-30
+```
+
+Scans only `YYYY/YYYY-MM-DD/` folders in that range (+ in-range DB paths). Rebuilds the
+photos table for that window while preserving rows outside the range. Does not resume
+checkpoints; skips library-wide empty-folder cleanup.
+
+API (SSE): `POST /api/library/make-perfect/date-range/stream`
+with body `{"date_from":"2026-05-01","date_to":"2026-06-30"}`.
+
 ## Quick start
 
 **Engine:** v2 (`make_library_clean_v2.py` via `make_library_perfect.py`).
