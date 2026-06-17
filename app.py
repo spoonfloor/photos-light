@@ -119,6 +119,7 @@ from photo_canonicalization import (
 from picker_sort import sort_picker_items
 from make_library_perfect import _compute_photo_duplicate_key, verify_media_file
 from trash_catalog import (
+    archive_live_photo_to_user_trash,
     ensure_user_deleted_trash_dir,
     fetch_deleted_photos_anchored_at_month,
     fetch_deleted_photos_for_grid_month,
@@ -127,7 +128,6 @@ from trash_catalog import (
     fetch_trash_years,
     get_cached_trash_month_index,
     invalidate_trash_grid_caches,
-    move_photo_to_user_trash,
     parse_deleted_photo_data,
     restore_or_merge_deleted_photo,
     resolve_user_deleted_trash_path,
@@ -2005,6 +2005,7 @@ def _delete_photo_id(cursor, photo_id, trash_dir):
     """Move one library photo to user trash and archive its DB row."""
     moved_to_trash = None
     original_full_path = None
+    merge_duplicate = False
     try:
         print(f"    Processing photo_id: {photo_id}", flush=True)
         cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
@@ -2020,29 +2021,32 @@ def _delete_photo_id(cursor, photo_id, trash_dir):
 
         print(f"  - Photo {photo_id}: {current_path}")
 
-        if not os.path.exists(original_full_path):
-            print(f"    ⚠️  Original file not found: {original_full_path}")
-            return False, f"Photo {photo_id} file not found on disk"
-
-        trash_filename = move_photo_to_user_trash(
-            LIBRARY_PATH,
-            trash_dir,
-            original_full_path,
+        deleted_at = datetime.now().isoformat()
+        outcome, trash_filename, error = archive_live_photo_to_user_trash(
+            cursor,
+            photo_id=photo_id,
+            photo_data=photo_data,
+            current_path=current_path,
+            library_path=LIBRARY_PATH,
+            trash_dir=trash_dir,
+            deleted_at=deleted_at,
         )
-        moved_to_trash = resolve_user_deleted_trash_path(trash_dir, trash_filename)
-        if not moved_to_trash or not os.path.exists(moved_to_trash):
-            raise RuntimeError("Failed to verify file in trash")
-        print(f"    ✓ Moved to: {moved_to_trash}")
+        if error:
+            print(f"    ❌ {error}")
+            return False, error
+
+        if outcome == 'merged_duplicate':
+            merge_duplicate = True
+            print(
+                f"    ✓ Merged with existing trash copy (hash "
+                f"{photo_data.get('content_hash', '')[:8]})",
+                flush=True,
+            )
+        else:
+            moved_to_trash = resolve_user_deleted_trash_path(trash_dir, trash_filename)
+            print(f"    ✓ Moved to: {moved_to_trash}", flush=True)
 
         cleanup_empty_folders(original_full_path, LIBRARY_PATH)
-
-        deleted_at = datetime.now().isoformat()
-        cursor.execute("""
-            INSERT INTO deleted_photos (id, original_path, trash_filename, deleted_at, photo_data)
-            VALUES (?, ?, ?, ?, ?)
-        """, (photo_id, current_path, trash_filename, deleted_at, json.dumps(photo_data)))
-
-        cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
 
         content_hash = photo_data.get('content_hash')
         if content_hash:
@@ -2056,7 +2060,12 @@ def _delete_photo_id(cursor, photo_id, trash_dir):
         return True, None
 
     except Exception as e:
-        if moved_to_trash and original_full_path and os.path.exists(moved_to_trash):
+        if (
+            not merge_duplicate
+            and moved_to_trash
+            and original_full_path
+            and os.path.exists(moved_to_trash)
+        ):
             try:
                 os.makedirs(os.path.dirname(original_full_path), exist_ok=True)
                 shutil.move(moved_to_trash, original_full_path)
@@ -3493,8 +3502,7 @@ def import_from_paths():
                         )
                         library_mutations_so_far = max(
                             library_mutations_so_far,
-                            int(payload.get('imported') or 0)
-                            + int(payload.get('merged_from_trash') or 0),
+                            int(payload.get('imported') or 0),
                         )
                     elif event_name == 'complete':
                         imported_so_far = max(
@@ -3503,13 +3511,11 @@ def import_from_paths():
                         )
                         library_mutations_so_far = max(
                             library_mutations_so_far,
-                            int(payload.get('imported') or 0)
-                            + int(payload.get('merged_from_trash') or 0),
+                            int(payload.get('imported') or 0),
                         )
                         print(f"\n{'='*60}")
                         print("IMPORT COMPLETE:")
                         print(f"  Imported: {payload.get('imported', 0)}")
-                        print(f"  Merged from trash: {payload.get('merged_from_trash', 0)}")
                         print(f"  Duplicates: {payload.get('duplicates', 0)}")
                         print(f"  Errors: {payload.get('errors', 0)}")
                         print(f"  Log: {log_path_rel}")

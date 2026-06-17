@@ -6,7 +6,7 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '452';
+const STATIC_ASSET_VERSION = '454';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -4373,14 +4373,8 @@ async function refreshActiveVirtualGridMonthIndex(options = {}) {
   }
   setupThumbnailLazyLoading();
   ensureGridInteractionsWired();
-  if (state.photoTotalCount === 0 && !hasActivePhotoFilters()) {
-    if (reconcileTrashCatalogEmptyState()) {
-      return 'catalog_empty';
-    }
-    if (state.photos.length === 0) {
-      showEmptyLibraryState();
-      return 'catalog_empty';
-    }
+  if (reconcileCatalogEmptyAfterGridLoad({ total: state.photoTotalCount })) {
+    return 'catalog_empty';
   }
   return result;
 }
@@ -4394,6 +4388,18 @@ function reconcileTrashCatalogEmptyState() {
     return false;
   }
   showEmptyTrashState();
+  return true;
+}
+
+function reconcileCatalogEmptyAfterGridLoad(index) {
+  const total = index?.total ?? state.photoTotalCount;
+  if (total !== 0 || hasActivePhotoFilters()) {
+    return false;
+  }
+  if (reconcileTrashCatalogEmptyState()) {
+    return true;
+  }
+  showEmptyLibraryState();
   return true;
 }
 
@@ -4439,6 +4445,10 @@ function showZeroMatchGridState() {
 function showEmptyLibraryState() {
   if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
     VirtualGrid.destroy();
+  }
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
   }
   renderEmptyLibraryState();
   enableAppBarButtons();
@@ -6818,11 +6828,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     },
     onReady: (index) => {
       updateUtilityMenuAvailability();
-      if (
-        state.trashViewActive &&
-        (index?.total ?? state.photoTotalCount) === 0
-      ) {
-        reconcileTrashCatalogEmptyState();
+      if (reconcileCatalogEmptyAfterGridLoad(index)) {
         return;
       }
       updateFilterChipRailVisibility();
@@ -8405,7 +8411,6 @@ let importState = {
   isImporting: false,
   totalFiles: 0,
   importedCount: 0,
-  mergedFromTrashCount: 0,
   duplicateCount: 0,
   errorCount: 0,
   backupPath: null,
@@ -8545,7 +8550,6 @@ function resetImportSession(totalFiles) {
   importState.isImporting = true;
   importState.totalFiles = totalFiles;
   importState.importedCount = 0;
-  importState.mergedFromTrashCount = 0;
   importState.duplicateCount = 0;
   importState.errorCount = 0;
   importState.importedPhotoIds = [];
@@ -15420,7 +15424,6 @@ async function handleImportEvent(event, data) {
   if (event === 'start') {
     importState.totalFiles = data.total || importState.totalFiles;
     importState.importedCount = 0;
-    importState.mergedFromTrashCount = 0;
     importState.duplicateCount = 0;
     importState.errorCount = 0;
     importState.importedPhotoIds = [];
@@ -15498,7 +15501,6 @@ async function handleImportEvent(event, data) {
 
   if (event === 'complete') {
     importState.importedCount = data.imported || 0;
-    importState.mergedFromTrashCount = data.merged_from_trash || 0;
     importState.duplicateCount = data.duplicates || 0;
     importState.errorCount = data.errors || 0;
 
@@ -15508,16 +15510,6 @@ async function handleImportEvent(event, data) {
     });
 
     await syncGridAfterHistogramChange();
-
-    const mergedFromTrash = importState.mergedFromTrashCount || 0;
-    if (mergedFromTrash > 0) {
-      showToast(
-        mergedFromTrash === 1
-          ? 'Merged into your library.'
-          : `${mergedFromTrash} photos merged into your library.`,
-        null,
-      );
-    }
   }
 
   if (event === 'error') {

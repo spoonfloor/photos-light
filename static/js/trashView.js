@@ -452,9 +452,15 @@ const TrashView = (() => {
       return;
     }
 
+    const title = total === 1 ? 'Restore' : 'Restore All';
+    const message =
+      total === 1
+        ? 'Restore 1 photo to the library?'
+        : `Restore all ${total} photos to the library?`;
+
     showDialogOld(
-      'Restore All',
-      `Restore all ${total} photo${total > 1 ? 's' : ''} to the library?`,
+      title,
+      message,
       async () => {
         try {
           const response = await fetch('/api/trash/restore-all', {
@@ -483,6 +489,7 @@ const TrashView = (() => {
           showToast('Restore all failed', null);
         }
       },
+      'Restore',
     );
   }
 

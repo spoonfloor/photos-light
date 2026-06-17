@@ -23,11 +23,6 @@ from normalization_contract import (
     compute_duplicate_key,
     expected_canonical_rel_path_from_db_date,
 )
-from trash_catalog import (
-    deleted_row_for_content_hash,
-    restore_or_merge_deleted_photo,
-    user_trash_dir_for_library,
-)
 
 
 @dataclass
@@ -144,32 +139,6 @@ def normalize_ingest_photo(
             staged_path = None
             return NormalizationFileResult(status="duplicate")
 
-        deleted_row = deleted_row_for_content_hash(conn, canonical_photo.content_hash)
-        if deleted_row:
-            deps.cleanup_staged_file(staged_path)
-            staged_path = None
-            outcome, live_photo_id, error = restore_or_merge_deleted_photo(
-                conn.cursor(),
-                photo_id=deleted_row['id'],
-                trash_dir=user_trash_dir_for_library(deps.library_path),
-                library_path=deps.library_path,
-            )
-            if outcome == 'error':
-                return NormalizationFileResult(
-                    status="rejected",
-                    rejection={
-                        "file": filename,
-                        "source_path": source_path,
-                        "reason": error or "Failed to restore photo from Trash",
-                        "category": "restore",
-                        "technical_error": error,
-                    },
-                )
-            return NormalizationFileResult(
-                status="merged_from_trash",
-                photo_id=live_photo_id,
-            )
-
         target_path = os.path.join(deps.library_path, canonical_photo.relative_path)
         if os.path.exists(target_path):
             deps.cleanup_staged_file(staged_path)
@@ -215,30 +184,6 @@ def normalize_ingest_video(
 
     if duplicate_row_for_hash(conn, identity.duplicate_key):
         return NormalizationFileResult(status="duplicate")
-
-    deleted_row = deleted_row_for_content_hash(conn, identity.content_hash)
-    if deleted_row:
-        outcome, live_photo_id, error = restore_or_merge_deleted_photo(
-            conn.cursor(),
-            photo_id=deleted_row['id'],
-            trash_dir=user_trash_dir_for_library(deps.library_path),
-            library_path=deps.library_path,
-        )
-        if outcome == 'error':
-            return NormalizationFileResult(
-                status="rejected",
-                rejection={
-                    "file": filename,
-                    "source_path": source_path,
-                    "reason": error or "Failed to restore video from Trash",
-                    "category": "restore",
-                    "technical_error": error,
-                },
-            )
-        return NormalizationFileResult(
-            status="merged_from_trash",
-            photo_id=live_photo_id,
-        )
 
     relative_path = identity.relative_path
     canonical_name = os.path.basename(relative_path)

@@ -9,6 +9,7 @@ from collections import defaultdict
 from typing import Callable, Literal, Optional, Tuple
 
 RestoreOutcome = Literal['restored', 'merged', 'error']
+TrashArchiveOutcome = Literal['archived', 'merged_duplicate']
 
 from library_filesystem import move_file_to_category_trash
 
@@ -69,10 +70,96 @@ def deleted_row_for_content_hash(cursor, content_hash: str):
         """
         SELECT * FROM deleted_photos
         WHERE json_extract(photo_data, '$.content_hash') = ?
+        ORDER BY deleted_at DESC
         LIMIT 1
         """,
         (content_hash,),
     ).fetchone()
+
+
+def archive_live_photo_to_user_trash(
+    cursor,
+    *,
+    photo_id: int,
+    photo_data: dict,
+    current_path: str,
+    library_path: str,
+    trash_dir: str,
+    deleted_at: str,
+) -> Tuple[TrashArchiveOutcome, Optional[str], Optional[str]]:
+    """
+    Move one live library photo into user trash.
+
+    When ``content_hash`` already exists in ``deleted_photos``, silently merge:
+    discard the duplicate bytes on disk, refresh ``deleted_at`` on the existing
+    trash row, and do not insert a second grid row (Google Photos trash model).
+
+    Returns ``(outcome, trash_filename, error_message)``.
+    ``trash_filename`` is set only for a newly archived row (for callers that log paths).
+    """
+    content_hash = photo_data.get('content_hash')
+    original_full_path = os.path.join(library_path, current_path)
+
+    if not os.path.exists(original_full_path):
+        return 'archived', None, f'Photo {photo_id} file not found on disk'
+
+    existing_row = deleted_row_for_content_hash(cursor, content_hash) if content_hash else None
+
+    if existing_row:
+        existing_data = dict(existing_row)
+        canonical_path = resolve_user_deleted_trash_path(
+            trash_dir,
+            existing_data['trash_filename'],
+        )
+        if canonical_path and os.path.exists(canonical_path):
+            os.remove(original_full_path)
+            cursor.execute(
+                """
+                UPDATE deleted_photos
+                SET deleted_at = ?
+                WHERE id = ?
+                """,
+                (deleted_at, existing_data['id']),
+            )
+        else:
+            trash_filename = move_photo_to_user_trash(
+                library_path,
+                trash_dir,
+                original_full_path,
+            )
+            moved_path = resolve_user_deleted_trash_path(trash_dir, trash_filename)
+            if not moved_path or not os.path.exists(moved_path):
+                return 'archived', None, f'Failed to verify file in trash for photo {photo_id}'
+            cursor.execute(
+                """
+                UPDATE deleted_photos
+                SET trash_filename = ?, deleted_at = ?
+                WHERE id = ?
+                """,
+                (trash_filename, deleted_at, existing_data['id']),
+            )
+
+        cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+        return 'merged_duplicate', None, None
+
+    trash_filename = move_photo_to_user_trash(
+        library_path,
+        trash_dir,
+        original_full_path,
+    )
+    moved_path = resolve_user_deleted_trash_path(trash_dir, trash_filename)
+    if not moved_path or not os.path.exists(moved_path):
+        return 'archived', None, f'Failed to verify file in trash for photo {photo_id}'
+
+    cursor.execute(
+        """
+        INSERT INTO deleted_photos (id, original_path, trash_filename, deleted_at, photo_data)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (photo_id, current_path, trash_filename, deleted_at, json.dumps(photo_data)),
+    )
+    cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+    return 'archived', trash_filename, None
 
 
 def restore_or_merge_deleted_photo(
