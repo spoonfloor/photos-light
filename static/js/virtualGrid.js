@@ -37,6 +37,14 @@ const VirtualGrid = (() => {
     return document.scrollingElement || document.documentElement;
   }
 
+  function photosApiRoot() {
+    return hooks.photosApiRoot || '/api/photos';
+  }
+
+  function yearsApiUrl() {
+    return hooks.yearsApiUrl || '/api/years';
+  }
+
   function mergePhotosIntoState(photos) {
     if (!hooks.mergePhotos || !photos?.length) {
       return;
@@ -54,7 +62,7 @@ const VirtualGrid = (() => {
 
     const promise = (async () => {
       const response = await fetch(
-        `/api/photos/month?month=${encodeURIComponent(monthKey)}&sort=${sortOrder}`,
+        `${photosApiRoot()}/month?month=${encodeURIComponent(monthKey)}&sort=${sortOrder}`,
       );
       const data = await response.json();
       if (!response.ok) {
@@ -190,10 +198,6 @@ const VirtualGrid = (() => {
       card.dataset.id = String(photo.id);
       card.dataset.index = String(globalIndex);
 
-      const starBadgeHTML =
-        photo.rating === 5
-          ? '<div class="star-badge"><span class="material-symbols-outlined">star</span></div>'
-          : '';
       const videoBadgeHTML =
         photo.file_type === 'video'
           ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
@@ -201,9 +205,12 @@ const VirtualGrid = (() => {
 
       card.innerHTML = `
         <img data-photo-id="${photo.id}" alt="" class="photo-thumb">
-        ${starBadgeHTML}
+        ${typeof buildGridStarBadgeHTML === 'function' ? buildGridStarBadgeHTML(photo.rating === 5) : ''}
         ${videoBadgeHTML}
       `;
+      if (typeof applyGridStarBadgeState === 'function') {
+        applyGridStarBadgeState(card, photo.rating === 5);
+      }
       grid.appendChild(card);
     });
     return grid;
@@ -711,7 +718,7 @@ const VirtualGrid = (() => {
     if (video) {
       params.set('video', '1');
     }
-    return `/api/photos/month_index?${params.toString()}`;
+    return `${photosApiRoot()}/month_index?${params.toString()}`;
   }
 
   function rebuildLayoutFromIndex(indexPayload, container, options = {}) {
@@ -927,10 +934,10 @@ const VirtualGrid = (() => {
 
     try {
       const [countResponse, yearsResponse] = await Promise.all([
-        fetch(`/api/photos?limit=1&sort=${encodeURIComponent(sort)}`, {
+        fetch(`${photosApiRoot()}?limit=1&sort=${encodeURIComponent(sort)}`, {
           signal: options.signal,
         }),
-        fetch('/api/years', { signal: options.signal }),
+        fetch(yearsApiUrl(), { signal: options.signal }),
       ]);
       const countPayload = await countResponse.json();
       if (!countResponse.ok) {
@@ -995,7 +1002,7 @@ const VirtualGrid = (() => {
     }
 
     const indexResponse = await fetch(
-      `/api/photos/month_index?sort=${encodeURIComponent(sort)}`,
+      `${photosApiRoot()}/month_index?sort=${encodeURIComponent(sort)}`,
       { signal: options.signal },
     );
     const indexPayload = await indexResponse.json();
@@ -1121,6 +1128,48 @@ const VirtualGrid = (() => {
       if (section) {
         mountPlaceholderSection(section, { pending: true });
         scheduleSync();
+      }
+    }
+  }
+
+  function patchCachedPhotos(patches) {
+    if (!patches?.length) {
+      return;
+    }
+    const patchById = new Map(patches.map((patch) => [patch.id, patch]));
+    for (const [monthKey, photos] of monthCache.entries()) {
+      for (const photo of photos) {
+        const patch = patchById.get(photo.id);
+        if (!patch) {
+          continue;
+        }
+        if (patch.rating !== undefined) {
+          photo.rating = patch.rating;
+        }
+        if (patch.path !== undefined) {
+          photo.path = patch.path;
+        }
+        if (patch.date !== undefined) {
+          photo.date = patch.date;
+        }
+        if (patch.month !== undefined) {
+          photo.month = patch.month;
+        }
+      }
+    }
+
+    for (const [photoId, patch] of patchById) {
+      if (patch.rating === undefined) {
+        continue;
+      }
+      const card = contentLayer?.querySelector(
+        `.photo-card[data-id="${photoId}"]`,
+      );
+      if (!card) {
+        continue;
+      }
+      if (typeof applyGridStarBadgeState === 'function') {
+        applyGridStarBadgeState(card, patch.rating === 5);
       }
     }
   }
@@ -1400,6 +1449,7 @@ const VirtualGrid = (() => {
     scrollToMonth,
     invalidateMonth,
     invalidateAllMonths,
+    patchCachedPhotos,
     refreshMonthIndex,
     setFilterPhoto,
     applyFilterLayout,

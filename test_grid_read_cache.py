@@ -2,8 +2,10 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import app as photo_app
+from media_finalization import FinalizeMediaResult
 
 
 class GridReadCacheTest(unittest.TestCase):
@@ -54,6 +56,8 @@ class GridReadCacheTest(unittest.TestCase):
 
         photo_app.LIBRARY_PATH = self.library_path
         photo_app.DB_PATH = self.db_path
+        photo_app.TRASH_DIR = os.path.join(self.library_path, ".trash")
+        os.makedirs(photo_app.TRASH_DIR, exist_ok=True)
         photo_app.invalidate_grid_read_caches()
         self.client = photo_app.app.test_client()
 
@@ -196,6 +200,47 @@ class GridReadCacheTest(unittest.TestCase):
         self.assertTrue(video["filtered"])
         self.assertEqual(video["total"], 1)
         self.assertEqual(video["months"], [{"month": "1900-01", "count": 1}])
+
+    def test_toggle_favorite_invalidates_starred_month_index_cache(self):
+        photo_dir = os.path.join(self.library_path, "1900", "1900-01-01")
+        os.makedirs(photo_dir, exist_ok=True)
+        photo_path = os.path.join(photo_dir, "a.jpg")
+        with open(photo_path, "wb") as fh:
+            fh.write(b"test-photo-bytes")
+
+        self.client.get("/api/photos/month_index?sort=newest").get_json()
+        starred_before = self.client.get(
+            "/api/photos/month_index?sort=newest&starred=1",
+        ).get_json()
+        self.assertEqual(starred_before["total"], 0)
+
+        finalize_result = FinalizeMediaResult(
+            status="finalized",
+            current_path="1900/1900-01-01/a.jpg",
+            full_path=photo_path,
+            content_hash="hashaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            file_size=len(b"test-photo-bytes"),
+            width=1,
+            height=1,
+        )
+
+        with patch(
+            "file_operations.extract_exif_rating",
+            side_effect=[None, 5],
+        ), patch("file_operations.write_exif_rating", return_value=True), patch.object(
+            photo_app,
+            "finalize_mutated_media",
+            return_value=finalize_result,
+        ):
+            response = self.client.post("/api/photo/1/favorite")
+
+        self.assertEqual(response.status_code, 200)
+
+        starred_after = self.client.get(
+            "/api/photos/month_index?sort=newest&starred=1",
+        ).get_json()
+        self.assertEqual(starred_after["total"], 1)
+        self.assertEqual(starred_after["months"], [{"month": "1900-01", "count": 1}])
 
 
 if __name__ == "__main__":

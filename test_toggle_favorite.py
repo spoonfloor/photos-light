@@ -119,7 +119,7 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
                 fh.write(b"-rating-five")
             return True
 
-        with patch("file_operations.extract_exif_rating", return_value=None), patch(
+        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
             "file_operations.write_exif_rating",
             side_effect=fake_write_exif_rating,
         ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
@@ -177,7 +177,7 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
                 fh.write(b"-rated")
             return True
 
-        with patch("file_operations.extract_exif_rating", return_value=None), patch(
+        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
             "file_operations.write_exif_rating",
             side_effect=fake_write_exif_rating,
         ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
@@ -205,6 +205,122 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
         self.assertEqual(duplicate_row[0], duplicate_rel_path)
         self.assertEqual(duplicate_row[1], duplicate_hash)
         self.assertEqual(duplicate_row[2], 5)
+
+    def test_set_favorite_explicit_rating_noop_when_already_starred(self):
+        date_taken = "2026:04:12 09:30:15"
+        file_bytes = b"already-starred"
+        photo_id, rel_path, full_path, content_hash = self._insert_photo(
+            file_bytes=file_bytes,
+            date_taken=date_taken,
+            rating=5,
+        )
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("EXIF write should not run for settled favorite")
+
+        with patch("file_operations.extract_exif_rating", return_value=5), patch(
+            "file_operations.write_exif_rating",
+            side_effect=fail_if_called,
+        ), patch(
+            "file_operations.strip_exif_rating",
+            side_effect=fail_if_called,
+        ):
+            response = self.client.post(
+                f"/api/photo/{photo_id}/favorite",
+                json={"rating": 5},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["rating"], 5)
+        self.assertTrue(payload["favorited"])
+        self.assertEqual(payload["photo"]["path"], rel_path)
+        self.assertEqual(payload["photo"]["content_hash"], content_hash)
+        self.assertTrue(os.path.exists(full_path))
+
+    def test_set_favorite_explicit_rating_stars_without_toggle(self):
+        date_taken = "2026:04:12 09:30:15"
+        old_bytes = b"explicit-star-bytes"
+        photo_id, old_rel_path, old_full_path, old_hash = self._insert_photo(
+            file_bytes=old_bytes,
+            date_taken=date_taken,
+        )
+
+        final_bytes = old_bytes + b"-rating-five"
+        final_hash = hashlib.sha256(final_bytes).hexdigest()
+        final_rel_path, _ = build_canonical_photo_path(date_taken, final_hash, ".jpg")
+
+        def fake_write_exif_rating(file_path, rating):
+            self.assertEqual(rating, 5)
+            with open(file_path, "ab") as fh:
+                fh.write(b"-rating-five")
+            return True
+
+        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
+            "file_operations.write_exif_rating",
+            side_effect=fake_write_exif_rating,
+        ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
+            response = self.client.post(
+                f"/api/photo/{photo_id}/favorite",
+                json={"rating": 5},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["rating"], 5)
+        self.assertTrue(payload["favorited"])
+        self.assertEqual(payload["photo"]["path"], final_rel_path)
+        self.assertFalse(os.path.exists(old_full_path))
+
+    def test_bulk_favorite_uses_verified_finalize_contract(self):
+        date_taken = "2026:04:12 09:30:15"
+        old_bytes = b"bulk-star-bytes"
+        photo_id, old_rel_path, old_full_path, old_hash = self._insert_photo(
+            file_bytes=old_bytes,
+            date_taken=date_taken,
+        )
+
+        final_bytes = old_bytes + b"-bulk-rating-five"
+        final_hash = hashlib.sha256(final_bytes).hexdigest()
+        final_rel_path, _ = build_canonical_photo_path(date_taken, final_hash, ".jpg")
+
+        def fake_write_exif_rating(file_path, rating):
+            self.assertEqual(file_path, old_full_path)
+            self.assertEqual(rating, 5)
+            with open(file_path, "ab") as fh:
+                fh.write(b"-bulk-rating-five")
+            return True
+
+        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
+            "file_operations.write_exif_rating",
+            side_effect=fake_write_exif_rating,
+        ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
+            response = self.client.post(
+                "/api/photos/bulk-favorite",
+                json={"photo_ids": [photo_id], "rating": 5},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["success_count"], 1)
+        self.assertEqual(payload["error_count"], 0)
+        self.assertEqual(payload["results"][0]["photo"]["path"], final_rel_path)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT current_path, content_hash, file_size, width, height, rating FROM photos WHERE id = ?",
+            (photo_id,),
+        ).fetchone()
+        conn.close()
+
+        self.assertEqual(row["current_path"], final_rel_path)
+        self.assertEqual(row["content_hash"], final_hash)
+        self.assertEqual(row["file_size"], len(final_bytes))
+        self.assertEqual(row["width"], 640)
+        self.assertEqual(row["height"], 480)
+        self.assertEqual(row["rating"], 5)
+        self.assertFalse(os.path.exists(old_full_path))
 
 
 if __name__ == "__main__":

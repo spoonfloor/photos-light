@@ -93,7 +93,11 @@ from library_layout import (
     quarantine_unexpected_metadata_entries,
     resolve_db_path,
 )
-from media_finalization import finalize_mutated_media
+from media_finalization import (
+    apply_pending_thumbnail_cleanup,
+    finalize_mutated_media,
+    rollback_finalize_mutated_media,
+)
 from media_dates import write_and_verify_media_date
 from library_filesystem import (
     ensure_blocking_audit_prep,
@@ -112,8 +116,21 @@ from photo_canonicalization import (
     CanonicalizedPhoto,
     canonicalize_photo_file,
 )
-from make_library_perfect import _compute_photo_duplicate_key, verify_media_file
 from picker_sort import sort_picker_items
+from make_library_perfect import _compute_photo_duplicate_key, verify_media_file
+from trash_catalog import (
+    ensure_user_deleted_trash_dir,
+    fetch_deleted_photos_anchored_at_month,
+    fetch_deleted_photos_for_grid_month,
+    fetch_deleted_photos_page,
+    fetch_trash_nearest_month,
+    fetch_trash_years,
+    get_cached_trash_month_index,
+    invalidate_trash_grid_caches,
+    move_photo_to_user_trash,
+    parse_deleted_photo_data,
+    resolve_user_deleted_trash_path,
+)
 from rotation_utils import (
     HEIC_ROTATION_EXTENSIONS,
     JPEG_LOSSY_QUALITY,
@@ -178,11 +195,12 @@ error_logger.setLevel(logging.WARNING)
 
 def get_db_connection():
     """Create database connection with WAL mode enabled"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=60)
     conn.row_factory = sqlite3.Row  # Return rows as dictionaries
     
     # Enable Write-Ahead Logging for better concurrency
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=60000")
     
     # Enable foreign keys for data integrity
     conn.execute("PRAGMA foreign_keys=ON")
@@ -889,6 +907,14 @@ def invalidate_grid_read_caches():
     """Drop cached month histogram and total count after row/histogram mutations."""
     invalidate_photo_total_count_cache()
     invalidate_month_index_cache()
+    invalidate_trash_grid_caches()
+
+
+def commit_row_mutation(conn, *, invalidate_histogram=True):
+    """Commit a row mutation and invalidate grid read caches on success."""
+    conn.commit()
+    if invalidate_histogram:
+        invalidate_grid_read_caches()
 
 
 def invalidate_photo_total_count_cache():
@@ -1786,6 +1812,7 @@ def rotate_photo(photo_id):
             delete_thumbnail_for_hash=delete_thumbnail_for_hash,
             duplicate_policy='trash',
             duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
+            defer_thumbnail_cleanup=True,
         )
         if source_heic_rel_path:
             source_heic_full_path = os.path.join(LIBRARY_PATH, source_heic_rel_path)
@@ -1799,7 +1826,16 @@ def rotate_photo(photo_id):
                     print(
                         f"   🗑️ Removed source HEIC after conversion: {source_heic_rel_path}"
                     )
-        conn.commit()
+        try:
+            commit_row_mutation(conn)
+            apply_pending_thumbnail_cleanup(
+                finalize_result,
+                delete_thumbnail_for_hash,
+            )
+        except Exception:
+            conn.rollback()
+            rollback_finalize_mutated_media(finalize_result)
+            raise
         conn.close()
         conn = None
         request_elapsed_ms = (time.perf_counter() - request_started_at) * 1000
@@ -1997,7 +2033,7 @@ def delete_photos():
         deleted_count = 0
         errors = []
         trash_dir = TRASH_DIR
-        os.makedirs(trash_dir, exist_ok=True)
+        ensure_user_deleted_trash_dir(trash_dir)
         
         from datetime import datetime
         import json
@@ -2023,23 +2059,15 @@ def delete_photos():
                 
                 print(f"  - Photo {photo_id}: {current_path}")
                 
-                # Move file to .trash/
+                # Move file to .trash/user_deleted/
                 trash_filename = None
                 if os.path.exists(full_path):
-                    filename = os.path.basename(full_path)
-                    trash_path = os.path.join(trash_dir, filename)
-                    
-                    # Handle duplicate filenames in trash
-                    counter = 1
-                    base_name, ext = os.path.splitext(filename)
-                    while os.path.exists(trash_path):
-                        trash_filename_candidate = f"{base_name}_{counter}{ext}"
-                        trash_path = os.path.join(trash_dir, trash_filename_candidate)
-                        counter += 1
-                    
-                    trash_filename = os.path.basename(trash_path)
-                    shutil.move(full_path, trash_path)
-                    print(f"    ✓ Moved to: {trash_path}")
+                    trash_filename = move_photo_to_user_trash(
+                        LIBRARY_PATH,
+                        trash_dir,
+                        full_path,
+                    )
+                    print(f"    ✓ Moved to: {os.path.join(trash_dir, trash_filename)}")
                     
                     # Cleanup empty folders after successful delete
                     cleanup_empty_folders(full_path, LIBRARY_PATH)
@@ -2088,9 +2116,9 @@ def delete_photos():
         
         if errors:
             response['errors'] = errors
-        
+
         return jsonify(response)
-        
+
     except Exception as e:
         print(f"Delete error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -2626,6 +2654,63 @@ def bulk_update_photo_dates_execute():
     
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
+def _restore_photo_ids(cursor, photo_ids, trash_dir):
+    """Restore deleted photos from user trash back to the library index."""
+    import json
+
+    restored_count = 0
+    errors = []
+
+    for photo_id in photo_ids:
+        try:
+            cursor.execute("SELECT * FROM deleted_photos WHERE id = ?", (photo_id,))
+            row = cursor.fetchone()
+
+            if not row:
+                print(f"    ❌ Photo {photo_id} not found in trash")
+                errors.append(f"Photo {photo_id} not found in trash")
+                continue
+
+            deleted_data = dict(row)
+            original_path = deleted_data['original_path']
+            trash_filename = deleted_data['trash_filename']
+            photo_data = json.loads(deleted_data['photo_data'])
+
+            print(f"  - Photo {photo_id}: {original_path}")
+
+            trash_path = resolve_user_deleted_trash_path(trash_dir, trash_filename)
+            full_path = os.path.join(LIBRARY_PATH, original_path)
+
+            if os.path.exists(trash_path):
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                shutil.move(trash_path, full_path)
+                print(f"    ✓ Restored to: {full_path}")
+            else:
+                print(f"    ⚠️  File not found in trash: {trash_path}")
+                errors.append(f"Photo {photo_id} file not found in trash")
+                continue
+
+            columns = list(photo_data.keys())
+            placeholders = ', '.join(['?' for _ in columns])
+            values = [photo_data[col] for col in columns]
+
+            cursor.execute(f"""
+                INSERT INTO photos ({', '.join(columns)})
+                VALUES ({placeholders})
+            """, values)
+
+            cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
+            restored_count += 1
+            app.logger.info(f"Restored photo {photo_id}: {original_path}")
+
+        except Exception as e:
+            errors.append(f"Error restoring photo {photo_id}: {str(e)}")
+            print(f"    ❌ Error: {e}")
+            error_logger.error(f"Restore failed for photo {photo_id}: {e}")
+
+    return restored_count, errors
+
+
 @app.route('/api/photos/restore', methods=['POST'])
 @handle_db_corruption
 def restore_photos():
@@ -2643,67 +2728,7 @@ def restore_photos():
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        restored_count = 0
-        errors = []
-        trash_dir = TRASH_DIR
-        
-        import json
-        
-        for photo_id in photo_ids:
-            try:
-                # Get deleted photo record
-                cursor.execute("SELECT * FROM deleted_photos WHERE id = ?", (photo_id,))
-                row = cursor.fetchone()
-                
-                if not row:
-                    print(f"    ❌ Photo {photo_id} not found in trash")
-                    errors.append(f"Photo {photo_id} not found in trash")
-                    continue
-                
-                deleted_data = dict(row)
-                original_path = deleted_data['original_path']
-                trash_filename = deleted_data['trash_filename']
-                photo_data = json.loads(deleted_data['photo_data'])
-                
-                print(f"  - Photo {photo_id}: {original_path}")
-                
-                # Move file back from trash
-                trash_path = os.path.join(trash_dir, trash_filename)
-                full_path = os.path.join(LIBRARY_PATH, original_path)
-                
-                if os.path.exists(trash_path):
-                    # Ensure directory exists
-                    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-                    
-                    # Move file back
-                    shutil.move(trash_path, full_path)
-                    print(f"    ✓ Restored to: {full_path}")
-                else:
-                    print(f"    ⚠️  File not found in trash: {trash_path}")
-                    errors.append(f"Photo {photo_id} file not found in trash")
-                    continue
-                
-                # Restore DB record to photos table
-                # Build INSERT statement dynamically from photo_data
-                columns = list(photo_data.keys())
-                placeholders = ', '.join(['?' for _ in columns])
-                values = [photo_data[col] for col in columns]
-                
-                cursor.execute(f"""
-                    INSERT INTO photos ({', '.join(columns)})
-                    VALUES ({placeholders})
-                """, values)
-                
-                # Remove from deleted_photos table
-                cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
-                restored_count += 1
-                app.logger.info(f"Restored photo {photo_id}: {original_path}")
-                
-            except Exception as e:
-                errors.append(f"Error restoring photo {photo_id}: {str(e)}")
-                print(f"    ❌ Error: {e}")
-                error_logger.error(f"Restore failed for photo {photo_id}: {e}")
+        restored_count, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
         
         conn.commit()
         if restored_count > 0:
@@ -2716,14 +2741,369 @@ def restore_photos():
             'restored': restored_count,
             'total': len(photo_ids),
         }
-        
+
         if errors:
             response['errors'] = errors
-        
+
         return jsonify(response)
-        
+
     except Exception as e:
         app.logger.error(f"Restore error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def _trash_grid_helpers():
+    return {
+        'month_key_for_photo_grid': month_key_for_photo_grid,
+        'sort_grid_month_keys': _sort_grid_month_keys,
+        'month_bounds_for_sql': month_bounds_for_sql,
+        'decode_photos_cursor': decode_photos_cursor,
+        'cursor_from_row': cursor_from_row,
+        'catalog_revision': LIBRARY_CATALOG_REVISION,
+    }
+
+
+def _fetch_deleted_row(cursor, photo_id):
+    row = cursor.execute(
+        "SELECT * FROM deleted_photos WHERE id = ?",
+        (photo_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _deleted_media_full_path(trash_dir, deleted_row):
+    trash_path = resolve_user_deleted_trash_path(trash_dir, deleted_row['trash_filename'])
+    return trash_path if trash_path and os.path.exists(trash_path) else None
+
+
+@app.route('/api/trash/photos')
+@handle_db_corruption
+def get_trash_photos():
+    """Paginated trash grid rows sourced from deleted_photos."""
+    limit = request.args.get('limit', type=int)
+    cursor_str = request.args.get('cursor')
+    sort_order = request.args.get('sort', 'newest')
+    helpers = _trash_grid_helpers()
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if limit is None:
+            payload = fetch_deleted_photos_page(
+                cursor,
+                10**9,
+                sort_order,
+                cursor_str=None,
+                catalog_revision=helpers['catalog_revision'],
+                month_key_for_photo_grid=helpers['month_key_for_photo_grid'],
+                decode_photos_cursor=helpers['decode_photos_cursor'],
+                cursor_from_row=helpers['cursor_from_row'],
+            )
+            conn.close()
+            return jsonify(attach_catalog_revision({
+                'photos': payload['photos'],
+                'count': payload['count'],
+            }))
+
+        payload = fetch_deleted_photos_page(
+            cursor,
+            limit,
+            sort_order,
+            cursor_str=cursor_str,
+            catalog_revision=helpers['catalog_revision'],
+            month_key_for_photo_grid=helpers['month_key_for_photo_grid'],
+            decode_photos_cursor=helpers['decode_photos_cursor'],
+            cursor_from_row=helpers['cursor_from_row'],
+        )
+        conn.close()
+        return jsonify(attach_catalog_revision(payload))
+    except Exception as e:
+        app.logger.error(f"Error fetching trash photos: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/month_index')
+@handle_db_corruption
+def get_trash_month_index():
+    try:
+        sort_order = request.args.get('sort', 'newest')
+        starred, video = _parse_grid_filter_query_args(
+            request.args.get('starred'),
+            request.args.get('video'),
+        )
+        helpers = _trash_grid_helpers()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        payload = get_cached_trash_month_index(
+            cursor,
+            sort_order,
+            starred=starred,
+            video=video,
+            month_key_for_photo_grid=helpers['month_key_for_photo_grid'],
+            sort_grid_month_keys=helpers['sort_grid_month_keys'],
+            catalog_revision=helpers['catalog_revision'],
+        )
+        conn.close()
+        return jsonify(attach_catalog_revision(payload))
+    except Exception as e:
+        app.logger.error(f"Error fetching trash month index: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/month')
+@handle_db_corruption
+def get_trash_month_photos():
+    try:
+        month_key = request.args.get('month')
+        sort_order = request.args.get('sort', 'newest')
+        if not month_key:
+            return jsonify({'error': 'month parameter required (format: YYYY-MM)'}), 400
+        helpers = _trash_grid_helpers()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        photos = fetch_deleted_photos_for_grid_month(
+            cursor,
+            month_key,
+            sort_order,
+            month_key_for_photo_grid=helpers['month_key_for_photo_grid'],
+            month_bounds_for_sql=helpers['month_bounds_for_sql'],
+        )
+        conn.close()
+        return jsonify(attach_catalog_revision({
+            'photos': photos,
+            'count': len(photos),
+            'month': month_key,
+        }))
+    except Exception as e:
+        app.logger.error(f"Error fetching trash month photos: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/jump')
+@handle_db_corruption
+def jump_to_trash_month():
+    try:
+        target_month = request.args.get('month')
+        limit = request.args.get('limit', 500, type=int)
+        sort_order = request.args.get('sort', 'newest')
+        if not target_month:
+            return jsonify({'error': 'month parameter required (format: YYYY-MM)'}), 400
+        helpers = _trash_grid_helpers()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        payload = fetch_deleted_photos_anchored_at_month(
+            cursor,
+            target_month,
+            limit,
+            sort_order,
+            catalog_revision=helpers['catalog_revision'],
+            month_bounds_for_sql=helpers['month_bounds_for_sql'],
+            month_key_for_photo_grid=helpers['month_key_for_photo_grid'],
+            cursor_from_row=helpers['cursor_from_row'],
+        )
+        conn.close()
+        return jsonify(attach_catalog_revision(payload))
+    except Exception as e:
+        app.logger.error(f"Error jumping to trash month: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/nearest_month')
+@handle_db_corruption
+def get_trash_nearest_month():
+    try:
+        target_month = request.args.get('month')
+        sort_order = request.args.get('sort', 'newest')
+        if not target_month:
+            return jsonify({'error': 'month parameter required (format: YYYY-MM)'}), 400
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        nearest = fetch_trash_nearest_month(cursor, target_month, sort_order)
+        conn.close()
+        if not nearest:
+            return jsonify({'error': 'No photos found in trash'}), 404
+        return jsonify({'nearest_month': nearest})
+    except Exception as e:
+        app.logger.error(f"Error finding nearest trash month: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/years')
+@handle_db_corruption
+def get_trash_years():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        years = sort_picker_items(fetch_trash_years(cursor), key=str)
+        conn.close()
+        return jsonify({'years': years})
+    except Exception as e:
+        app.logger.error(f"Error fetching trash years: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/photo/<int:photo_id>/thumbnail')
+@handle_db_corruption
+def get_trash_photo_thumbnail(photo_id):
+    if not LIBRARY_PATH or not THUMBNAIL_CACHE_DIR or not DB_PATH:
+        return jsonify({'error': 'Library not configured'}), 503
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        deleted_row = _fetch_deleted_row(cursor, photo_id)
+        conn.close()
+        if not deleted_row:
+            return jsonify({'error': 'Photo not found in trash'}), 404
+
+        photo_data = parse_deleted_photo_data(deleted_row)
+        content_hash = photo_data.get('content_hash')
+        file_type = photo_data.get('file_type')
+        if not content_hash:
+            return jsonify({'error': 'Photo missing content hash'}), 404
+
+        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
+        if os.path.exists(thumbnail_path):
+            return send_file(thumbnail_path, mimetype='image/jpeg')
+
+        full_path = _deleted_media_full_path(TRASH_DIR, deleted_row)
+        if not full_path:
+            return jsonify({'error': 'File not found in trash'}), 404
+
+        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash, mkdir=True)
+        if file_type == 'video':
+            temp_frame = os.path.join(os.path.dirname(thumbnail_path), f"temp_trash_{photo_id}.jpg")
+            try:
+                generate_video_square_thumbnail(
+                    full_path,
+                    thumbnail_path,
+                    temp_frame_path=temp_frame,
+                    to_rgb=convert_to_rgb_properly,
+                )
+            except Exception as video_error:
+                return jsonify({'error': str(video_error)}), 500
+            return send_file(thumbnail_path, mimetype='image/jpeg')
+
+        generate_still_square_thumbnail(
+            full_path,
+            thumbnail_path,
+            to_rgb=convert_to_rgb_properly,
+        )
+        return send_file(thumbnail_path, mimetype='image/jpeg')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/photo/<int:photo_id>/file')
+@handle_db_corruption
+def get_trash_photo_file(photo_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        deleted_row = _fetch_deleted_row(cursor, photo_id)
+        conn.close()
+        if not deleted_row:
+            return jsonify({'error': 'Photo not found in trash'}), 404
+
+        full_path = _deleted_media_full_path(TRASH_DIR, deleted_row)
+        if not full_path:
+            return jsonify({'error': 'File not found in trash'}), 404
+
+        photo_data = parse_deleted_photo_data(deleted_row)
+        file_type = photo_data.get('file_type')
+        ext = os.path.splitext(full_path)[1].lower()
+        if file_type == 'video':
+            if needs_browser_video_proxy(ext):
+                buffer = video_to_browser_mp4_buffer(full_path)
+                return send_file(
+                    BytesIO(buffer),
+                    mimetype='video/mp4',
+                    download_name=os.path.basename(full_path),
+                )
+            return send_file(full_path, mimetype=video_mimetype_for_extension(ext))
+        return send_file(full_path)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/purge', methods=['POST'])
+@handle_db_corruption
+def purge_trash_photos():
+    """Permanently delete photos from user trash."""
+    try:
+        data = request.get_json() or {}
+        photo_ids = data.get('photo_ids') or []
+        purge_all = bool(data.get('all'))
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        if purge_all:
+            cursor.execute("SELECT id FROM deleted_photos")
+            photo_ids = [row['id'] for row in cursor.fetchall()]
+
+        if not photo_ids:
+            conn.close()
+            return jsonify({'purged': 0, 'total': 0})
+
+        purged_count = 0
+        errors = []
+        trash_dir = TRASH_DIR
+
+        for photo_id in photo_ids:
+            try:
+                deleted_row = _fetch_deleted_row(cursor, photo_id)
+                if not deleted_row:
+                    errors.append(f"Photo {photo_id} not found in trash")
+                    continue
+                trash_path = resolve_user_deleted_trash_path(
+                    trash_dir,
+                    deleted_row['trash_filename'],
+                )
+                if os.path.exists(trash_path):
+                    os.remove(trash_path)
+                cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
+                purged_count += 1
+            except Exception as exc:
+                errors.append(f"Error purging photo {photo_id}: {exc}")
+
+        conn.commit()
+        invalidate_grid_read_caches()
+        conn.close()
+
+        response = {'purged': purged_count, 'total': len(photo_ids)}
+        if errors:
+            response['errors'] = errors
+        return jsonify(response)
+    except Exception as e:
+        app.logger.error(f"Purge trash error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/trash/restore-all', methods=['POST'])
+@handle_db_corruption
+def restore_all_trash_photos():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM deleted_photos")
+        photo_ids = [row['id'] for row in cursor.fetchall()]
+        if not photo_ids:
+            conn.close()
+            return jsonify({'restored': 0, 'total': 0})
+
+        print(f"\n↩️  RESTORE ALL REQUEST: {len(photo_ids)} photos")
+        restored_count, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
+        conn.commit()
+        if restored_count > 0:
+            invalidate_grid_read_caches()
+        conn.close()
+
+        response = {'restored': restored_count, 'total': len(photo_ids)}
+        if errors:
+            response['errors'] = errors
+        return jsonify(response)
+    except Exception as e:
+        app.logger.error(f"Restore all trash error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/years')
@@ -3454,6 +3834,8 @@ def update_app_paths(library_path, db_path):
         except (PermissionError, OSError) as e:
             print(f"⚠️  Warning: Could not create directory {directory}: {e}")
             print(f"   This may indicate the library is not accessible.")
+    if TRASH_DIR:
+        ensure_user_deleted_trash_dir(TRASH_DIR)
 
 
 def build_library_status_payload(library_path, db_path, report):
@@ -3740,8 +4122,10 @@ def list_directory():
             if item.startswith('.'):
                 continue
             
-            # Skip Time Machine folders
+            # Skip Time Machine and backup volumes
             item_lower = item.lower()
+            if item.startswith('Backups of '):
+                continue
             if 'time machine' in item_lower or 'time_machine' in item_lower:
                 continue
 
@@ -3932,6 +4316,8 @@ def get_locations():
                         continue
                     
                     volume_lower = volume.lower()
+                    if volume.startswith('Backups of '):
+                        continue
                     if 'time machine' in volume_lower or 'time_machine' in volume_lower:
                         continue
                     
@@ -5109,84 +5495,106 @@ def terraform_library():
 # FAVORITES / RATING API
 # ============================================================================
 
-@app.route('/api/photo/<int:photo_id>/favorite', methods=['POST'])
-@handle_db_corruption
-def toggle_favorite(photo_id):
-    """
-    Toggle favorite status for a photo (NULL/5 rating).
-    
-    POST body (optional):
-        {
-            "rating": 5  // Explicit rating (0-5), default toggles NULL↔5
-        }
-    
-    Returns:
-        {
-            "photo_id": int,
-            "rating": int or null,  // New rating (NULL or 5)
-            "favorited": bool  // true if now favorited
-        }
-    """
+def set_photo_favorite_rating(photo_id, explicit_rating=None):
+    """Set a photo rating using the file-SOT mutation contract."""
     from file_operations import extract_exif_rating, write_exif_rating, strip_exif_rating
-    
-    try:
-        data = request.get_json(silent=True) or {}
-        explicit_rating = data.get('rating')
-        
-        # Get photo path and current cleanliness state
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT current_path, content_hash, date_taken FROM photos WHERE id = ?",
-            (photo_id,),
-        )
-        row = cursor.fetchone()
-        
-        if not row:
-            return jsonify({'error': 'Photo not found'}), 404
-        
-        rel_path = row['current_path']
-        full_path = os.path.join(LIBRARY_PATH, rel_path)
-        
-        if not os.path.exists(full_path):
-            return jsonify({'error': 'File not found on disk'}), 404
-        
-        # Get current rating
-        current_rating = extract_exif_rating(full_path)
-        # Treat None and 0 as equivalent (not starred)
-        if current_rating is None or current_rating == 0:
-            current_rating = 0
-        
-        print(f"⭐ Photo {photo_id}: current rating = {current_rating}, toggling...")
-        
-        # Determine new rating
-        if explicit_rating is not None:
-            # Use explicit rating
-            new_rating = int(explicit_rating)
-            if not 0 <= new_rating <= 5:
-                return jsonify({'error': 'Rating must be 0-5'}), 400
-        else:
-            # Toggle: 0 ↔ 5
-            new_rating = 0 if current_rating == 5 else 5
-        
-        # Write or strip EXIF rating
-        if new_rating == 0:
-            # Strip rating tags completely (cleaner than writing 0)
-            print(f"   → Stripping rating from {os.path.basename(full_path)}")
-            success = strip_exif_rating(full_path)
-            db_rating = None  # Store NULL in database
-        else:
-            # Write rating
-            print(f"   → Writing rating {new_rating} to {os.path.basename(full_path)}")
-            success = write_exif_rating(full_path, new_rating)
-            db_rating = new_rating
-        
-        print(f"   → EXIF update success: {success}")
-        
-        if not success:
-            error_logger.error(f"Failed to update EXIF rating for photo {photo_id}: {full_path}")
-            return jsonify({'error': 'Failed to update EXIF rating'}), 500
 
+    conn = None
+    finalize_result = None
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT current_path, content_hash, date_taken, rating, width, height FROM photos WHERE id = ?",
+        (photo_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    conn = None
+
+    if not row:
+        return {'error': 'Photo not found'}, 404
+
+    rel_path = row['current_path']
+    full_path = os.path.join(LIBRARY_PATH, rel_path)
+
+    if not os.path.exists(full_path):
+        return {'error': 'File not found on disk'}, 404
+
+    current_rating = extract_exif_rating(full_path)
+    if current_rating is None or current_rating == 0:
+        current_rating = 0
+
+    print(f"⭐ Photo {photo_id}: current rating = {current_rating}, toggling...")
+
+    if explicit_rating is not None:
+        new_rating = int(explicit_rating)
+        if not 0 <= new_rating <= 5:
+            return {'error': 'Rating must be 0-5'}, 400
+    else:
+        new_rating = 0 if current_rating == 5 else 5
+
+    db_rating_raw = row['rating']
+    db_rating = None if db_rating_raw in (None, 0) else int(db_rating_raw)
+    target_db_rating = None if new_rating == 0 else new_rating
+    file_matches_target = (
+        current_rating == new_rating
+        if new_rating != 0
+        else current_rating == 0
+    )
+    db_matches_target = db_rating == target_db_rating
+
+    if file_matches_target and db_matches_target:
+        print(f"   → Already at rating {new_rating if new_rating != 0 else 'NULL'}; skipping write")
+        return {
+            'photo_id': photo_id,
+            'rating': target_db_rating,
+            'favorited': new_rating == 5,
+            'photo': {
+                'id': photo_id,
+                'path': rel_path,
+                'content_hash': row['content_hash'],
+                'width': row['width'],
+                'height': row['height'],
+            },
+        }, 200
+
+    if new_rating == 0:
+        print(f"   → Stripping rating from {os.path.basename(full_path)}")
+        if not strip_exif_rating(full_path):
+            error_logger.error(
+                f"Failed to strip EXIF rating for photo {photo_id}: {full_path}"
+            )
+            return {'error': 'Failed to update EXIF rating'}, 500
+        verified_rating = extract_exif_rating(full_path)
+        if verified_rating not in (None, 0):
+            error_logger.error(
+                f"EXIF rating verify failed after strip for photo {photo_id}: "
+                f"read {verified_rating} from {full_path}"
+            )
+            return {'error': 'Failed to verify EXIF rating removal'}, 500
+        db_rating = None
+    else:
+        print(f"   → Writing rating {new_rating} to {os.path.basename(full_path)}")
+        if not write_exif_rating(full_path, new_rating):
+            error_logger.error(
+                f"Failed to write EXIF rating for photo {photo_id}: {full_path}"
+            )
+            return {'error': 'Failed to update EXIF rating'}, 500
+        verified_rating = extract_exif_rating(full_path)
+        if verified_rating != new_rating:
+            error_logger.error(
+                f"EXIF rating verify failed for photo {photo_id}: "
+                f"expected {new_rating}, read {verified_rating} from {full_path}"
+            )
+            return {'error': 'Failed to verify EXIF rating write'}, 500
+        db_rating = verified_rating
+
+    precomputed_hash = compute_full_hash(full_path)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
         finalize_result = finalize_mutated_media(
             conn=conn,
             photo_id=photo_id,
@@ -5200,6 +5608,8 @@ def toggle_favorite(photo_id):
             delete_thumbnail_for_hash=delete_thumbnail_for_hash,
             duplicate_policy='trash',
             duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
+            precomputed_hash=precomputed_hash,
+            defer_thumbnail_cleanup=True,
         )
         print(
             f"   🔎 Favorite finalize: photo_id={photo_id} "
@@ -5212,38 +5622,82 @@ def toggle_favorite(photo_id):
         )
 
         if finalize_result.status == 'duplicate_removed':
-            conn.commit()
-            conn.close()
+            commit_row_mutation(conn)
+            apply_pending_thumbnail_cleanup(
+                finalize_result,
+                delete_thumbnail_for_hash,
+            )
             print(
                 f"⭐ Photo {photo_id}: favorite update made file a duplicate of "
                 f"{finalize_result.duplicate.photo_id if finalize_result.duplicate else 'unknown'}"
             )
-            return jsonify({
+            return {
                 'photo_id': photo_id,
                 'duplicate_removed': True,
                 'message': 'Photo became a duplicate after updating favorite and was moved to trash'
-            })
+            }, 200
 
-        # Update database rating after final hash/path reconciliation.
-        cursor.execute("UPDATE photos SET rating = ? WHERE id = ?", (db_rating, photo_id))
-        conn.commit()
-        conn.close()
-        
-        print(f"⭐ Photo {photo_id}: rating {current_rating} → {new_rating if new_rating != 0 else 'NULL'}")
-        
-        return jsonify({
-            'photo_id': photo_id,
-            'rating': db_rating,
-            'favorited': new_rating == 5,
-            'photo': {
-                'id': photo_id,
-                'path': finalize_result.current_path,
-                'content_hash': finalize_result.content_hash,
-                'width': finalize_result.width,
-                'height': finalize_result.height,
-            }
-        })
-    
+        cursor.execute(
+            "UPDATE photos SET rating = ? WHERE id = ?",
+            (db_rating, photo_id),
+        )
+        commit_row_mutation(conn)
+        apply_pending_thumbnail_cleanup(
+            finalize_result,
+            delete_thumbnail_for_hash,
+        )
+    except Exception:
+        if conn is not None:
+            conn.rollback()
+        if finalize_result is not None:
+            rollback_finalize_mutated_media(finalize_result)
+        raise
+    finally:
+        if conn is not None:
+            conn.close()
+            conn = None
+
+    print(f"⭐ Photo {photo_id}: rating {current_rating} → {new_rating if new_rating != 0 else 'NULL'}")
+
+    return {
+        'photo_id': photo_id,
+        'rating': db_rating,
+        'favorited': new_rating == 5,
+        'photo': {
+            'id': photo_id,
+            'path': finalize_result.current_path,
+            'content_hash': finalize_result.content_hash,
+            'width': finalize_result.width,
+            'height': finalize_result.height,
+        }
+    }, 200
+
+
+@app.route('/api/photo/<int:photo_id>/favorite', methods=['POST'])
+@handle_db_corruption
+def toggle_favorite(photo_id):
+    """
+    Toggle favorite status for a photo (NULL/5 rating).
+
+    POST body (optional):
+        {
+            "rating": 5  // Explicit rating (0-5), default toggles NULL↔5
+        }
+
+    Returns:
+        {
+            "photo_id": int,
+            "rating": int or null,  // New rating (NULL or 5)
+            "favorited": bool  // true if now favorited
+        }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        payload, status_code = set_photo_favorite_rating(
+            photo_id,
+            data.get('rating'),
+        )
+        return jsonify(payload), status_code
     except Exception as e:
         error_logger.error(f"Error toggling favorite for photo {photo_id}: {e}")
         import traceback
@@ -5406,6 +5860,102 @@ def api_make_library_perfect_stream():
                 event_queue.put(('done', result))
         except Exception as e:
             error_logger.error(f"Make Library Perfect stream failed: {e}")
+            error_logger.error(traceback.format_exc())
+            event_queue.put(('err', str(e)))
+
+    threading.Thread(target=run_op, daemon=True).start()
+
+    @stream_with_context
+    def generate():
+        try:
+            while True:
+                try:
+                    kind, payload = event_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                if kind == 'evt':
+                    yield f"data: {json.dumps(payload)}\n\n"
+                elif kind == 'done':
+                    notify_catalog_reset_from_make_perfect(payload)
+                    yield f"data: {json.dumps({'type': 'complete', 'result': attach_catalog_revision(payload)})}\n\n"
+                    break
+                elif kind == 'cancelled':
+                    yield f"data: {json.dumps({'type': 'cancelled', 'result': payload})}\n\n"
+                    break
+                elif kind == 'err':
+                    yield f"data: {json.dumps({'type': 'error', 'error': payload})}\n\n"
+                    break
+        finally:
+            cancel_event.set()
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
+
+
+@app.route('/api/library/make-perfect/date-range/stream', methods=['POST'])
+def api_make_library_perfect_date_range_stream():
+    """
+    Clean library scoped to an inclusive date range (YYYY-MM-DD).
+
+    Body: {"date_from": "2026-05-01", "date_to": "2026-06-30"}
+    """
+    if not LIBRARY_PATH:
+        return jsonify({'error': 'No library configured'}), 400
+
+    if not os.path.isdir(LIBRARY_PATH):
+        return jsonify({'error': 'Configured library path is missing or invalid'}), 400
+
+    if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+        return jsonify({'error': 'Configured library path is not accessible'}), 503
+
+    if not DB_PATH:
+        return jsonify({'error': 'No database configured'}), 400
+
+    db_dir = os.path.dirname(DB_PATH) or '.'
+    if not os.path.isdir(db_dir):
+        return jsonify({'error': 'Configured database path is invalid'}), 400
+
+    from make_library_perfect import run_db_normalization_engine
+
+    payload = request.get_json(silent=True) or {}
+    date_from = payload.get('date_from')
+    date_to = payload.get('date_to')
+    if not date_from or not date_to:
+        return jsonify({'error': 'date_from and date_to are required (YYYY-MM-DD)'}), 400
+
+    event_queue: queue.Queue = queue.Queue()
+    cancel_event = threading.Event()
+
+    def run_op():
+        try:
+
+            def progress_callback(ev):
+                event_queue.put(('evt', ev))
+
+            def cancel_check():
+                return cancel_event.is_set()
+
+            result = run_db_normalization_engine(
+                LIBRARY_PATH,
+                db_path=DB_PATH,
+                progress_callback=progress_callback,
+                resume=False,
+                cancel_check=cancel_check,
+                date_from=str(date_from),
+                date_to=str(date_to),
+            )
+            if result.get("status") == "CANCELLED":
+                event_queue.put(('cancelled', result))
+            else:
+                event_queue.put(('done', result))
+        except Exception as e:
+            error_logger.error(f"Date-range clean library stream failed: {e}")
             error_logger.error(traceback.format_exc())
             event_queue.put(('err', str(e)))
 
@@ -5616,8 +6166,6 @@ def bulk_favorite():
             "errors": [{"photo_id": int, "error": str}, ...]
         }
     """
-    from file_operations import write_exif_rating
-    
     try:
         data = request.json
         photo_ids = data.get('photo_ids', [])
@@ -5629,57 +6177,36 @@ def bulk_favorite():
         if not photo_ids:
             return jsonify({'error': 'No photo_ids provided'}), 400
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         success_count = 0
         error_count = 0
         errors = []
-        
+        results = []
+
         for photo_id in photo_ids:
             try:
-                # Get photo path
-                cursor.execute("SELECT current_path FROM photos WHERE id = ?", (photo_id,))
-                row = cursor.fetchone()
-                
-                if not row:
-                    errors.append({'photo_id': photo_id, 'error': 'Photo not found'})
+                payload, status_code = set_photo_favorite_rating(photo_id, rating)
+                if status_code != 200 or payload.get('error'):
+                    errors.append({
+                        'photo_id': photo_id,
+                        'error': payload.get('error', 'Failed to update favorite'),
+                    })
                     error_count += 1
                     continue
-                
-                rel_path = row['current_path']
-                full_path = os.path.join(LIBRARY_PATH, rel_path)
-                
-                if not os.path.exists(full_path):
-                    errors.append({'photo_id': photo_id, 'error': 'File not found on disk'})
-                    error_count += 1
-                    continue
-                
-                # Write EXIF rating
-                success = write_exif_rating(full_path, rating)
-                
-                if not success:
-                    errors.append({'photo_id': photo_id, 'error': 'Failed to write EXIF'})
-                    error_count += 1
-                    continue
-                
-                # Update database
-                cursor.execute("UPDATE photos SET rating = ? WHERE id = ?", (rating, photo_id))
+
                 success_count += 1
-            
+                results.append(payload)
+
             except Exception as e:
                 errors.append({'photo_id': photo_id, 'error': str(e)})
                 error_count += 1
-        
-        conn.commit()
-        conn.close()
-        
+
         print(f"⭐ Bulk favorite: {success_count} success, {error_count} errors")
-        
+
         return jsonify({
             'success_count': success_count,
             'error_count': error_count,
-            'errors': errors
+            'errors': errors,
+            'results': results,
         })
     
     except Exception as e:

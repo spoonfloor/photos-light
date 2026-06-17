@@ -22,6 +22,7 @@
   /* --- Layout --- */
   --app-bar-height: 64px;
   --filter-chip-rail-height: 50px;
+  --trash-chrome-height: 48px;
   --app-chrome-height: var(--app-bar-height);
   --page-top-gap: 24px;
 
@@ -196,6 +197,70 @@ body.filter-chip-rail-visible {
   --app-chrome-height: calc(
     var(--app-bar-height) + var(--filter-chip-rail-height)
   );
+}
+
+body.trash-view-active {
+  --app-chrome-height: calc(
+    var(--app-bar-height) + var(--trash-chrome-height)
+  );
+}
+
+body.trash-view-active.filter-chip-rail-visible {
+  --app-chrome-height: calc(
+    var(--app-bar-height) + var(--trash-chrome-height) +
+      var(--filter-chip-rail-height)
+  );
+}
+
+.trash-chrome-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: var(--trash-chrome-height);
+  padding: 0 20px;
+  background: #000;
+  color: var(--text-primary);
+}
+
+.trash-chrome-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.trash-chrome-back:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.trash-chrome-back .material-symbols-outlined {
+  font-size: 24px;
+}
+
+.trash-chrome-title {
+  font-size: var(--app-bar-title-size);
+  font-weight: 300;
+}
+
+.trash-chrome-bar[hidden] {
+  display: none !important;
+}
+
+#restoreBtn[hidden],
+#lightboxRestoreBtn[hidden],
+#viewTrashBtn[hidden],
+#emptyTrashBtn[hidden],
+#restoreAllTrashBtn[hidden],
+#trashMenuDivider[hidden] {
+  display: none !important;
 }
 
 /* Prevent white flash before app-bar injects */
@@ -697,23 +762,50 @@ body.filter-chip-rail-visible {
   opacity: 1;
 }
 
-/* Star badge (always visible for starred photos) */
+/* Star button — filled when starred; outline on card hover when not */
 .photo-card .star-badge {
   position: absolute;
   top: 8px;
   right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  opacity: 0;
   pointer-events: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.photo-card.is-starred .star-badge,
+.photo-card:hover .star-badge {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .photo-card .star-badge .material-symbols-outlined {
   font-size: 20px;
   color: white;
   font-variation-settings:
-    'FILL' 1,
+    'FILL' 0,
     'wght' 400,
     'GRAD' 0,
     'opsz' 20;
   filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
+  user-select: none;
+  pointer-events: none;
+}
+
+.photo-card .star-badge .material-symbols-outlined.filled {
+  font-variation-settings:
+    'FILL' 1,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 20;
 }
 
 /* Video badge (always visible for videos) */
@@ -824,6 +916,10 @@ body.filter-chip-rail-visible {
 .lightbox-icon-button:disabled {
   opacity: 0.55;
   cursor: wait;
+}
+
+#lightboxStarBtn:disabled {
+  cursor: default;
 }
 
 .lightbox-icon-button .material-symbols-outlined {

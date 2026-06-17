@@ -32,6 +32,18 @@
     <div id="appChromeMount">
       <div id="appBarMount"></div>
 
+      <div id="trashChromeMount" class="trash-chrome-bar" hidden>
+        <button
+          type="button"
+          class="trash-chrome-back"
+          id="trashBackBtn"
+          aria-label="Back to library"
+        >
+          <span class="material-symbols-outlined">arrow_back</span>
+        </button>
+        <span class="trash-chrome-title">Trash</span>
+      </div>
+
       <div id="filterChipRailMount" class="filter-chip-rail" hidden>
         <div class="filter-chip-rail-scroll">
           <button
@@ -79,15 +91,17 @@
     <div id="toastMount"></div>
 
     <!-- JavaScript -->
-    <script src="js/pickerUtils.js?v=2"></script>
+    <script src="js/pickerUtils.js?v=3"></script>
     <script src="js/pickerFilesystem.js?v=1"></script>
-    <script src="js/folderPicker.js?v=14"></script>
-    <script src="js/photoPicker.js?v=5"></script>
+    <script src="js/folderPicker.js?v=15"></script>
+    <script src="js/photoPicker.js?v=6"></script>
     <script src="js/libraryRecoveryUI.js?v=1"></script>
     <script src="js/gridLayout.js?v=10"></script>
     <script src="js/thumbnailQueue.js?v=5"></script>
-    <script src="js/virtualGrid.js?v=22"></script>
+    <script src="js/virtualGrid.js?v=23"></script>
+    <script src="js/libraryMutation.js?v=2"></script>
+    <script src="js/trashView.js?v=1"></script>
     <script src="js/flowController.js?v=6"></script>
-    <script src="js/main.js?v=441"></script>
+    <script src="js/main.js?v=444"></script>
   </body>
 </html>

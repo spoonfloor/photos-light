@@ -6,7 +6,7 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '438';
+const STATIC_ASSET_VERSION = '440';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -171,6 +171,7 @@ const state = {
   lightboxUITimeout: null, // Timeout for hiding UI after pointer leaves overlay
   lightboxUIHovered: false, // True while pointer is over the lightbox overlay
   deleteInProgress: false,
+  libraryMutationPending: 0,
   hasMore: true, // For infinite scroll
   currentOffset: 0, // Loaded row count in the current window
   photosNextCursor: null, // Keyset cursor for the next scroll page
@@ -186,6 +187,7 @@ const state = {
   lightboxClosing: false,
   lightboxNavMode: null, // 'timeline' | 'selection' | 'filter' | 'library'
   lightboxNavPhotoIds: null, // Frozen ordered scope captured at lightbox open
+  trashViewActive: false,
 };
 
 const libraryRecoveryState = {
@@ -1315,7 +1317,11 @@ async function populateDatePicker(options = {}) {
   try {
     let years = prefetchedYears;
     if (!Array.isArray(years)) {
-      const { response, data } = await apiFetchJson('/api/years');
+      const { response, data } = await apiFetchJson(
+        typeof TrashView !== 'undefined'
+          ? TrashView.getYearsApiUrl()
+          : '/api/years',
+      );
 
       if (!response.ok) {
         console.warn('⚠️  Date picker disabled (database not available)');
@@ -1570,6 +1576,10 @@ function updateDeleteButtonVisibility() {
     } else {
       deselectBtn.classList.add('inactive');
     }
+  }
+
+  if (typeof TrashView !== 'undefined') {
+    TrashView.updateRestoreButtonVisibility();
   }
 }
 
@@ -4117,6 +4127,89 @@ function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
   }
 }
 
+function refreshLibraryMutationControls() {
+  const pending = state.libraryMutationPending > 0;
+  const starBtn = document.getElementById('lightboxStarBtn');
+  if (starBtn) {
+    starBtn.disabled = state.lightboxClosing;
+    starBtn.setAttribute('aria-busy', 'false');
+  }
+  const rotateBtn = document.getElementById('lightboxRotateBtn');
+  if (rotateBtn && pending) {
+    rotateBtn.setAttribute('aria-disabled', 'true');
+  } else if (rotateBtn && !state.lightboxClosing) {
+    const photo = state.photos[state.lightboxPhotoIndex];
+    if (photo) {
+      updateLightboxRotateButtonState(photo);
+    }
+  }
+}
+
+function initLibraryMutationEngine() {
+  LibraryMutation.init({
+    getPhoto: (photoId) => state.photos.find((photo) => photo.id === photoId),
+    applyStarUi: (photoId, favorited) => {
+      if (
+        state.lightboxOpen &&
+        state.photos[state.lightboxPhotoIndex]?.id === photoId
+      ) {
+        const starBtn = document.getElementById('lightboxStarBtn');
+        const starIcon = starBtn?.querySelector('.material-symbols-outlined');
+        if (starIcon) {
+          starIcon.classList.toggle('filled', favorited);
+        }
+      }
+      updateGridStarBadge(photoId, favorited);
+    },
+    patchPhotoRating: (photoId, rating) =>
+      patchLibraryPhotoFields(photoId, { rating }),
+    applyCommittedPhotoUpdate,
+    syncGridAfterHistogramChange,
+    hasActivePhotoFilters,
+    hasStarredPhotoFilter: () => Boolean(state.activeFilters.starred),
+    updateFilterChipUI,
+    applyPhotoFilters,
+    showToast,
+    onStarDuplicateRemoved: async (photoId, result) => {
+      if (
+        state.lightboxOpen &&
+        state.photos[state.lightboxPhotoIndex]?.id === photoId
+      ) {
+        await closeLightbox();
+      }
+      await syncGridAfterHistogramChange();
+      showToast(
+        result.message ||
+          'Photo became a duplicate and was moved to trash',
+        null,
+      );
+    },
+    onPendingCountChange: (count) => {
+      state.libraryMutationPending = count;
+      refreshLibraryMutationControls();
+    },
+  });
+}
+
+function enqueueLibraryMutation(options) {
+  return LibraryMutation.enqueueGenericJob(options);
+}
+
+function syncLightboxStarButton(photo) {
+  const starBtn = document.getElementById('lightboxStarBtn');
+  if (!starBtn || !photo) {
+    return;
+  }
+  const starIcon = starBtn.querySelector('.material-symbols-outlined');
+  if (!starIcon) {
+    return;
+  }
+  starIcon.classList.toggle(
+    'filled',
+    LibraryMutation.isLightboxStarFilled(photo.id),
+  );
+}
+
 async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
   if (currentPhotoLoad?.promise) {
     try {
@@ -4835,6 +4928,9 @@ function applyCurrentLightboxPreviewRotation() {
 }
 
 function getPhotoFileUrl(photoId) {
+  if (typeof TrashView !== 'undefined') {
+    return TrashView.getPhotoFileUrl(photoId);
+  }
   const version = state.lightboxMediaVersions[photoId];
   return version
     ? `/api/photo/${photoId}/file?v=${version}`
@@ -4842,6 +4938,9 @@ function getPhotoFileUrl(photoId) {
 }
 
 function getPhotoThumbnailUrl(photoId) {
+  if (typeof TrashView !== 'undefined') {
+    return TrashView.getPhotoThumbnailUrl(photoId);
+  }
   const version = state.lightboxMediaVersions[photoId];
   return version
     ? `/api/photo/${photoId}/thumbnail?v=${version}`
@@ -4974,6 +5073,53 @@ function updateLightboxRotateButtonState(
   rotateBtn.title = getRotateTooltip(photo);
 }
 
+function buildGridStarBadgeHTML(favorited = false) {
+  const filledClass = favorited ? ' filled' : '';
+  return (
+    `<button type="button" class="star-badge" aria-label="Star photo" aria-pressed="${favorited ? 'true' : 'false'}">` +
+    `<span class="material-symbols-outlined${filledClass}">star</span></button>`
+  );
+}
+
+function applyGridStarBadgeState(photoIdOrCard, favorited) {
+  const card =
+    typeof photoIdOrCard === 'object' && photoIdOrCard !== null
+      ? photoIdOrCard
+      : document.querySelector(`.photo-card[data-id="${photoIdOrCard}"]`);
+  if (!card) {
+    return;
+  }
+
+  if (!card.querySelector('.star-badge')) {
+    card.insertAdjacentHTML('beforeend', buildGridStarBadgeHTML(favorited));
+  }
+
+  card.classList.toggle('is-starred', favorited);
+  const badge = card.querySelector('.star-badge');
+  if (!badge) {
+    return;
+  }
+  badge.setAttribute('aria-pressed', favorited ? 'true' : 'false');
+  const icon = badge.querySelector('.material-symbols-outlined');
+  if (icon) {
+    icon.classList.toggle('filled', favorited);
+  }
+}
+
+function updateGridStarBadge(photoId, favorited) {
+  applyGridStarBadgeState(photoId, favorited);
+}
+
+function patchLibraryPhotoFields(photoId, fields) {
+  const photoIndex = state.photos.findIndex((photo) => photo.id === photoId);
+  if (photoIndex !== -1) {
+    Object.assign(state.photos[photoIndex], fields);
+  }
+  if (VirtualGrid.isActive()) {
+    VirtualGrid.patchCachedPhotos([{ id: photoId, ...fields }]);
+  }
+}
+
 function refreshGridPhotoThumbnail(photoId) {
   ThumbnailQueue.invalidate(photoId);
   const thumb = document.querySelector(
@@ -4998,12 +5144,16 @@ function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
   state.photos[photoIndex] = {
     ...state.photos[photoIndex],
     path: updatedPhoto.path,
+    content_hash: updatedPhoto.content_hash,
     width: updatedPhoto.width,
     height: updatedPhoto.height,
   };
 
-  state.lightboxMediaVersions[updatedPhoto.id] = Date.now();
+  if (options.skipMediaRefresh) {
+    return;
+  }
 
+  state.lightboxMediaVersions[updatedPhoto.id] = Date.now();
   if (options.deferThumbnailRefresh) {
     scheduleGridPhotoThumbnailRefresh(updatedPhoto.id);
   } else {
@@ -5050,39 +5200,50 @@ async function commitPendingLightboxRotations() {
   for (const [photoIdString, session] of pendingEntries) {
     const photoId = Number(photoIdString);
     const degrees = getRotationStillNeeded(photoId);
-    try {
-      const saveStartedAt = performance.now();
-      const response = await fetch(`/api/photo/${photoId}/rotate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          degrees_ccw: degrees,
-          commit_lossy: true,
-        }),
-      });
+    const saved = await enqueueLibraryMutation({
+      applyOptimistic: () => {},
+      revertOptimistic: () => {},
+      execute: async () => {
+        const response = await fetch(`/api/photo/${photoId}/rotate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            degrees_ccw: degrees,
+            commit_lossy: true,
+          }),
+        });
 
-      const result = await response.json();
-      if (!response.ok || !result.ok || !result.committed) {
-        throw new Error(result.error || 'Failed to save rotation');
-      }
+        const result = await response.json();
+        if (!response.ok || !result.ok || !result.committed) {
+          return {
+            ok: false,
+            error: result.error || 'Failed to save rotation',
+          };
+        }
+        return { ok: true, ...result, photoId };
+      },
+      onSuccess: async (result) => {
+        if (result.duplicate_removed) {
+          await handleDuplicateRemovedRotation(photoId, result.message);
+          return;
+        }
 
-      if (result.duplicate_removed) {
-        await handleDuplicateRemovedRotation(photoId, result.message);
-        continue;
-      }
+        applyCommittedPhotoUpdate(result.photo, {
+          deferThumbnailRefresh: Boolean(result.reconcile_pending),
+        });
+        delete state.lightboxRotationSessions[photoId];
+        await syncGridAfterHistogramChange();
+      },
+      failureToast: 'Failed to save rotation',
+      onFailure: () => {
+        session.displayRotation = session.persistedRotation;
+        session.mode = null;
+        applyCurrentLightboxPreviewRotation();
+        cleanupLightboxRotationSession(photoId);
+      },
+    }).catch(() => false);
 
-      applyCommittedPhotoUpdate(result.photo, {
-        deferThumbnailRefresh: Boolean(result.reconcile_pending),
-      });
-      delete state.lightboxRotationSessions[photoId];
-      const saveElapsedMs = performance.now() - saveStartedAt;
-    } catch (error) {
-      session.displayRotation = session.persistedRotation;
-      session.mode = null;
-      applyCurrentLightboxPreviewRotation();
-      cleanupLightboxRotationSession(photoId);
-      console.error('❌ Error saving staged rotation:', error);
-      showToast('Failed to save rotation', null);
+    if (saved === false) {
       return false;
     }
   }
@@ -5164,89 +5325,12 @@ function wireLightbox() {
 
   const starBtn = document.getElementById('lightboxStarBtn');
   if (starBtn) {
-    starBtn.addEventListener('click', async () => {
+    starBtn.addEventListener('click', () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      if (!photoId) return;
-
-      const starIcon = starBtn.querySelector('.material-symbols-outlined');
-      const isFilled = starIcon.classList.contains('filled');
-
-      try {
-        // Optimistically toggle UI
-        starIcon.classList.toggle('filled');
-
-        // Call API to toggle favorite
-        const response = await fetch(`/api/photo/${photoId}/favorite`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to toggle favorite: ${response.status}`);
-        }
-
-        const result = await response.json();
-
-        if (result.duplicate_removed) {
-          if (
-            state.lightboxOpen &&
-            state.photos[state.lightboxPhotoIndex]?.id === photoId
-          ) {
-            await closeLightbox();
-          }
-          await syncGridAfterHistogramChange();
-          showToast(
-            result.message || 'Photo became a duplicate and was moved to trash',
-            null,
-          );
-          return;
-        }
-
-        // Update local state to match backend
-        if (state.photos[state.lightboxPhotoIndex]) {
-          state.photos[state.lightboxPhotoIndex].rating = result.rating;
-        }
-        if (result.photo) {
-          applyCommittedPhotoUpdate(result.photo);
-        }
-
-        // Update grid star badge
-        const gridCard = document.querySelector(
-          `.photo-card[data-id="${photoId}"]`,
-        );
-        if (gridCard) {
-          // Remove existing star badge if present
-          const existingBadge = gridCard.querySelector('.star-badge');
-          if (existingBadge) {
-            existingBadge.remove();
-          }
-
-          // Add star badge if favorited
-          if (result.favorited) {
-            const starBadge = document.createElement('div');
-            starBadge.className = 'star-badge';
-            starBadge.innerHTML =
-              '<span class="material-symbols-outlined">star</span>';
-            gridCard.appendChild(starBadge);
-          }
-        }
-
-        // Ensure UI matches result
-        if (result.favorited) {
-          starIcon.classList.add('filled');
-        } else {
-          starIcon.classList.remove('filled');
-        }
-
-        if (hasActivePhotoFilters()) {
-          applyPhotoFilters();
-        }
-      } catch (error) {
-        console.error('❌ Error toggling star:', error);
-        // Revert optimistic UI change on error
-        starIcon.classList.toggle('filled');
-        showToast('Failed to update star', null);
+      if (!photoId) {
+        return;
       }
+      LibraryMutation.togglePhotoStar(photoId);
     });
   }
 
@@ -5265,6 +5349,13 @@ function wireLightbox() {
 
       if (!photoId) return;
 
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        TrashView.confirmPermanentDelete([photoId], () => {
+          void TrashView.purgePhotos([photoId]);
+        });
+        return;
+      }
+
       showDialogOld(
         'Delete Photo',
         'Are you sure you want to delete this photo?',
@@ -5273,6 +5364,10 @@ function wireLightbox() {
         },
       );
     });
+  }
+
+  if (typeof TrashView !== 'undefined') {
+    TrashView.updateLightboxForMode();
   }
 
   // Auto-hide UI only after pointer leaves the overlay (not while hovering)
@@ -5678,22 +5773,14 @@ async function openLightbox(photoIndex) {
 
   overlay.style.display = 'flex';
 
+  if (typeof TrashView !== 'undefined') {
+    TrashView.updateLightboxForMode();
+  }
+
   // Prevent body scroll while lightbox is open
   document.body.style.overflow = 'hidden';
 
-  // Update star button state based on photo rating
-  const starBtn = document.getElementById('lightboxStarBtn');
-  if (starBtn) {
-    const starIcon = starBtn.querySelector('.material-symbols-outlined');
-    if (starIcon) {
-      // Photo is starred if rating === 5
-      if (photo.rating === 5) {
-        starIcon.classList.add('filled');
-      } else {
-        starIcon.classList.remove('filled');
-      }
-    }
-  }
+  syncLightboxStarButton(photo);
 
   // Update info panel with photo details
   updateLightboxRotateButtonState(photo);
@@ -6281,7 +6368,11 @@ async function fetchPhotosPage(options = {}) {
     sortOrder = state.currentSortOrder,
     signal,
   } = options;
-  let url = `/api/photos?limit=${limit}&sort=${sortOrder}`;
+  let url = `${
+    typeof TrashView !== 'undefined'
+      ? TrashView.getPhotosApiRoot()
+      : '/api/photos'
+  }?limit=${limit}&sort=${sortOrder}`;
   if (cursor) {
     url += `&cursor=${encodeURIComponent(cursor)}`;
   }
@@ -6314,6 +6405,14 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
   return {
     sortOrder: sortOrder ?? state.currentSortOrder,
     signal,
+    photosApiRoot:
+      typeof TrashView !== 'undefined'
+        ? TrashView.getPhotosApiRoot()
+        : '/api/photos',
+    yearsApiUrl:
+      typeof TrashView !== 'undefined'
+        ? TrashView.getYearsApiUrl()
+        : '/api/years',
     getGeneration: () => generation,
     mergePhotos: mergePhotosIntoVirtualState,
     filterPhoto: getActiveVirtualGridFilterPhoto(),
@@ -6365,8 +6464,29 @@ function mergePhotosIntoVirtualState(incomingPhotos) {
   if (!incomingPhotos?.length) {
     return;
   }
-  const knownIds = new Set(state.photos.map((photo) => photo.id));
-  const fresh = incomingPhotos.filter((photo) => !knownIds.has(photo.id));
+  const indexById = new Map(
+    state.photos.map((photo, index) => [photo.id, index]),
+  );
+  const fresh = [];
+  for (const incoming of incomingPhotos) {
+    const existingIndex = indexById.get(incoming.id);
+    if (existingIndex !== undefined) {
+      if (incoming.rating !== undefined) {
+        state.photos[existingIndex].rating = incoming.rating;
+      }
+      if (incoming.path !== undefined) {
+        state.photos[existingIndex].path = incoming.path;
+      }
+      if (incoming.date !== undefined) {
+        state.photos[existingIndex].date = incoming.date;
+      }
+      if (incoming.month !== undefined) {
+        state.photos[existingIndex].month = incoming.month;
+      }
+    } else {
+      fresh.push(incoming);
+    }
+  }
   if (fresh.length) {
     state.photos = state.photos.concat(fresh);
   }
@@ -6524,9 +6644,15 @@ async function loadMorePhotos() {
 }
 
 async function replaceGridAtMonth(targetMonth) {
-  const response = await fetch(
-    `/api/photos/jump?month=${encodeURIComponent(targetMonth)}&limit=${PHOTO_PAGE_SIZE}&sort=${state.currentSortOrder}`,
-  );
+  const jumpUrl =
+    typeof TrashView !== 'undefined'
+      ? TrashView.getJumpApiUrl(
+          targetMonth,
+          PHOTO_PAGE_SIZE,
+          state.currentSortOrder,
+        )
+      : `/api/photos/jump?month=${encodeURIComponent(targetMonth)}&limit=${PHOTO_PAGE_SIZE}&sort=${state.currentSortOrder}`;
+  const response = await fetch(jumpUrl);
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.error || 'Failed to load photos for that date');
@@ -6786,6 +6912,9 @@ async function rehydrateLibraryCatalog(options = {}) {
 
   if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
     VirtualGrid.destroy();
+  }
+  if (typeof TrashView !== 'undefined') {
+    TrashView.resetViewState();
   }
   resetPhotoWindowState();
   state.selectedPhotos.clear();
@@ -7162,13 +7291,6 @@ function renderPhotoGrid(photos, append = false) {
         card.dataset.id = photo.id;
         card.dataset.index = photo.globalIndex;
 
-        // Build star badge HTML if photo is starred
-        const starBadgeHTML =
-          photo.rating === 5
-            ? '<div class="star-badge"><span class="material-symbols-outlined">star</span></div>'
-            : '';
-
-        // Build video badge HTML if photo is a video
         const videoBadgeHTML =
           photo.file_type === 'video'
             ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
@@ -7176,9 +7298,10 @@ function renderPhotoGrid(photos, append = false) {
 
         card.innerHTML = `
           <img src="${getPhotoThumbnailUrl(photo.id)}" alt="" loading="lazy" class="photo-thumb" data-photo-id="${photo.id}">
-          ${starBadgeHTML}
+          ${buildGridStarBadgeHTML(photo.rating === 5)}
           ${videoBadgeHTML}
         `;
+        applyGridStarBadgeState(card, photo.rating === 5);
         grid.appendChild(card);
       });
     } else {
@@ -7195,20 +7318,15 @@ function renderPhotoGrid(photos, append = false) {
       `;
 
       photosByMonth[month].forEach((photo) => {
-        const starBadgeHTML =
-          photo.rating === 5
-            ? '<div class="star-badge"><span class="material-symbols-outlined">star</span></div>'
-            : '';
-
         const videoBadgeHTML =
           photo.file_type === 'video'
             ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
             : '';
 
         html += `
-          <div class="photo-card" data-id="${photo.id}" data-index="${photo.globalIndex}">
+          <div class="photo-card${photo.rating === 5 ? ' is-starred' : ''}" data-id="${photo.id}" data-index="${photo.globalIndex}">
             <img data-photo-id="${photo.id}" alt="" class="photo-thumb">
-            ${starBadgeHTML}
+            ${buildGridStarBadgeHTML(photo.rating === 5)}
             ${videoBadgeHTML}
           </div>
         `;
@@ -7257,6 +7375,20 @@ function ensureGridInteractionsWired() {
     const monthCircle = event.target.closest('.month-select-circle');
     if (monthCircle && container.contains(monthCircle)) {
       handleMonthCircleClick(monthCircle, event);
+      return;
+    }
+
+    const starBadge = event.target.closest('.star-badge');
+    if (starBadge && container.contains(starBadge)) {
+      event.stopPropagation();
+      event.preventDefault();
+      const photoId = parseInt(
+        starBadge.closest('.photo-card')?.dataset.id,
+        10,
+      );
+      if (photoId) {
+        LibraryMutation.togglePhotoStar(photoId);
+      }
       return;
     }
 
@@ -7549,6 +7681,13 @@ async function handleStalePhoto(photoId, { closeLightbox: forceClose = false } =
  * Delete photos - with undo support via trash tracking
  */
 async function deletePhotos(photoIds) {
+  if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+    TrashView.confirmPermanentDelete(photoIds, () => {
+      void TrashView.purgePhotos(photoIds);
+    });
+    return;
+  }
+
   if (state.deleteInProgress) return;
   state.deleteInProgress = true;
 
@@ -7563,62 +7702,70 @@ async function deletePhotos(photoIds) {
   }
 
   try {
-    const response = await fetch('/api/photos/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ photo_ids: photoIds }),
+    await enqueueLibraryMutation({
+      applyOptimistic: () => {},
+      revertOptimistic: () => {},
+      execute: async () => {
+        const response = await fetch('/api/photos/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photo_ids: photoIds }),
+        });
+
+        if (!response.ok) {
+          return { ok: false, error: `Delete failed: ${response.status}` };
+        }
+
+        const result = await response.json();
+        return { ok: true, ...result };
+      },
+      onSuccess: async (result) => {
+        if (!fromLightbox) {
+          state.selectedPhotos.clear();
+          state.lastClickedIndex = null;
+          updateDeleteButtonVisibility();
+
+          if (state.lightboxOpen) {
+            await closeLightbox({ commitRotations: false });
+          }
+        }
+
+        const deletedCount = result.deleted || 0;
+        const errors = Array.isArray(result.errors) ? result.errors : [];
+        const notFoundIds = photoIds.filter((id) =>
+          errors.some((message) => message === `Photo ${id} not found`),
+        );
+
+        if (deletedCount > 0) {
+          removePhotosFromState(photoIds);
+          await syncGridAfterHistogramChange();
+          if (fromLightbox) {
+            await applyLightboxSuccessorAfterRemove(lightboxSuccessor, photoIds);
+          }
+        } else if (notFoundIds.length > 0) {
+          removePhotosFromState(notFoundIds);
+          if (fromLightbox) {
+            await applyLightboxSuccessorAfterRemove(lightboxSuccessor, notFoundIds);
+          }
+        }
+
+        if (deletedCount > 0) {
+          showToast(
+            `Deleted ${deletedCount} photo${deletedCount > 1 ? 's' : ''}`,
+            () => undoDelete(photoIds),
+          );
+        } else if (notFoundIds.length > 0) {
+          showToast('Photo was already deleted', null);
+        } else if (errors.length > 0) {
+          showToast(errors[0], null);
+        } else {
+          showToast('Nothing to delete', null);
+        }
+      },
+      failureToast: 'Delete failed',
     });
-
-    if (!response.ok) {
-      throw new Error(`Delete failed: ${response.status}`);
-    }
-
-    const result = await response.json();
-
-    if (!fromLightbox) {
-      state.selectedPhotos.clear();
-      state.lastClickedIndex = null;
-      updateDeleteButtonVisibility();
-
-      if (state.lightboxOpen) {
-        await closeLightbox({ commitRotations: false });
-      }
-    }
-
-    const deletedCount = result.deleted || 0;
-    const errors = Array.isArray(result.errors) ? result.errors : [];
-    const notFoundIds = photoIds.filter((id) =>
-      errors.some((message) => message === `Photo ${id} not found`),
-    );
-
-    if (deletedCount > 0) {
-      removePhotosFromState(photoIds);
-      await syncGridAfterHistogramChange();
-      if (fromLightbox) {
-        await applyLightboxSuccessorAfterRemove(lightboxSuccessor, photoIds);
-      }
-    } else if (notFoundIds.length > 0) {
-      removePhotosFromState(notFoundIds);
-      if (fromLightbox) {
-        await applyLightboxSuccessorAfterRemove(lightboxSuccessor, notFoundIds);
-      }
-    }
-
-    if (deletedCount > 0) {
-      showToast(
-        `Deleted ${deletedCount} photo${deletedCount > 1 ? 's' : ''}`,
-        () => undoDelete(photoIds),
-      );
-    } else if (notFoundIds.length > 0) {
-      showToast('Photo was already deleted', null);
-    } else if (errors.length > 0) {
-      showToast(errors[0], null);
-    } else {
-      showToast('Nothing to delete', null);
-    }
   } catch (error) {
     console.error('❌ Delete error:', error);
-    showToast('Delete failed', null);
   } finally {
     state.deleteInProgress = false;
   }
@@ -7661,26 +7808,33 @@ async function undoDateEdit(originalDates) {
  */
 async function undoDelete(photoIds) {
   try {
-    const response = await fetch('/api/photos/restore', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ photo_ids: photoIds }),
+    await enqueueLibraryMutation({
+      applyOptimistic: () => {},
+      revertOptimistic: () => {},
+      execute: async () => {
+        const response = await fetch('/api/photos/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photo_ids: photoIds }),
+        });
+
+        if (!response.ok) {
+          return { ok: false, error: `Restore failed: ${response.status}` };
+        }
+
+        const result = await response.json();
+        return { ok: true, ...result };
+      },
+      onSuccess: async (result) => {
+        await syncGridAfterHistogramChange();
+
+        const count = result.restored;
+        showToast(`Restored ${count} photo${count > 1 ? 's' : ''}`, null);
+      },
+      failureToast: 'Restore failed',
     });
-
-    if (!response.ok) {
-      throw new Error(`Restore failed: ${response.status}`);
-    }
-
-    const result = await response.json();
-
-    // Reload grid to show restored photos
-    await syncGridAfterHistogramChange();
-
-    const count = result.restored;
-    showToast(`Restored ${count} photo${count > 1 ? 's' : ''}`, null);
   } catch (error) {
     console.error('❌ Restore error:', error);
-    showToast('Restore failed', null);
   }
 }
 
@@ -8435,6 +8589,37 @@ async function loadUtilitiesMenu() {
       });
     }
 
+    const viewTrashBtn = document.getElementById('viewTrashBtn');
+    const emptyTrashBtn = document.getElementById('emptyTrashBtn');
+    const restoreAllTrashBtn = document.getElementById('restoreAllTrashBtn');
+
+    if (viewTrashBtn) {
+      viewTrashBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        if (typeof TrashView !== 'undefined') {
+          void TrashView.enter();
+        }
+      });
+    }
+
+    if (emptyTrashBtn) {
+      emptyTrashBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        if (typeof TrashView !== 'undefined') {
+          void TrashView.purgeAll();
+        }
+      });
+    }
+
+    if (restoreAllTrashBtn) {
+      restoreAllTrashBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        if (typeof TrashView !== 'undefined') {
+          void TrashView.restoreAll();
+        }
+      });
+    }
+
     if (closeLibraryBtn) {
       closeLibraryBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
@@ -8531,6 +8716,14 @@ function updateUtilityMenuAvailability() {
 
   // Rebuild database - requires database
   enableMenuItem('rebuildDatabaseBtn', hasDatabase);
+
+  enableMenuItem('viewTrashBtn', hasDatabase);
+  enableMenuItem('emptyTrashBtn', hasDatabase && state.trashViewActive);
+  enableMenuItem('restoreAllTrashBtn', hasDatabase && state.trashViewActive);
+
+  if (typeof TrashView !== 'undefined') {
+    TrashView.updateTrashMenuItems();
+  }
 }
 
 /**
@@ -14715,6 +14908,12 @@ async function init() {
       getUrl: (photoId) => getPhotoThumbnailUrl(photoId),
       getVersion: (photoId) => state.lightboxMediaVersions[photoId],
     });
+  }
+
+  initLibraryMutationEngine();
+
+  if (typeof TrashView !== 'undefined') {
+    TrashView.init();
   }
 
   // Wait for fonts to load to prevent layout shift
