@@ -11,6 +11,7 @@ import app as photo_app
 from db_schema_v3 import create_database_schema
 from trash_catalog import (
     USER_DELETED_TRASH_CATEGORY,
+    deleted_row_for_content_hash,
     move_photo_to_user_trash,
     resolve_user_deleted_trash_path,
 )
@@ -30,12 +31,7 @@ class TrashViewTests(unittest.TestCase):
 
         photo_app.LIBRARY_PATH = self.library_path
         photo_app.DB_PATH = self.db_path
-        photo_app.TRASH_DIR = os.path.join(self.library_path, ".trash")
-        photo_app.THUMBNAIL_CACHE_DIR = os.path.join(self.library_path, ".thumbnails")
-        photo_app.DB_BACKUP_DIR = os.path.join(self.library_path, ".db_backups")
-        photo_app.LOG_DIR = os.path.join(self.library_path, ".logs")
-        os.makedirs(photo_app.TRASH_DIR, exist_ok=True)
-
+        photo_app.update_app_paths(self.library_path, self.db_path)
         photo_app.app.config["TESTING"] = True
         self.client = photo_app.app.test_client()
 
@@ -112,7 +108,9 @@ class TrashViewTests(unittest.TestCase):
         self.client.post("/api/photos/delete", json={"photo_ids": [1]})
         response = self.client.post("/api/photos/restore", json={"photo_ids": [1]})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["restored"], 1)
+        payload = response.get_json()
+        self.assertEqual(payload["restored"], 1)
+        self.assertEqual(payload["merged"], 0)
         self.assertTrue(
             os.path.exists(os.path.join(self.library_path, "2024/2024-01-15/photo.jpg"))
         )
@@ -123,6 +121,69 @@ class TrashViewTests(unittest.TestCase):
         conn.close()
         self.assertEqual(deleted_count, 0)
         self.assertEqual(live_count, 1)
+
+    def test_restore_merges_when_live_copy_already_exists(self):
+        self.client.post("/api/photos/delete", json={"photo_ids": [1]})
+
+        rel_path = "2024/2024-01-15/photo.jpg"
+        full_path = os.path.join(self.library_path, rel_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "wb") as handle:
+            handle.write(b"photo-bytes")
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO photos (
+                id, original_filename, current_path, date_taken,
+                content_hash, file_size, file_type, width, height, rating
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                2,
+                "photo.jpg",
+                rel_path,
+                "2024:01:15 12:00:00",
+                "abc1234",
+                11,
+                "photo",
+                100,
+                100,
+                None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        response = self.client.post("/api/photos/restore", json={"photo_ids": [1]})
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["restored"], 1)
+        self.assertEqual(payload["merged"], 1)
+        self.assertEqual(payload["processed_ids"], [1])
+
+        conn = sqlite3.connect(self.db_path)
+        deleted_count = conn.execute("SELECT COUNT(*) FROM deleted_photos").fetchone()[0]
+        live_count = conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+        live_id = conn.execute("SELECT id FROM photos").fetchone()[0]
+        conn.close()
+        self.assertEqual(deleted_count, 0)
+        self.assertEqual(live_count, 1)
+        self.assertEqual(live_id, 2)
+        self.assertTrue(os.path.isfile(full_path))
+
+    def test_deleted_row_for_content_hash_finds_trashed_photo(self):
+        self.client.post("/api/photos/delete", json={"photo_ids": [1]})
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = deleted_row_for_content_hash(conn.cursor(), "abc1234")
+        conn.close()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["id"], 1)
 
     def test_purge_permanently_deletes_trash_rows_and_files(self):
         self.client.post("/api/photos/delete", json={"photo_ids": [1]})

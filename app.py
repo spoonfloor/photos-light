@@ -129,6 +129,7 @@ from trash_catalog import (
     invalidate_trash_grid_caches,
     move_photo_to_user_trash,
     parse_deleted_photo_data,
+    restore_or_merge_deleted_photo,
     resolve_user_deleted_trash_path,
 )
 from rotation_utils import (
@@ -2000,6 +2001,74 @@ def cleanup_empty_thumbnail_folders(thumbnail_path):
         # Never fail the operation if cleanup fails
         print(f"    ⚠️  Thumbnail folder cleanup failed: {e}")
 
+def _delete_photo_id(cursor, photo_id, trash_dir):
+    """Move one library photo to user trash and archive its DB row."""
+    moved_to_trash = None
+    original_full_path = None
+    try:
+        print(f"    Processing photo_id: {photo_id}", flush=True)
+        cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            print(f"    ❌ Photo {photo_id} NOT FOUND in database")
+            return False, f"Photo {photo_id} not found"
+
+        photo_data = dict(row)
+        current_path = photo_data['current_path']
+        original_full_path = os.path.join(LIBRARY_PATH, current_path)
+
+        print(f"  - Photo {photo_id}: {current_path}")
+
+        if not os.path.exists(original_full_path):
+            print(f"    ⚠️  Original file not found: {original_full_path}")
+            return False, f"Photo {photo_id} file not found on disk"
+
+        trash_filename = move_photo_to_user_trash(
+            LIBRARY_PATH,
+            trash_dir,
+            original_full_path,
+        )
+        moved_to_trash = resolve_user_deleted_trash_path(trash_dir, trash_filename)
+        if not moved_to_trash or not os.path.exists(moved_to_trash):
+            raise RuntimeError("Failed to verify file in trash")
+        print(f"    ✓ Moved to: {moved_to_trash}")
+
+        cleanup_empty_folders(original_full_path, LIBRARY_PATH)
+
+        deleted_at = datetime.now().isoformat()
+        cursor.execute("""
+            INSERT INTO deleted_photos (id, original_path, trash_filename, deleted_at, photo_data)
+            VALUES (?, ?, ?, ?, ?)
+        """, (photo_id, current_path, trash_filename, deleted_at, json.dumps(photo_data)))
+
+        cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+
+        content_hash = photo_data.get('content_hash')
+        if content_hash:
+            thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
+            if os.path.exists(thumbnail_path):
+                os.remove(thumbnail_path)
+                cleanup_empty_thumbnail_folders(thumbnail_path)
+                print(f"    ✓ Deleted thumbnail")
+
+        app.logger.info(f"Deleted photo {photo_id}: {current_path}")
+        return True, None
+
+    except Exception as e:
+        if moved_to_trash and original_full_path and os.path.exists(moved_to_trash):
+            try:
+                os.makedirs(os.path.dirname(original_full_path), exist_ok=True)
+                shutil.move(moved_to_trash, original_full_path)
+            except Exception as rollback_error:
+                error_logger.error(
+                    f"Delete rollback failed for photo {photo_id}: {rollback_error}"
+                )
+        print(f"    ❌ Error: {e}")
+        error_logger.error(f"Delete failed for photo {photo_id}: {e}")
+        return False, f"Error deleting photo {photo_id}: {str(e)}"
+
+
 @app.route('/api/photos/delete', methods=['POST'])
 @handle_db_corruption
 def delete_photos():
@@ -2035,76 +2104,19 @@ def delete_photos():
         trash_dir = TRASH_DIR
         ensure_user_deleted_trash_dir(trash_dir)
         
-        from datetime import datetime
-        import json
-        
         print(f"    Starting delete loop for {len(photo_ids)} photos...", flush=True)
         
         for photo_id in photo_ids:
-            try:
-                print(f"    Processing photo_id: {photo_id}", flush=True)
-                # Get full photo record
-                cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
-                row = cursor.fetchone()
-                
-                if not row:
-                    print(f"    ❌ Photo {photo_id} NOT FOUND in database")
-                    errors.append(f"Photo {photo_id} not found")
-                    continue
-                
-                # Convert row to dict
-                photo_data = dict(row)
-                current_path = photo_data['current_path']
-                full_path = os.path.join(LIBRARY_PATH, current_path)
-                
-                print(f"  - Photo {photo_id}: {current_path}")
-                
-                # Move file to .trash/user_deleted/
-                trash_filename = None
-                if os.path.exists(full_path):
-                    trash_filename = move_photo_to_user_trash(
-                        LIBRARY_PATH,
-                        trash_dir,
-                        full_path,
-                    )
-                    print(f"    ✓ Moved to: {os.path.join(trash_dir, trash_filename)}")
-                    
-                    # Cleanup empty folders after successful delete
-                    cleanup_empty_folders(full_path, LIBRARY_PATH)
-                else:
-                    print(f"    ⚠️  Original file not found: {full_path}")
-                    trash_filename = os.path.basename(full_path)  # Store original name
-                
-                # Delete thumbnail cache (hash-based)
-                content_hash = photo_data.get('content_hash')
-                if content_hash:
-                    shard_dir = os.path.join(THUMBNAIL_CACHE_DIR, content_hash[:2], content_hash[2:4])
-                    thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
-                    
-                    if os.path.exists(thumbnail_path):
-                        os.remove(thumbnail_path)
-                        cleanup_empty_thumbnail_folders(thumbnail_path)
-                        print(f"    ✓ Deleted thumbnail")
-                
-                # Move DB record to deleted_photos table
-                deleted_at = datetime.now().isoformat()
-                cursor.execute("""
-                    INSERT INTO deleted_photos (id, original_path, trash_filename, deleted_at, photo_data)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (photo_id, current_path, trash_filename, deleted_at, json.dumps(photo_data)))
-                
-                # Remove from photos table
-                cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+            deleted, error = _delete_photo_id(cursor, photo_id, trash_dir)
+            if deleted:
                 deleted_count += 1
-                app.logger.info(f"Deleted photo {photo_id}: {current_path}")
-                
-            except Exception as e:
-                errors.append(f"Error deleting photo {photo_id}: {str(e)}")
-                print(f"    ❌ Error: {e}")
-                error_logger.error(f"Delete failed for photo {photo_id}: {e}")
+            elif error:
+                errors.append(error)
         
-        conn.commit()
-        invalidate_grid_read_caches()
+        if deleted_count > 0:
+            commit_row_mutation(conn)
+        else:
+            conn.rollback()
         conn.close()
 
         print(f"✅ Deleted {deleted_count} photos\n", flush=True)
@@ -2177,7 +2189,7 @@ def update_photo_date():
         success, result, transaction = update_photo_date_with_files(photo_id, new_date, conn)
         
         if success:
-            conn.commit()
+            commit_row_mutation(conn)
             conn.close()
             print(f"✅ Updated photo {photo_id} with file operations")
             if result['status'] == 'duplicate_removed':
@@ -2365,7 +2377,7 @@ def bulk_update_photo_dates():
             }), 500
         else:
             # All succeeded - commit
-            conn.commit()
+            commit_row_mutation(conn)
             conn.close()
             if duplicate_count > 0:
                 print(f"✅ Updated {success_count} photos, {duplicate_count} duplicates moved to trash")
@@ -2409,8 +2421,7 @@ def update_photo_date_execute():
             success, result, transaction = update_photo_date_with_files(photo_id, new_date, conn)
 
             if success:
-                conn.commit()
-                invalidate_grid_read_caches()
+                commit_row_mutation(conn)
                 print(f"✅ Updated photo {photo_id} with file operations")
 
                 if result['status'] == 'duplicate_removed':
@@ -2624,8 +2635,7 @@ def bulk_update_photo_dates_execute():
                         print(f"  Item {i}: type={type(f)}, value={f}")
                     raise
             else:
-                conn.commit()
-                invalidate_grid_read_caches()
+                commit_row_mutation(conn)
                 conn.close()
 
                 if duplicate_count > 0:
@@ -2656,59 +2666,46 @@ def bulk_update_photo_dates_execute():
 
 def _restore_photo_ids(cursor, photo_ids, trash_dir):
     """Restore deleted photos from user trash back to the library index."""
-    import json
-
     restored_count = 0
+    merged_count = 0
+    processed_ids = []
     errors = []
 
     for photo_id in photo_ids:
         try:
-            cursor.execute("SELECT * FROM deleted_photos WHERE id = ?", (photo_id,))
-            row = cursor.fetchone()
-
-            if not row:
-                print(f"    ❌ Photo {photo_id} not found in trash")
-                errors.append(f"Photo {photo_id} not found in trash")
+            print(f"  - Photo {photo_id}")
+            outcome, live_photo_id, error = restore_or_merge_deleted_photo(
+                cursor,
+                photo_id=photo_id,
+                trash_dir=trash_dir,
+                library_path=LIBRARY_PATH,
+            )
+            if outcome == 'error':
+                print(f"    ❌ {error}")
+                errors.append(error)
                 continue
 
-            deleted_data = dict(row)
-            original_path = deleted_data['original_path']
-            trash_filename = deleted_data['trash_filename']
-            photo_data = json.loads(deleted_data['photo_data'])
-
-            print(f"  - Photo {photo_id}: {original_path}")
-
-            trash_path = resolve_user_deleted_trash_path(trash_dir, trash_filename)
-            full_path = os.path.join(LIBRARY_PATH, original_path)
-
-            if os.path.exists(trash_path):
-                os.makedirs(os.path.dirname(full_path), exist_ok=True)
-                shutil.move(trash_path, full_path)
-                print(f"    ✓ Restored to: {full_path}")
-            else:
-                print(f"    ⚠️  File not found in trash: {trash_path}")
-                errors.append(f"Photo {photo_id} file not found in trash")
-                continue
-
-            columns = list(photo_data.keys())
-            placeholders = ', '.join(['?' for _ in columns])
-            values = [photo_data[col] for col in columns]
-
-            cursor.execute(f"""
-                INSERT INTO photos ({', '.join(columns)})
-                VALUES ({placeholders})
-            """, values)
-
-            cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
+            processed_ids.append(photo_id)
             restored_count += 1
-            app.logger.info(f"Restored photo {photo_id}: {original_path}")
+            if outcome == 'merged':
+                merged_count += 1
+                print(
+                    f"    ✓ Merged with live photo {live_photo_id}",
+                    flush=True,
+                )
+                app.logger.info(
+                    f"Merged trash photo {photo_id} with live photo {live_photo_id}",
+                )
+            else:
+                print(f"    ✓ Restored photo {photo_id}", flush=True)
+                app.logger.info(f"Restored photo {photo_id}")
 
         except Exception as e:
             errors.append(f"Error restoring photo {photo_id}: {str(e)}")
             print(f"    ❌ Error: {e}")
             error_logger.error(f"Restore failed for photo {photo_id}: {e}")
 
-    return restored_count, errors
+    return restored_count, merged_count, processed_ids, errors
 
 
 @app.route('/api/photos/restore', methods=['POST'])
@@ -2728,17 +2725,20 @@ def restore_photos():
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        restored_count, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
+        restored_count, merged_count, processed_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
         
-        conn.commit()
         if restored_count > 0:
-            invalidate_grid_read_caches()
+            commit_row_mutation(conn)
+        else:
+            conn.rollback()
         conn.close()
         
-        print(f"✅ Restored {restored_count} photos\n")
+        print(f"✅ Restored {restored_count} photos ({merged_count} merged)\n")
         
         response = {
             'restored': restored_count,
+            'merged': merged_count,
+            'processed_ids': processed_ids,
             'total': len(photo_ids),
         }
 
@@ -3066,8 +3066,10 @@ def purge_trash_photos():
             except Exception as exc:
                 errors.append(f"Error purging photo {photo_id}: {exc}")
 
-        conn.commit()
-        invalidate_grid_read_caches()
+        if purged_count > 0:
+            commit_row_mutation(conn)
+        else:
+            conn.rollback()
         conn.close()
 
         response = {'purged': purged_count, 'total': len(photo_ids)}
@@ -3092,13 +3094,19 @@ def restore_all_trash_photos():
             return jsonify({'restored': 0, 'total': 0})
 
         print(f"\n↩️  RESTORE ALL REQUEST: {len(photo_ids)} photos")
-        restored_count, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
-        conn.commit()
+        restored_count, merged_count, processed_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
         if restored_count > 0:
-            invalidate_grid_read_caches()
+            commit_row_mutation(conn)
+        else:
+            conn.rollback()
         conn.close()
 
-        response = {'restored': restored_count, 'total': len(photo_ids)}
+        response = {
+            'restored': restored_count,
+            'merged': merged_count,
+            'processed_ids': processed_ids,
+            'total': len(photo_ids),
+        }
         if errors:
             response['errors'] = errors
         return jsonify(response)
@@ -3468,6 +3476,7 @@ def import_from_paths():
             )
 
             imported_so_far = 0
+            library_mutations_so_far = 0
 
             try:
                 for event_name, payload in iter_ingest_events(
@@ -3482,21 +3491,32 @@ def import_from_paths():
                             imported_so_far,
                             int(payload.get('imported') or 0),
                         )
+                        library_mutations_so_far = max(
+                            library_mutations_so_far,
+                            int(payload.get('imported') or 0)
+                            + int(payload.get('merged_from_trash') or 0),
+                        )
                     elif event_name == 'complete':
                         imported_so_far = max(
                             imported_so_far,
                             int(payload.get('imported') or 0),
                         )
+                        library_mutations_so_far = max(
+                            library_mutations_so_far,
+                            int(payload.get('imported') or 0)
+                            + int(payload.get('merged_from_trash') or 0),
+                        )
                         print(f"\n{'='*60}")
                         print("IMPORT COMPLETE:")
                         print(f"  Imported: {payload.get('imported', 0)}")
+                        print(f"  Merged from trash: {payload.get('merged_from_trash', 0)}")
                         print(f"  Duplicates: {payload.get('duplicates', 0)}")
                         print(f"  Errors: {payload.get('errors', 0)}")
                         print(f"  Log: {log_path_rel}")
                         print(f"{'='*60}\n")
                         payload = dict(payload)
                         payload['log_path'] = log_path_rel
-                        if imported_so_far > 0:
+                        if library_mutations_so_far > 0:
                             invalidate_import_grid_caches()
 
                     if not (yield from emit_event(event_name, payload)):
@@ -3507,7 +3527,7 @@ def import_from_paths():
                     return
             finally:
                 log_file.close()
-                if imported_so_far > 0:
+                if library_mutations_so_far > 0:
                     invalidate_import_grid_caches()
             
         except GeneratorExit:

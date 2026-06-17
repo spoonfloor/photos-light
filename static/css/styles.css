@@ -200,9 +200,7 @@ body.filter-chip-rail-visible {
 }
 
 body.trash-view-active {
-  --app-chrome-height: calc(
-    var(--app-bar-height) + var(--trash-chrome-height)
-  );
+  --app-chrome-height: calc(var(--app-bar-height) + var(--trash-chrome-height));
 }
 
 body.trash-view-active.filter-chip-rail-visible {
@@ -219,7 +217,7 @@ body.trash-view-active.filter-chip-rail-visible {
   width: 100%;
   height: var(--trash-chrome-height);
   padding: 0 20px;
-  background: #000;
+  background: var(--body-bg);
   color: var(--text-primary);
 }
 
@@ -255,11 +253,32 @@ body.trash-view-active.filter-chip-rail-visible {
 }
 
 #restoreBtn[hidden],
+#addPhotoBtn[hidden],
+#editDateBtn[hidden],
+#switchLibraryBtn[hidden],
+#convertToLibraryBtn[hidden],
+#closeLibraryBtn[hidden],
+#cleanOrganizeBtn[hidden],
+#lightboxEditDateBtn[hidden],
+#lightboxRotateBtn[hidden],
+#lightboxStarBtn[hidden],
 #lightboxRestoreBtn[hidden],
 #viewTrashBtn[hidden],
 #emptyTrashBtn[hidden],
 #restoreAllTrashBtn[hidden],
 #trashMenuDivider[hidden] {
+  display: none !important;
+}
+
+body.trash-view-active #addPhotoBtn,
+body.trash-view-active #editDateBtn,
+body.trash-view-active #lightboxEditDateBtn,
+body.trash-view-active #lightboxRotateBtn,
+body.trash-view-active #lightboxStarBtn {
+  display: none !important;
+}
+
+body.trash-view-active .photo-card .star-badge {
   display: none !important;
 }
 

@@ -57,7 +57,9 @@ class GridReadCacheTest(unittest.TestCase):
         photo_app.LIBRARY_PATH = self.library_path
         photo_app.DB_PATH = self.db_path
         photo_app.TRASH_DIR = os.path.join(self.library_path, ".trash")
+        photo_app.THUMBNAIL_CACHE_DIR = os.path.join(self.library_path, ".thumbnails")
         os.makedirs(photo_app.TRASH_DIR, exist_ok=True)
+        os.makedirs(photo_app.THUMBNAIL_CACHE_DIR, exist_ok=True)
         photo_app.invalidate_grid_read_caches()
         self.client = photo_app.app.test_client()
 
@@ -241,6 +243,44 @@ class GridReadCacheTest(unittest.TestCase):
         ).get_json()
         self.assertEqual(starred_after["total"], 1)
         self.assertEqual(starred_after["months"], [{"month": "1900-01", "count": 1}])
+
+    def test_delete_invalidates_month_index_cache(self):
+        photo_dir = os.path.join(self.library_path, "1900", "1900-01-01")
+        os.makedirs(photo_dir, exist_ok=True)
+        with open(os.path.join(photo_dir, "a.jpg"), "wb") as fh:
+            fh.write(b"test-photo-bytes")
+
+        before = self.client.get("/api/photos/month_index?sort=newest").get_json()
+        self.assertEqual(before["total"], 1)
+
+        response = self.client.post("/api/photos/delete", json={"photo_ids": [1]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["deleted"], 1)
+
+        after = self.client.get("/api/photos/month_index?sort=newest").get_json()
+        self.assertEqual(after["total"], 0)
+        self.assertEqual(after["months"], [])
+
+    def test_restore_invalidates_month_index_cache(self):
+        photo_dir = os.path.join(self.library_path, "1900", "1900-01-01")
+        os.makedirs(photo_dir, exist_ok=True)
+        with open(os.path.join(photo_dir, "a.jpg"), "wb") as fh:
+            fh.write(b"test-photo-bytes")
+
+        delete_response = self.client.post("/api/photos/delete", json={"photo_ids": [1]})
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.get_json()["deleted"], 1)
+
+        empty = self.client.get("/api/photos/month_index?sort=newest").get_json()
+        self.assertEqual(empty["total"], 0)
+
+        restore_response = self.client.post("/api/photos/restore", json={"photo_ids": [1]})
+        self.assertEqual(restore_response.status_code, 200)
+        self.assertEqual(restore_response.get_json()["restored"], 1)
+
+        restored = self.client.get("/api/photos/month_index?sort=newest").get_json()
+        self.assertEqual(restored["total"], 1)
+        self.assertEqual(restored["months"], [{"month": "1900-01", "count": 1}])
 
 
 if __name__ == "__main__":

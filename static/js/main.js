@@ -6,7 +6,7 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '440';
+const STATIC_ASSET_VERSION = '451';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -1199,6 +1199,9 @@ function wireAppBar() {
 
   if (addPhotoBtn) {
     addPhotoBtn.addEventListener('click', () => {
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        return;
+      }
       triggerImport();
     });
   }
@@ -1209,12 +1212,20 @@ function wireAppBar() {
 
       if (count === 0) return;
 
+      const selectedIds = Array.from(state.selectedPhotos);
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        TrashView.confirmPermanentDelete(selectedIds, () => {
+          void TrashView.purgePhotos(selectedIds);
+        });
+        return;
+      }
+
       showDialogOld(
         'Delete Photos',
         `Are you sure you want to delete ${count} photo${
           count > 1 ? 's' : ''
         }?`,
-        () => deletePhotos(Array.from(state.selectedPhotos)),
+        () => deletePhotos(selectedIds),
       );
     });
   }
@@ -1222,6 +1233,9 @@ function wireAppBar() {
   const editDateBtn = document.getElementById('editDateBtn');
   if (editDateBtn) {
     editDateBtn.addEventListener('click', () => {
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        return;
+      }
       const count = state.selectedPhotos.size;
 
       if (count === 0) return;
@@ -1266,6 +1280,11 @@ function wireAppBar() {
 
   // Wire up date picker change handlers (but don't populate yet - that happens after health check)
   wireDatePicker();
+
+  if (typeof TrashView !== 'undefined') {
+    TrashView.wireAppBarRestore();
+    TrashView.updateAppBarForMode();
+  }
 }
 
 /**
@@ -1560,7 +1579,7 @@ function updateDeleteButtonVisibility() {
     }
   }
 
-  if (editDateBtn) {
+  if (editDateBtn && !(typeof TrashView !== 'undefined' && TrashView.isActive())) {
     if (state.selectedPhotos.size > 0) {
       editDateBtn.style.opacity = '1';
       editDateBtn.style.pointerEvents = 'auto';
@@ -3781,6 +3800,9 @@ function wireDateEditor() {
  * @param {number|number[]} photoIdOrIds - Single photo ID or array of IDs for bulk edit
  */
 async function openDateEditor(photoIdOrIds) {
+  if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+    return;
+  }
   await loadDateEditor();
 
   const overlay = document.getElementById('dateEditorOverlay');
@@ -4060,12 +4082,33 @@ async function refreshActiveVirtualGridMonthIndex(options = {}) {
     ...getGridFilterOptions(),
   });
   if (result === 'empty') {
-    showFilterZeroState();
+    showZeroMatchGridState();
     return 'empty';
   }
   setupThumbnailLazyLoading();
   ensureGridInteractionsWired();
+  if (state.photoTotalCount === 0 && !hasActivePhotoFilters()) {
+    if (reconcileTrashCatalogEmptyState()) {
+      return 'catalog_empty';
+    }
+    if (state.photos.length === 0) {
+      showEmptyLibraryState();
+      return 'catalog_empty';
+    }
+  }
   return result;
+}
+
+function isTrashCatalogEmpty() {
+  return state.trashViewActive && state.photoTotalCount === 0;
+}
+
+function reconcileTrashCatalogEmptyState() {
+  if (!isTrashCatalogEmpty()) {
+    return false;
+  }
+  showEmptyTrashState();
+  return true;
 }
 
 function showFilterZeroState() {
@@ -4081,6 +4124,32 @@ function showFilterZeroState() {
   updateFilterChipRailVisibility();
 }
 
+function showEmptyTrashState() {
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    VirtualGrid.destroy();
+  }
+  state.photos = [];
+  state.hasMore = false;
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
+  }
+  renderEmptyTrashState();
+  enableAppBarButtons();
+  updateFilterChipRailVisibility();
+  if (typeof TrashView !== 'undefined') {
+    TrashView.updateAppBarForMode();
+    TrashView.updateTrashMenuItems();
+  }
+}
+
+function showZeroMatchGridState() {
+  if (reconcileTrashCatalogEmptyState()) {
+    return;
+  }
+  showFilterZeroState();
+}
+
 function showEmptyLibraryState() {
   if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
     VirtualGrid.destroy();
@@ -4090,17 +4159,26 @@ function showEmptyLibraryState() {
   updateFilterChipRailVisibility();
 }
 
+function showCatalogEmptyState() {
+  if (reconcileTrashCatalogEmptyState()) {
+    return;
+  }
+  showEmptyLibraryState();
+}
+
 /**
  * After lightbox scope is exhausted or grid sync finds zero matches.
  */
 function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
   if (exhaustedScope === 'filter') {
-    showFilterZeroState();
+    showZeroMatchGridState();
     return;
   }
 
   if (exhaustedScope === 'library' || exhaustedScope === 'timeline') {
-    if (state.photoTotalCount === 0 && state.photos.length === 0) {
+    if (!reconcileTrashCatalogEmptyState()
+      && state.photoTotalCount === 0
+      && state.photos.length === 0) {
       showEmptyLibraryState();
     }
     return;
@@ -4110,16 +4188,20 @@ function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
     if (VirtualGrid.isActive()) {
       const layout = VirtualGrid.getLayout();
       if ((layout?.totalPhotos ?? 0) === 0) {
-        showFilterZeroState();
+        showZeroMatchGridState();
         return;
       }
     } else if (
       state.photos.length > 0 &&
       getFilteredPhotos(state.photos).length === 0
     ) {
-      showFilterZeroState();
+      showZeroMatchGridState();
       return;
     }
+  }
+
+  if (reconcileTrashCatalogEmptyState()) {
+    return;
   }
 
   if (state.photoTotalCount === 0 && state.photos.length === 0) {
@@ -4174,7 +4256,7 @@ function initLibraryMutationEngine() {
       }
       const result = VirtualGrid.applyFilterRowChange(photoId);
       if (result === 'empty') {
-        showFilterZeroState();
+        showZeroMatchGridState();
       }
     },
     applyPhotoFilters,
@@ -5083,6 +5165,9 @@ function updateLightboxRotateButtonState(
 }
 
 function buildGridStarBadgeHTML(favorited = false) {
+  if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+    return '';
+  }
   const filledClass = favorited ? ' filled' : '';
   return (
     `<button type="button" class="star-badge" aria-label="Star photo" aria-pressed="${favorited ? 'true' : 'false'}">` +
@@ -5091,6 +5176,9 @@ function buildGridStarBadgeHTML(favorited = false) {
 }
 
 function applyGridStarBadgeState(photoIdOrCard, favorited) {
+  if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+    return;
+  }
   const card =
     typeof photoIdOrCard === 'object' && photoIdOrCard !== null
       ? photoIdOrCard
@@ -5329,12 +5417,20 @@ function wireLightbox() {
 
   const rotateBtn = document.getElementById('lightboxRotateBtn');
   if (rotateBtn) {
-    rotateBtn.addEventListener('click', handleLightboxRotate);
+    rotateBtn.addEventListener('click', () => {
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        return;
+      }
+      handleLightboxRotate();
+    });
   }
 
   const starBtn = document.getElementById('lightboxStarBtn');
   if (starBtn) {
     starBtn.addEventListener('click', () => {
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        return;
+      }
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
       if (!photoId) {
         return;
@@ -5346,6 +5442,9 @@ function wireLightbox() {
   const editDateBtn = document.getElementById('lightboxEditDateBtn');
   if (editDateBtn) {
     editDateBtn.addEventListener('click', () => {
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        return;
+      }
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
 
       openDateEditor(photoId);
@@ -5376,6 +5475,7 @@ function wireLightbox() {
   }
 
   if (typeof TrashView !== 'undefined') {
+    TrashView.wireLightboxRestore();
     TrashView.updateLightboxForMode();
   }
 
@@ -6418,6 +6518,10 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
       typeof TrashView !== 'undefined'
         ? TrashView.getPhotosApiRoot()
         : '/api/photos',
+    gridCatalogApiRoot:
+      typeof TrashView !== 'undefined'
+        ? TrashView.getGridCatalogApiRoot()
+        : '/api/photos',
     yearsApiUrl:
       typeof TrashView !== 'undefined'
         ? TrashView.getYearsApiUrl()
@@ -6459,8 +6563,15 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
         state.onMonthsRendered();
       }
     },
-    onReady: () => {
+    onReady: (index) => {
       updateUtilityMenuAvailability();
+      if (
+        state.trashViewActive &&
+        (index?.total ?? state.photoTotalCount) === 0
+      ) {
+        reconcileTrashCatalogEmptyState();
+        return;
+      }
       updateFilterChipRailVisibility();
       enableAppBarButtons();
       datePickerLastSyncedMonth = null;
@@ -7067,7 +7178,7 @@ async function applyPhotoFiltersAsync() {
     try {
       const result = await VirtualGrid.applyFilterLayout(getGridFilterOptions());
       if (result === 'empty') {
-        showFilterZeroState();
+        showZeroMatchGridState();
         return;
       }
       setupThumbnailLazyLoading();
@@ -7181,6 +7292,31 @@ function renderFilterEmptyState() {
       <div style="display: flex; gap: 12px;">
         <button class="btn btn-primary" onclick="clearPhotoFilters()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span>Clear filters</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Trash view with no deleted photos
+ */
+function renderEmptyTrashState() {
+  const container = document.getElementById('photoContainer');
+  if (!container) return;
+
+  setPagedGridContainerMode(container, false);
+
+  container.innerHTML = `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
+      <div style="text-align: center;">
+        <div style="font-size: 18px; margin-bottom: 8px;">Trash is empty</div>
+        <div style="font-size: 14px; color: var(--text-secondary);">Photos you delete from your library appear here.</div>
+      </div>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn btn-primary" onclick="void TrashView.exit()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
+          <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">arrow_back</span>
+          <span>Back to library</span>
         </button>
       </div>
     </div>
@@ -7391,6 +7527,9 @@ function ensureGridInteractionsWired() {
     if (starBadge && container.contains(starBadge)) {
       event.stopPropagation();
       event.preventDefault();
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        return;
+      }
       const photoId = parseInt(
         starBadge.closest('.photo-card')?.dataset.id,
         10,
@@ -7653,6 +7792,156 @@ function removePhotosFromState(photoIds) {
   return true;
 }
 
+function createDeleteOptimisticSnapshot(photoIds, { fromLightbox = false } = {}) {
+  const normalizedIds = [...new Set(photoIds.map((id) => Number(id)))];
+  const idSet = new Set(normalizedIds);
+  return {
+    photoIds: normalizedIds,
+    originalPhotos: [...state.photos],
+    deletedPhotos: state.photos
+      .map((photo, index) => ({ photo, index }))
+      .filter(({ photo }) => idSet.has(photo.id)),
+    selectedPhotos: new Set(state.selectedPhotos),
+    lastClickedIndex: state.lastClickedIndex,
+    photoTotalCount: state.photoTotalCount,
+    hasMore: state.hasMore,
+    fromLightbox,
+    lightboxPhotoId:
+      fromLightbox && state.lightboxPhotoIndex !== null
+        ? state.photos[state.lightboxPhotoIndex]?.id || null
+        : null,
+    virtualPatch: null,
+  };
+}
+
+function applyDeleteOptimistically(snapshot, { lightboxSuccessor = null } = {}) {
+  if (!snapshot?.photoIds?.length) {
+    return false;
+  }
+
+  if (VirtualGrid.isActive()) {
+    snapshot.virtualPatch = VirtualGrid.applyPhotoDeletes(snapshot.photoIds);
+  }
+
+  const removed = removePhotosFromState(snapshot.photoIds);
+  if (!snapshot.fromLightbox) {
+    state.selectedPhotos.clear();
+    state.lastClickedIndex = null;
+    updateDeleteButtonVisibility();
+  }
+
+  const removedCount = snapshot.deletedPhotos.length;
+  if (removedCount > 0) {
+    state.photoTotalCount = Math.max(0, state.photoTotalCount - removedCount);
+  }
+  state.hasMore = state.photos.length < state.photoTotalCount;
+
+  if (snapshot.fromLightbox) {
+    void applyLightboxSuccessorAfterRemove(lightboxSuccessor, snapshot.photoIds);
+  } else if (state.lightboxOpen) {
+    void closeLightbox({ commitRotations: false });
+  }
+  if (!snapshot.fromLightbox) {
+    reconcileGridEmptyState();
+  }
+
+  return removed;
+}
+
+function restoreDeleteOptimism(snapshot, photoIds = snapshot?.photoIds || []) {
+  if (!snapshot) {
+    return false;
+  }
+
+  const restoreIds = new Set(photoIds.map((id) => Number(id)));
+  if (!restoreIds.size) {
+    return false;
+  }
+
+  const restorableIds = new Set(
+    snapshot.deletedPhotos
+      .filter(({ photo }) => restoreIds.has(photo.id))
+      .map(({ photo }) => photo.id),
+  );
+  if (!restorableIds.size) {
+    return false;
+  }
+  const restoringAllDeletedPhotos = snapshot.deletedPhotos.every(({ photo }) =>
+    restorableIds.has(photo.id),
+  );
+
+  const currentById = new Map(state.photos.map((photo) => [photo.id, photo]));
+  const nextPhotos = [];
+  snapshot.originalPhotos.forEach((photo) => {
+    if (currentById.has(photo.id)) {
+      nextPhotos.push(currentById.get(photo.id));
+      currentById.delete(photo.id);
+    } else if (restorableIds.has(photo.id)) {
+      nextPhotos.push(photo);
+    }
+  });
+  currentById.forEach((photo) => nextPhotos.push(photo));
+  state.photos = nextPhotos;
+
+  if (VirtualGrid.isActive() && snapshot.virtualPatch) {
+    VirtualGrid.restorePhotoDeletes(snapshot.virtualPatch, [...restorableIds]);
+  } else {
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+  }
+
+  if (restoringAllDeletedPhotos) {
+    state.selectedPhotos = new Set(snapshot.selectedPhotos);
+    state.lastClickedIndex = snapshot.lastClickedIndex;
+  } else {
+    restorableIds.forEach((id) => {
+      if (snapshot.selectedPhotos.has(id)) {
+        state.selectedPhotos.add(id);
+      }
+    });
+  }
+  state.photoTotalCount = Math.min(
+    snapshot.photoTotalCount,
+    state.photoTotalCount + restorableIds.size,
+  );
+  state.hasMore = state.photos.length < state.photoTotalCount;
+  updateDeleteButtonVisibility();
+
+  if (snapshot.fromLightbox && restorableIds.has(snapshot.lightboxPhotoId)) {
+    const restoredIndex = getPhotoLibraryIndex(snapshot.lightboxPhotoId);
+    if (restoredIndex >= 0) {
+      void openLightbox(restoredIndex);
+    }
+  }
+
+  return true;
+}
+
+function parseDeleteResultErrors(errors) {
+  const parsed = {
+    notFoundIds: [],
+    failedIds: [],
+  };
+
+  errors.forEach((message) => {
+    const normalized = String(message);
+    const match =
+      normalized.match(/^Photo (\d+) (.+)$/) ||
+      normalized.match(/^Error deleting photo (\d+): (.+)$/);
+    if (!match) {
+      return;
+    }
+    const photoId = Number(match[1]);
+    if (match[2] === 'not found') {
+      parsed.notFoundIds.push(photoId);
+    } else {
+      parsed.failedIds.push(photoId);
+    }
+  });
+
+  return parsed;
+}
+
 /**
  * Photo exists in client state but not on server (already deleted / stale cache).
  */
@@ -7711,9 +8000,17 @@ async function deletePhotos(photoIds) {
   }
 
   try {
+    const deleteSnapshot = createDeleteOptimisticSnapshot(photoIds, {
+      fromLightbox,
+    });
+
     await enqueueLibraryMutation({
-      applyOptimistic: () => {},
-      revertOptimistic: () => {},
+      applyOptimistic: () => {
+        applyDeleteOptimistically(deleteSnapshot, { lightboxSuccessor });
+      },
+      revertOptimistic: () => {
+        restoreDeleteOptimism(deleteSnapshot);
+      },
       execute: async () => {
         const response = await fetch('/api/photos/delete', {
           method: 'POST',
@@ -7729,42 +8026,32 @@ async function deletePhotos(photoIds) {
         return { ok: true, ...result };
       },
       onSuccess: async (result) => {
-        if (!fromLightbox) {
-          state.selectedPhotos.clear();
-          state.lastClickedIndex = null;
-          updateDeleteButtonVisibility();
-
-          if (state.lightboxOpen) {
-            await closeLightbox({ commitRotations: false });
-          }
-        }
-
         const deletedCount = result.deleted || 0;
         const errors = Array.isArray(result.errors) ? result.errors : [];
-        const notFoundIds = photoIds.filter((id) =>
-          errors.some((message) => message === `Photo ${id} not found`),
+        const { notFoundIds, failedIds } = parseDeleteResultErrors(errors);
+        const errorIds = new Set([...notFoundIds, ...failedIds]);
+        const undoIds = deleteSnapshot.photoIds.filter(
+          (id) => !errorIds.has(Number(id)),
         );
 
-        if (deletedCount > 0) {
-          removePhotosFromState(photoIds);
-          await syncGridAfterHistogramChange();
-          if (fromLightbox) {
-            await applyLightboxSuccessorAfterRemove(lightboxSuccessor, photoIds);
-          }
-        } else if (notFoundIds.length > 0) {
-          removePhotosFromState(notFoundIds);
-          if (fromLightbox) {
-            await applyLightboxSuccessorAfterRemove(lightboxSuccessor, notFoundIds);
-          }
+        if (failedIds.length > 0) {
+          restoreDeleteOptimism(deleteSnapshot, failedIds);
         }
 
-        if (deletedCount > 0) {
+        if (deletedCount > 0 && failedIds.length > 0) {
+          showToast(
+            `Deleted ${deletedCount} photo${deletedCount > 1 ? 's' : ''}; ${failedIds.length} failed`,
+            undoIds.length ? () => undoDelete(undoIds) : null,
+          );
+        } else if (deletedCount > 0) {
           showToast(
             `Deleted ${deletedCount} photo${deletedCount > 1 ? 's' : ''}`,
-            () => undoDelete(photoIds),
+            undoIds.length ? () => undoDelete(undoIds) : null,
           );
         } else if (notFoundIds.length > 0) {
           showToast('Photo was already deleted', null);
+        } else if (failedIds.length > 0) {
+          showToast(errors[0], null);
         } else if (errors.length > 0) {
           showToast(errors[0], null);
         } else {
@@ -7855,6 +8142,7 @@ let importState = {
   isImporting: false,
   totalFiles: 0,
   importedCount: 0,
+  mergedFromTrashCount: 0,
   duplicateCount: 0,
   errorCount: 0,
   backupPath: null,
@@ -7992,6 +8280,7 @@ function resetImportSession(totalFiles) {
   importState.isImporting = true;
   importState.totalFiles = totalFiles;
   importState.importedCount = 0;
+  importState.mergedFromTrashCount = 0;
   importState.duplicateCount = 0;
   importState.errorCount = 0;
   importState.importedPhotoIds = [];
@@ -12720,9 +13009,9 @@ function enableAppBarButtons() {
   const canUseDatePicker =
     state.hasDatabase && (state.photoTotalCount > 0 || hasPhotos);
 
-  // Re-enable add photo button (always available)
+  // Re-enable add photo button (not available in trash view)
   const addPhotoBtn = document.getElementById('addPhotoBtn');
-  if (addPhotoBtn) {
+  if (addPhotoBtn && !(typeof TrashView !== 'undefined' && TrashView.isActive())) {
     addPhotoBtn.style.opacity = '1';
     addPhotoBtn.style.pointerEvents = 'auto';
   }
@@ -12748,6 +13037,10 @@ function enableAppBarButtons() {
   }
 
   updateUtilityMenuAvailability();
+
+  if (typeof TrashView !== 'undefined') {
+    TrashView.updateAppBarForMode();
+  }
 }
 
 async function createAndSwitchLibraryInSubfolder(parentPath) {
@@ -14208,6 +14501,9 @@ async function triggerImportWithLibraryCheck() {
  *   when the photo picker is ready to take over, or immediately if setup fails first.
  */
 async function triggerImport(options = {}) {
+  if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+    return;
+  }
   const deferHandoff = !!options.deferTransitionHandoff;
   let didRunPickerVisibleCallback = false;
 
@@ -14751,6 +15047,7 @@ async function handleImportEvent(event, data) {
   if (event === 'start') {
     importState.totalFiles = data.total || importState.totalFiles;
     importState.importedCount = 0;
+    importState.mergedFromTrashCount = 0;
     importState.duplicateCount = 0;
     importState.errorCount = 0;
     importState.importedPhotoIds = [];
@@ -14828,6 +15125,7 @@ async function handleImportEvent(event, data) {
 
   if (event === 'complete') {
     importState.importedCount = data.imported || 0;
+    importState.mergedFromTrashCount = data.merged_from_trash || 0;
     importState.duplicateCount = data.duplicates || 0;
     importState.errorCount = data.errors || 0;
 
@@ -14837,6 +15135,16 @@ async function handleImportEvent(event, data) {
     });
 
     await syncGridAfterHistogramChange();
+
+    const mergedFromTrash = importState.mergedFromTrashCount || 0;
+    if (mergedFromTrash > 0) {
+      showToast(
+        mergedFromTrash === 1
+          ? 'Merged into your library.'
+          : `${mergedFromTrash} photos merged into your library.`,
+        null,
+      );
+    }
   }
 
   if (event === 'error') {

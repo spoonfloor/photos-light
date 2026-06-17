@@ -128,9 +128,10 @@ Current wiring (audit as of 2026-06):
 | Convert / terraform complete | ✅ |
 | Toggle favorite | ✅ |
 | Bulk favorite | ✅ — delegates to the same verified per-photo favorite contract |
-| Rotate | ❌ — gap |
+| Rotate | ✅ |
 
-New mutators must use the same hook. Prefer a thin wrapper (e.g. `commit_row_mutation(conn, *, invalidate_histogram=True)`) over scattering raw `commit()` + invalidation calls.
+New mutators must use the same hook. Use `commit_row_mutation(conn, *, invalidate_histogram=True)` rather than scattering raw `commit()` + invalidation calls.
+Delete and restore are file-first row mutations: verify the move succeeded before changing the DB row, and roll the file move back if row archival/restore fails.
 
 ### Error shape
 
@@ -249,7 +250,7 @@ Use this when fixing star/filter slowness and sibling mutations. Do not skip hig
 
 ### Phase 1 — Architecture (server)
 
-1. Add `commit_row_mutation` (or document mandatory post-commit invalidation) and wire **favorite**, **bulk-favorite**, **rotate**.
+1. Add `commit_row_mutation` (or document mandatory post-commit invalidation) and wire **favorite**, **bulk-favorite**, **rotate**, **delete**, **restore**, and **date edit** routes.
 2. Ensure favorite toggle uses **verified** post-write rating before DB update (file SOT).
 3. Audit all `@app.route` row mutators against the invalidation table above.
 

@@ -27,12 +27,14 @@ class IngestDependencies(NormalizationCoreDependencies):
 @dataclass
 class IngestCounters:
     imported: int = 0
+    merged_from_trash: int = 0
     duplicates: int = 0
     errors: int = 0
 
     def progress_payload(self, *, current: int, total: int, **extra: Any) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "imported": self.imported,
+            "merged_from_trash": self.merged_from_trash,
             "duplicates": self.duplicates,
             "errors": self.errors,
             "current": current,
@@ -99,6 +101,17 @@ def iter_ingest_events(
                 )
                 yield "log", {"entry": imported_entry}
                 yield "progress", payload
+            elif result.status == "merged_from_trash":
+                counters.merged_from_trash += 1
+                payload = counters.progress_payload(current=file_index, total=total)
+                if result.photo_id:
+                    payload["photo_id"] = result.photo_id
+                merged_entry = _log(
+                    "merged_from_trash",
+                    {"file": source_path, "photo_id": result.photo_id},
+                )
+                yield "log", {"entry": merged_entry}
+                yield "progress", payload
             elif result.status == "duplicate":
                 counters.duplicates += 1
                 duplicate_entry = _log("duplicate", {"file": source_path})
@@ -151,6 +164,7 @@ def iter_ingest_events(
 
     complete_payload = {
         "imported": counters.imported,
+        "merged_from_trash": counters.merged_from_trash,
         "duplicates": counters.duplicates,
         "errors": counters.errors,
         "total": total,

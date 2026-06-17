@@ -2,14 +2,57 @@
  * Trash view — browse and act on user-deleted photos in .trash/user_deleted/.
  */
 const TrashView = (() => {
-  let wired = false;
+  let trashChromeWired = false;
+  let appBarRestoreWired = false;
+  let lightboxRestoreWired = false;
 
   function isActive() {
     return Boolean(state.trashViewActive);
   }
 
+  function formatRestoreResultToast(restored, merged, { restoreAll = false } = {}) {
+    const n = Number(restored) || 0;
+    const m = Number(merged) || 0;
+    if (n <= 0) {
+      return null;
+    }
+
+    if (m === 0) {
+      if (n === 1) {
+        return '1 photo restored.';
+      }
+      return restoreAll ? `All ${n} photos restored.` : `${n} photos restored.`;
+    }
+
+    if (m === n) {
+      if (n === 1) {
+        return '1 photo restored and merged with an existing copy.';
+      }
+      return restoreAll
+        ? `All ${n} photos restored and merged with existing copies.`
+        : `${n} photos restored and merged with existing copies.`;
+    }
+
+    const head =
+      n === 1
+        ? '1 photo restored.'
+        : restoreAll
+          ? `All ${n} photos restored.`
+          : `${n} photos restored.`;
+    if (m === 1) {
+      return `${head} 1 was merged with an existing copy.`;
+    }
+    return `${head} ${m} were merged with existing copies.`;
+  }
+
+  /** Paginated photo list (`?limit=`, cursor). */
   function getPhotosApiRoot() {
     return isActive() ? '/api/trash/photos' : '/api/photos';
+  }
+
+  /** Month histogram + per-month hydration (`/month`, `/month_index`). */
+  function getGridCatalogApiRoot() {
+    return isActive() ? '/api/trash' : '/api/photos';
   }
 
   function getYearsApiUrl() {
@@ -115,6 +158,19 @@ const TrashView = (() => {
     const restoreAllBtn = document.getElementById('restoreAllTrashBtn');
     const trashDivider = document.getElementById('trashMenuDivider');
     const active = isActive();
+    const libraryMenuIds = [
+      'switchLibraryBtn',
+      'convertToLibraryBtn',
+      'closeLibraryBtn',
+      'cleanOrganizeBtn',
+    ];
+
+    for (const id of libraryMenuIds) {
+      const btn = document.getElementById(id);
+      if (btn) {
+        btn.hidden = active;
+      }
+    }
 
     if (trashBtn) {
       trashBtn.hidden = active;
@@ -126,7 +182,7 @@ const TrashView = (() => {
       restoreAllBtn.hidden = !active;
     }
     if (trashDivider) {
-      trashDivider.hidden = !active;
+      trashDivider.hidden = active;
     }
   }
 
@@ -161,6 +217,35 @@ const TrashView = (() => {
       VirtualGrid.destroy();
     }
     await loadAndRenderPhotos();
+  }
+
+  /**
+   * Single post-mutation sync for restore, purge, and bulk variants.
+   * Empty trash UI is reconciled centrally via syncGridAfterHistogramChange.
+   */
+  async function syncAfterMutation({ processedIds = null } = {}) {
+    if (!isActive()) {
+      return;
+    }
+    if (processedIds === 'all') {
+      state.photos = [];
+    } else if (processedIds?.length) {
+      removePhotosFromState(processedIds);
+    }
+    await syncGridAfterHistogramChange();
+  }
+
+  function clearTrashMutationSelection(fromLightbox) {
+    if (fromLightbox) {
+      return;
+    }
+    state.selectedPhotos.clear();
+    state.lastClickedIndex = null;
+    updateDeleteButtonVisibility();
+    updateRestoreButtonVisibility();
+    if (state.lightboxOpen) {
+      void closeLightbox({ commitRotations: false });
+    }
   }
 
   function resetViewState() {
@@ -234,20 +319,11 @@ const TrashView = (() => {
           return { ok: true, ...result };
         },
         onSuccess: async (result) => {
-          if (!fromLightbox) {
-            state.selectedPhotos.clear();
-            state.lastClickedIndex = null;
-            updateDeleteButtonVisibility();
-            updateRestoreButtonVisibility();
-            if (state.lightboxOpen) {
-              await closeLightbox({ commitRotations: false });
-            }
-          }
+          clearTrashMutationSelection(fromLightbox);
 
           const purgedCount = result.purged || 0;
           if (purgedCount > 0) {
-            removePhotosFromState(photoIds);
-            await syncGridAfterHistogramChange();
+            await syncAfterMutation({ processedIds: photoIds });
             if (fromLightbox) {
               await applyLightboxSuccessorAfterRemove(
                 lightboxSuccessor,
@@ -279,8 +355,8 @@ const TrashView = (() => {
     }
 
     showDialogOld(
-      'Empty Trash',
-      `Permanently delete all ${total} photo${total > 1 ? 's' : ''} in trash? This cannot be undone.`,
+      'Permanently delete photos',
+      `Are you sure you want to permanently delete all ${total} photo${total > 1 ? 's' : ''}? ${permanentDeleteRecoveryNote(total)}`,
       async () => {
         try {
           const response = await fetch('/api/trash/purge', {
@@ -292,11 +368,8 @@ const TrashView = (() => {
           if (!response.ok) {
             throw new Error(result.error || 'Empty trash failed');
           }
-          if (state.lightboxOpen) {
-            await closeLightbox({ commitRotations: false });
-          }
-          deselectAllPhotos();
-          await reloadGridCatalog();
+          clearTrashMutationSelection(false);
+          await syncAfterMutation({ processedIds: 'all' });
           const count = result.purged || 0;
           showToast(
             `Permanently deleted ${count} photo${count > 1 ? 's' : ''}`,
@@ -307,6 +380,7 @@ const TrashView = (() => {
           showToast('Empty trash failed', null);
         }
       },
+      'Delete Forever',
     );
   }
 
@@ -341,28 +415,23 @@ const TrashView = (() => {
           return { ok: true, ...result };
         },
         onSuccess: async (result) => {
-          if (!fromLightbox) {
-            state.selectedPhotos.clear();
-            state.lastClickedIndex = null;
-            updateDeleteButtonVisibility();
-            updateRestoreButtonVisibility();
-            if (state.lightboxOpen) {
-              await closeLightbox({ commitRotations: false });
-            }
-          }
+          clearTrashMutationSelection(fromLightbox);
 
           const restoredCount = result.restored || 0;
+          const mergedCount = result.merged || 0;
+          const processedIds = result.processed_ids?.length
+            ? result.processed_ids
+            : photoIds;
           if (restoredCount > 0) {
-            removePhotosFromState(photoIds);
-            await syncGridAfterHistogramChange();
+            await syncAfterMutation({ processedIds });
             if (fromLightbox) {
               await applyLightboxSuccessorAfterRemove(
                 lightboxSuccessor,
-                photoIds,
+                processedIds,
               );
             }
             showToast(
-              `Restored ${restoredCount} photo${restoredCount > 1 ? 's' : ''}`,
+              formatRestoreResultToast(restoredCount, mergedCount),
               null,
             );
           } else {
@@ -396,16 +465,19 @@ const TrashView = (() => {
           if (!response.ok) {
             throw new Error(result.error || 'Restore all failed');
           }
-          if (state.lightboxOpen) {
-            await closeLightbox({ commitRotations: false });
-          }
-          deselectAllPhotos();
-          await reloadGridCatalog();
-          const count = result.restored || 0;
-          showToast(
-            `Restored ${count} photo${count > 1 ? 's' : ''}`,
-            null,
+          clearTrashMutationSelection(false);
+          const processedIds = result.processed_ids?.length
+            ? result.processed_ids
+            : 'all';
+          await syncAfterMutation({ processedIds });
+          const restoredCount = result.restored || 0;
+          const mergedCount = result.merged || 0;
+          const toastMessage = formatRestoreResultToast(
+            restoredCount,
+            mergedCount,
+            { restoreAll: true },
           );
+          showToast(toastMessage || 'Nothing to restore', null);
         } catch (error) {
           console.error('❌ Restore all error:', error);
           showToast('Restore all failed', null);
@@ -414,50 +486,73 @@ const TrashView = (() => {
     );
   }
 
+  function permanentDeleteRecoveryNote(count) {
+    return count === 1
+      ? 'It will be removed immediately and cannot be recovered.'
+      : 'They will be removed immediately and cannot be recovered.';
+  }
+
+  function permanentDeleteMessage(count) {
+    return `Are you sure you want to permanently delete ${count} photo${count > 1 ? 's' : ''}? ${permanentDeleteRecoveryNote(count)}`;
+  }
+
   function confirmPermanentDelete(photoIds, onConfirm) {
     const count = photoIds.length;
     showDialogOld(
-      'Delete Permanently',
-      `Permanently delete ${count} photo${count > 1 ? 's' : ''}? This cannot be undone.`,
+      'Permanently delete photos',
+      permanentDeleteMessage(count),
       onConfirm,
+      'Delete Forever',
     );
   }
 
-  function wire() {
-    if (wired) {
+  function wireTrashChrome() {
+    if (trashChromeWired) {
       return;
     }
-
     const backBtn = document.getElementById('trashBackBtn');
     if (backBtn) {
       backBtn.addEventListener('click', () => {
         void exit();
       });
+      trashChromeWired = true;
     }
+  }
 
+  function wireAppBarRestore() {
+    if (appBarRestoreWired) {
+      return;
+    }
     const restoreBtn = document.getElementById('restoreBtn');
-    if (restoreBtn) {
-      restoreBtn.addEventListener('click', () => {
-        const count = state.selectedPhotos.size;
-        if (count === 0) return;
-        void restorePhotos(Array.from(state.selectedPhotos));
-      });
+    if (!restoreBtn) {
+      return;
     }
+    restoreBtn.addEventListener('click', () => {
+      const count = state.selectedPhotos.size;
+      if (count === 0) return;
+      void restorePhotos(Array.from(state.selectedPhotos));
+    });
+    appBarRestoreWired = true;
+  }
 
+  function wireLightboxRestore() {
+    if (lightboxRestoreWired) {
+      return;
+    }
     const lightboxRestoreBtn = document.getElementById('lightboxRestoreBtn');
-    if (lightboxRestoreBtn) {
-      lightboxRestoreBtn.addEventListener('click', () => {
-        const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-        if (!photoId) return;
-        void restorePhotos([photoId]);
-      });
+    if (!lightboxRestoreBtn) {
+      return;
     }
-
-    wired = true;
+    lightboxRestoreBtn.addEventListener('click', () => {
+      const photoId = state.photos[state.lightboxPhotoIndex]?.id;
+      if (!photoId) return;
+      void restorePhotos([photoId]);
+    });
+    lightboxRestoreWired = true;
   }
 
   function init() {
-    wire();
+    wireTrashChrome();
     updateTrashMenuItems();
   }
 
@@ -471,7 +566,11 @@ const TrashView = (() => {
     restorePhotos,
     restoreAll,
     confirmPermanentDelete,
+    wireAppBarRestore,
+    wireLightboxRestore,
+    formatRestoreResultToast,
     getPhotosApiRoot,
+    getGridCatalogApiRoot,
     getYearsApiUrl,
     getNearestMonthApiUrl,
     getJumpApiUrl,

@@ -37,7 +37,11 @@ const VirtualGrid = (() => {
     return document.scrollingElement || document.documentElement;
   }
 
-  function photosApiRoot() {
+  function gridCatalogApiRoot() {
+    return hooks.gridCatalogApiRoot || hooks.photosApiRoot || '/api/photos';
+  }
+
+  function photosListApiRoot() {
     return hooks.photosApiRoot || '/api/photos';
   }
 
@@ -62,7 +66,7 @@ const VirtualGrid = (() => {
 
     const promise = (async () => {
       const response = await fetch(
-        `${photosApiRoot()}/month?month=${encodeURIComponent(monthKey)}&sort=${sortOrder}`,
+        `${gridCatalogApiRoot()}/month?month=${encodeURIComponent(monthKey)}&sort=${sortOrder}`,
       );
       const data = await response.json();
       if (!response.ok) {
@@ -718,7 +722,7 @@ const VirtualGrid = (() => {
     if (video) {
       params.set('video', '1');
     }
-    return `${photosApiRoot()}/month_index?${params.toString()}`;
+    return `${gridCatalogApiRoot()}/month_index?${params.toString()}`;
   }
 
   function rebuildLayoutFromIndex(indexPayload, container, options = {}) {
@@ -934,7 +938,7 @@ const VirtualGrid = (() => {
 
     try {
       const [countResponse, yearsResponse] = await Promise.all([
-        fetch(`${photosApiRoot()}?limit=1&sort=${encodeURIComponent(sort)}`, {
+        fetch(`${photosListApiRoot()}?limit=1&sort=${encodeURIComponent(sort)}`, {
           signal: options.signal,
         }),
         fetch(yearsApiUrl(), { signal: options.signal }),
@@ -1002,7 +1006,7 @@ const VirtualGrid = (() => {
     }
 
     const indexResponse = await fetch(
-      `${photosApiRoot()}/month_index?sort=${encodeURIComponent(sort)}`,
+      `${gridCatalogApiRoot()}/month_index?sort=${encodeURIComponent(sort)}`,
       { signal: options.signal },
     );
     const indexPayload = await indexResponse.json();
@@ -1296,6 +1300,165 @@ const VirtualGrid = (() => {
     return true;
   }
 
+  function isPhotoVisibleInCurrentIndex(photo) {
+    return hooks.filterPhoto ? hooks.filterPhoto(photo) : true;
+  }
+
+  function rebuildMountedHydratedMonth(monthKey) {
+    const section = GridLayout.findSectionForMonth(layout, monthKey);
+    const wrapper = getMountedMonthSection(monthKey);
+    const existingGrid = wrapper?.querySelector('.photo-grid');
+    if (!section) {
+      unmountMonth(monthKey);
+      return true;
+    }
+    if (!wrapper || !existingGrid) {
+      return true;
+    }
+
+    const photos = monthCache.get(monthKey) || [];
+    const visiblePhotos = visibleMonthPhotos(photos);
+    if (!visiblePhotos.length) {
+      unmountMonth(monthKey);
+      return true;
+    }
+
+    const grid = buildHydratedGrid(section, photos, hooks.filterPhoto);
+    existingGrid.replaceWith(grid);
+    applyThumbnailsToGrid(grid);
+    if (hooks.onMonthMounted) {
+      hooks.onMonthMounted(monthKey);
+    }
+    return true;
+  }
+
+  function applyPhotoDeletes(photoIds) {
+    if (!layout || !monthIndex) {
+      return null;
+    }
+
+    const idSet = new Set((photoIds || []).map((id) => Number(id)));
+    if (!idSet.size) {
+      return null;
+    }
+
+    const token = {
+      months: [],
+    };
+    const monthCounts = new Map();
+    const affectedMonths = new Set();
+
+    for (const [monthKey, photos] of monthCache.entries()) {
+      const removedPhotos = photos.filter((photo) => idSet.has(photo.id));
+      if (!removedPhotos.length) {
+        continue;
+      }
+
+      affectedMonths.add(monthKey);
+      token.months.push({
+        monthKey,
+        beforePhotos: [...photos],
+        removedPhotos,
+      });
+      monthCache.set(
+        monthKey,
+        photos.filter((photo) => !idSet.has(photo.id)),
+      );
+
+      const visibleRemoved = removedPhotos.filter(isPhotoVisibleInCurrentIndex).length;
+      if (visibleRemoved > 0) {
+        monthCounts.set(monthKey, visibleRemoved);
+      }
+    }
+
+    if (!token.months.length) {
+      return null;
+    }
+
+    if (monthCounts.size) {
+      const patchedIndex = GridLayout.patchPhotoDeletes(monthIndex, monthCounts);
+      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+        return null;
+      }
+    } else {
+      scheduleSync();
+    }
+
+    affectedMonths.forEach(rebuildMountedHydratedMonth);
+    return token;
+  }
+
+  function restorePhotoDeletes(token, photoIds) {
+    if (!token?.months?.length || !layout || !monthIndex) {
+      return false;
+    }
+
+    const idSet = new Set(
+      (photoIds?.length
+        ? photoIds
+        : token.months.flatMap((entry) => entry.removedPhotos.map((photo) => photo.id))
+      ).map((id) => Number(id)),
+    );
+    if (!idSet.size) {
+      return false;
+    }
+
+    const monthCounts = new Map();
+    const affectedMonths = new Set();
+
+    token.months.forEach(({ monthKey, beforePhotos, removedPhotos }) => {
+      const restorePhotos = removedPhotos.filter((photo) => idSet.has(photo.id));
+      if (!restorePhotos.length) {
+        return;
+      }
+
+      const currentPhotos = monthCache.get(monthKey) || [];
+      const currentIds = new Set(currentPhotos.map((photo) => photo.id));
+      const restoreIds = new Set(restorePhotos.map((photo) => photo.id));
+      const beforeIds = new Set(beforePhotos.map((photo) => photo.id));
+      const nextPhotos = beforePhotos.filter(
+        (photo) => currentIds.has(photo.id) || restoreIds.has(photo.id),
+      );
+
+      currentPhotos.forEach((photo) => {
+        if (!beforeIds.has(photo.id) && !restoreIds.has(photo.id)) {
+          nextPhotos.push(photo);
+        }
+      });
+
+      monthCache.set(monthKey, nextPhotos);
+      affectedMonths.add(monthKey);
+
+      const visibleRestored = restorePhotos.filter(isPhotoVisibleInCurrentIndex).length;
+      if (visibleRestored > 0) {
+        monthCounts.set(monthKey, visibleRestored);
+      }
+    });
+
+    if (!affectedMonths.size) {
+      return false;
+    }
+
+    if (monthCounts.size) {
+      let patchedIndex = monthIndex;
+      monthCounts.forEach((delta, monthKey) => {
+        patchedIndex = GridLayout.patchMonthIndexDelta(
+          patchedIndex,
+          monthKey,
+          delta,
+        );
+      });
+      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+        return false;
+      }
+    } else {
+      scheduleSync();
+    }
+
+    affectedMonths.forEach(rebuildMountedHydratedMonth);
+    return true;
+  }
+
   function invalidateAllMonths() {
     monthCache.clear();
     monthInflight.clear();
@@ -1573,6 +1736,8 @@ const VirtualGrid = (() => {
     invalidateAllMonths,
     patchCachedPhotos,
     applyFilterRowChange,
+    applyPhotoDeletes,
+    restorePhotoDeletes,
     refreshMonthIndex,
     setFilterPhoto,
     applyFilterLayout,
