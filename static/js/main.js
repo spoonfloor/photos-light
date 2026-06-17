@@ -4168,6 +4168,15 @@ function initLibraryMutationEngine() {
     hasActivePhotoFilters,
     hasStarredPhotoFilter: () => Boolean(state.activeFilters.starred),
     updateFilterChipUI,
+    applyStarFilterRowChange: (photoId) => {
+      if (!state.activeFilters.starred || !VirtualGrid.isActive()) {
+        return;
+      }
+      const result = VirtualGrid.applyFilterRowChange(photoId);
+      if (result === 'empty') {
+        showFilterZeroState();
+      }
+    },
     applyPhotoFilters,
     showToast,
     onStarDuplicateRemoved: async (photoId, result) => {

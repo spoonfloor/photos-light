@@ -76,8 +76,10 @@ const LibraryMutation = (() => {
   }
 
   function applyStarUi(photoId, rating) {
-    hooks.applyStarUi?.(photoId, isStarred(rating));
-    hooks.patchPhotoRating?.(photoId, rating === 5 ? 5 : null);
+    const favorited = isStarred(rating);
+    hooks.patchPhotoRating?.(photoId, favorited ? 5 : null);
+    hooks.applyStarUi?.(photoId, favorited);
+    hooks.applyStarFilterRowChange?.(photoId);
   }
 
   function hasPendingStarIntent() {
@@ -116,11 +118,7 @@ const LibraryMutation = (() => {
         return;
       }
       void (async () => {
-        if (hooks.hasStarredPhotoFilter?.()) {
-          hooks.applyPhotoFilters?.();
-        } else {
-          hooks.updateFilterChipUI?.();
-        }
+        hooks.updateFilterChipUI?.();
         reapplyPendingStarUi();
       })();
     }, HISTOGRAM_SYNC_MS);

@@ -1174,6 +1174,128 @@ const VirtualGrid = (() => {
     }
   }
 
+  function findCachedPhoto(photoId) {
+    for (const [monthKey, photos] of monthCache.entries()) {
+      const photo = photos.find((item) => item.id === photoId);
+      if (photo) {
+        return { monthKey, photo, photos };
+      }
+    }
+    return null;
+  }
+
+  function applyLayoutGeometryFromIndex(indexPayload) {
+    const container = getContainer();
+    if (!container || !indexPayload) {
+      return null;
+    }
+
+    monthIndex = indexPayload;
+    const columnLayout = GridLayout.computeColumnLayout(container);
+    const nextLayout = GridLayout.toLayoutSnapshot(
+      GridLayout.buildVirtualLayout(indexPayload.months || [], columnLayout),
+    );
+
+    layout = nextLayout;
+    GridLayout.publishCssVars(container, layout);
+
+    const totalHeight = Math.max(0, layout.totalHeight);
+    if (spacer) {
+      spacer.style.height = `${totalHeight}px`;
+    }
+    if (canvas) {
+      canvas.style.height = `${totalHeight}px`;
+    }
+
+    const activeMonths = new Set((layout.sections || []).map((section) => section.month));
+    for (const monthKey of [...mountedMonths]) {
+      if (!activeMonths.has(monthKey)) {
+        unmountMonth(monthKey);
+      }
+    }
+
+    for (const section of layout.sections || []) {
+      const wrapper = getMountedMonthSection(section.month);
+      if (wrapper) {
+        wrapper.style.top = `${section.yStart}px`;
+      }
+    }
+
+    if (hooks.onIndexReady) {
+      hooks.onIndexReady(indexPayload);
+    }
+    if (hooks.onLayoutApplied) {
+      hooks.onLayoutApplied(layout);
+    }
+
+    scheduleSync();
+    return layout;
+  }
+
+  function applyFilterRowChange(photoId) {
+    if (!hooks.filterPhoto || !layout || !monthIndex) {
+      return false;
+    }
+
+    const cached = findCachedPhoto(photoId);
+    if (!cached) {
+      return false;
+    }
+
+    const card = contentLayer?.querySelector(`.photo-card[data-id="${photoId}"]`);
+    const shouldShow = hooks.filterPhoto(cached.photo);
+    let delta = 0;
+    if (shouldShow && !card) {
+      delta = 1;
+    } else if (!shouldShow && card) {
+      delta = -1;
+    } else {
+      return true;
+    }
+
+    const patchedIndex = GridLayout.patchMonthIndexDelta(
+      monthIndex,
+      cached.monthKey,
+      delta,
+    );
+    if ((patchedIndex.total ?? 0) === 0) {
+      monthIndex = patchedIndex;
+      if (hooks.onIndexReady) {
+        hooks.onIndexReady(patchedIndex);
+      }
+      return 'empty';
+    }
+
+    if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+      return false;
+    }
+
+    const section = GridLayout.findSectionForMonth(layout, cached.monthKey);
+    if (!section) {
+      return true;
+    }
+
+    const wrapper = getMountedMonthSection(cached.monthKey);
+    const existingGrid = wrapper?.querySelector('.photo-grid');
+    if (!wrapper || !existingGrid) {
+      return true;
+    }
+
+    const visiblePhotos = visibleMonthPhotos(cached.photos);
+    if (!visiblePhotos.length) {
+      unmountMonth(cached.monthKey);
+      return true;
+    }
+
+    const grid = buildHydratedGrid(section, cached.photos, hooks.filterPhoto);
+    existingGrid.replaceWith(grid);
+    applyThumbnailsToGrid(grid);
+    if (hooks.onMonthMounted) {
+      hooks.onMonthMounted(cached.monthKey);
+    }
+    return true;
+  }
+
   function invalidateAllMonths() {
     monthCache.clear();
     monthInflight.clear();
@@ -1450,6 +1572,7 @@ const VirtualGrid = (() => {
     invalidateMonth,
     invalidateAllMonths,
     patchCachedPhotos,
+    applyFilterRowChange,
     refreshMonthIndex,
     setFilterPhoto,
     applyFilterLayout,
