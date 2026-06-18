@@ -263,6 +263,7 @@ body.trash-view-active.filter-chip-rail-visible {
 #lightboxEditDateBtn[hidden],
 #lightboxRotateBtn[hidden],
 #lightboxStarBtn[hidden],
+#lightboxDownloadBtn[hidden],
 #lightboxRestoreBtn[hidden],
 #viewTrashBtn[hidden],
 #emptyTrashBtn[hidden],
@@ -275,7 +276,8 @@ body.trash-view-active #addPhotoBtn,
 body.trash-view-active #editDateBtn,
 body.trash-view-active #lightboxEditDateBtn,
 body.trash-view-active #lightboxRotateBtn,
-body.trash-view-active #lightboxStarBtn {
+body.trash-view-active #lightboxStarBtn,
+body.trash-view-active #lightboxDownloadBtn {
   display: none !important;
 }
 

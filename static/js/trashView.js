@@ -192,11 +192,13 @@ const TrashView = (() => {
     const editDateBtn = document.getElementById('lightboxEditDateBtn');
     const starBtn = document.getElementById('lightboxStarBtn');
     const restoreBtn = document.getElementById('lightboxRestoreBtn');
+    const downloadBtn = document.getElementById('lightboxDownloadBtn');
     const deleteBtn = document.getElementById('lightboxDeleteBtn');
 
     if (rotateBtn) rotateBtn.hidden = active;
     if (editDateBtn) editDateBtn.hidden = active;
     if (starBtn) starBtn.hidden = active;
+    if (downloadBtn) downloadBtn.hidden = active;
     if (restoreBtn) restoreBtn.hidden = !active;
     if (deleteBtn) {
       deleteBtn.setAttribute(

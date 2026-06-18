@@ -2177,6 +2177,55 @@ def reveal_in_finder(photo_id):
         app.logger.error(f"Error revealing file in Finder: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/photo/export', methods=['POST'])
+@handle_db_corruption
+def export_photo():
+    """Copy a library photo's original file to a user-chosen folder."""
+    try:
+        if not LIBRARY_PATH:
+            return jsonify({'error': 'Library not configured'}), 503
+
+        data = request.get_json() or {}
+        photo_id = data.get('photo_id')
+        destination = data.get('destination')
+
+        if not photo_id or not destination:
+            return jsonify({'error': 'Missing photo_id or destination'}), 400
+
+        if not os.path.isdir(destination):
+            return jsonify({'error': 'Destination folder does not exist'}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT current_path FROM photos WHERE id = ?",
+            (photo_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row or not row['current_path']:
+            return jsonify({'error': 'Photo not found'}), 404
+
+        source_path = os.path.join(LIBRARY_PATH, row['current_path'])
+        if not os.path.exists(source_path):
+            return jsonify({'error': 'File not found on disk'}), 404
+
+        filename = os.path.basename(row['current_path'])
+        dest_path = os.path.join(destination, filename)
+        base, ext = os.path.splitext(filename)
+        counter = 1
+        while os.path.exists(dest_path):
+            dest_path = os.path.join(destination, f"{base}_{counter}{ext}")
+            counter += 1
+
+        shutil.copy2(source_path, dest_path)
+
+        return jsonify({'success': True, 'path': dest_path})
+    except Exception as e:
+        app.logger.error(f"Export photo error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/photo/update_date', methods=['POST'])
 @handle_db_corruption
 def update_photo_date():

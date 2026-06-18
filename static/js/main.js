@@ -5614,6 +5614,97 @@ async function handleLightboxRotate() {
   updateLightboxRotateButtonState();
 }
 
+const SAVE_LAST_PATH_KEY = 'save.lastPath';
+let lightboxSaveInProgress = false;
+
+async function getSavePickerInitialPath() {
+  const stickyPath = localStorage.getItem(SAVE_LAST_PATH_KEY);
+  if (stickyPath) {
+    return stickyPath;
+  }
+
+  try {
+    const parentPath = await FolderPicker.getDefaultParentPath();
+    if (parentPath) {
+      return `${parentPath}/Desktop`;
+    }
+  } catch (error) {
+    console.warn('Could not resolve Desktop path for save picker:', error);
+  }
+
+  return null;
+}
+
+async function saveLightboxPhoto(photoId) {
+  if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+    return;
+  }
+  if (lightboxSaveInProgress || !photoId) {
+    return;
+  }
+
+  lightboxSaveInProgress = true;
+  const downloadBtn = document.getElementById('lightboxDownloadBtn');
+  if (downloadBtn) {
+    downloadBtn.disabled = true;
+  }
+
+  try {
+    const initialPath = await getSavePickerInitialPath();
+    const pickerOptions = {
+      intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
+      title: 'Save photo',
+      subtitle: 'Choose where to save this file',
+      primaryActionLabel: 'Save',
+      lastPathStorageKey: SAVE_LAST_PATH_KEY,
+    };
+    if (initialPath) {
+      pickerOptions.initialPath = initialPath;
+    }
+
+    const destFolder = await FolderPicker.show(pickerOptions);
+    if (!destFolder) {
+      return;
+    }
+
+    showToast('Saving…', 'info');
+    const hadPendingRotation = getRotationStillNeeded(photoId) !== 0;
+
+    const response = await fetch('/api/photo/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        photo_id: photoId,
+        destination: destFolder,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      if (response.status === 404 && error.error === 'Photo not found') {
+        await handleStalePhoto(photoId);
+      }
+      throw new Error(error.error || 'Save failed');
+    }
+
+    const result = await response.json();
+    const savedPath = result.path || destFolder;
+    let message = `Saved to ${savedPath}`;
+    if (hadPendingRotation) {
+      message += ' (original file; rotation not included)';
+    }
+    showToast(message, null, 4000);
+  } catch (error) {
+    console.error('Save photo failed:', error);
+    showToast(`Save failed: ${error.message}`, 'error');
+  } finally {
+    lightboxSaveInProgress = false;
+    if (downloadBtn) {
+      downloadBtn.disabled = state.lightboxClosing;
+    }
+  }
+}
+
 /**
  * Wire up lightbox controls
  */
@@ -5725,6 +5816,20 @@ function wireLightbox() {
     });
   }
 
+  const downloadBtn = document.getElementById('lightboxDownloadBtn');
+  if (downloadBtn) {
+    downloadBtn.addEventListener('click', () => {
+      if (typeof TrashView !== 'undefined' && TrashView.isActive()) {
+        return;
+      }
+      const photoId = state.photos[state.lightboxPhotoIndex]?.id;
+      if (!photoId) {
+        return;
+      }
+      void saveLightboxPhoto(photoId);
+    });
+  }
+
   if (typeof TrashView !== 'undefined') {
     TrashView.wireLightboxRestore();
     TrashView.updateLightboxForMode();
@@ -5800,7 +5905,15 @@ function syncLightboxUIHoverState() {
  * Handle keyboard events for lightbox
  */
 function handleLightboxKeyboard(e) {
+  const visibleOverlay = window.PickerUtils?.getTopmostVisibleOverlay?.();
+
   if (e.key === 'Escape') {
+    if (visibleOverlay?.id === 'folderPickerOverlay') {
+      document.getElementById('folderPickerCancelBtn')?.click();
+      e.preventDefault();
+      return;
+    }
+
     // Priority 1: Close date editor if open (stay in lightbox)
     if (state.dateEditorOpen) {
       closeDateEditor();
@@ -5821,8 +5934,14 @@ function handleLightboxKeyboard(e) {
       e.preventDefault();
     }
   } else if (e.key === 'ArrowLeft' && state.lightboxOpen) {
+    if (visibleOverlay) {
+      return;
+    }
     navigateLightbox(-1);
   } else if (e.key === 'ArrowRight' && state.lightboxOpen) {
+    if (visibleOverlay) {
+      return;
+    }
     navigateLightbox(1);
   } else if (
     e.key === 'r' &&

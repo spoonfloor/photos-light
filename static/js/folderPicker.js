@@ -57,6 +57,8 @@ const FolderPicker = (() => {
   let folderListLoading = false;
   let lastListSignature = null;
   let embeddedRefreshActive = false;
+  let primaryActionLabelOverride = null;
+  let activeLastPathStorageKey = 'picker.lastPath';
   const FOLDER_LIST_PLACEHOLDER_COUNT = 6;
 
   const pickerAutoRefresh = PickerUtils.createPickerAutoRefresh({
@@ -288,6 +290,9 @@ const FolderPicker = (() => {
   }
 
   function getPrimaryActionLabel() {
+    if (primaryActionLabelOverride) {
+      return primaryActionLabelOverride;
+    }
     if (shouldUseOpenLibraryCta()) {
       return 'Open';
     }
@@ -296,6 +301,17 @@ const FolderPicker = (() => {
     }
 
     return 'Continue';
+  }
+
+  function rememberPickerPath(path) {
+    if (!path || path === VIRTUAL_ROOT) {
+      return;
+    }
+    localStorage.setItem(activeLastPathStorageKey, path);
+  }
+
+  function getRememberedPickerPath() {
+    return localStorage.getItem(activeLastPathStorageKey);
   }
 
   // ===========================================================================
@@ -328,7 +344,7 @@ const FolderPicker = (() => {
     if (options.initialPath) {
       return options.initialPath;
     }
-    const savedPath = localStorage.getItem('picker.lastPath');
+    const savedPath = getRememberedPickerPath();
     if (savedPath) {
       return savedPath;
     }
@@ -604,7 +620,7 @@ const FolderPicker = (() => {
             selectedPath = currentPath;
             updateSelectedPath();
             syncFolderPickerState();
-            localStorage.setItem('picker.lastPath', currentPath);
+            rememberPickerPath(currentPath);
 
             const overlay = pickerEl('overlay');
             if (overlay) {
@@ -1042,7 +1058,7 @@ const FolderPicker = (() => {
         }
       }
 
-      const savedPath = localStorage.getItem('picker.lastPath');
+      const savedPath = getRememberedPickerPath();
       if (savedPath) {
         try {
           await listDirectory(savedPath);
@@ -1206,7 +1222,7 @@ const FolderPicker = (() => {
         return;
       }
 
-      localStorage.setItem('picker.lastPath', selectedPath);
+      rememberPickerPath(selectedPath);
 
       if (typeof options.beforeResolveChoose === 'function') {
         await options.beforeResolveChoose(selectedPath);
@@ -1260,6 +1276,8 @@ const FolderPicker = (() => {
 
         wizardActions = !!options.wizardActions;
         pickerIntent = options.intent || PICKER_INTENT.GENERIC_FOLDER_SELECTION;
+        primaryActionLabelOverride = options.primaryActionLabel || null;
+        activeLastPathStorageKey = options.lastPathStorageKey || 'picker.lastPath';
 
         const overlay = await ensureFolderPickerOverlay();
         if (!overlay) {
@@ -1364,6 +1382,8 @@ const FolderPicker = (() => {
   function hide() {
     stopPickerAutoRefresh();
     embeddedRefreshActive = false;
+    primaryActionLabelOverride = null;
+    activeLastPathStorageKey = 'picker.lastPath';
     const overlay = document.getElementById('folderPickerOverlay');
     if (overlay) {
       overlay.style.display = 'none';
