@@ -156,24 +156,21 @@ def normalize_convert_video(
     width = dimensions[0] if dimensions else None
     height = dimensions[1] if dimensions else None
     file_size = os.path.getsize(target_path)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            relative_path,
-            filename,
-            content_hash,
-            file_size,
-            "video",
-            identity.date_taken,
-            width,
-            height,
-        ),
+    from photo_catalog import insert_photo_row
+
+    photo_id = insert_photo_row(
+        conn,
+        {
+            "current_path": relative_path,
+            "original_filename": filename,
+            "content_hash": content_hash,
+            "file_size": file_size,
+            "file_type": "video",
+            "date_taken": identity.date_taken,
+            "width": width,
+            "height": height,
+        },
     )
-    photo_id = cursor.lastrowid
     conn.commit()
     return NormalizationFileResult(status="imported", photo_id=photo_id)
 

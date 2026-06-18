@@ -26,6 +26,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from PIL import Image, ImageOps
 
 from db_schema import create_database_schema
+from photo_catalog import (
+    insert_photo_row,
+    lookup_preserved_date_added,
+    snapshot_date_added_maps,
+)
 from file_operations import extract_exif_date, extract_exif_rating, strip_exif_rating
 from media_dates import read_media_date
 from hash_cache import HashCache, compute_hash_legacy
@@ -2152,6 +2157,7 @@ class LibraryCleaner:
             {"database_repairs": repaired_db_paths},
             action="rebuild_db",
         )
+        date_added_by_hash, date_added_by_path = snapshot_date_added_maps(cursor)
         cursor.execute("DELETE FROM photos")
 
         sorted_rows = sorted(records, key=lambda item: (item.date_taken, item.rel_path.lower()))
@@ -2168,32 +2174,26 @@ class LibraryCleaner:
                 }
             )
             file_size = os.path.getsize(record.full_path)
-            cursor.execute(
-                """
-                INSERT INTO photos (
-                    original_filename,
-                    current_path,
-                    date_taken,
-                    content_hash,
-                    file_size,
-                    file_type,
-                    width,
-                    height,
-                    rating
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.original_filename,
-                    record.rel_path,
-                    record.date_taken,
-                    record.content_hash,
-                    file_size,
-                    record.file_type,
-                    record.width,
-                    record.height,
-                    record.rating,
-                ),
+            preserved_date_added = lookup_preserved_date_added(
+                record.content_hash,
+                record.rel_path,
+                date_added_by_hash,
+                date_added_by_path,
+            )
+            insert_photo_row(
+                self.db_conn,
+                {
+                    "original_filename": record.original_filename,
+                    "current_path": record.rel_path,
+                    "date_taken": record.date_taken,
+                    "content_hash": record.content_hash,
+                    "file_size": file_size,
+                    "file_type": record.file_type,
+                    "width": record.width,
+                    "height": record.height,
+                    "rating": record.rating,
+                },
+                date_added=preserved_date_added,
             )
 
         self.db_conn.commit()
@@ -2208,7 +2208,7 @@ class LibraryCleaner:
         preserved_rows = cursor.execute(
             """
             SELECT original_filename, current_path, date_taken, content_hash,
-                   file_size, file_type, width, height, rating
+                   file_size, file_type, width, height, rating, date_added
             FROM photos
             WHERE date_taken < ? OR date_taken >= ? OR date_taken IS NULL
             """,
@@ -2238,22 +2238,24 @@ class LibraryCleaner:
             action="rebuild_db",
         )
 
+        date_added_by_hash, date_added_by_path = snapshot_date_added_maps(cursor)
         cursor.execute("DELETE FROM photos")
 
-        insert_rows: List[Tuple[Any, ...]] = []
+        insert_rows: List[Dict[str, Any]] = []
         for row in preserved_rows:
             insert_rows.append(
-                (
-                    row["original_filename"],
-                    row["current_path"],
-                    row["date_taken"],
-                    row["content_hash"],
-                    row["file_size"],
-                    row["file_type"],
-                    row["width"],
-                    row["height"],
-                    row["rating"],
-                )
+                {
+                    "original_filename": row["original_filename"],
+                    "current_path": row["current_path"],
+                    "date_taken": row["date_taken"],
+                    "content_hash": row["content_hash"],
+                    "file_size": row["file_size"],
+                    "file_type": row["file_type"],
+                    "width": row["width"],
+                    "height": row["height"],
+                    "rating": row["rating"],
+                    "date_added": row["date_added"],
+                }
             )
 
         sorted_in_range = sorted(
@@ -2272,39 +2274,33 @@ class LibraryCleaner:
                 }
             )
             file_size = os.path.getsize(record.full_path)
+            preserved_date_added = lookup_preserved_date_added(
+                record.content_hash,
+                record.rel_path,
+                date_added_by_hash,
+                date_added_by_path,
+            )
             insert_rows.append(
-                (
-                    record.original_filename,
-                    record.rel_path,
-                    record.date_taken,
-                    record.content_hash,
-                    file_size,
-                    record.file_type,
-                    record.width,
-                    record.height,
-                    record.rating,
-                )
+                {
+                    "original_filename": record.original_filename,
+                    "current_path": record.rel_path,
+                    "date_taken": record.date_taken,
+                    "content_hash": record.content_hash,
+                    "file_size": file_size,
+                    "file_type": record.file_type,
+                    "width": record.width,
+                    "height": record.height,
+                    "rating": record.rating,
+                    "date_added": preserved_date_added,
+                }
             )
 
-        insert_rows.sort(key=lambda item: (str(item[2] or ""), str(item[1] or "").lower()))
+        insert_rows.sort(
+            key=lambda item: (str(item["date_taken"] or ""), str(item["current_path"] or "").lower())
+        )
         for row in insert_rows:
-            cursor.execute(
-                """
-                INSERT INTO photos (
-                    original_filename,
-                    current_path,
-                    date_taken,
-                    content_hash,
-                    file_size,
-                    file_type,
-                    width,
-                    height,
-                    rating
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                row,
-            )
+            date_added = row.pop("date_added", None)
+            insert_photo_row(self.db_conn, row, date_added=date_added)
 
         self.db_conn.commit()
         self.stats["db_rows_rebuilt"] = len(insert_rows)

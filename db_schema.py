@@ -8,11 +8,12 @@ Version History:
 - v1: Original schema (photos, deleted_photos)
 - v2: Added hash_cache, operation_state, rating column (overengineered)
 - v3: Removed operation_state, kept hash_cache + rating (recommended)
+- v4: Added photos.date_added for recently-imported sorting
 
-Current: v3
+Current: v4
 """
 
-from db_schema_v3 import (
+from db_schema_v4 import (
     SCHEMA_VERSION,
     PHOTOS_TABLE_SCHEMA,
     DELETED_PHOTOS_TABLE_SCHEMA,

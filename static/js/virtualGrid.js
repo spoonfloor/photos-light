@@ -28,6 +28,8 @@ const VirtualGrid = (() => {
   let pendingContainerMount = null;
   /** Canonical unfiltered month histogram — restored when filters clear. */
   let unfilteredMonthIndex = null;
+  /** Catalog filter matched zero photos — overlay inside grid, not alternate renderer. */
+  let catalogFilterZeroActive = false;
 
   function getContainer() {
     return document.getElementById('photoContainer');
@@ -56,6 +58,84 @@ const VirtualGrid = (() => {
     hooks.mergePhotos(photos);
   }
 
+  /** Library timeline sort — never adopt import-cluster index sort (recently_added). */
+  function librarySortOrder() {
+    return hooks.getLibrarySortOrder?.() || sortOrder || 'newest';
+  }
+
+  function clearCatalogFilterZeroOverlay() {
+    catalogFilterZeroActive = false;
+    contentLayer?.querySelector('.catalog-filter-zero')?.remove();
+  }
+
+  function mountCatalogFilterZeroOverlay(options = {}) {
+    if (!contentLayer) {
+      return;
+    }
+    clearCatalogFilterZeroOverlay();
+    const recentImports = Boolean(options.recentImports);
+    const heading = recentImports ? 'No recent imports' : 'No results found';
+    const detail = recentImports
+      ? 'No import dates are available yet.'
+      : 'No images match the current filters.';
+    const overlay = document.createElement('div');
+    overlay.className = 'catalog-filter-zero';
+    overlay.innerHTML = `
+      <div class="catalog-filter-zero-inner">
+        <div class="catalog-filter-zero-copy">
+          <div class="catalog-filter-zero-heading">${heading}</div>
+          <div class="catalog-filter-zero-detail">${detail}</div>
+        </div>
+        <button type="button" class="btn btn-primary catalog-filter-zero-clear">Clear filters</button>
+      </div>
+    `;
+    overlay.querySelector('.catalog-filter-zero-clear')?.addEventListener('click', () => {
+      hooks.onClearCatalogFilters?.();
+    });
+    contentLayer.appendChild(overlay);
+    catalogFilterZeroActive = true;
+    if (spacer) {
+      spacer.style.height = '0px';
+    }
+    if (canvas) {
+      canvas.style.height = '0px';
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  function applyCatalogFilterZeroMatch(indexPayload, filterOptions = {}) {
+    const container = getContainer();
+    if (!container || !contentLayer) {
+      return false;
+    }
+
+    monthInflight.clear();
+    hydratedMonths = new Set();
+    clearMountedMonths();
+    clearComfortLayer();
+
+    monthIndex = indexPayload;
+    sortOrder = librarySortOrder();
+    const columnLayout = GridLayout.computeColumnLayout(container);
+    layout = GridLayout.toLayoutSnapshot(
+      GridLayout.buildVirtualLayout([], columnLayout),
+    );
+    GridLayout.publishCssVars(container, layout);
+    updateLabelGate();
+
+    mountCatalogFilterZeroOverlay({
+      recentImports: Boolean(filterOptions.importSets),
+    });
+
+    if (hooks.onIndexReady) {
+      hooks.onIndexReady(indexPayload);
+    }
+    if (hooks.onLayoutApplied) {
+      hooks.onLayoutApplied(layout);
+    }
+    return true;
+  }
+
   async function fetchMonthPhotos(monthKey) {
     if (monthCache.has(monthKey)) {
       return monthCache.get(monthKey);
@@ -66,7 +146,7 @@ const VirtualGrid = (() => {
 
     const promise = (async () => {
       const response = await fetch(
-        `${gridCatalogApiRoot()}/month?month=${encodeURIComponent(monthKey)}&sort=${sortOrder}`,
+        `${gridCatalogApiRoot()}/month?month=${encodeURIComponent(monthKey)}&sort=${librarySortOrder()}`,
       );
       const data = await response.json();
       if (!response.ok) {
@@ -101,7 +181,11 @@ const VirtualGrid = (() => {
   }
 
   function monthSectionSelector(monthKey) {
-    return `.virtual-month-section[data-month="${monthKey}"]`;
+    const escaped =
+      typeof CSS !== 'undefined' && CSS.escape
+        ? CSS.escape(monthKey)
+        : monthKey.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return `.virtual-month-section[data-month="${escaped}"]`;
   }
 
   function getMountedMonthSection(monthKey) {
@@ -432,7 +516,7 @@ const VirtualGrid = (() => {
   }
 
   function syncComfortAndContent() {
-    if (!layout) {
+    if (!layout || catalogFilterZeroActive) {
       return;
     }
 
@@ -710,11 +794,11 @@ const VirtualGrid = (() => {
   }
 
   function buildMonthIndexUrl(
-    sortOrderNext,
-    { starred = false, video = false } = {},
+    _sortOrderNext,
+    { starred = false, video = false, importSets = null } = {},
   ) {
     const params = new URLSearchParams({
-      sort: sortOrderNext || sortOrder,
+      sort: librarySortOrder(),
     });
     if (starred) {
       params.set('starred', '1');
@@ -722,7 +806,14 @@ const VirtualGrid = (() => {
     if (video) {
       params.set('video', '1');
     }
+    if (importSets) {
+      params.set('import_sets', String(importSets));
+    }
     return `${gridCatalogApiRoot()}/month_index?${params.toString()}`;
+  }
+
+  function catalogFilterActive({ starred = false, video = false, importSets = null } = {}) {
+    return Boolean(starred || video || importSets);
   }
 
   function rebuildLayoutFromIndex(indexPayload, container, options = {}) {
@@ -731,7 +822,7 @@ const VirtualGrid = (() => {
     }
     rememberUnfilteredIndex(indexPayload);
     monthIndex = indexPayload;
-    sortOrder = indexPayload?.sort || sortOrder;
+    sortOrder = librarySortOrder();
     const columnLayout = GridLayout.computeColumnLayout(container);
     const nextLayout = GridLayout.buildVirtualLayout(
       indexPayload?.months || [],
@@ -1081,6 +1172,7 @@ const VirtualGrid = (() => {
     monthInflight.clear();
     hooks = {};
     unfilteredMonthIndex = null;
+    catalogFilterZeroActive = false;
   }
 
   function jumpToMonth(monthKey, options = {}) {
@@ -1092,7 +1184,7 @@ const VirtualGrid = (() => {
       layout,
       monthKey,
       monthIndex,
-      sortOrder,
+      librarySortOrder(),
     );
     if (!resolvedMonth) {
       return false;
@@ -1304,11 +1396,11 @@ const VirtualGrid = (() => {
       delta,
     );
     if ((patchedIndex.total ?? 0) === 0) {
-      monthIndex = patchedIndex;
-      if (hooks.onIndexReady) {
-        hooks.onIndexReady(patchedIndex);
-      }
-      return 'empty';
+      applyCatalogFilterZeroMatch(
+        patchedIndex,
+        hooks.getCatalogFilterOptions?.() || {},
+      );
+      return 'zero';
     }
 
     if (!applyLayoutGeometryFromIndex(patchedIndex)) {
@@ -1715,17 +1807,57 @@ const VirtualGrid = (() => {
   }
 
   /**
-   * Rebuild layout from filtered (or restored unfiltered) month_index — no grid destroy.
-   * Returns 'empty' when the active filter matches zero photos.
+   * Update layout + mounted sections in place. Month hydration cache stays warm.
    */
-  async function applyFilterLayout({ starred = false, video = false } = {}) {
+  function applyCatalogFilterWarm(indexPayload, preserveMonth) {
+    if (!applyLayoutGeometryFromIndex(indexPayload)) {
+      return false;
+    }
+
+    rememberUnfilteredIndex(indexPayload);
+
+    const activeMonths = new Set(
+      (layout?.sections || []).map((section) => section.month),
+    );
+
+    for (const monthKey of [...mountedMonths]) {
+      if (!activeMonths.has(monthKey)) {
+        unmountMonth(monthKey);
+        hydratedMonths.delete(monthKey);
+        continue;
+      }
+      if (hydratedMonths.has(monthKey) && monthCache.has(monthKey)) {
+        rebuildMountedHydratedMonth(monthKey);
+      } else {
+        unmountMonth(monthKey);
+      }
+    }
+
+    scheduleSync();
+    restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
+    return true;
+  }
+
+  /**
+   * Rebuild layout from filtered (or restored unfiltered) month_index — no grid destroy.
+   * Returns 'zero' when the active catalog filter matches zero photos (in-grid overlay).
+   */
+  async function applyCatalogFilter({
+    starred = false,
+    video = false,
+    importSets = null,
+  } = {}) {
+    const filterOptions = { starred, video, importSets };
     const container = getContainer();
     if (!container || !layout) {
       return false;
     }
 
-    const hasFilter = Boolean(starred || video);
+    clearCatalogFilterZeroOverlay();
+
+    const hasFilter = catalogFilterActive(filterOptions);
     const previousScrollTop = getScrollElement().scrollTop;
+    const previousAxis = monthIndex?.section_axis || 'date_taken';
     const preserveMonth = layout.provisional
       ? null
       : GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80);
@@ -1735,9 +1867,7 @@ const VirtualGrid = (() => {
       if (unfilteredMonthIndex) {
         indexPayload = unfilteredMonthIndex;
       } else {
-        const response = await fetch(
-          buildMonthIndexUrl(sortOrder, { starred: false, video: false }),
-        );
+        const response = await fetch(buildMonthIndexUrl(librarySortOrder(), {}));
         indexPayload = await response.json();
         if (!response.ok) {
           throw new Error(indexPayload.error || 'Failed to restore month index');
@@ -1745,18 +1875,39 @@ const VirtualGrid = (() => {
       }
     } else {
       const response = await fetch(
-        buildMonthIndexUrl(sortOrder, { starred, video }),
+        buildMonthIndexUrl(librarySortOrder(), filterOptions),
       );
       indexPayload = await response.json();
       if (!response.ok) {
         throw new Error(indexPayload.error || 'Failed to load filtered month index');
       }
       if ((indexPayload.total ?? 0) === 0) {
-        return 'empty';
+        applyCatalogFilterZeroMatch(indexPayload, filterOptions);
+        return 'zero';
       }
     }
 
-    monthCache.clear();
+    const nextAxis = indexPayload?.section_axis || 'date_taken';
+    const axisChanged = previousAxis !== nextAxis;
+    const scrollPreserveMonth = axisChanged ? null : preserveMonth;
+
+    const canWarmRestore =
+      !hasFilter &&
+      unfilteredMonthIndex &&
+      indexPayload === unfilteredMonthIndex &&
+      !layout.provisional;
+    const canWarmApply =
+      hasFilter && monthCache.size > 0 && !layout.provisional && !axisChanged;
+
+    if (canWarmRestore || canWarmApply) {
+      if (applyCatalogFilterWarm(indexPayload, scrollPreserveMonth)) {
+        if (hooks.onIndexReady) {
+          hooks.onIndexReady(indexPayload);
+        }
+        return true;
+      }
+    }
+
     monthInflight.clear();
     hydratedMonths = new Set();
     clearMountedMonths();
@@ -1765,7 +1916,7 @@ const VirtualGrid = (() => {
       hooks.onIndexReady(indexPayload);
     }
     scheduleSync();
-    restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
+    restoreScrollMonthAfterLayoutChange(indexPayload, scrollPreserveMonth);
     return true;
   }
 
@@ -1775,7 +1926,9 @@ const VirtualGrid = (() => {
       preserveScroll = true,
       starred = false,
       video = false,
+      importSets = null,
     } = options;
+    const filterOptions = { starred, video, importSets };
     const container = getContainer();
     if (!container) {
       return false;
@@ -1793,17 +1946,19 @@ const VirtualGrid = (() => {
       null;
 
     const response = await fetch(
-      buildMonthIndexUrl(sortOrderNext, { starred, video }),
+      buildMonthIndexUrl(sortOrderNext || librarySortOrder(), filterOptions),
     );
     const indexPayload = await response.json();
     if (!response.ok) {
       throw new Error(indexPayload.error || 'Failed to refresh month index');
     }
-    const hasFilter = Boolean(starred || video);
+    const hasFilter = catalogFilterActive(filterOptions);
     if (hasFilter && (indexPayload.total ?? 0) === 0) {
-      return 'empty';
+      applyCatalogFilterZeroMatch(indexPayload, filterOptions);
+      return 'zero';
     }
-    sortOrder = sortOrderNext;
+    clearCatalogFilterZeroOverlay();
+    sortOrder = sortOrderNext || librarySortOrder();
     monthCache.clear();
     monthInflight.clear();
     hydratedMonths = new Set();
@@ -1936,6 +2091,10 @@ const VirtualGrid = (() => {
     return window.__gridPhaseA || null;
   }
 
+  function isCatalogFilterZeroActive() {
+    return catalogFilterZeroActive;
+  }
+
   function isActive() {
     const container = getContainer();
     return Boolean(
@@ -1966,11 +2125,12 @@ const VirtualGrid = (() => {
     resortMonthCachePhoto,
     refreshMonthIndex,
     setFilterPhoto,
-    applyFilterLayout,
+    applyCatalogFilter,
     scheduleSync,
     getLayout,
     getPhaseAState,
     isActive,
+    isCatalogFilterZeroActive,
     fetchMonthPhotos,
     getGlobalIndexForPhotoId,
     resolveGlobalIndexForPhotoId,

@@ -201,23 +201,21 @@ def normalize_ingest_video(
 
     cursor = conn.cursor()
     file_size = os.path.getsize(source_path)
-    cursor.execute(
-        """
-            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            relative_path,
-            filename,
-            identity.content_hash,
-            file_size,
-            identity.file_type,
-            identity.date_taken,
-            None,
-            None,
-        ),
+    from photo_catalog import insert_photo_row
+
+    photo_id = insert_photo_row(
+        conn,
+        {
+            "current_path": relative_path,
+            "original_filename": filename,
+            "content_hash": identity.content_hash,
+            "file_size": file_size,
+            "file_type": identity.file_type,
+            "date_taken": identity.date_taken,
+            "width": None,
+            "height": None,
+        },
     )
-    photo_id = cursor.lastrowid
     conn.commit()
 
     shutil.copy2(source_path, target_path)

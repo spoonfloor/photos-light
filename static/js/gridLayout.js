@@ -359,6 +359,26 @@ const GridLayout = (() => {
     if (monthKey === 'undated') {
       return 'Undated';
     }
+    const importPrefix = 'import:';
+    if (monthKey.startsWith(importPrefix)) {
+      const encoded = monthKey.slice(importPrefix.length);
+      let dateAdded = encoded;
+      try {
+        dateAdded = decodeURIComponent(encoded);
+      } catch {
+        /* use raw encoded cluster token */
+      }
+      const parsed = new Date(dateAdded);
+      if (!Number.isNaN(parsed.getTime())) {
+        const formatted = parsed.toLocaleDateString('default', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        });
+        return `Imported ${formatted}`;
+      }
+      return `Imported ${dateAdded}`;
+    }
     const [year, monthNum] = monthKey.split('-');
     const monthName = new Date(
       parseInt(year, 10),

@@ -216,12 +216,23 @@ def synchronize_library_generator(library_path, db_connection,
                 width = dimensions[0] if dimensions else None
                 height = dimensions[1] if dimensions else None
                 
-                cursor.execute("""
-                    INSERT OR IGNORE INTO photos (content_hash, current_path, original_filename, date_taken, file_size, file_type, width, height)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (content_hash, mole_path, filename, date_taken, file_size, file_type, width, height))
-                
-                if cursor.rowcount > 0:
+                from photo_catalog import insert_photo_row
+
+                row_id = insert_photo_row(
+                    db_connection,
+                    {
+                        "content_hash": content_hash,
+                        "current_path": mole_path,
+                        "original_filename": filename,
+                        "date_taken": date_taken,
+                        "file_size": file_size,
+                        "file_type": file_type,
+                        "width": width,
+                        "height": height,
+                    },
+                    ignore_conflicts=True,
+                )
+                if row_id:
                     details['untracked_files'].append(mole_path)
             except Exception as e:
                 print(f"  ⚠️  Failed to index {mole_path}: {e}")

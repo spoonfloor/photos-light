@@ -4,9 +4,11 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
 const PHOTO_PAGE_SIZE = 400;
+/** Distinct date_added clusters shown when the recent-imports filter is active. */
+const IMPORT_SET_LIMIT = 5;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '455';
+const STATIC_ASSET_VERSION = '459';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -153,7 +155,9 @@ const state = {
   activeFilters: {
     starred: false,
     video: false,
+    recentImports: false,
   },
+  importClusterDates: null,
   selectedPhotos: new Set(),
   photos: [],
   loading: false,
@@ -1264,6 +1268,9 @@ function wireAppBar() {
 
   if (sortToggleBtn && sortIcon) {
     sortToggleBtn.addEventListener('click', async () => {
+      if (isRecentImportsFilterActive()) {
+        return;
+      }
       // Toggle sort order
       state.currentSortOrder =
         state.currentSortOrder === 'newest' ? 'oldest' : 'newest';
@@ -4360,16 +4367,19 @@ async function applyDateEditPatch(data) {
   };
 }
 
+/** Monotonic id — stale catalog filter async results are ignored. */
+let catalogFilterApplyId = 0;
+
 async function refreshActiveVirtualGridMonthIndex(options = {}) {
   const { scrollTargetMonth = null, preserveScroll = true } = options;
   const result = await VirtualGrid.refreshMonthIndex(state.currentSortOrder, {
     scrollTargetMonth,
     preserveScroll,
-    ...getGridFilterOptions(),
+    ...getCatalogFilterOptions(),
   });
-  if (result === 'empty') {
-    showZeroMatchGridState();
-    return 'empty';
+  if (result === 'zero') {
+    syncCatalogFilterZeroChrome();
+    return 'zero';
   }
   setupThumbnailLazyLoading();
   ensureGridInteractionsWired();
@@ -4393,7 +4403,7 @@ function reconcileTrashCatalogEmptyState() {
 
 function reconcileCatalogEmptyAfterGridLoad(index) {
   const total = index?.total ?? state.photoTotalCount;
-  if (total !== 0 || hasActivePhotoFilters()) {
+  if (total !== 0 || hasActiveCatalogFilters()) {
     return false;
   }
   if (reconcileTrashCatalogEmptyState()) {
@@ -4403,7 +4413,7 @@ function reconcileCatalogEmptyAfterGridLoad(index) {
   return true;
 }
 
-function showFilterZeroState() {
+function showFilterZeroState(options = {}) {
   if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
     VirtualGrid.destroy();
   }
@@ -4411,7 +4421,7 @@ function showFilterZeroState() {
   if (datePickerContainer) {
     datePickerContainer.style.visibility = 'hidden';
   }
-  renderFilterEmptyState();
+  renderFilterEmptyState(options);
   enableAppBarButtons();
   updateFilterChipRailVisibility();
 }
@@ -4435,11 +4445,28 @@ function showEmptyTrashState() {
   }
 }
 
+function syncCatalogFilterZeroChrome() {
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
+  }
+  enableAppBarButtons();
+  updateFilterChipRailVisibility();
+}
+
+function restoreCatalogFilterZeroChrome() {
+  updateRecentImportsFilterUi();
+  enableAppBarButtons();
+  updateFilterChipRailVisibility();
+}
+
 function showZeroMatchGridState() {
   if (reconcileTrashCatalogEmptyState()) {
     return;
   }
-  showFilterZeroState();
+  showFilterZeroState({
+    recentImports: Boolean(state.activeFilters.recentImports),
+  });
 }
 
 function showEmptyLibraryState() {
@@ -4467,7 +4494,11 @@ function showCatalogEmptyState() {
  */
 function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
   if (exhaustedScope === 'filter') {
-    showZeroMatchGridState();
+    if (VirtualGrid.isActive()) {
+      void applyPhotoFilters();
+    } else {
+      showZeroMatchGridState();
+    }
     return;
   }
 
@@ -4482,11 +4513,11 @@ function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
     return;
   }
 
-  if (hasActivePhotoFilters()) {
+  if (hasActiveCatalogFilters()) {
     if (VirtualGrid.isActive()) {
       const layout = VirtualGrid.getLayout();
-      if ((layout?.totalPhotos ?? 0) === 0) {
-        showZeroMatchGridState();
+      if ((layout?.totalPhotos ?? 0) === 0 && !VirtualGrid.isCatalogFilterZeroActive()) {
+        void applyPhotoFilters();
         return;
       }
     } else if (
@@ -4545,7 +4576,7 @@ function initLibraryMutationEngine() {
       patchLibraryPhotoFields(photoId, { rating }),
     applyCommittedPhotoUpdate,
     syncGridAfterHistogramChange,
-    hasActivePhotoFilters,
+    hasActiveCatalogFilters,
     hasStarredPhotoFilter: () => Boolean(state.activeFilters.starred),
     updateFilterChipUI,
     applyStarFilterRowChange: (photoId) => {
@@ -4553,8 +4584,8 @@ function initLibraryMutationEngine() {
         return;
       }
       const result = VirtualGrid.applyFilterRowChange(photoId);
-      if (result === 'empty') {
-        showZeroMatchGridState();
+      if (result === 'zero') {
+        syncCatalogFilterZeroChrome();
       }
     },
     applyPhotoFilters,
@@ -4633,6 +4664,32 @@ async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
   }
 }
 
+function updateRecentImportsFilterUi() {
+  const sortToggleBtn = document.getElementById('sortToggleBtn');
+  const datePickerContainer = document.querySelector('.date-picker');
+  const recentImportsActive = isRecentImportsFilterActive();
+
+  if (recentImportsActive) {
+    if (sortToggleBtn) {
+      sortToggleBtn.style.opacity = '0.3';
+      sortToggleBtn.style.pointerEvents = 'none';
+    }
+    if (datePickerContainer) {
+      datePickerContainer.style.visibility = 'hidden';
+    }
+  } else {
+    if (sortToggleBtn && state.photos.length > 0) {
+      sortToggleBtn.style.opacity = '1';
+      sortToggleBtn.style.pointerEvents = 'auto';
+    }
+    if (datePickerContainer && state.photos.length > 0) {
+      datePickerContainer.style.visibility = 'visible';
+    }
+  }
+
+  updateFilterChipUI();
+}
+
 async function syncGridAfterSortChange() {
   if (currentPhotoLoad?.promise) {
     try {
@@ -4640,6 +4697,11 @@ async function syncGridAfterSortChange() {
     } catch {
       /* in-flight load aborted or failed — continue with sync */
     }
+  }
+
+  if (isRecentImportsFilterActive()) {
+    state.activeFilters.recentImports = false;
+    updateRecentImportsFilterUi();
   }
 
   if (VirtualGrid.isActive()) {
@@ -6453,7 +6515,7 @@ function captureLightboxNavContext(anchorPhoto) {
     return;
   }
 
-  if (hasActivePhotoFilters()) {
+  if (hasActiveCatalogFilters()) {
     state.lightboxNavMode = 'filter';
     state.lightboxNavPhotoIds = getFilteredPhotos(state.photos).map(
       (photo) => photo.id,
@@ -6818,7 +6880,8 @@ async function fetchPhotosPage(options = {}) {
   const {
     cursor = null,
     limit = PHOTO_PAGE_SIZE,
-    sortOrder = state.currentSortOrder,
+    sortOrder = getPhotosSortParam(),
+    importSets = null,
     signal,
   } = options;
   let url = `${
@@ -6826,6 +6889,9 @@ async function fetchPhotosPage(options = {}) {
       ? TrashView.getPhotosApiRoot()
       : '/api/photos'
   }?limit=${limit}&sort=${sortOrder}`;
+  if (importSets) {
+    url += `&import_sets=${encodeURIComponent(importSets)}`;
+  }
   if (cursor) {
     url += `&cursor=${encodeURIComponent(cursor)}`;
   }
@@ -6850,13 +6916,22 @@ function resetPhotoWindowState() {
   state.loadingMore = false;
 }
 
+function isRecentImportsFilterActive() {
+  return Boolean(state.activeFilters.recentImports);
+}
+
+function getPhotosSortParam() {
+  return state.currentSortOrder;
+}
+
 function shouldUseVirtualGrid() {
   return Boolean(state.libraryPath);
 }
 
 function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
+  const effectiveSort = sortOrder ?? state.currentSortOrder;
   return {
-    sortOrder: sortOrder ?? state.currentSortOrder,
+    sortOrder: effectiveSort,
     signal,
     photosApiRoot:
       typeof TrashView !== 'undefined'
@@ -6871,12 +6946,15 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
         ? TrashView.getYearsApiUrl()
         : '/api/years',
     getGeneration: () => generation,
+    getLibrarySortOrder: () => state.currentSortOrder,
+    getCatalogFilterOptions,
+    onClearCatalogFilters: clearPhotoFilters,
     mergePhotos: mergePhotosIntoVirtualState,
     comparePhotos: (a, b) =>
       comparePhotosForLibrarySort(
         a,
         b,
-        sortOrder ?? state.currentSortOrder,
+        effectiveSort,
       ),
     filterPhoto: getActiveVirtualGridFilterPhoto(),
     deferContainerMount: state.libraryTransitionActive,
@@ -6903,6 +6981,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     },
     onIndexReady: (index) => {
       state.photoTotalCount = index.total;
+      state.importClusterDates = index.import_cluster_dates || null;
       state.hasDatabase = true;
       state.hasMore = false;
     },
@@ -7158,7 +7237,7 @@ async function loadAndRenderPhotosPaged(options = {}) {
   const {
     throwOnError = false,
     generation = state.libraryGeneration,
-    sortOrder = state.currentSortOrder,
+    sortOrder = getPhotosSortParam(),
     signal,
   } = options;
 
@@ -7173,7 +7252,7 @@ async function loadAndRenderPhotosPaged(options = {}) {
   const isStaleLoad =
     (signal && signal.aborted) ||
     !isCurrentLibraryGeneration(generation) ||
-    sortOrder !== state.currentSortOrder;
+    sortOrder !== getPhotosSortParam();
 
   if (isStaleLoad) {
     return false;
@@ -7183,8 +7262,18 @@ async function loadAndRenderPhotosPaged(options = {}) {
   updatePhotoWindowFromPage(data, { append: false });
   state.lastClickedIndex = null;
 
+  const filteredPhotos = getFilteredPhotos(state.photos);
+  if (filteredPhotos.length === 0 && hasActiveCatalogFilters()) {
+    if (VirtualGrid.isActive()) {
+      void applyPhotoFilters();
+    } else {
+      showZeroMatchGridState();
+    }
+    return true;
+  }
+
   const renderPagedGrid = () => {
-    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    renderPhotoGrid(filteredPhotos, false);
     setupThumbnailLazyLoading();
     ensureScrollSentinel();
     setupGridScrollObserver();
@@ -7210,7 +7299,7 @@ async function loadAndRenderPhotos(append = false, options = {}) {
   const {
     throwOnError = false,
     generation = state.libraryGeneration,
-    sortOrder = state.currentSortOrder,
+    sortOrder = getPhotosSortParam(),
     forcePaged = false,
     signal: externalSignal = null,
   } = options;
@@ -7254,7 +7343,7 @@ async function loadAndRenderPhotos(append = false, options = {}) {
           abortController.signal.aborted ||
           loadId !== photoLoadRequestId ||
           !isCurrentLibraryGeneration(generation) ||
-          sortOrder !== state.currentSortOrder;
+          sortOrder !== getPhotosSortParam();
         return isStaleLoad ? false : ok;
       }
 
@@ -7268,7 +7357,7 @@ async function loadAndRenderPhotos(append = false, options = {}) {
         abortController.signal.aborted ||
         loadId !== photoLoadRequestId ||
         !isCurrentLibraryGeneration(generation) ||
-        sortOrder !== state.currentSortOrder;
+        sortOrder !== getPhotosSortParam();
       return isStaleLoad ? false : ok;
     } catch (error) {
       const isExpectedAbort =
@@ -7415,49 +7504,53 @@ function setupThumbnailLazyLoading() {
 // PHOTO FILTERS
 // =====================
 
-function hasActivePhotoFilters() {
-  return state.activeFilters.starred || state.activeFilters.video;
+function hasActiveCatalogFilters() {
+  return (
+    state.activeFilters.starred ||
+    state.activeFilters.video ||
+    state.activeFilters.recentImports
+  );
 }
 
 function getFilteredPhotos(photos = state.photos) {
-  const { starred, video } = state.activeFilters;
-  if (!starred && !video) {
+  if (!hasActiveCatalogFilters()) {
     return photos;
   }
-
-  return photos.filter((photo) => {
-    if (starred && photo.rating !== 5) {
-      return false;
-    }
-    if (video && photo.file_type !== 'video') {
-      return false;
-    }
-    return true;
-  });
+  return photos.filter(photoMatchesCatalogFilters);
 }
 
-function photoMatchesActiveFilters(photo) {
-  if (!hasActivePhotoFilters()) {
+function photoMatchesCatalogFilters(photo) {
+  if (!hasActiveCatalogFilters()) {
     return true;
   }
-  const { starred, video } = state.activeFilters;
+  const { starred, video, recentImports } = state.activeFilters;
   if (starred && photo.rating !== 5) {
     return false;
   }
   if (video && photo.file_type !== 'video') {
     return false;
   }
+  if (recentImports) {
+    const clusters = state.importClusterDates;
+    if (
+      clusters?.length &&
+      (!photo.date_added || !clusters.includes(photo.date_added))
+    ) {
+      return false;
+    }
+  }
   return true;
 }
 
 function getActiveVirtualGridFilterPhoto() {
-  return hasActivePhotoFilters() ? photoMatchesActiveFilters : null;
+  return hasActiveCatalogFilters() ? photoMatchesCatalogFilters : null;
 }
 
-function getGridFilterOptions() {
+function getCatalogFilterOptions() {
   return {
     starred: Boolean(state.activeFilters.starred),
     video: Boolean(state.activeFilters.video),
+    importSets: isRecentImportsFilterActive() ? IMPORT_SET_LIMIT : null,
   };
 }
 
@@ -7484,6 +7577,9 @@ function updateFilterChipUI() {
   const chips = document.querySelectorAll('.filter-chip[data-filter]');
   chips.forEach((chip) => {
     const filterKey = chip.dataset.filter;
+    if (filterKey === 'recentImports') {
+      chip.hidden = Boolean(state.trashViewActive);
+    }
     const isActive = !!state.activeFilters[filterKey];
     chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
   });
@@ -7513,24 +7609,42 @@ function applyPhotoFilters() {
 }
 
 async function applyPhotoFiltersAsync() {
+  const applyId = ++catalogFilterApplyId;
+  const isStaleApply = () => applyId !== catalogFilterApplyId;
+
+  updateRecentImportsFilterUi();
+
   if (!VirtualGrid.isActive() && shouldUseVirtualGrid()) {
     await loadAndRenderPhotos(false);
-  }
-  if (VirtualGrid.isActive()) {
-    VirtualGrid.setFilterPhoto(getActiveVirtualGridFilterPhoto());
-    try {
-      const result = await VirtualGrid.applyFilterLayout(
-        getGridFilterOptions(),
-      );
-      if (result === 'empty') {
-        showZeroMatchGridState();
-        return;
-      }
-      setupThumbnailLazyLoading();
-      ensureGridInteractionsWired();
-    } catch (error) {
-      console.error('❌ Failed to apply photo filters:', error);
+    if (isStaleApply()) {
+      return;
     }
+  }
+
+  if (!VirtualGrid.isActive()) {
+    return;
+  }
+
+  VirtualGrid.setFilterPhoto(getActiveVirtualGridFilterPhoto());
+  try {
+    const result = await VirtualGrid.applyCatalogFilter(
+      getCatalogFilterOptions(),
+    );
+    if (isStaleApply()) {
+      return;
+    }
+    if (result === 'zero') {
+      syncCatalogFilterZeroChrome();
+      return;
+    }
+    restoreCatalogFilterZeroChrome();
+    setupThumbnailLazyLoading();
+    ensureGridInteractionsWired();
+  } catch (error) {
+    if (isStaleApply()) {
+      return;
+    }
+    console.error('❌ Failed to apply photo filters:', error);
   }
 }
 
@@ -7547,6 +7661,7 @@ function togglePhotoFilter(filterKey) {
 function clearPhotoFilters() {
   state.activeFilters.starred = false;
   state.activeFilters.video = false;
+  state.activeFilters.recentImports = false;
   state.lastClickedIndex = null;
   applyPhotoFilters();
 }
@@ -7554,6 +7669,8 @@ function clearPhotoFilters() {
 function resetPhotoFilters() {
   state.activeFilters.starred = false;
   state.activeFilters.video = false;
+  state.activeFilters.recentImports = false;
+  state.importClusterDates = null;
   updateFilterChipUI();
 }
 
@@ -7622,17 +7739,24 @@ function getEmptyLibraryHeading() {
 /**
  * Active filters returned no matches — offer to clear filters
  */
-function renderFilterEmptyState() {
+function renderFilterEmptyState(options = {}) {
   const container = document.getElementById('photoContainer');
   if (!container) return;
 
   setPagedGridContainerMode(container, false);
 
+  const heading = options.recentImports
+    ? 'No recent imports'
+    : 'No results found';
+  const detail = options.recentImports
+    ? 'No import dates are available yet.'
+    : 'No images match the current filters.';
+
   container.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
       <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">No results found</div>
-        <div style="font-size: 14px; color: var(--text-secondary);">No images match the current filters.</div>
+        <div style="font-size: 18px; margin-bottom: 8px;">${heading}</div>
+        <div style="font-size: 14px; color: var(--text-secondary);">${detail}</div>
       </div>
       <div style="display: flex; gap: 12px;">
         <button class="btn btn-primary" onclick="clearPhotoFilters()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
@@ -7722,7 +7846,7 @@ function renderPhotoGrid(photos, append = false) {
   if (!photos || photos.length === 0) {
     if (!append) {
       setPagedGridContainerMode(container, false);
-      if (state.photos.length > 0 && hasActivePhotoFilters()) {
+      if (state.photos.length > 0 && hasActiveCatalogFilters()) {
         renderFilterEmptyState();
       } else if (state.hasDatabase) {
         renderEmptyLibraryState();
@@ -13439,12 +13563,17 @@ function enableAppBarButtons() {
     addPhotoBtn.style.pointerEvents = 'auto';
   }
 
-  // Sort button follows whether the current library has photos.
   const sortToggleBtn = document.getElementById('sortToggleBtn');
   if (sortToggleBtn) {
-    sortToggleBtn.style.opacity = hasPhotos ? '1' : '0.3';
-    sortToggleBtn.style.pointerEvents = hasPhotos ? 'auto' : 'none';
+    if (isRecentImportsFilterActive()) {
+      sortToggleBtn.style.opacity = '0.3';
+      sortToggleBtn.style.pointerEvents = 'none';
+    } else {
+      sortToggleBtn.style.opacity = hasPhotos ? '1' : '0.3';
+      sortToggleBtn.style.pointerEvents = hasPhotos ? 'auto' : 'none';
+    }
   }
+  updateRecentImportsFilterUi();
 
   updateDeleteButtonVisibility();
 

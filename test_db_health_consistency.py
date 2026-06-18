@@ -12,7 +12,7 @@ from db_schema import create_database_schema
 from library_layout import canonical_db_path
 
 
-def create_photos_only_db(db_path, *, include_rating=True, extra_columns=None):
+def create_photos_only_db(db_path, *, include_rating=True, include_date_added=True, extra_columns=None):
     """Create a minimal photos table fixture for DB health classification tests."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
@@ -29,6 +29,8 @@ def create_photos_only_db(db_path, *, include_rating=True, extra_columns=None):
     ]
     if include_rating:
         columns.append("rating INTEGER DEFAULT NULL")
+    if include_date_added:
+        columns.append("date_added TEXT")
     if extra_columns:
         columns.extend(extra_columns)
 
@@ -67,12 +69,12 @@ class DBHealthMatrixTest(unittest.TestCase):
 
     def test_missing_columns_reports_migration_needed(self):
         db_path = os.path.join(self.tmpdir.name, "missing_columns.db")
-        create_photos_only_db(db_path, include_rating=False)
+        create_photos_only_db(db_path, include_rating=False, include_date_added=False)
 
         report = check_database_health(db_path)
 
         self.assertEqual(report.status, DBStatus.MISSING_COLUMNS)
-        self.assertEqual(report.missing_columns, ["rating"])
+        self.assertEqual(report.missing_columns, ["date_added", "rating"])
         self.assertTrue(report.can_migrate)
         self.assertTrue(report.can_use_anyway)
 
@@ -81,13 +83,14 @@ class DBHealthMatrixTest(unittest.TestCase):
         create_photos_only_db(
             db_path,
             include_rating=False,
+            include_date_added=False,
             extra_columns=["legacy_caption TEXT"],
         )
 
         report = check_database_health(db_path)
 
         self.assertEqual(report.status, DBStatus.MIXED_SCHEMA)
-        self.assertEqual(report.missing_columns, ["rating"])
+        self.assertEqual(report.missing_columns, ["date_added", "rating"])
         self.assertEqual(report.extra_columns, ["legacy_caption"])
         self.assertTrue(report.can_migrate)
         self.assertTrue(report.can_use_anyway)

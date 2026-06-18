@@ -7,6 +7,7 @@ from flask import Flask, send_from_directory, jsonify, request, send_file, Respo
 from collections import defaultdict
 import base64
 import sqlite3
+from urllib.parse import quote, unquote
 import traceback
 from functools import wraps
 from hash_cache import HashCache
@@ -466,26 +467,25 @@ def stage_photo_for_canonicalization(source_path, *, temp_prefix, temp_dir=None)
         raise
 
 
-def insert_canonical_photo_row(conn, *, original_filename, relative_path, canonical_photo):
-    cursor = conn.cursor()
-    cursor.execute(
-        '''
-            INSERT INTO photos (current_path, original_filename, content_hash, file_size, file_type, date_taken, width, height)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''',
-        (
-            relative_path,
-            original_filename,
-            canonical_photo.content_hash,
-            canonical_photo.file_size,
-            'photo',
-            canonical_photo.date_taken,
-            canonical_photo.width,
-            canonical_photo.height,
-        ),
+def insert_canonical_photo_row(conn, *, original_filename, relative_path, canonical_photo, date_added=None):
+    from photo_catalog import insert_photo_row
+
+    photo_id = insert_photo_row(
+        conn,
+        {
+            'current_path': relative_path,
+            'original_filename': original_filename,
+            'content_hash': canonical_photo.content_hash,
+            'file_size': canonical_photo.file_size,
+            'file_type': 'photo',
+            'date_taken': canonical_photo.date_taken,
+            'width': canonical_photo.width,
+            'height': canonical_photo.height,
+        },
+        date_added=date_added,
     )
     conn.commit()
-    return cursor.lastrowid
+    return photo_id
 
 
 def commit_staged_canonical_photo(
@@ -870,7 +870,7 @@ def month_key_for_photo_grid(date_taken, current_path):
 
 
 PHOTO_GRID_SELECT = """
-    SELECT id, date_taken, file_type, current_path, width, height, rating
+    SELECT id, date_taken, date_added, file_type, current_path, width, height, rating
     FROM photos
 """
 
@@ -968,6 +968,8 @@ def ensure_photo_grid_indices(db_path=None):
     existing = {row[0] for row in cursor.fetchall()}
     for index_sql in PHOTOS_INDICES:
         index_name = index_sql.split("INDEX IF NOT EXISTS ")[1].split(" ")[0]
+        if index_name == 'idx_date_added_recent' and 'date_added' not in columns:
+            continue
         if index_name not in existing:
             cursor.execute(index_sql)
     conn.commit()
@@ -1009,6 +1011,7 @@ def photo_row_to_grid_dict(row):
     return {
         'id': row['id'],
         'date': date_str,
+        'date_added': row['date_added'],
         'month': month_key_for_photo_grid(date_str, row['current_path']),
         'file_type': row['file_type'],
         'path': row['current_path'],
@@ -1018,10 +1021,12 @@ def photo_row_to_grid_dict(row):
     }
 
 
-def encode_photos_cursor(section, *, date_taken=None, current_path=None, photo_id=None):
-    """Opaque cursor for keyset pagination (dated or undated section)."""
+def encode_photos_cursor(section, *, date_taken=None, current_path=None, photo_id=None, date_added=None):
+    """Opaque cursor for keyset pagination (dated, undated, or recently_added)."""
     if section == 'dated':
         raw = f"dated|{date_taken or ''}|{current_path or ''}|{photo_id or ''}"
+    elif section == 'recently_added':
+        raw = f"recently_added|{date_added or ''}|{photo_id or ''}"
     else:
         raw = f"undated|{current_path or ''}|{photo_id or ''}"
     return base64.urlsafe_b64encode(raw.encode('utf-8')).decode('ascii')
@@ -1047,6 +1052,12 @@ def decode_photos_cursor(cursor_str):
                 'current_path': parts[1] or None,
                 'photo_id': int(parts[2]) if parts[2] else None,
             }
+        if parts[0] == 'recently_added' and len(parts) >= 3:
+            return {
+                'section': 'recently_added',
+                'date_added': parts[1] or None,
+                'photo_id': int(parts[2]) if parts[2] else None,
+            }
     except (ValueError, UnicodeDecodeError):
         return None
     return None
@@ -1059,6 +1070,12 @@ def cursor_from_row(row, section):
             'dated',
             date_taken=row['date_taken'],
             current_path=row['current_path'],
+            photo_id=row['id'],
+        )
+    if section == 'recently_added':
+        return encode_photos_cursor(
+            'recently_added',
+            date_added=row['date_added'],
             photo_id=row['id'],
         )
     return encode_photos_cursor(
@@ -1089,6 +1106,125 @@ def _hydrate_photo_rows_by_id(cursor, id_rows):
     ).fetchall()
     by_id = {row['id']: row for row in rows}
     return [by_id[photo_id] for photo_id in ids if photo_id in by_id]
+
+
+def get_recent_import_set_dates(cursor, limit=5):
+    """Return the N most recent distinct date_added values (import clusters)."""
+    if limit <= 0:
+        return []
+    rows = cursor.execute(
+        """
+        SELECT date_added FROM photos
+        WHERE date_added IS NOT NULL
+        GROUP BY date_added
+        ORDER BY date_added DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def count_photos_in_import_sets(cursor, import_set_dates):
+    """Count photos whose date_added is in the given import clusters."""
+    if not import_set_dates:
+        return 0
+    placeholders = ','.join('?' * len(import_set_dates))
+    return cursor.execute(
+        f"SELECT COUNT(*) FROM photos WHERE date_added IN ({placeholders})",
+        import_set_dates,
+    ).fetchone()[0]
+
+
+def _fetch_recently_added_photo_page(cursor, limit, after=None, import_set_dates=None):
+    """Flat import-date order: non-null date_added first, NULL rows last."""
+    if import_set_dates is not None and not import_set_dates:
+        return []
+
+    order_clause = 'ORDER BY date_added IS NULL ASC, date_added DESC, id DESC'
+    where_parts = []
+    params = []
+
+    if import_set_dates is not None:
+        placeholders = ','.join('?' * len(import_set_dates))
+        where_parts.append(f'date_added IN ({placeholders})')
+        params.extend(import_set_dates)
+
+    if after:
+        if after.get('date_added'):
+            where_parts.append(
+                '(date_added < ? OR (date_added = ? AND id < ?))'
+            )
+            params.extend([
+                after['date_added'], after['date_added'], after['photo_id'],
+            ])
+        else:
+            where_parts.append('date_added IS NULL AND id < ?')
+            params.append(after['photo_id'])
+
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ''
+    params.append(limit)
+
+    id_rows = cursor.execute(
+        f"SELECT id FROM photos {where} {order_clause} LIMIT ?",
+        params,
+    ).fetchall()
+    return _hydrate_photo_rows_by_id(cursor, id_rows)
+
+
+def fetch_recently_added_photos_page(cursor, limit, cursor_str=None, import_set_limit=None):
+    """Paginate photos by import date as a flat list."""
+    parsed = decode_photos_cursor(cursor_str)
+    import_set_dates = None
+    if import_set_limit:
+        import_set_dates = get_recent_import_set_dates(cursor, import_set_limit)
+
+    photos = _fetch_recently_added_photo_page(
+        cursor,
+        limit,
+        after=parsed if parsed and parsed.get('section') == 'recently_added' else None,
+        import_set_dates=import_set_dates,
+    )
+
+    next_cursor = None
+    if photos:
+        next_cursor = cursor_from_row(photos[-1], 'recently_added')
+
+    if import_set_limit:
+        total = count_photos_in_import_sets(cursor, import_set_dates or [])
+        import_set_count = len(import_set_dates or [])
+    else:
+        total = get_photo_total_count(cursor)
+        import_set_count = None
+
+    has_more = len(photos) == limit
+
+    payload = {
+        'photos': [photo_row_to_grid_dict(row) for row in photos],
+        'count': len(photos),
+        'total': total,
+        'limit': limit,
+        'next_cursor': next_cursor,
+        'has_more': has_more,
+        'sort': 'recently_added',
+    }
+    if import_set_limit:
+        payload['import_sets'] = import_set_limit
+        payload['import_set_count'] = import_set_count
+    return payload
+
+
+def fetch_all_recently_added_photos(cursor, import_set_limit=None):
+    """Return full library in recently-added order."""
+    import_set_dates = None
+    if import_set_limit:
+        import_set_dates = get_recent_import_set_dates(cursor, import_set_limit)
+    rows = _fetch_recently_added_photo_page(
+        cursor,
+        limit=10**9,
+        import_set_dates=import_set_dates,
+    )
+    return [photo_row_to_grid_dict(row) for row in rows]
 
 
 def _fetch_dated_photo_page(cursor, limit, sort_order, after=None):
@@ -1290,16 +1426,51 @@ def get_photos():
     - limit: number of photos to return (optional - if omitted, returns ALL)
     - cursor: keyset pagination cursor from prior response next_cursor
     - offset: legacy pagination offset (avoid on large libraries)
-    - sort: 'newest' or 'oldest' (default 'newest')
+    - sort: 'newest', 'oldest', or 'recently_added' (default 'newest')
+    - import_sets: when sort=recently_added, limit to the N most recent
+      distinct date_added clusters (e.g. import_sets=5)
     """
     limit = request.args.get('limit', type=int)
     cursor_str = request.args.get('cursor')
     offset = request.args.get('offset', 0, type=int)
     sort_order = request.args.get('sort', 'newest')
+    import_set_limit = request.args.get('import_sets', type=int)
 
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        if sort_order == 'recently_added':
+            if limit is None:
+                import_set_dates = None
+                if import_set_limit:
+                    import_set_dates = get_recent_import_set_dates(cursor, import_set_limit)
+                photos = fetch_all_recently_added_photos(
+                    cursor,
+                    import_set_limit=import_set_limit,
+                )
+                payload = {
+                    'photos': photos,
+                    'count': len(photos),
+                    'sort': 'recently_added',
+                }
+                if import_set_limit:
+                    payload['import_sets'] = import_set_limit
+                    payload['import_set_count'] = len(import_set_dates or [])
+                    payload['total'] = count_photos_in_import_sets(
+                        cursor, import_set_dates or [],
+                    )
+                conn.close()
+                return jsonify(attach_catalog_revision(payload))
+            payload = fetch_recently_added_photos_page(
+                cursor,
+                limit,
+                cursor_str=cursor_str,
+                import_set_limit=import_set_limit,
+            )
+            conn.close()
+            payload['offset'] = offset
+            return jsonify(attach_catalog_revision(payload))
 
         if limit is None:
             rows = fetch_all_photos_for_grid(cursor, sort_order)
@@ -1330,12 +1501,29 @@ def _sort_grid_month_keys(month_counts, sort_order):
     return ordered
 
 
-def _month_index_cache_key(sort_order, starred=False, video=False):
+IMPORT_CLUSTER_PREFIX = 'import:'
+
+
+def encode_import_cluster_key(date_added):
+    """Stable virtual-grid section key for one date_added import cluster."""
+    return f'{IMPORT_CLUSTER_PREFIX}{quote(date_added or "", safe="")}'
+
+
+def decode_import_cluster_key(month_key):
+    """Return date_added for import:… section keys, else None."""
+    if not month_key or not month_key.startswith(IMPORT_CLUSTER_PREFIX):
+        return None
+    return unquote(month_key[len(IMPORT_CLUSTER_PREFIX):])
+
+
+def _month_index_cache_key(sort_order, starred=False, video=False, import_sets=None):
     flags = []
     if starred:
         flags.append('starred')
     if video:
         flags.append('video')
+    if import_sets:
+        flags.append(f'import_sets={import_sets}')
     suffix = ','.join(flags) if flags else 'all'
     return f'{sort_order}|{suffix}'
 
@@ -1353,8 +1541,67 @@ def _parse_grid_filter_query_args(starred_arg=None, video_arg=None):
     return starred, video
 
 
-def build_month_index(cursor, sort_order='newest', *, starred=False, video=False):
-    """Aggregate photo counts per grid month bucket, optionally filtered."""
+def _count_photos_in_import_cluster(cursor, date_added, *, starred=False, video=False):
+    query = 'SELECT COUNT(*) FROM photos WHERE date_added = ?'
+    params = [date_added]
+    if starred:
+        query += ' AND rating = 5'
+    if video:
+        query += ' AND file_type = ?'
+        params.append('video')
+    return cursor.execute(query, params).fetchone()[0]
+
+
+def build_import_set_month_index(cursor, import_set_limit, *, starred=False, video=False):
+    """Aggregate counts per recent date_added import cluster."""
+    import_dates = get_recent_import_set_dates(cursor, import_set_limit)
+    months = []
+    total = 0
+    for date_added in import_dates:
+        count = _count_photos_in_import_cluster(
+            cursor,
+            date_added,
+            starred=starred,
+            video=video,
+        )
+        if count <= 0:
+            continue
+        months.append({
+            'month': encode_import_cluster_key(date_added),
+            'count': count,
+        })
+        total += count
+    return {
+        'months': months,
+        'total': total,
+        'undated_count': 0,
+        'sort': 'recently_added',
+        'starred': starred,
+        'video': video,
+        'import_sets': import_set_limit,
+        'import_cluster_dates': import_dates,
+        'section_axis': 'import',
+        'filtered': True,
+    }
+
+
+def build_month_index(
+    cursor,
+    sort_order='newest',
+    *,
+    starred=False,
+    video=False,
+    import_sets=None,
+):
+    """Aggregate photo counts per grid section bucket, optionally filtered."""
+    if import_sets:
+        return build_import_set_month_index(
+            cursor,
+            import_sets,
+            starred=starred,
+            video=video,
+        )
+
     query = 'SELECT date_taken, current_path FROM photos WHERE 1=1'
     params = []
     if starred:
@@ -1379,29 +1626,60 @@ def build_month_index(cursor, sort_order='newest', *, starred=False, video=False
         'sort': sort_order,
         'starred': starred,
         'video': video,
+        'section_axis': 'date_taken',
         'filtered': bool(starred or video),
     }
 
 
-def get_cached_month_index(cursor, sort_order='newest', *, starred=False, video=False):
+def get_cached_month_index(
+    cursor,
+    sort_order='newest',
+    *,
+    starred=False,
+    video=False,
+    import_sets=None,
+):
     """Return month histogram; cached per sort + filter for the current catalog revision."""
     global MONTH_INDEX_CACHE, MONTH_INDEX_CACHE_REVISION
     if MONTH_INDEX_CACHE_REVISION != LIBRARY_CATALOG_REVISION:
         MONTH_INDEX_CACHE = {}
         MONTH_INDEX_CACHE_REVISION = LIBRARY_CATALOG_REVISION
-    cache_key = _month_index_cache_key(sort_order, starred, video)
+    cache_key = _month_index_cache_key(
+        sort_order,
+        starred,
+        video,
+        import_sets=import_sets,
+    )
     if cache_key not in MONTH_INDEX_CACHE:
         MONTH_INDEX_CACHE[cache_key] = build_month_index(
             cursor,
             sort_order,
             starred=starred,
             video=video,
+            import_sets=import_sets,
         )
     return MONTH_INDEX_CACHE[cache_key]
 
 
+def fetch_photos_for_import_cluster(cursor, date_added, sort_order='newest'):
+    """Load all photos in one date_added import cluster."""
+    rows = cursor.execute(
+        f"""
+        {PHOTO_GRID_SELECT}
+        WHERE date_added = ?
+        ORDER BY id DESC
+        """,
+        (date_added,),
+    ).fetchall()
+    return [photo_row_to_grid_dict(row) for row in rows]
+
+
 def fetch_photos_for_grid_month(cursor, month_key, sort_order='newest'):
     """Load all photos belonging to one grid month bucket."""
+    cluster_date = decode_import_cluster_key(month_key)
+    if cluster_date is not None:
+        return fetch_photos_for_import_cluster(cursor, cluster_date, sort_order)
+
     if month_key == 'undated':
         rows = cursor.execute(
             f"{PHOTO_GRID_SELECT} WHERE date_taken IS NULL ORDER BY current_path ASC, id ASC",
@@ -1455,6 +1733,7 @@ def get_photos_month_index():
     """Month histogram for virtual grid layout (counts per YYYY-MM bucket)."""
     try:
         sort_order = request.args.get('sort', 'newest')
+        import_set_limit = request.args.get('import_sets', type=int)
         starred, video = _parse_grid_filter_query_args(
             request.args.get('starred'),
             request.args.get('video'),
@@ -1466,6 +1745,7 @@ def get_photos_month_index():
             sort_order,
             starred=starred,
             video=video,
+            import_sets=import_set_limit,
         )
         conn.close()
         return jsonify(attach_catalog_revision(payload))
@@ -1482,7 +1762,9 @@ def get_photos_for_month():
         month_key = request.args.get('month')
         sort_order = request.args.get('sort', 'newest')
         if not month_key:
-            return jsonify({'error': 'month parameter required (format: YYYY-MM or undated)'}), 400
+            return jsonify({
+                'error': 'month parameter required (format: YYYY-MM, undated, or import:…)',
+            }), 400
 
         conn = get_db_connection()
         cursor = conn.cursor()

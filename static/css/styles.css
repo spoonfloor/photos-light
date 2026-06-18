@@ -457,6 +457,33 @@ body.trash-view-active .photo-card .star-badge {
   color: var(--filter-chip-text-active-hover);
 }
 
+.catalog-filter-zero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - var(--app-chrome-height, 112px) - 48px);
+  padding: 24px;
+  color: var(--text-color);
+}
+
+.catalog-filter-zero-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  text-align: center;
+}
+
+.catalog-filter-zero-heading {
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+
+.catalog-filter-zero-detail {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
 .app-bar-icon-button {
   display: flex;
   align-items: center;
