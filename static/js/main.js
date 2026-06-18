@@ -199,7 +199,7 @@ const DEFAULT_VIEW_CAPABILITIES = Object.freeze({
   restore: false,
   import: true,
   catalogFilters: true,
-  gridStarBadge: true,
+  gridStarBadge: 'interactive',
   deleteKind: 'soft',
   deleteAppBarLabel: 'Delete selected',
   deleteLightboxLabel: 'Delete',
@@ -4407,10 +4407,15 @@ async function applyDateEditPatch(data) {
 let catalogFilterApplyId = 0;
 
 async function refreshActiveVirtualGridMonthIndex(options = {}) {
-  const { scrollTargetMonth = null, preserveScroll = true } = options;
+  const {
+    scrollTargetMonth = null,
+    preserveScroll = true,
+    requireServerIndex = false,
+  } = options;
   const result = await VirtualGrid.refreshMonthIndex(state.currentSortOrder, {
     scrollTargetMonth,
     preserveScroll,
+    requireServerIndex,
     ...getCatalogFilterOptions(),
   });
   if (result === 'zero') {
@@ -4450,6 +4455,14 @@ function reconcileCatalogEmptyAfterGridLoad(index) {
 }
 
 function showFilterZeroState(options = {}) {
+  if (
+    typeof VirtualGrid !== 'undefined' &&
+    VirtualGrid.isActive() &&
+    VirtualGrid.isCatalogFilterZeroActive()
+  ) {
+    syncCatalogFilterZeroChrome();
+    return;
+  }
   if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
     VirtualGrid.destroy();
   }
@@ -4677,20 +4690,35 @@ function syncLightboxStarButton(photo) {
   );
 }
 
-async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
-  if (currentPhotoLoad?.promise) {
-    try {
-      await currentPhotoLoad.promise;
-    } catch {
-      /* in-flight load aborted or failed — continue with sync */
-    }
+function abortInFlightPhotoLoad() {
+  if (currentPhotoLoadAbortController) {
+    currentPhotoLoadAbortController.abort();
+    currentPhotoLoadAbortController = null;
   }
+  currentPhotoLoad = null;
+  state.loading = false;
+}
+
+function getDatePickerYears() {
+  const yearPicker = document.getElementById('yearPicker');
+  if (!yearPicker) {
+    return null;
+  }
+  const years = Array.from(yearPicker.options)
+    .map((option) => parseInt(option.value, 10))
+    .filter((year) => Number.isFinite(year));
+  return years.length > 0 ? years : null;
+}
+
+async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
+  abortInFlightPhotoLoad();
 
   if (VirtualGrid.isActive()) {
     try {
       await refreshActiveVirtualGridMonthIndex({
         scrollTargetMonth,
         preserveScroll: !scrollTargetMonth,
+        requireServerIndex: true,
       });
     } catch (error) {
       console.error('❌ Failed to sync grid after histogram change:', error);
@@ -4731,13 +4759,7 @@ function updateRecentImportsFilterUi() {
 }
 
 async function syncGridAfterSortChange() {
-  if (currentPhotoLoad?.promise) {
-    try {
-      await currentPhotoLoad.promise;
-    } catch {
-      /* in-flight load aborted or failed — continue with sync */
-    }
-  }
+  abortInFlightPhotoLoad();
 
   if (isRecentImportsFilterActive()) {
     state.activeFilters.recentImports = false;
@@ -4747,7 +4769,12 @@ async function syncGridAfterSortChange() {
   if (VirtualGrid.isActive()) {
     try {
       await refreshActiveVirtualGridMonthIndex({ preserveScroll: true });
-      await populateDatePicker();
+      const years = getDatePickerYears();
+      if (years) {
+        applyDatePickerFromYears(years);
+      } else {
+        await populateDatePicker();
+      }
     } catch (error) {
       console.error('❌ Failed to sync grid after sort change:', error);
     }
@@ -5565,8 +5592,18 @@ function updateLightboxRotateButtonState(
 }
 
 function buildGridStarBadgeHTML(favorited = false) {
-  if (!getViewCapabilities().gridStarBadge) {
+  const mode = getViewCapabilities().gridStarBadge;
+  if (!mode) {
     return '';
+  }
+  if (mode === 'readonly') {
+    if (!favorited) {
+      return '';
+    }
+    return (
+      '<span class="star-badge star-badge--readonly" aria-hidden="true">' +
+      '<span class="material-symbols-outlined filled">star</span></span>'
+    );
   }
   const filledClass = favorited ? ' filled' : '';
   return (
@@ -5576,7 +5613,8 @@ function buildGridStarBadgeHTML(favorited = false) {
 }
 
 function applyGridStarBadgeState(photoIdOrCard, favorited) {
-  if (!getViewCapabilities().gridStarBadge) {
+  const mode = getViewCapabilities().gridStarBadge;
+  if (!mode) {
     return;
   }
   const card =
@@ -5584,6 +5622,19 @@ function applyGridStarBadgeState(photoIdOrCard, favorited) {
       ? photoIdOrCard
       : document.querySelector(`.photo-card[data-id="${photoIdOrCard}"]`);
   if (!card) {
+    return;
+  }
+
+  if (mode === 'readonly') {
+    card.classList.toggle('is-starred', favorited);
+    const badge = card.querySelector('.star-badge');
+    if (!favorited) {
+      badge?.remove();
+      return;
+    }
+    if (!badge) {
+      card.insertAdjacentHTML('beforeend', buildGridStarBadgeHTML(true));
+    }
     return;
   }
 
@@ -7750,6 +7801,7 @@ async function applyPhotoFiltersAsync() {
   const applyId = ++catalogFilterApplyId;
   const isStaleApply = () => applyId !== catalogFilterApplyId;
 
+  abortInFlightPhotoLoad();
   updateRecentImportsFilterUi();
 
   if (!VirtualGrid.isActive() && shouldUseVirtualGrid()) {
@@ -7777,9 +7829,7 @@ async function applyPhotoFiltersAsync() {
       return;
     }
     if (result === 'zero') {
-      showFilterZeroState({
-        recentImports: Boolean(state.activeFilters.recentImports),
-      });
+      syncCatalogFilterZeroChrome();
       updateFilterChipUI();
       return;
     }
@@ -8188,7 +8238,7 @@ function ensureGridInteractionsWired() {
     if (starBadge && container.contains(starBadge)) {
       event.stopPropagation();
       event.preventDefault();
-      if (!getViewCapabilities().gridStarBadge) {
+      if (getViewCapabilities().gridStarBadge !== 'interactive') {
         return;
       }
       const photoId = parseInt(

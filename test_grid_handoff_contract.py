@@ -84,10 +84,8 @@ class TestGridHandoffContract(unittest.TestCase):
         self.assertRegex(body, r"remount:\s*wasProvisional")
 
     def test_month_hydration_targets_virtual_sections_not_anchor(self):
-        self.assertIn(
-            'return `.virtual-month-section[data-month="${monthKey}"]`;',
-            self.virtual_grid_js,
-        )
+        selector_body = _function_body(self.virtual_grid_js, "monthSectionSelector")
+        self.assertIn('data-month="${escaped}"', selector_body)
         for name in (
             "hydrateMonthSection",
             "mountHydratedMonthSection",
@@ -264,6 +262,32 @@ class TestGridHandoffContract(unittest.TestCase):
         self.assertGreaterEqual(invalidate_at, 0)
         self.assertGreaterEqual(log_path_at, 0)
         self.assertGreater(invalidate_at, log_path_at)
+
+    def test_transition_catalog_view_unifies_filter_and_refresh(self):
+        body = self.virtual_grid_js
+        self.assertIn("function transitionCatalogView", body)
+        apply_filter_body = _function_body(body, "applyCatalogFilter")
+        refresh_body = _function_body(body, "refreshMonthIndex")
+        self.assertIn("return transitionCatalogView", apply_filter_body)
+        self.assertIn("return transitionCatalogView", refresh_body)
+        self.assertIn("function beginCatalogViewTransition", body)
+        self.assertIn("function applySortOrderInstant", body)
+
+    def test_filter_zero_keeps_virtual_grid_alive(self):
+        apply_body = _function_body(self.main_js, "applyPhotoFiltersAsync")
+        self.assertIn("syncCatalogFilterZeroChrome()", apply_body)
+        self.assertNotIn("showFilterZeroState", apply_body)
+        zero_body = _function_body(self.main_js, "showFilterZeroState")
+        self.assertIn("VirtualGrid.isCatalogFilterZeroActive()", zero_body)
+
+    def test_histogram_sync_requires_server_index(self):
+        body = _function_body(self.main_js, "syncGridAfterHistogramChange")
+        self.assertIn("requireServerIndex: true", body)
+
+    def test_sort_sync_skips_blocking_photo_load_wait(self):
+        body = _function_body(self.main_js, "syncGridAfterSortChange")
+        self.assertIn("abortInFlightPhotoLoad()", body)
+        self.assertNotIn("await currentPhotoLoad.promise", body)
 
 
 if __name__ == "__main__":

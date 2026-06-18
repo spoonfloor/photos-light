@@ -1903,6 +1903,310 @@ const VirtualGrid = (() => {
     }
   }
 
+  function reindexForSort(indexPayload, sortOrderNext) {
+    if (!indexPayload) {
+      return null;
+    }
+    return {
+      ...indexPayload,
+      sort: sortOrderNext,
+      months: GridLayout.sortMonthEntries(
+        indexPayload.months || [],
+        sortOrderNext,
+      ),
+    };
+  }
+
+  /** Frame-0 feedback: pending placeholders + comfort before index fetch completes. */
+  function beginCatalogViewTransition(options = {}) {
+    const { preserveScroll = true, axisChangeExpected = false } = options;
+    clearCatalogFilterZeroOverlay();
+
+    const scrollTop = getScrollElement().scrollTop;
+    const preserveMonth =
+      layout && !layout.provisional && preserveScroll && !axisChangeExpected
+        ? GridLayout.findMonthAtScrollTop(layout, scrollTop, 80)
+        : null;
+
+    if (layout && !layout.provisional && contentLayer) {
+      const strictVisible = GridLayout.findSectionsInStrictViewport(
+        layout,
+        scrollTop,
+        window.innerHeight,
+      );
+      strictVisible.forEach((section) => {
+        const monthKey = section.month;
+        if (hydratedMonths.has(monthKey)) {
+          unmountMonth(monthKey);
+          hydratedMonths.delete(monthKey);
+          committedMonths.delete(monthKey);
+        }
+        mountPlaceholderSection(section, { pending: true });
+      });
+      if (strictVisible.length > 0) {
+        setComfortVisible(true);
+        syncTileLayer();
+      }
+    }
+
+    return { preserveMonth, scrollTop };
+  }
+
+  function resortAllMonthCaches() {
+    for (const [monthKey, photos] of monthCache.entries()) {
+      monthCache.set(monthKey, sortMonthPhotos(photos));
+    }
+  }
+
+  function applySortOrderInstant(sortOrderNext, preserveMonth) {
+    const sourceIndex = unfilteredMonthIndex || monthIndex;
+    if (!sourceIndex || layout?.provisional) {
+      return false;
+    }
+
+    const reindexed = reindexForSort(sourceIndex, sortOrderNext);
+    if (!reindexed) {
+      return false;
+    }
+
+    sortOrder = sortOrderNext;
+    resortAllMonthCaches();
+    rememberUnfilteredIndex(reindexed);
+
+    if (!applyCatalogFilterWarm(reindexed, preserveMonth)) {
+      return false;
+    }
+
+    if (hooks.onIndexReady) {
+      hooks.onIndexReady(reindexed);
+    }
+    return true;
+  }
+
+  function finishCatalogViewLayout(
+    indexPayload,
+    {
+      preserveMonth = null,
+      scrollTargetMonth = null,
+      wasProvisional = false,
+      previousScrollTop = 0,
+      clearMonthCache = false,
+      axisChanged = false,
+    } = {},
+  ) {
+    const container = getContainer();
+    if (!container) {
+      return false;
+    }
+
+    const scrollPreserveMonth = axisChanged ? null : preserveMonth;
+
+    if (clearMonthCache) {
+      monthCache.clear();
+    }
+    monthInflight.clear();
+    hydratedMonths = new Set();
+    clearMountedMonths();
+    rebuildLayoutFromIndex(indexPayload, container, { remount: true });
+    if (hooks.onIndexReady) {
+      hooks.onIndexReady(indexPayload);
+    }
+    scheduleSync();
+
+    const nextHeight = layout?.totalHeight ?? 0;
+    const maxScrollTop = Math.max(
+      0,
+      nextHeight - (window.innerHeight || document.documentElement.clientHeight),
+    );
+
+    if (scrollTargetMonth) {
+      scrollToMonth(scrollTargetMonth);
+    } else if (wasProvisional) {
+      restoreScrollMonthAfterLayoutChange(indexPayload, scrollPreserveMonth);
+    } else if (scrollPreserveMonth) {
+      restoreScrollMonthAfterLayoutChange(indexPayload, scrollPreserveMonth);
+    } else if (previousScrollTop > maxScrollTop + 1) {
+      const anchor = indexPayload?.months?.[0]?.month || null;
+      if (anchor) {
+        scrollToMonth(anchor);
+      } else {
+        window.scrollTo({ top: 0, behavior: 'instant' });
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Unified catalog-view transition — instant comfort/placeholders, then month_index refine.
+   * Used by filter toggle, sort toggle, and histogram sync.
+   */
+  async function transitionCatalogView(options = {}) {
+    const {
+      sortOrderNext = librarySortOrder(),
+      filterOptions = {},
+      selectedIds = null,
+      catalogFilterPhoto = null,
+      scrollTargetMonth = null,
+      preserveScroll = true,
+      requireServerIndex = false,
+    } = options;
+
+    const container = getContainer();
+    if (!container || !layout) {
+      return false;
+    }
+
+    const selectionActive = Boolean(selectedIds?.size);
+    const hasCatalogFilter = catalogFilterActive(filterOptions);
+    const hasFilter = hasCatalogFilter || selectionActive;
+    const previousAxis = monthIndex?.section_axis || 'date_taken';
+    const scrollTop = getScrollElement().scrollTop;
+    const preserveMonth =
+      layout && !layout.provisional && preserveScroll && !scrollTargetMonth
+        ? GridLayout.findMonthAtScrollTop(layout, scrollTop, 80)
+        : null;
+
+    const currentSort = monthIndex?.sort || sortOrder;
+    const isSortOnly =
+      !requireServerIndex &&
+      !hasFilter &&
+      sortOrderNext !== currentSort &&
+      (unfilteredMonthIndex || monthIndex);
+
+    if (
+      isSortOnly &&
+      applySortOrderInstant(
+        sortOrderNext,
+        scrollTargetMonth || preserveMonth,
+      )
+    ) {
+      return true;
+    }
+
+    let indexPayload = null;
+
+    if (!hasCatalogFilter) {
+      if (unfilteredMonthIndex) {
+        indexPayload = unfilteredMonthIndex;
+      } else if (!requireServerIndex && monthIndex && !monthIndex.filtered) {
+        indexPayload = monthIndex;
+      }
+    }
+
+    if (indexPayload && selectionActive) {
+      indexPayload = buildSelectionScopeIndex(
+        selectedIds,
+        catalogFilterPhoto,
+        indexPayload,
+      );
+      if ((indexPayload.total ?? 0) === 0) {
+        applyCatalogFilterZeroMatch(indexPayload, filterOptions);
+        return 'zero';
+      }
+      const axisChanged = previousAxis !== (indexPayload?.section_axis || 'date_taken');
+      if (
+        applyCatalogFilterWarm(
+          indexPayload,
+          axisChanged ? null : preserveMonth,
+        )
+      ) {
+        if (hooks.onIndexReady) {
+          hooks.onIndexReady(indexPayload);
+        }
+        return true;
+      }
+    } else if (indexPayload && !selectionActive && !requireServerIndex) {
+      const axisChanged = previousAxis !== (indexPayload?.section_axis || 'date_taken');
+      if (
+        applyCatalogFilterWarm(
+          indexPayload,
+          axisChanged ? null : preserveMonth,
+        )
+      ) {
+        if (hooks.onIndexReady) {
+          hooks.onIndexReady(indexPayload);
+        }
+        return true;
+      }
+    }
+
+    const axisChangeExpected =
+      Boolean(filterOptions.importSets) && previousAxis !== 'import';
+    const { preserveMonth: transitionPreserveMonth, scrollTop: previousScrollTop } =
+      beginCatalogViewTransition({
+        preserveScroll: preserveScroll && !scrollTargetMonth,
+        axisChangeExpected,
+      });
+
+    const response = await fetch(
+      buildMonthIndexUrl(sortOrderNext, filterOptions),
+    );
+    indexPayload = await response.json();
+    if (!response.ok) {
+      throw new Error(indexPayload.error || 'Failed to load month index');
+    }
+
+    if (hasCatalogFilter && (indexPayload.total ?? 0) === 0) {
+      applyCatalogFilterZeroMatch(indexPayload, filterOptions);
+      return 'zero';
+    }
+
+    sortOrder = sortOrderNext;
+
+    if (selectionActive) {
+      indexPayload = buildSelectionScopeIndex(
+        selectedIds,
+        catalogFilterPhoto,
+        indexPayload,
+      );
+      if ((indexPayload.total ?? 0) === 0) {
+        applyCatalogFilterZeroMatch(indexPayload, filterOptions);
+        return 'zero';
+      }
+    }
+
+    const nextAxis = indexPayload?.section_axis || 'date_taken';
+    const axisChanged = previousAxis !== nextAxis;
+    const wasProvisional = Boolean(layout?.provisional);
+
+    const canWarmRestore =
+      !hasFilter &&
+      unfilteredMonthIndex &&
+      indexPayload === unfilteredMonthIndex &&
+      !wasProvisional &&
+      !requireServerIndex;
+    const canWarmApply =
+      hasFilter &&
+      monthCache.size > 0 &&
+      !wasProvisional &&
+      !axisChanged &&
+      !requireServerIndex;
+
+    if (canWarmRestore || canWarmApply) {
+      if (
+        applyCatalogFilterWarm(
+          indexPayload,
+          axisChanged ? null : transitionPreserveMonth,
+        )
+      ) {
+        if (hooks.onIndexReady) {
+          hooks.onIndexReady(indexPayload);
+        }
+        return true;
+      }
+    }
+
+    return finishCatalogViewLayout(indexPayload, {
+      preserveMonth: transitionPreserveMonth,
+      scrollTargetMonth,
+      wasProvisional,
+      previousScrollTop,
+      clearMonthCache: requireServerIndex,
+      axisChanged,
+    });
+  }
+
   /**
    * Update layout + mounted sections in place. Month hydration cache stays warm.
    */
@@ -1946,92 +2250,12 @@ const VirtualGrid = (() => {
     selectedIds = null,
     catalogFilterPhoto = null,
   } = {}) {
-    const filterOptions = { starred, video, importSets };
-    const container = getContainer();
-    if (!container || !layout) {
-      return false;
-    }
-
-    clearCatalogFilterZeroOverlay();
-
-    const selectionActive = Boolean(selectedIds?.size);
-    const hasCatalogFilter = catalogFilterActive(filterOptions);
-    const hasFilter = hasCatalogFilter || selectionActive;
-    const previousScrollTop = getScrollElement().scrollTop;
-    const previousAxis = monthIndex?.section_axis || 'date_taken';
-    const preserveMonth = layout.provisional
-      ? null
-      : GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80);
-
-    let indexPayload;
-    if (!hasCatalogFilter) {
-      if (unfilteredMonthIndex) {
-        indexPayload = unfilteredMonthIndex;
-      } else {
-        const response = await fetch(buildMonthIndexUrl(librarySortOrder(), {}));
-        indexPayload = await response.json();
-        if (!response.ok) {
-          throw new Error(indexPayload.error || 'Failed to restore month index');
-        }
-      }
-    } else {
-      const response = await fetch(
-        buildMonthIndexUrl(librarySortOrder(), filterOptions),
-      );
-      indexPayload = await response.json();
-      if (!response.ok) {
-        throw new Error(indexPayload.error || 'Failed to load filtered month index');
-      }
-      if ((indexPayload.total ?? 0) === 0) {
-        applyCatalogFilterZeroMatch(indexPayload, filterOptions);
-        return 'zero';
-      }
-    }
-
-    if (selectionActive) {
-      const scopedIndex = buildSelectionScopeIndex(
-        selectedIds,
-        catalogFilterPhoto,
-        indexPayload,
-      );
-      if ((scopedIndex.total ?? 0) === 0) {
-        applyCatalogFilterZeroMatch(scopedIndex, filterOptions);
-        return 'zero';
-      }
-      indexPayload = scopedIndex;
-    }
-
-    const nextAxis = indexPayload?.section_axis || 'date_taken';
-    const axisChanged = previousAxis !== nextAxis;
-    const scrollPreserveMonth = axisChanged ? null : preserveMonth;
-
-    const canWarmRestore =
-      !hasFilter &&
-      unfilteredMonthIndex &&
-      indexPayload === unfilteredMonthIndex &&
-      !layout.provisional;
-    const canWarmApply =
-      hasFilter && monthCache.size > 0 && !layout.provisional && !axisChanged;
-
-    if (canWarmRestore || canWarmApply) {
-      if (applyCatalogFilterWarm(indexPayload, scrollPreserveMonth)) {
-        if (hooks.onIndexReady) {
-          hooks.onIndexReady(indexPayload);
-        }
-        return true;
-      }
-    }
-
-    monthInflight.clear();
-    hydratedMonths = new Set();
-    clearMountedMonths();
-    rebuildLayoutFromIndex(indexPayload, container, { remount: true });
-    if (hooks.onIndexReady) {
-      hooks.onIndexReady(indexPayload);
-    }
-    scheduleSync();
-    restoreScrollMonthAfterLayoutChange(indexPayload, scrollPreserveMonth);
-    return true;
+    return transitionCatalogView({
+      filterOptions: { starred, video, importSets },
+      selectedIds,
+      catalogFilterPhoto,
+      requireServerIndex: false,
+    });
   }
 
   async function refreshMonthIndex(sortOrderNext = sortOrder, options = {}) {
@@ -2041,75 +2265,16 @@ const VirtualGrid = (() => {
       starred = false,
       video = false,
       importSets = null,
+      requireServerIndex = false,
     } = options;
-    const filterOptions = { starred, video, importSets };
-    const container = getContainer();
-    if (!container) {
-      return false;
-    }
-    const wasProvisional = Boolean(layout?.provisional);
-    const previousScrollTop = getScrollElement().scrollTop;
-    const previousHeight = layout?.totalHeight ?? 0;
-    const preserveMonth =
-      preserveScroll && layout && !wasProvisional
-        ? GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80)
-        : null;
-    const handoffMonth =
-      scrollTargetMonth ||
-      anchorMonthKey ||
-      null;
 
-    const response = await fetch(
-      buildMonthIndexUrl(sortOrderNext || librarySortOrder(), filterOptions),
-    );
-    const indexPayload = await response.json();
-    if (!response.ok) {
-      throw new Error(indexPayload.error || 'Failed to refresh month index');
-    }
-    const hasFilter = catalogFilterActive(filterOptions);
-    if (hasFilter && (indexPayload.total ?? 0) === 0) {
-      applyCatalogFilterZeroMatch(indexPayload, filterOptions);
-      return 'zero';
-    }
-    clearCatalogFilterZeroOverlay();
-    sortOrder = sortOrderNext || librarySortOrder();
-    monthCache.clear();
-    monthInflight.clear();
-    hydratedMonths = new Set();
-    clearMountedMonths();
-    rebuildLayoutFromIndex(indexPayload, container, { remount: true });
-    if (hooks.onIndexReady) {
-      hooks.onIndexReady(indexPayload);
-    }
-    scheduleSync();
-
-    const nextHeight = layout?.totalHeight ?? 0;
-    const maxScrollTop = Math.max(
-      0,
-      nextHeight - (window.innerHeight || document.documentElement.clientHeight),
-    );
-
-    if (scrollTargetMonth) {
-      scrollToMonth(scrollTargetMonth);
-    } else if (wasProvisional) {
-      const anchor = handoffMonth || indexPayload?.months?.[0]?.month || null;
-      if (anchor) {
-        scrollToMonth(anchor);
-      } else {
-        window.scrollTo({ top: 0, behavior: 'instant' });
-      }
-    } else if (preserveMonth) {
-      restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
-    } else if (previousScrollTop > maxScrollTop + 1) {
-      const anchor = indexPayload?.months?.[0]?.month || null;
-      if (anchor) {
-        scrollToMonth(anchor);
-      } else {
-        window.scrollTo({ top: 0, behavior: 'instant' });
-      }
-    }
-
-    return true;
+    return transitionCatalogView({
+      sortOrderNext: sortOrderNext || librarySortOrder(),
+      filterOptions: { starred, video, importSets },
+      scrollTargetMonth,
+      preserveScroll,
+      requireServerIndex,
+    });
   }
 
   function visibleMonthPhotos(photos) {
@@ -2238,6 +2403,7 @@ const VirtualGrid = (() => {
     rebuildMountedMonthForPhoto,
     resortMonthCachePhoto,
     refreshMonthIndex,
+    transitionCatalogView,
     setFilterPhoto,
     applyCatalogFilter,
     scheduleSync,

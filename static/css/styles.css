@@ -281,10 +281,6 @@ body.trash-view-active #lightboxDownloadBtn {
   display: none !important;
 }
 
-body.trash-view-active .photo-card .star-badge {
-  display: none !important;
-}
-
 /* Prevent white flash before app-bar injects */
 #appChromeMount {
   position: fixed;
@@ -830,10 +826,16 @@ body.trash-view-active .photo-card .star-badge {
   -webkit-tap-highlight-color: transparent;
 }
 
-.photo-card.is-starred .star-badge,
-.photo-card:hover .star-badge {
+.photo-card.is-starred .star-badge:not(.star-badge--readonly),
+.photo-card:hover .star-badge:not(.star-badge--readonly) {
   opacity: 1;
   pointer-events: auto;
+}
+
+.photo-card .star-badge.star-badge--readonly {
+  opacity: 1;
+  pointer-events: none;
+  cursor: default;
 }
 
 .photo-card .star-badge .material-symbols-outlined {
