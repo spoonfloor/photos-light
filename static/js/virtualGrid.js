@@ -1785,6 +1785,111 @@ const VirtualGrid = (() => {
     hooks.filterPhoto = typeof filterPhoto === 'function' ? filterPhoto : null;
   }
 
+  function resolvePhotoForSelectionScope(photoId) {
+    const normalizedId = Number(photoId);
+    const cached = findCachedPhoto(normalizedId);
+    if (cached?.photo) {
+      return cached.photo;
+    }
+    if (typeof hooks.findPhotoInState === 'function') {
+      const fromState = hooks.findPhotoInState(normalizedId);
+      if (fromState) {
+        return fromState;
+      }
+    }
+    const card = contentLayer?.querySelector(
+      `.photo-card[data-id="${normalizedId}"]`,
+    );
+    if (card) {
+      const monthKey = card.closest('.month-section')?.dataset?.month;
+      if (monthKey) {
+        return { id: normalizedId, month: monthKey };
+      }
+    }
+    return null;
+  }
+
+  function buildSelectionScopeIndex(selectedIds, catalogFilterPhoto = null) {
+    const idSet = new Set([...selectedIds].map((id) => Number(id)));
+    const monthCounts = new Map();
+    let total = 0;
+
+    for (const photoId of idSet) {
+      const photo = resolvePhotoForSelectionScope(photoId);
+      if (!photo) {
+        continue;
+      }
+      if (catalogFilterPhoto && !catalogFilterPhoto(photo)) {
+        continue;
+      }
+      const monthKey = photo.month || 'undated';
+      monthCounts.set(monthKey, (monthCounts.get(monthKey) || 0) + 1);
+      total += 1;
+    }
+
+    const sort = librarySortOrder();
+    const months = GridLayout.sortMonthEntries(
+      [...monthCounts.entries()].map(([month, count]) => ({ month, count })),
+      sort,
+    );
+    const undatedEntry = months.find((entry) => entry.month === 'undated');
+    return {
+      months,
+      total,
+      undated_count: undatedEntry?.count || 0,
+      sort,
+      section_axis: monthIndex?.section_axis || 'date_taken',
+      filtered: true,
+      selectionScope: true,
+    };
+  }
+
+  /**
+   * Rebuild layout from a client-built index of selected photo IDs (no server round-trip).
+   */
+  async function applySelectionScope(selectedIds, catalogFilterPhoto = null) {
+    const container = getContainer();
+    if (!container || !layout) {
+      return false;
+    }
+
+    clearCatalogFilterZeroOverlay();
+
+    const previousScrollTop = getScrollElement().scrollTop;
+    const preserveMonth = layout.provisional
+      ? null
+      : GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80);
+
+    const indexPayload = buildSelectionScopeIndex(
+      selectedIds,
+      catalogFilterPhoto,
+    );
+    if ((indexPayload.total ?? 0) === 0) {
+      applyCatalogFilterZeroMatch(indexPayload, {});
+      return 'zero';
+    }
+
+    if (monthCache.size > 0 && !layout.provisional) {
+      if (applyCatalogFilterWarm(indexPayload, preserveMonth)) {
+        if (hooks.onIndexReady) {
+          hooks.onIndexReady(indexPayload);
+        }
+        return true;
+      }
+    }
+
+    monthInflight.clear();
+    hydratedMonths = new Set();
+    clearMountedMonths();
+    rebuildLayoutFromIndex(indexPayload, container, { remount: true });
+    if (hooks.onIndexReady) {
+      hooks.onIndexReady(indexPayload);
+    }
+    scheduleSync();
+    restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
+    return true;
+  }
+
   function restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth) {
     if (preserveMonth) {
       const resolvedMonth = GridLayout.resolveJumpMonth(
@@ -2125,6 +2230,7 @@ const VirtualGrid = (() => {
     resortMonthCachePhoto,
     refreshMonthIndex,
     setFilterPhoto,
+    applySelectionScope,
     applyCatalogFilter,
     scheduleSync,
     getLayout,

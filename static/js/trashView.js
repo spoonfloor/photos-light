@@ -4,10 +4,50 @@
 const TrashView = (() => {
   let trashChromeWired = false;
   let appBarRestoreWired = false;
-  let lightboxRestoreWired = false;
+
+  const LIBRARY_VIEW_CAPABILITIES = Object.freeze({
+    rotate: true,
+    star: true,
+    editDate: true,
+    download: true,
+    restore: false,
+    import: true,
+    catalogFilters: true,
+    gridStarBadge: true,
+    deleteKind: 'soft',
+    deleteAppBarLabel: 'Delete selected',
+    deleteLightboxLabel: 'Delete',
+  });
+
+  const TRASH_VIEW_CAPABILITIES = Object.freeze({
+    rotate: false,
+    star: false,
+    editDate: false,
+    download: false,
+    restore: true,
+    import: false,
+    catalogFilters: false,
+    gridStarBadge: false,
+    deleteKind: 'permanent',
+    deleteAppBarLabel: 'Delete permanently',
+    deleteLightboxLabel: 'Delete permanently',
+  });
 
   function isActive() {
     return Boolean(state.trashViewActive);
+  }
+
+  function getViewCapabilities() {
+    return isActive() ? TRASH_VIEW_CAPABILITIES : LIBRARY_VIEW_CAPABILITIES;
+  }
+
+  function resetCatalogFiltersForTrashView() {
+    state.activeFilters.starred = false;
+    state.activeFilters.video = false;
+    state.activeFilters.recentImports = false;
+    if (typeof updateFilterChipUI === 'function') {
+      updateFilterChipUI();
+    }
   }
 
   function formatRestoreResultToast(restored, merged, { restoreAll = false } = {}) {
@@ -107,30 +147,24 @@ const TrashView = (() => {
   }
 
   function updateAppBarForMode() {
-    const active = isActive();
+    const caps = getViewCapabilities();
     const addPhotoBtn = document.getElementById('addPhotoBtn');
     const editDateBtn = document.getElementById('editDateBtn');
     const restoreBtn = document.getElementById('restoreBtn');
     const deleteBtn = document.getElementById('deleteBtn');
 
     if (addPhotoBtn) {
-      addPhotoBtn.hidden = active;
+      addPhotoBtn.hidden = !caps.import;
     }
     if (editDateBtn) {
-      editDateBtn.hidden = active;
+      editDateBtn.hidden = !caps.editDate;
     }
     if (restoreBtn) {
-      restoreBtn.hidden = !active;
+      restoreBtn.hidden = !caps.restore;
     }
     if (deleteBtn) {
-      deleteBtn.setAttribute(
-        'title',
-        active ? 'Delete permanently' : 'Delete selected',
-      );
-      deleteBtn.setAttribute(
-        'aria-label',
-        active ? 'Delete permanently' : 'Delete',
-      );
+      deleteBtn.setAttribute('title', caps.deleteAppBarLabel);
+      deleteBtn.setAttribute('aria-label', caps.deleteAppBarLabel);
     }
 
     updateTrashMenuItems();
@@ -187,7 +221,7 @@ const TrashView = (() => {
   }
 
   function updateLightboxForMode() {
-    const active = isActive();
+    const caps = getViewCapabilities();
     const rotateBtn = document.getElementById('lightboxRotateBtn');
     const editDateBtn = document.getElementById('lightboxEditDateBtn');
     const starBtn = document.getElementById('lightboxStarBtn');
@@ -195,20 +229,14 @@ const TrashView = (() => {
     const downloadBtn = document.getElementById('lightboxDownloadBtn');
     const deleteBtn = document.getElementById('lightboxDeleteBtn');
 
-    if (rotateBtn) rotateBtn.hidden = active;
-    if (editDateBtn) editDateBtn.hidden = active;
-    if (starBtn) starBtn.hidden = active;
-    if (downloadBtn) downloadBtn.hidden = active;
-    if (restoreBtn) restoreBtn.hidden = !active;
+    if (rotateBtn) rotateBtn.hidden = !caps.rotate;
+    if (editDateBtn) editDateBtn.hidden = !caps.editDate;
+    if (starBtn) starBtn.hidden = !caps.star;
+    if (downloadBtn) downloadBtn.hidden = !caps.download;
+    if (restoreBtn) restoreBtn.hidden = !caps.restore;
     if (deleteBtn) {
-      deleteBtn.setAttribute(
-        'aria-label',
-        active ? 'Delete permanently' : 'Delete',
-      );
-      deleteBtn.setAttribute(
-        'title',
-        active ? 'Delete permanently' : 'Delete',
-      );
+      deleteBtn.setAttribute('aria-label', caps.deleteLightboxLabel);
+      deleteBtn.setAttribute('title', caps.deleteLightboxLabel);
     }
   }
 
@@ -267,6 +295,7 @@ const TrashView = (() => {
     if (state.lightboxOpen) {
       await closeLightbox({ commitRotations: false });
     }
+    resetCatalogFiltersForTrashView();
     state.trashViewActive = true;
     setChromeVisible(true);
     updateAppBarForMode();
@@ -359,28 +388,42 @@ const TrashView = (() => {
     showDialogOld(
       'Permanently delete photos',
       `Are you sure you want to permanently delete all ${total} photo${total > 1 ? 's' : ''}? ${permanentDeleteRecoveryNote(total)}`,
-      async () => {
-        try {
-          const response = await fetch('/api/trash/purge', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ all: true }),
-          });
-          const result = await response.json();
-          if (!response.ok) {
-            throw new Error(result.error || 'Empty trash failed');
+      () => {
+        void (async () => {
+          try {
+            await enqueueLibraryMutation({
+              applyOptimistic: () => {},
+              revertOptimistic: () => {},
+              execute: async () => {
+                const response = await fetch('/api/trash/purge', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ all: true }),
+                });
+                if (!response.ok) {
+                  return {
+                    ok: false,
+                    error: `Empty trash failed: ${response.status}`,
+                  };
+                }
+                const result = await response.json();
+                return { ok: true, ...result };
+              },
+              onSuccess: async (result) => {
+                clearTrashMutationSelection(false);
+                await syncAfterMutation({ processedIds: 'all' });
+                const count = result.purged || 0;
+                showToast(
+                  `Permanently deleted ${count} photo${count > 1 ? 's' : ''}`,
+                  null,
+                );
+              },
+              failureToast: 'Empty trash failed',
+            });
+          } catch (error) {
+            console.error('❌ Empty trash error:', error);
           }
-          clearTrashMutationSelection(false);
-          await syncAfterMutation({ processedIds: 'all' });
-          const count = result.purged || 0;
-          showToast(
-            `Permanently deleted ${count} photo${count > 1 ? 's' : ''}`,
-            null,
-          );
-        } catch (error) {
-          console.error('❌ Empty trash error:', error);
-          showToast('Empty trash failed', null);
-        }
+        })();
       },
       'Delete Forever',
     );
@@ -463,33 +506,48 @@ const TrashView = (() => {
     showDialogOld(
       title,
       message,
-      async () => {
-        try {
-          const response = await fetch('/api/trash/restore-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-          });
-          const result = await response.json();
-          if (!response.ok) {
-            throw new Error(result.error || 'Restore all failed');
+      () => {
+        void (async () => {
+          try {
+            await enqueueLibraryMutation({
+              applyOptimistic: () => {},
+              revertOptimistic: () => {},
+              execute: async () => {
+                const response = await fetch('/api/trash/restore-all', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                });
+                if (!response.ok) {
+                  const result = await response.json().catch(() => ({}));
+                  return {
+                    ok: false,
+                    error: result.error || `Restore all failed: ${response.status}`,
+                  };
+                }
+                const result = await response.json();
+                return { ok: true, ...result };
+              },
+              onSuccess: async (result) => {
+                clearTrashMutationSelection(false);
+                const processedIds = result.processed_ids?.length
+                  ? result.processed_ids
+                  : 'all';
+                await syncAfterMutation({ processedIds });
+                const restoredCount = result.restored || 0;
+                const mergedCount = result.merged || 0;
+                const toastMessage = formatRestoreResultToast(
+                  restoredCount,
+                  mergedCount,
+                  { restoreAll: true },
+                );
+                showToast(toastMessage || 'Nothing to restore', null);
+              },
+              failureToast: 'Restore all failed',
+            });
+          } catch (error) {
+            console.error('❌ Restore all error:', error);
           }
-          clearTrashMutationSelection(false);
-          const processedIds = result.processed_ids?.length
-            ? result.processed_ids
-            : 'all';
-          await syncAfterMutation({ processedIds });
-          const restoredCount = result.restored || 0;
-          const mergedCount = result.merged || 0;
-          const toastMessage = formatRestoreResultToast(
-            restoredCount,
-            mergedCount,
-            { restoreAll: true },
-          );
-          showToast(toastMessage || 'Nothing to restore', null);
-        } catch (error) {
-          console.error('❌ Restore all error:', error);
-          showToast('Restore all failed', null);
-        }
+        })();
       },
       'Restore',
     );
@@ -544,22 +602,6 @@ const TrashView = (() => {
     appBarRestoreWired = true;
   }
 
-  function wireLightboxRestore() {
-    if (lightboxRestoreWired) {
-      return;
-    }
-    const lightboxRestoreBtn = document.getElementById('lightboxRestoreBtn');
-    if (!lightboxRestoreBtn) {
-      return;
-    }
-    lightboxRestoreBtn.addEventListener('click', () => {
-      const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      if (!photoId) return;
-      void restorePhotos([photoId]);
-    });
-    lightboxRestoreWired = true;
-  }
-
   function init() {
     wireTrashChrome();
     updateTrashMenuItems();
@@ -576,7 +618,7 @@ const TrashView = (() => {
     restoreAll,
     confirmPermanentDelete,
     wireAppBarRestore,
-    wireLightboxRestore,
+    getViewCapabilities,
     formatRestoreResultToast,
     getPhotosApiRoot,
     getGridCatalogApiRoot,
