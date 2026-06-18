@@ -8,6 +8,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parent
 MAIN_JS = REPO_ROOT / "static" / "js" / "main.js"
+FLOW_CONTROLLER_JS = REPO_ROOT / "static" / "js" / "flowController.js"
 VIRTUAL_GRID_JS = REPO_ROOT / "static" / "js" / "virtualGrid.js"
 GRID_LAYOUT_JS = REPO_ROOT / "static" / "js" / "gridLayout.js"
 STYLES_CSS = REPO_ROOT / "static" / "css" / "styles.css"
@@ -55,13 +56,17 @@ class TestGridHandoffContract(unittest.TestCase):
         self.assertIn("!VirtualGrid.getLayout()?.provisional", body)
 
     def test_safe_library_fallback_destroys_client_grid_session(self):
-        body = _function_body(self.main_js, "renderSafeLibraryFallback")
-        self.assertIn("currentPhotoLoadAbortController.abort()", body)
-        self.assertIn("VirtualGrid.destroy()", body)
-        self.assertIn("ThumbnailQueue.clear()", body)
-        self.assertIn("resetPhotoWindowState()", body)
-        self.assertIn("state.photoTotalCount = 0", body)
-        self.assertIn("state.libraryPath = null", body)
+        release_body = _function_body(self.main_js, "releaseLibrarySession")
+        self.assertIn("teardownLibraryClientState()", release_body)
+        self.assertIn("state.libraryPath = null", release_body)
+        fallback_body = _function_body(self.main_js, "renderSafeLibraryFallback")
+        self.assertIn("releaseLibrarySession({ toFirstRun: true })", fallback_body)
+        teardown_body = _function_body(self.main_js, "teardownLibraryClientState")
+        self.assertIn("currentPhotoLoadAbortController.abort()", teardown_body)
+        self.assertIn("VirtualGrid.destroy()", teardown_body)
+        self.assertIn("ThumbnailQueue.clear()", teardown_body)
+        self.assertIn("resetPhotoWindowState()", teardown_body)
+        self.assertIn("state.photoTotalCount = 0", teardown_body)
 
     def test_virtual_grid_active_requires_connected_owned_dom(self):
         body = _function_body(self.virtual_grid_js, "isActive")
@@ -192,6 +197,61 @@ class TestGridHandoffContract(unittest.TestCase):
         self.assertIn("loadAndRenderPhotos", body)
         self.assertNotIn("/api/library/make-perfect/scan", body)
         self.assertNotIn("switchToLibraryWithBlockingNormalize", body)
+
+    def test_open_existing_library_closes_before_picker(self):
+        body = _function_body(self.main_js, "openExistingLibrary")
+        begin_at = body.find("await beginLibrarySwapFlow()")
+        picker_at = body.find("FolderPicker.show")
+        self.assertGreaterEqual(begin_at, 0)
+        self.assertGreaterEqual(picker_at, 0)
+        self.assertLess(begin_at, picker_at)
+        self.assertIn("skipRelease: true", body)
+
+    def test_convert_to_library_closes_before_picker(self):
+        body = _function_body(self.main_js, "convertToLibrary")
+        begin_at = body.find("await beginLibrarySwapFlow()")
+        picker_at = body.find("FolderPicker.show")
+        self.assertGreaterEqual(begin_at, 0)
+        self.assertGreaterEqual(picker_at, 0)
+        self.assertLess(begin_at, picker_at)
+
+    def test_begin_library_swap_flow_resets_server_and_client(self):
+        body = _function_body(self.main_js, "beginLibrarySwapFlow")
+        self.assertIn("clearLibraryConfigOnServer()", body)
+        self.assertIn("releaseLibrarySession({ toFirstRun: true })", body)
+
+    def test_switch_to_library_releases_before_bind_when_paths_differ(self):
+        body = _function_body(self.main_js, "switchToLibrary")
+        release_at = body.find("await releaseLibrarySession()")
+        switch_at = body.find("fetch('/api/library/switch'")
+        self.assertGreaterEqual(release_at, 0)
+        self.assertGreaterEqual(switch_at, 0)
+        self.assertLess(release_at, switch_at)
+        self.assertIn("isDifferentLibraryPath", body)
+        self.assertIn("releasedForSwap", body)
+        self.assertIn("restoreLibraryShellAfterFlowDismiss()", body)
+
+    def test_release_library_session_settles_flows_before_teardown(self):
+        body = _function_body(self.main_js, "releaseLibrarySession")
+        settle_at = body.find("FlowController.settleAllFlows")
+        teardown_at = body.find("teardownLibraryClientState()")
+        self.assertGreaterEqual(settle_at, 0)
+        self.assertGreaterEqual(teardown_at, 0)
+        self.assertLess(settle_at, teardown_at)
+
+    def test_render_safe_library_fallback_delegates_to_release(self):
+        body = _function_body(self.main_js, "renderSafeLibraryFallback")
+        self.assertIn("releaseLibrarySession({ toFirstRun: true })", body)
+        self.assertNotIn("VirtualGrid.destroy()", body)
+
+    def test_flow_controller_exposes_settle_all_flows(self):
+        self.assertIn("function settleAllFlows", FLOW_CONTROLLER_JS.read_text())
+
+    def test_safe_library_fallback_teardown_helper(self):
+        body = _function_body(self.main_js, "teardownLibraryClientState")
+        self.assertIn("VirtualGrid.destroy()", body)
+        self.assertIn("ThumbnailQueue.clear()", body)
+        self.assertIn("state.photoTotalCount = 0", body)
 
     def test_import_complete_invalidates_grid_caches_before_sse_complete(self):
         complete_branch = self.app_py.split("elif event_name == 'complete':", 1)[1]

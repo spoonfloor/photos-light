@@ -235,6 +235,31 @@ const FlowController = (() => {
     syncOverlayPhase(flowKey, null);
   }
 
+  /**
+   * End active flow overlays before a library swap (release → bind).
+   * Inflight runs are aborted; preflight/complete shells are dismissed.
+   * @param {{ exceptFlowKey?: string, reloadGrid?: boolean }} [options]
+   */
+  async function settleAllFlows(options = {}) {
+    const exceptFlowKey = options.exceptFlowKey || null;
+    const reloadGrid = options.reloadGrid ?? false;
+
+    for (const [flowKey, flow] of flows.entries()) {
+      if (flowKey === exceptFlowKey) {
+        continue;
+      }
+      const phase = flow.lifecyclePhase;
+      if (!phase || phase === 'idle') {
+        continue;
+      }
+      if (phase === 'inflight') {
+        await cancelRecovery(flowKey, { skipConfirm: true, reloadGrid });
+      } else {
+        await dismissOverlay(flowKey, { reloadGrid });
+      }
+    }
+  }
+
   return Object.freeze({
     LIFECYCLE_PHASES,
     init,
@@ -246,6 +271,7 @@ const FlowController = (() => {
     syncOverlayPhase,
     cancelRecovery,
     dismissOverlay,
+    settleAllFlows,
     hideRegisteredOverlays,
   });
 })();

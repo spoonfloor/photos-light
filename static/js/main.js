@@ -7762,17 +7762,14 @@ async function applyPhotoFiltersAsync() {
 
   VirtualGrid.setFilterPhoto(getActiveVirtualGridFilterPhoto());
   try {
-    let result;
-    if (isSelectionViewFilterActive()) {
-      result = await VirtualGrid.applySelectionScope(
-        state.selectedPhotos,
-        getCatalogFilterPredicate(),
-      );
-    } else {
-      result = await VirtualGrid.applyCatalogFilter(
-        getCatalogFilterOptions(),
-      );
-    }
+    const filterOptions = getCatalogFilterOptions();
+    const result = await VirtualGrid.applyCatalogFilter({
+      ...filterOptions,
+      selectedIds: isSelectionViewFilterActive()
+        ? state.selectedPhotos
+        : null,
+      catalogFilterPhoto: getCatalogFilterPredicate(),
+    });
     if (isStaleApply()) {
       return;
     }
@@ -13509,7 +13506,7 @@ async function executeTerraformFlow(options = {}) {
     );
 
     // Step 5: Switch to this library
-    return await switchToLibrary(path, dbPath);
+    return await switchToLibrary(path, dbPath, { skipRelease: true });
   } catch (error) {
     if (error?.name === 'AbortError') {
       endTerraformProgressUi();
@@ -13517,7 +13514,7 @@ async function executeTerraformFlow(options = {}) {
         'terraformProgressOverlay',
       );
       if (isFlowOverlayVisible(progressOverlay)) {
-        await FlowController.cancelRecovery('convert', { reloadGrid: true });
+        await FlowController.cancelRecovery('convert', { reloadGrid: false });
       }
       return false;
     }
@@ -13664,6 +13661,122 @@ function hideLibraryTransitionOverlay() {
   state.libraryTransitionActive = false;
 }
 
+function normalizeLibraryPathForCompare(path) {
+  if (!path) {
+    return '';
+  }
+  const trimmed = String(path).replace(/\/+$/, '');
+  return trimmed || String(path);
+}
+
+function isDifferentLibraryPath(targetPath, currentPath) {
+  if (!currentPath) {
+    return false;
+  }
+  return (
+    normalizeLibraryPathForCompare(targetPath) !==
+    normalizeLibraryPathForCompare(currentPath)
+  );
+}
+
+function teardownLibraryClientState() {
+  cancelPendingPhotoContainerMount();
+  advanceLibraryGeneration();
+  if (currentPhotoLoadAbortController) {
+    currentPhotoLoadAbortController.abort();
+    currentPhotoLoadAbortController = null;
+  }
+  currentPhotoLoad = null;
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    VirtualGrid.destroy();
+  }
+  if (typeof TrashView !== 'undefined') {
+    TrashView.resetViewState();
+  }
+  if (typeof ThumbnailQueue !== 'undefined') {
+    ThumbnailQueue.clear();
+  }
+  resetPhotoWindowState();
+  state.photos = [];
+  state.photoTotalCount = 0;
+  state.loading = false;
+  state.selectedPhotos.clear();
+  state.lastClickedIndex = null;
+  resetPhotoFilters();
+}
+
+async function clearLibraryConfigOnServer() {
+  const response = await fetch('/api/library/reset', {
+    method: 'DELETE',
+  });
+  const data = await response.json();
+  if (data.status !== 'success') {
+    throw new Error(data.error || 'Reset failed');
+  }
+}
+
+/**
+ * Close the current library (server + client) before Open / Convert / Create
+ * picker flows. Cancel leaves the first-run empty shell — no restore.
+ */
+async function beginLibrarySwapFlow() {
+  const current = await fetchCurrentLibraryInfo();
+  const hasServerLibrary = Boolean(current?.library_path);
+  const hasClientLibrary = Boolean(
+    state.hasDatabase ||
+      state.libraryPath ||
+      (Number(state.photoTotalCount) || 0) > 0 ||
+      (state.photos?.length ?? 0) > 0 ||
+      (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()),
+  );
+
+  if (!hasServerLibrary && !hasClientLibrary) {
+    return true;
+  }
+
+  try {
+    if (hasServerLibrary) {
+      await clearLibraryConfigOnServer();
+    }
+    await releaseLibrarySession({ toFirstRun: true });
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to begin library swap:', error);
+    showToast(`Error: ${error.message}`, 'error');
+    return false;
+  }
+}
+
+/**
+ * Release the active library session on the client before binding to another
+ * library (or before server reset). Keeps server config until switch/reset runs.
+ */
+async function releaseLibrarySession(options = {}) {
+  const { skipFlowSettle = false, toFirstRun = false } = options;
+
+  if (state.lightboxOpen) {
+    await closeLightbox({ commitRotations: false });
+  }
+
+  if (!skipFlowSettle && typeof FlowController !== 'undefined') {
+    await FlowController.settleAllFlows({ reloadGrid: false });
+  }
+
+  teardownLibraryClientState();
+
+  if (toFirstRun) {
+    state.hasDatabase = false;
+    state.libraryPath = null;
+    const datePickerContainer = document.querySelector('.date-picker');
+    if (datePickerContainer) {
+      datePickerContainer.style.visibility = 'hidden';
+    }
+    renderFirstRunEmptyState();
+    updateFilterChipRailVisibility();
+    enableAppBarButtons();
+  }
+}
+
 async function restorePreviousLibraryAfterFailedSwitch(previousLibrary) {
   if (!previousLibrary?.library_path) {
     return false;
@@ -13706,34 +13819,7 @@ function isCurrentLibraryGeneration(generation) {
 }
 
 function renderSafeLibraryFallback() {
-  cancelPendingPhotoContainerMount();
-  advanceLibraryGeneration();
-  if (currentPhotoLoadAbortController) {
-    currentPhotoLoadAbortController.abort();
-    currentPhotoLoadAbortController = null;
-  }
-  currentPhotoLoad = null;
-  if (typeof VirtualGrid !== 'undefined') {
-    VirtualGrid.destroy();
-  }
-  if (typeof ThumbnailQueue !== 'undefined') {
-    ThumbnailQueue.clear();
-  }
-  resetPhotoWindowState();
-  state.hasDatabase = false;
-  state.libraryPath = null;
-  state.photoTotalCount = 0;
-  state.loading = false;
-  state.selectedPhotos.clear();
-  state.lastClickedIndex = null;
-  resetPhotoFilters();
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
-  }
-  renderFirstRunEmptyState();
-  updateFilterChipRailVisibility();
-  enableAppBarButtons();
+  return releaseLibrarySession({ toFirstRun: true });
 }
 
 /**
@@ -14273,6 +14359,9 @@ async function runSwitchDeferReloadNormalizeAndLoad(libraryPath, dbPath) {
 // -----------------------------------------------------------------------------
 // INVARIANT — Product library actions
 //
+// • Swap-capable commands call beginLibrarySwapFlow() before the picker (empty
+//   shell immediately; cancel does not restore). Bind via switchToLibrary
+//   with skipRelease: true after entry release.
 // • Open: `openExistingLibrary` only (readable DB required).
 // • Convert: `convertToLibrary` (media folder → library; destructive).
 // • Legacy recover picker: `browseSwitchLibraryLegacy` (DevTools only).
@@ -14340,6 +14429,10 @@ async function showConvertToLibraryCompleteDialog(options = {}) {
  */
 async function convertToLibrary() {
   try {
+    if (!(await beginLibrarySwapFlow())) {
+      return false;
+    }
+
     while (true) {
       const selectedPath = await FolderPicker.show({
         intent: FolderPicker.INTENT.CONVERT_TO_LIBRARY,
@@ -14380,6 +14473,10 @@ async function openExistingLibrary() {
   try {
     closeSwitchLibraryOverlay();
 
+    if (!(await beginLibrarySwapFlow())) {
+      return false;
+    }
+
     const selectedPath = await FolderPicker.show({
       intent: FolderPicker.INTENT.OPEN_EXISTING_LIBRARY,
       title: 'Open library',
@@ -14410,6 +14507,7 @@ async function openExistingLibrary() {
     try {
       const opened = await switchToLibrary(selectedPath, null, {
         skipTransitionOverlay: true,
+        skipRelease: true,
         signal: openAbort.signal,
         suppressFailureToast: true,
       });
@@ -14960,24 +15058,8 @@ async function createNewLibraryWithName(dialogOptions = {}) {
  */
 async function resetLibraryConfig() {
   try {
-    const response = await fetch('/api/library/reset', {
-      method: 'DELETE',
-    });
-
-    const data = await response.json();
-
-    if (data.status === 'success') {
-      if (currentPhotoLoadAbortController) {
-        currentPhotoLoadAbortController.abort();
-        currentPhotoLoadAbortController = null;
-      }
-      currentPhotoLoad = null;
-      state.loading = false;
-      renderSafeLibraryFallback();
-      return;
-    }
-
-    throw new Error(data.error || 'Reset failed');
+    await clearLibraryConfigOnServer();
+    await releaseLibrarySession({ toFirstRun: true });
   } catch (error) {
     console.error('❌ Failed to reset configuration:', error);
     showToast(`Reset failed: ${error.message}`, 'error');
@@ -15073,10 +15155,15 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
   const suppressSuccessToast = !!switchOptions.suppressSuccessToast;
   const suppressFailureToast = !!switchOptions.suppressFailureToast;
   const throwOnError = !!switchOptions.throwOnError;
+  const skipRelease = !!switchOptions.skipRelease;
   const { signal } = switchOptions;
   const previousLibrary = await fetchCurrentLibraryInfo();
+  const currentPath = previousLibrary?.library_path || state.libraryPath;
+  const isLibrarySwap =
+    !skipRelease && isDifferentLibraryPath(libraryPath, currentPath);
   const folderName = libraryPath.split('/').filter(Boolean).pop() || 'library';
   let switchedLibrary = false;
+  let releasedForSwap = false;
   let success = false;
 
   try {
@@ -15086,6 +15173,11 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
         message: 'Loading your media.',
         libraryPath,
       });
+    }
+
+    if (isLibrarySwap) {
+      await releaseLibrarySession();
+      releasedForSwap = true;
     }
 
     const response = await fetch('/api/library/switch', {
@@ -15151,14 +15243,17 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
           }
         }
         if (shouldAttemptRestore) {
-          const restored =
-            await restorePreviousLibraryAfterFailedSwitch(previousLibrary);
+          const restored = await restorePreviousLibraryAfterFailedSwitch(
+            previousLibrary,
+          );
           if (!restored) {
             await restoreLibraryShellAfterFlowDismiss();
           }
         } else {
           await restoreLibraryShellAfterFlowDismiss();
         }
+      } else if (releasedForSwap) {
+        await restoreLibraryShellAfterFlowDismiss();
       }
       throw error;
     }
@@ -15181,7 +15276,9 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     }
 
     if (switchedLibrary && !restoredPreviousLibrary && shouldAttemptRestore) {
-      renderSafeLibraryFallback();
+      await renderSafeLibraryFallback();
+    } else if (!switchedLibrary && releasedForSwap) {
+      await restoreLibraryShellAfterFlowDismiss();
     }
 
     const errorMessage = restoredPreviousLibrary

@@ -1809,8 +1809,27 @@ const VirtualGrid = (() => {
     return null;
   }
 
-  function buildSelectionScopeIndex(selectedIds, catalogFilterPhoto = null) {
+  function photoGridMonthKey(photo, sectionAxis = 'date_taken') {
+    if (sectionAxis === 'import') {
+      if (photo.month?.startsWith('import:')) {
+        return photo.month;
+      }
+      const importMonth = photo.date_added?.slice(0, 7);
+      if (importMonth?.length === 7 && importMonth[4] === '-') {
+        return `import:${importMonth}`;
+      }
+      return null;
+    }
+    return photo.month || 'undated';
+  }
+
+  function buildSelectionScopeIndex(
+    selectedIds,
+    catalogFilterPhoto,
+    catalogIndexPayload,
+  ) {
     const idSet = new Set([...selectedIds].map((id) => Number(id)));
+    const sectionAxis = catalogIndexPayload?.section_axis || 'date_taken';
     const monthCounts = new Map();
     let total = 0;
 
@@ -1822,72 +1841,45 @@ const VirtualGrid = (() => {
       if (catalogFilterPhoto && !catalogFilterPhoto(photo)) {
         continue;
       }
-      const monthKey = photo.month || 'undated';
+      const monthKey = photoGridMonthKey(photo, sectionAxis);
+      if (!monthKey) {
+        continue;
+      }
       monthCounts.set(monthKey, (monthCounts.get(monthKey) || 0) + 1);
       total += 1;
     }
 
-    const sort = librarySortOrder();
-    const months = GridLayout.sortMonthEntries(
-      [...monthCounts.entries()].map(([month, count]) => ({ month, count })),
-      sort,
-    );
+    const catalogMonths = catalogIndexPayload?.months || [];
+    let months;
+    if (catalogMonths.length > 0) {
+      months = catalogMonths
+        .filter((entry) => monthCounts.has(entry.month))
+        .map((entry) => ({
+          month: entry.month,
+          count: monthCounts.get(entry.month),
+        }));
+      for (const [month, count] of monthCounts.entries()) {
+        if (!months.some((entry) => entry.month === month)) {
+          months.push({ month, count });
+        }
+      }
+    } else {
+      months = GridLayout.sortMonthEntries(
+        [...monthCounts.entries()].map(([month, count]) => ({ month, count })),
+        catalogIndexPayload?.sort || librarySortOrder(),
+      );
+    }
+
     const undatedEntry = months.find((entry) => entry.month === 'undated');
     return {
+      ...catalogIndexPayload,
       months,
       total,
       undated_count: undatedEntry?.count || 0,
-      sort,
-      section_axis: monthIndex?.section_axis || 'date_taken',
       filtered: true,
       selectionScope: true,
+      section_axis: sectionAxis,
     };
-  }
-
-  /**
-   * Rebuild layout from a client-built index of selected photo IDs (no server round-trip).
-   */
-  async function applySelectionScope(selectedIds, catalogFilterPhoto = null) {
-    const container = getContainer();
-    if (!container || !layout) {
-      return false;
-    }
-
-    clearCatalogFilterZeroOverlay();
-
-    const previousScrollTop = getScrollElement().scrollTop;
-    const preserveMonth = layout.provisional
-      ? null
-      : GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80);
-
-    const indexPayload = buildSelectionScopeIndex(
-      selectedIds,
-      catalogFilterPhoto,
-    );
-    if ((indexPayload.total ?? 0) === 0) {
-      applyCatalogFilterZeroMatch(indexPayload, {});
-      return 'zero';
-    }
-
-    if (monthCache.size > 0 && !layout.provisional) {
-      if (applyCatalogFilterWarm(indexPayload, preserveMonth)) {
-        if (hooks.onIndexReady) {
-          hooks.onIndexReady(indexPayload);
-        }
-        return true;
-      }
-    }
-
-    monthInflight.clear();
-    hydratedMonths = new Set();
-    clearMountedMonths();
-    rebuildLayoutFromIndex(indexPayload, container, { remount: true });
-    if (hooks.onIndexReady) {
-      hooks.onIndexReady(indexPayload);
-    }
-    scheduleSync();
-    restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
-    return true;
   }
 
   function restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth) {
@@ -1951,6 +1943,8 @@ const VirtualGrid = (() => {
     starred = false,
     video = false,
     importSets = null,
+    selectedIds = null,
+    catalogFilterPhoto = null,
   } = {}) {
     const filterOptions = { starred, video, importSets };
     const container = getContainer();
@@ -1960,7 +1954,9 @@ const VirtualGrid = (() => {
 
     clearCatalogFilterZeroOverlay();
 
-    const hasFilter = catalogFilterActive(filterOptions);
+    const selectionActive = Boolean(selectedIds?.size);
+    const hasCatalogFilter = catalogFilterActive(filterOptions);
+    const hasFilter = hasCatalogFilter || selectionActive;
     const previousScrollTop = getScrollElement().scrollTop;
     const previousAxis = monthIndex?.section_axis || 'date_taken';
     const preserveMonth = layout.provisional
@@ -1968,7 +1964,7 @@ const VirtualGrid = (() => {
       : GridLayout.findMonthAtScrollTop(layout, previousScrollTop, 80);
 
     let indexPayload;
-    if (!hasFilter) {
+    if (!hasCatalogFilter) {
       if (unfilteredMonthIndex) {
         indexPayload = unfilteredMonthIndex;
       } else {
@@ -1990,6 +1986,19 @@ const VirtualGrid = (() => {
         applyCatalogFilterZeroMatch(indexPayload, filterOptions);
         return 'zero';
       }
+    }
+
+    if (selectionActive) {
+      const scopedIndex = buildSelectionScopeIndex(
+        selectedIds,
+        catalogFilterPhoto,
+        indexPayload,
+      );
+      if ((scopedIndex.total ?? 0) === 0) {
+        applyCatalogFilterZeroMatch(scopedIndex, filterOptions);
+        return 'zero';
+      }
+      indexPayload = scopedIndex;
     }
 
     const nextAxis = indexPayload?.section_axis || 'date_taken';
@@ -2230,7 +2239,6 @@ const VirtualGrid = (() => {
     resortMonthCachePhoto,
     refreshMonthIndex,
     setFilterPhoto,
-    applySelectionScope,
     applyCatalogFilter,
     scheduleSync,
     getLayout,
