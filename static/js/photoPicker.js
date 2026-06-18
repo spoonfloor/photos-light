@@ -863,20 +863,6 @@ const PhotoPicker = (() => {
       return;
     }
 
-    // Enter key - trigger Import button if enabled
-    if (e.key === 'Enter') {
-      const importBtn = document.getElementById('photoPickerImportBtn');
-      if (importBtn && !importBtn.disabled) {
-        
-        importBtn.click();
-        e.preventDefault();
-        e.stopPropagation(); // Prevent event from bubbling to global handler
-      } else {
-        
-      }
-      return;
-    }
-
     // Command+Shift+D - Navigate to Desktop (Mac standard shortcut)
     if (e.metaKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
       e.preventDefault();

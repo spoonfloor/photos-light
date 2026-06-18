@@ -1240,24 +1240,6 @@ const FolderPicker = (() => {
 
     keyboardHandler = (e) => {
       void handleKeyboard(e);
-      const isEnter = e.key === 'Enter' || e.key === 'NumpadEnter';
-      if (!isEnter) return;
-      const t = e.target;
-      const actionBtn =
-        t && typeof t.closest === 'function' ? t.closest('button') : null;
-      if (
-        actionBtn === chooseBtn ||
-        actionBtn === cancelBtn ||
-        actionBtn === closeBtn ||
-        (showGoBack && goBackBtn && actionBtn === goBackBtn)
-      ) {
-        return;
-      }
-      if (chooseBtn?.disabled) {
-        return;
-      }
-      e.preventDefault();
-      void handleChoose();
     };
     document.addEventListener('keydown', keyboardHandler);
   }

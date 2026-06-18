@@ -1,12 +1,12 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v437';
+const MAIN_JS_VERSION = 'v438';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
 const PHOTO_PAGE_SIZE = 400;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '454';
+const STATIC_ASSET_VERSION = '455';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -5816,41 +5816,9 @@ function handleLightboxKeyboard(e) {
 
     // Priority 3: Deselect all if on grid
     deselectAllPhotos();
-  } else if (e.key === 'Enter') {
-    // Don't trigger if photo picker is open (it has its own Enter handler)
-    const photoPickerOverlay = document.getElementById('photoPickerOverlay');
-    if (photoPickerOverlay && photoPickerOverlay.style.display !== 'none') {
-      return;
-    }
-
-    // Don't trigger if user is typing in an input field
-    const activeElement = document.activeElement;
-    if (
-      activeElement &&
-      (activeElement.tagName === 'INPUT' ||
-        activeElement.tagName === 'TEXTAREA' ||
-        activeElement.tagName === 'SELECT')
-    ) {
-      return; // Let the input handle Enter naturally
-    }
-
-    // Find visible primary button (not hidden, not disabled)
-    // Use offsetParent check - returns null if element or any ancestor has display:none
-    const allPrimaryBtns = document.querySelectorAll(
-      '.btn-primary:not(:disabled)',
-    );
-    let primaryBtn = null;
-    for (const btn of allPrimaryBtns) {
-      if (btn.offsetParent !== null) {
-        primaryBtn = btn;
-        break;
-      }
-    }
-
-    if (primaryBtn) {
-      primaryBtn.click();
-      e.preventDefault(); // Prevent any default Enter behavior
-    } else {
+  } else if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+    if (window.PickerUtils?.activatePrimaryActionForEnter()) {
+      e.preventDefault();
     }
   } else if (e.key === 'ArrowLeft' && state.lightboxOpen) {
     navigateLightbox(-1);
@@ -11825,9 +11793,7 @@ async function showCreateLibraryDialog(options = {}) {
     };
 
     const handleKeyPress = (e) => {
-      if (e.key === 'Enter' && mode === 'compact') {
-        handleConfirm();
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         if (mode === 'expanded') {
           setMode('compact');
         } else {
@@ -12120,11 +12086,9 @@ async function showNameLibraryDialog(options = {}) {
       }
     };
 
-    // Handle Enter key
+    // Handle Escape key
     const handleKeyPress = (e) => {
-      if (e.key === 'Enter') {
-        handleConfirm();
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         handleCancel();
       }
     };

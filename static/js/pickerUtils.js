@@ -67,6 +67,16 @@ const PickerUtils = (() => {
     return VIRTUAL_ROOT;
   }
 
+  const OVERLAY_SELECTORS = [
+    '.picker-overlay',
+    '.import-overlay',
+    '.dialog-overlay',
+    '.date-editor-overlay',
+  ].join(',');
+
+  const ACTION_BAR_SELECTORS =
+    '.import-actions, .dialog-actions, .picker-actions';
+
   function isTypingTarget(target) {
     if (!(target instanceof HTMLElement)) {
       return false;
@@ -78,6 +88,104 @@ const PickerUtils = (() => {
 
     const tagName = target.tagName;
     return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+  }
+
+  function isOverlayVisible(el) {
+    if (!(el instanceof HTMLElement)) {
+      return false;
+    }
+    const style = getComputedStyle(el);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  function isActionButtonVisible(btn) {
+    if (!(btn instanceof HTMLButtonElement) || btn.disabled) {
+      return false;
+    }
+    const style = getComputedStyle(btn);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  function getTopmostVisibleOverlay() {
+    return [...document.querySelectorAll(OVERLAY_SELECTORS)]
+      .filter(isOverlayVisible)
+      .sort(
+        (left, right) =>
+          (parseInt(getComputedStyle(right).zIndex, 10) || 0) -
+          (parseInt(getComputedStyle(left).zIndex, 10) || 0),
+      )[0];
+  }
+
+  function findOverlayPrimaryButton(overlay) {
+    if (!(overlay instanceof HTMLElement)) {
+      return null;
+    }
+
+    const actionBar = overlay.querySelector(ACTION_BAR_SELECTORS);
+    const scope = actionBar ?? overlay;
+
+    const primary = scope.querySelector('.btn-primary');
+    if (primary && isActionButtonVisible(primary)) {
+      return primary;
+    }
+
+    const buttons = [...scope.querySelectorAll('button')].filter(
+      isActionButtonVisible,
+    );
+    return buttons.length > 0 ? buttons[buttons.length - 1] : null;
+  }
+
+  function findPagePrimaryButton() {
+    for (const btn of document.querySelectorAll('.btn-primary:not(:disabled)')) {
+      if (btn.offsetParent !== null) {
+        return btn;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Trigger the primary CTA for Enter key: scoped to the topmost visible
+   * overlay when one is open, otherwise the first page-level primary button.
+   * @returns {boolean} true if a button was activated
+   */
+  function activatePrimaryActionForEnter() {
+    const overlay = getTopmostVisibleOverlay();
+    const activeElement = document.activeElement;
+
+    if (overlay) {
+      if (
+        overlay.id === 'nameLibraryOverlay' &&
+        overlay.classList.contains('expanded')
+      ) {
+        return false;
+      }
+
+      if (
+        isTypingTarget(activeElement) &&
+        !overlay.contains(activeElement)
+      ) {
+        return false;
+      }
+
+      const overlayPrimary = findOverlayPrimaryButton(overlay);
+      if (overlayPrimary) {
+        overlayPrimary.click();
+        return true;
+      }
+      return false;
+    }
+
+    if (isTypingTarget(activeElement)) {
+      return false;
+    }
+
+    const pagePrimary = findPagePrimaryButton();
+    if (pagePrimary) {
+      pagePrimary.click();
+      return true;
+    }
+    return false;
   }
 
   function getNavigableRows(container, selector) {
@@ -217,6 +325,10 @@ const PickerUtils = (() => {
     sortPickerItems,
     getDefaultPath,
     isTypingTarget,
+    isOverlayVisible,
+    getTopmostVisibleOverlay,
+    findOverlayPrimaryButton,
+    activatePrimaryActionForEnter,
     getNavigableRows,
     getNextFocusIndex,
     scrollRowIntoView,
