@@ -361,23 +361,16 @@ const GridLayout = (() => {
     }
     const importPrefix = 'import:';
     if (monthKey.startsWith(importPrefix)) {
-      const encoded = monthKey.slice(importPrefix.length);
-      let dateAdded = encoded;
-      try {
-        dateAdded = decodeURIComponent(encoded);
-      } catch {
-        /* use raw encoded cluster token */
+      const monthToken = monthKey.slice(importPrefix.length);
+      if (/^\d{4}-\d{2}$/.test(monthToken)) {
+        const [year, monthNum] = monthToken.split('-');
+        const monthName = new Date(
+          parseInt(year, 10),
+          parseInt(monthNum, 10) - 1,
+        ).toLocaleString('default', { month: 'long' });
+        return `Imported ${monthName} ${year}`;
       }
-      const parsed = new Date(dateAdded);
-      if (!Number.isNaN(parsed.getTime())) {
-        const formatted = parsed.toLocaleDateString('default', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        });
-        return `Imported ${formatted}`;
-      }
-      return `Imported ${dateAdded}`;
+      return `Imported ${monthToken}`;
     }
     const [year, monthNum] = monthKey.split('-');
     const monthName = new Date(

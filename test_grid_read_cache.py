@@ -317,7 +317,7 @@ class GridReadCacheTest(unittest.TestCase):
             ),
         )
 
-    def test_month_index_import_sets_returns_import_clusters(self):
+    def test_month_index_import_sets_returns_import_months(self):
         conn = sqlite3.connect(self.db_path)
         self._insert_photo(
             conn,
@@ -333,7 +333,7 @@ class GridReadCacheTest(unittest.TestCase):
             path="1920/1920-01-01/new.jpg",
             date_taken="1920:01:01 00:00:00",
             content_hash="hashcccccccccccccccccccccccccccc",
-            date_added="2026-06-17T10:00:00+00:00",
+            date_added="2026-05-17T10:00:00+00:00",
         )
         conn.commit()
         conn.close()
@@ -348,12 +348,53 @@ class GridReadCacheTest(unittest.TestCase):
         self.assertEqual(payload["total"], 2)
         self.assertEqual(len(payload["months"]), 2)
         self.assertTrue(all(m["month"].startswith("import:") for m in payload["months"]))
+        self.assertEqual(payload["months"][0]["month"], "import:2026-06")
         self.assertEqual(payload["months"][0]["count"], 1)
+        self.assertEqual(payload["months"][1]["month"], "import:2026-05")
         self.assertEqual(payload["months"][1]["count"], 1)
+        self.assertEqual(payload["import_month_keys"], ["2026-06", "2026-05"])
 
         unfiltered = self.client.get("/api/photos/month_index?sort=newest").get_json()
         self.assertFalse(unfiltered["filtered"])
         self.assertEqual(unfiltered["section_axis"], "date_taken")
+
+    def test_month_index_import_sets_consolidates_same_import_month(self):
+        conn = sqlite3.connect(self.db_path)
+        self._insert_photo(
+            conn,
+            filename="a.jpg",
+            path="1900/1900-01-01/a.jpg",
+            date_taken="1900:01:01 00:00:00",
+            content_hash="hashbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            date_added="2026-06-18T10:00:01+00:00",
+        )
+        self._insert_photo(
+            conn,
+            filename="b.jpg",
+            path="1900/1900-01-02/b.jpg",
+            date_taken="1900:01:02 00:00:00",
+            content_hash="hashcccccccccccccccccccccccccccc",
+            date_added="2026-06-18T10:00:02+00:00",
+        )
+        self._insert_photo(
+            conn,
+            filename="c.jpg",
+            path="1900/1900-01-03/c.jpg",
+            date_taken="1900:01:03 00:00:00",
+            content_hash="hashdddddddddddddddddddddddddddd",
+            date_added="2026-06-18T10:00:03+00:00",
+        )
+        conn.commit()
+        conn.close()
+        photo_app.invalidate_grid_read_caches()
+
+        payload = self.client.get(
+            "/api/photos/month_index?sort=newest&import_sets=5",
+        ).get_json()
+        self.assertEqual(len(payload["months"]), 1)
+        self.assertEqual(payload["months"][0]["month"], "import:2026-06")
+        self.assertEqual(payload["months"][0]["count"], 3)
+        self.assertEqual(payload["total"], 3)
 
     def test_month_index_import_sets_combined_with_starred_and_video(self):
         conn = sqlite3.connect(self.db_path)
@@ -447,29 +488,37 @@ class GridReadCacheTest(unittest.TestCase):
         ).get_json()
         self.assertEqual(fresh_unfiltered["total"], 3)
 
-    def test_month_hydrates_import_cluster_section(self):
-        date_added = "2026-06-17T10:00:00+00:00"
+    def test_month_hydrates_import_month_section(self):
         conn = sqlite3.connect(self.db_path)
         self._insert_photo(
             conn,
-            filename="imported.jpg",
-            path="1900/1900-01-01/imported.jpg",
+            filename="older.jpg",
+            path="1900/1900-01-01/older.jpg",
             date_taken="1900:01:01 00:00:00",
             content_hash="hashhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
-            date_added=date_added,
+            date_added="2026-06-17T10:00:00+00:00",
+        )
+        self._insert_photo(
+            conn,
+            filename="newer.jpg",
+            path="2026/2026-01-01/newer.jpg",
+            date_taken="2026:01:01 00:00:00",
+            content_hash="hashiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+            date_added="2026-06-17T11:00:00+00:00",
         )
         conn.commit()
         conn.close()
         photo_app.invalidate_grid_read_caches()
 
-        cluster_key = photo_app.encode_import_cluster_key(date_added)
+        month_key = photo_app.encode_import_cluster_key("2026-06")
         payload = self.client.get(
-            f"/api/photos/month?month={quote(cluster_key, safe='')}",
+            f"/api/photos/month?month={quote(month_key, safe='')}",
         ).get_json()
-        self.assertEqual(payload["month"], cluster_key)
-        self.assertEqual(payload["count"], 1)
-        self.assertEqual(len(payload["photos"]), 1)
-        self.assertEqual(payload["photos"][0]["path"], "1900/1900-01-01/imported.jpg")
+        self.assertEqual(payload["month"], month_key)
+        self.assertEqual(payload["count"], 2)
+        self.assertEqual(len(payload["photos"]), 2)
+        self.assertEqual(payload["photos"][0]["path"], "2026/2026-01-01/newer.jpg")
+        self.assertEqual(payload["photos"][1]["path"], "1900/1900-01-01/older.jpg")
 
 
 if __name__ == "__main__":

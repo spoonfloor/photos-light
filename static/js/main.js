@@ -4,7 +4,7 @@ console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
 const PHOTO_PAGE_SIZE = 400;
-/** Distinct date_added clusters shown when the recent-imports filter is active. */
+/** Most recent import months shown when the recent-imports filter is active. */
 const IMPORT_SET_LIMIT = 5;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
@@ -157,7 +157,7 @@ const state = {
     video: false,
     recentImports: false,
   },
-  importClusterDates: null,
+  importMonthKeys: null,
   selectedPhotos: new Set(),
   photos: [],
   loading: false,
@@ -6981,7 +6981,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     },
     onIndexReady: (index) => {
       state.photoTotalCount = index.total;
-      state.importClusterDates = index.import_cluster_dates || null;
+      state.importMonthKeys = index.import_month_keys || null;
       state.hasDatabase = true;
       state.hasMore = false;
     },
@@ -7531,10 +7531,11 @@ function photoMatchesCatalogFilters(photo) {
     return false;
   }
   if (recentImports) {
-    const clusters = state.importClusterDates;
+    const importMonths = state.importMonthKeys;
     if (
-      clusters?.length &&
-      (!photo.date_added || !clusters.includes(photo.date_added))
+      importMonths?.length &&
+      (!photo.date_added ||
+        !importMonths.includes(photo.date_added.slice(0, 7)))
     ) {
       return false;
     }
@@ -7670,7 +7671,7 @@ function resetPhotoFilters() {
   state.activeFilters.starred = false;
   state.activeFilters.video = false;
   state.activeFilters.recentImports = false;
-  state.importClusterDates = null;
+  state.importMonthKeys = null;
   updateFilterChipUI();
 }
 

@@ -253,7 +253,7 @@ class DateAddedApiSortTest(unittest.TestCase):
                 "width": 10,
                 "height": 10,
             },
-            date_added="2026-06-01T10:00:00+00:00",
+            date_added="2026-05-01T10:00:00+00:00",
         )
         conn.commit()
         conn.close()
@@ -274,7 +274,7 @@ class DateAddedApiSortTest(unittest.TestCase):
         self.assertNotEqual(recent_ids, newest_ids)
         self.assertEqual(recent["sort"], "recently_added")
 
-    def test_import_sets_limits_to_top_distinct_date_added_clusters(self):
+    def test_import_sets_limits_to_top_import_months(self):
         client = photo_app.app.test_client()
         payload = client.get(
             "/api/photos?limit=50&sort=recently_added&import_sets=2"
