@@ -7723,7 +7723,10 @@ function updateFilterChipUI() {
 function updateFilterChipRailVisibility() {
   const rail = document.getElementById('filterChipRailMount');
   const shouldShow =
-    state.hasDatabase && (state.photoTotalCount > 0 || state.photos.length > 0);
+    state.hasDatabase &&
+    (state.photoTotalCount > 0 ||
+      state.photos.length > 0 ||
+      hasActiveGridViewFilters());
   if (!rail) {
     document.body.classList.toggle('filter-chip-rail-visible', shouldShow);
     return;
@@ -7774,7 +7777,10 @@ async function applyPhotoFiltersAsync() {
       return;
     }
     if (result === 'zero') {
-      syncCatalogFilterZeroChrome();
+      showFilterZeroState({
+        recentImports: Boolean(state.activeFilters.recentImports),
+      });
+      updateFilterChipUI();
       return;
     }
     restoreCatalogFilterZeroChrome();
