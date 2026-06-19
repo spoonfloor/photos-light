@@ -4276,6 +4276,12 @@ function applyDateEditOptimistically(snapshot) {
     VirtualGrid.resortMonthCachePhoto(edit.photoId);
   });
 
+  if (!VirtualGrid.isActive()) {
+    sortPhotosInLibraryOrder(state.photos);
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+  }
+
   if (scrollTargetMonth && VirtualGrid.isActive()) {
     VirtualGrid.scrollToMonth(scrollTargetMonth);
   }
@@ -4297,6 +4303,9 @@ function restoreDateEditOptimism(snapshot, photoIds = null) {
       return;
     }
     patchLibraryPhotoFields(edit.photoId, edit.oldFields);
+    if (VirtualGrid.isActive() && edit.oldMonth === edit.newMonth) {
+      VirtualGrid.resortMonthCachePhoto(edit.photoId);
+    }
   });
 
   snapshot.virtualPatches.forEach(({ photoId, token }) => {
@@ -4311,6 +4320,12 @@ function restoreDateEditOptimism(snapshot, photoIds = null) {
     }
   });
 
+  if (!VirtualGrid.isActive()) {
+    sortPhotosInLibraryOrder(state.photos);
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+  }
+
   return true;
 }
 
@@ -4321,8 +4336,26 @@ function applyDateEditDuplicateOptimistic(photoId, snapshot) {
   }
   snapshot.processedDuplicateIds.add(normalizedId);
 
-  const deleteSnapshot = createDeleteOptimisticSnapshot([normalizedId]);
-  applyDeleteOptimistically(deleteSnapshot);
+  const wasViewingInLightbox =
+    state.lightboxOpen &&
+    state.photos[state.lightboxPhotoIndex]?.id === normalizedId;
+
+  if (wasViewingInLightbox) {
+    refreshLightboxNavPhotoIds();
+    if (state.lightboxNavMode === 'timeline' && usesGridTimelineLightboxNav()) {
+      state.lightboxGlobalIndex =
+        VirtualGrid.getGlobalIndexForPhotoId(normalizedId);
+    }
+  }
+
+  const lightboxSuccessor = wasViewingInLightbox
+    ? computeLightboxSuccessorBeforeRemove(normalizedId)
+    : null;
+
+  const deleteSnapshot = createDeleteOptimisticSnapshot([normalizedId], {
+    fromLightbox: wasViewingInLightbox,
+  });
+  applyDeleteOptimistically(deleteSnapshot, { lightboxSuccessor });
   snapshot.deletePatches.push({
     photoId: normalizedId,
     snapshot: deleteSnapshot,
@@ -5005,8 +5038,22 @@ async function saveDateEdit() {
 
   const snapshot = createDateEditOptimisticSnapshot(edits);
 
+  const keepLightboxOnPhoto =
+    !isBulk &&
+    state.lightboxOpen &&
+    state.lightboxPhotoIndex !== null;
+  const lightboxAnchorPhotoId = keepLightboxOnPhoto
+    ? state.photos[state.lightboxPhotoIndex]?.id ?? null
+    : null;
+
+  const reconcileLightboxAnchor = () => {
+    if (lightboxAnchorPhotoId != null) {
+      void reconcileLightboxAfterLibraryReorder(lightboxAnchorPhotoId);
+    }
+  };
+
   closeDateEditor();
-  if (state.lightboxOpen) {
+  if (state.lightboxOpen && !keepLightboxOnPhoto) {
     await closeLightbox();
   }
 
@@ -5040,9 +5087,11 @@ async function saveDateEdit() {
       failureToast: isBulk ? 'Failed to update dates' : 'Failed to update date',
       applyOptimistic: () => {
         applyDateEditOptimistically(snapshot);
+        reconcileLightboxAnchor();
       },
       revertOptimistic: () => {
         restoreDateEditOptimism(snapshot);
+        reconcileLightboxAnchor();
       },
       onProgress: (data) => {
         updateDateChangeProgress(
@@ -5066,6 +5115,7 @@ async function saveDateEdit() {
               ? null
               : 'Date updated',
         });
+        reconcileLightboxAnchor();
       },
       onFailure: (error) => {
         showDateChangeError(error.message || 'Failed to update date');
@@ -6721,6 +6771,65 @@ function captureLightboxNavContext(anchorPhoto) {
 
   state.lightboxNavMode = 'library';
   state.lightboxNavPhotoIds = state.photos.map((photo) => photo.id);
+}
+
+/**
+ * Rebuild the frozen lightbox browse order after library rows re-sort (e.g. date edit).
+ * Timeline mode keeps null nav ids; global index is synced when the lightbox reloads.
+ */
+function refreshLightboxNavPhotoIds() {
+  if (!state.lightboxOpen) {
+    return;
+  }
+
+  if (state.lightboxNavMode === 'selection') {
+    const selectedPhotos = state.photos.filter((photo) =>
+      state.selectedPhotos.has(photo.id),
+    );
+    sortPhotosInLibraryOrder(selectedPhotos);
+    state.lightboxNavPhotoIds = selectedPhotos.map((photo) => photo.id);
+    return;
+  }
+
+  if (state.lightboxNavMode === 'filter') {
+    const filteredPhotos = getFilteredPhotos(state.photos);
+    sortPhotosInLibraryOrder(filteredPhotos);
+    state.lightboxNavPhotoIds = filteredPhotos.map((photo) => photo.id);
+    return;
+  }
+
+  if (state.lightboxNavMode === 'library') {
+    sortPhotosInLibraryOrder(state.photos);
+    state.lightboxNavPhotoIds = state.photos.map((photo) => photo.id);
+  }
+}
+
+/**
+ * Keep the lightbox on the same photo after a library reorder; refresh nav + UI.
+ */
+async function reconcileLightboxAfterLibraryReorder(anchorPhotoId) {
+  if (!state.lightboxOpen || anchorPhotoId == null) {
+    return;
+  }
+
+  const anchorPhoto = state.photos.find((photo) => photo.id === anchorPhotoId);
+  if (!anchorPhoto) {
+    return;
+  }
+
+  refreshLightboxNavPhotoIds();
+
+  if (state.lightboxNavMode === 'timeline' && usesGridTimelineLightboxNav()) {
+    state.lightboxGlobalIndex =
+      VirtualGrid.getGlobalIndexForPhotoId(anchorPhotoId);
+  }
+
+  const libraryIndex = getPhotoLibraryIndex(anchorPhotoId);
+  if (libraryIndex < 0) {
+    return;
+  }
+
+  await openLightbox(libraryIndex);
 }
 
 function resolveLightboxSuccessorPhotoId(deletedPhotoId, navPhotoIds) {
