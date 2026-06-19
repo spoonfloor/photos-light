@@ -453,7 +453,18 @@ body.trash-view-active #lightboxDownloadBtn {
   color: var(--filter-chip-text-active-hover);
 }
 
+.grid-root.grid-filter-zero .grid-content-layer {
+  bottom: 0;
+  min-height: 100%;
+}
+
+.grid-root.grid-filter-zero .grid-canvas {
+  overflow: visible;
+}
+
 .catalog-filter-zero {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;

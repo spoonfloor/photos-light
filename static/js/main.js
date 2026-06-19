@@ -1559,6 +1559,13 @@ function wireDatePicker() {
 
   const handleDateChange = () => {
     if (datePickerUpdatingFromScroll) return;
+    if (
+      typeof VirtualGrid !== 'undefined' &&
+      VirtualGrid.isActive() &&
+      VirtualGrid.isCatalogFilterZeroActive()
+    ) {
+      return;
+    }
 
     const month = monthPicker.value.padStart(2, '0');
     const year = yearPicker.value;
@@ -4405,6 +4412,14 @@ async function applyDateEditPatch(data) {
 
 /** Monotonic id — stale catalog filter async results are ignored. */
 let catalogFilterApplyId = 0;
+let catalogFilterAbortController = null;
+
+function abortInFlightCatalogFilter() {
+  if (catalogFilterAbortController) {
+    catalogFilterAbortController.abort();
+    catalogFilterAbortController = null;
+  }
+}
 
 async function refreshActiveVirtualGridMonthIndex(options = {}) {
   const {
@@ -4455,16 +4470,13 @@ function reconcileCatalogEmptyAfterGridLoad(index) {
 }
 
 function showFilterZeroState(options = {}) {
-  if (
-    typeof VirtualGrid !== 'undefined' &&
-    VirtualGrid.isActive() &&
-    VirtualGrid.isCatalogFilterZeroActive()
-  ) {
-    syncCatalogFilterZeroChrome();
-    return;
-  }
   if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
-    VirtualGrid.destroy();
+    if (VirtualGrid.isCatalogFilterZeroActive()) {
+      syncCatalogFilterZeroChrome();
+      return;
+    }
+    void applyPhotoFilters();
+    return;
   }
   const datePickerContainer = document.querySelector('.date-picker');
   if (datePickerContainer) {
@@ -4503,14 +4515,38 @@ function syncCatalogFilterZeroChrome() {
   updateFilterChipRailVisibility();
 }
 
+function syncGridViewAfterCatalogTransition(result) {
+  if (result === 'zero') {
+    syncCatalogFilterZeroChrome();
+    updateFilterChipUI();
+    return;
+  }
+  if (result === false) {
+    return;
+  }
+  restoreCatalogFilterZeroChrome();
+  setupThumbnailLazyLoading();
+  ensureGridInteractionsWired();
+  applySelectionStateToGrid();
+  updateMonthCircleStates();
+}
+
 function restoreCatalogFilterZeroChrome() {
   updateRecentImportsFilterUi();
   enableAppBarButtons();
   updateFilterChipRailVisibility();
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer && state.photoTotalCount > 0) {
+    datePickerContainer.style.visibility = 'visible';
+  }
 }
 
 function showZeroMatchGridState() {
   if (reconcileTrashCatalogEmptyState()) {
+    return;
+  }
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    void applyPhotoFilters();
     return;
   }
   showFilterZeroState({
@@ -7067,6 +7103,9 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     getLibrarySortOrder: () => state.currentSortOrder,
     getCatalogFilterOptions,
     onClearCatalogFilters: clearPhotoFilters,
+    onCatalogFilterZero: () => {
+      syncCatalogFilterZeroChrome();
+    },
     mergePhotos: mergePhotosIntoVirtualState,
     comparePhotos: (a, b) =>
       comparePhotosForLibrarySort(
@@ -7094,6 +7133,12 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     },
     onLayoutApplied: (appliedLayout) => {
       if (appliedLayout?.provisional) {
+        return;
+      }
+      if (
+        typeof VirtualGrid !== 'undefined' &&
+        VirtualGrid.isCatalogFilterZeroActive()
+      ) {
         return;
       }
       datePickerLastSyncedMonth = null;
@@ -7339,6 +7384,13 @@ async function replaceGridAtMonth(targetMonth) {
 
 async function hydrateGridForMonthJump(targetMonth) {
   try {
+    if (
+      typeof VirtualGrid !== 'undefined' &&
+      VirtualGrid.isActive() &&
+      VirtualGrid.isCatalogFilterZeroActive()
+    ) {
+      return;
+    }
     if (VirtualGrid.isActive()) {
       if (VirtualGrid.jumpToMonth(targetMonth)) {
         return;
@@ -7802,21 +7854,25 @@ async function applyPhotoFiltersAsync() {
   const isStaleApply = () => applyId !== catalogFilterApplyId;
 
   abortInFlightPhotoLoad();
+  abortInFlightCatalogFilter();
   updateRecentImportsFilterUi();
 
-  if (!VirtualGrid.isActive() && shouldUseVirtualGrid()) {
-    await loadAndRenderPhotos(false);
-    if (isStaleApply()) {
+  const abortController = new AbortController();
+  catalogFilterAbortController = abortController;
+
+  try {
+    if (!VirtualGrid.isActive() && shouldUseVirtualGrid()) {
+      await loadAndRenderPhotos(false);
+      if (isStaleApply()) {
+        return;
+      }
+    }
+
+    if (!VirtualGrid.isActive()) {
       return;
     }
-  }
 
-  if (!VirtualGrid.isActive()) {
-    return;
-  }
-
-  VirtualGrid.setFilterPhoto(getActiveVirtualGridFilterPhoto());
-  try {
+    VirtualGrid.setFilterPhoto(getActiveVirtualGridFilterPhoto());
     const filterOptions = getCatalogFilterOptions();
     const result = await VirtualGrid.applyCatalogFilter({
       ...filterOptions,
@@ -7824,25 +7880,25 @@ async function applyPhotoFiltersAsync() {
         ? state.selectedPhotos
         : null,
       catalogFilterPhoto: getCatalogFilterPredicate(),
+      signal: abortController.signal,
     });
-    if (isStaleApply()) {
+    if (isStaleApply() || abortController.signal.aborted) {
       return;
     }
-    if (result === 'zero') {
-      syncCatalogFilterZeroChrome();
-      updateFilterChipUI();
-      return;
-    }
-    restoreCatalogFilterZeroChrome();
-    setupThumbnailLazyLoading();
-    ensureGridInteractionsWired();
-    applySelectionStateToGrid();
-    updateMonthCircleStates();
+    syncGridViewAfterCatalogTransition(result);
   } catch (error) {
-    if (isStaleApply()) {
+    if (
+      isStaleApply() ||
+      abortController.signal.aborted ||
+      error?.name === 'AbortError'
+    ) {
       return;
     }
     console.error('❌ Failed to apply photo filters:', error);
+  } finally {
+    if (catalogFilterAbortController === abortController) {
+      catalogFilterAbortController = null;
+    }
   }
 }
 

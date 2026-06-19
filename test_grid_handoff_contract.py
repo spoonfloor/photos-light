@@ -275,10 +275,50 @@ class TestGridHandoffContract(unittest.TestCase):
 
     def test_filter_zero_keeps_virtual_grid_alive(self):
         apply_body = _function_body(self.main_js, "applyPhotoFiltersAsync")
-        self.assertIn("syncCatalogFilterZeroChrome()", apply_body)
+        self.assertIn("syncGridViewAfterCatalogTransition", apply_body)
         self.assertNotIn("showFilterZeroState", apply_body)
         zero_body = _function_body(self.main_js, "showFilterZeroState")
-        self.assertIn("VirtualGrid.isCatalogFilterZeroActive()", zero_body)
+        self.assertIn("VirtualGrid.isActive()", zero_body)
+        self.assertNotIn("VirtualGrid.destroy()", zero_body)
+        self.assertIn("function enterFilterZeroMode", self.virtual_grid_js)
+        self.assertIn("function exitFilterZeroMode", self.virtual_grid_js)
+        enter_body = _function_body(self.virtual_grid_js, "enterFilterZeroMode")
+        self.assertNotIn("spacer.style.height = '0px'", enter_body)
+        self.assertNotIn("canvas.style.height = '0px'", enter_body)
+        self.assertIn("filterZeroViewportHeight", enter_body)
+        warm_body = _function_body(self.virtual_grid_js, "applyCatalogFilterWarm")
+        self.assertIn("exitFilterZeroMode()", warm_body)
+
+    def test_filter_fetch_skips_comfort_strip(self):
+        body = _function_body(self.virtual_grid_js, "transitionCatalogView")
+        fetch_at = body.find("await fetch(")
+        self.assertGreaterEqual(fetch_at, 0)
+        has_filter_branch = body.find("if (!hasCatalogFilter)")
+        self.assertGreaterEqual(has_filter_branch, 0)
+        self.assertLess(has_filter_branch, fetch_at)
+
+    def test_filter_fetch_keeps_zero_overlay_until_result(self):
+        body = _function_body(self.virtual_grid_js, "transitionCatalogView")
+        fetch_at = body.find("await fetch(")
+        self.assertGreaterEqual(fetch_at, 0)
+        pre_fetch = body[:fetch_at]
+        self.assertNotIn("else if (catalogFilterZeroActive)", pre_fetch)
+        self.assertNotIn(
+            "exitFilterZeroMode();\n    }\n\n    let response;",
+            pre_fetch,
+        )
+
+    def test_catalog_filter_apply_aborts_in_flight_fetch(self):
+        apply_body = _function_body(self.main_js, "applyPhotoFiltersAsync")
+        self.assertIn("abortInFlightCatalogFilter()", apply_body)
+        self.assertIn("signal: abortController.signal", apply_body)
+
+    def test_filter_zero_syncs_chrome_from_grid_hook(self):
+        hooks_body = _function_body(self.main_js, "buildVirtualGridInitHooks")
+        self.assertIn("onCatalogFilterZero", hooks_body)
+        self.assertIn("syncCatalogFilterZeroChrome()", hooks_body)
+        enter_body = _function_body(self.virtual_grid_js, "enterFilterZeroMode")
+        self.assertIn("hooks.onCatalogFilterZero", enter_body)
 
     def test_histogram_sync_requires_server_index(self):
         body = _function_body(self.main_js, "syncGridAfterHistogramChange")
