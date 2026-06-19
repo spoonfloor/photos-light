@@ -1562,7 +1562,7 @@ function wireDatePicker() {
     if (
       typeof VirtualGrid !== 'undefined' &&
       VirtualGrid.isActive() &&
-      VirtualGrid.isCatalogFilterZeroActive()
+      VirtualGrid.isCatalogEmptyModeActive()
     ) {
       return;
     }
@@ -4449,35 +4449,28 @@ function isTrashCatalogEmpty() {
   return state.trashViewActive && state.photoTotalCount === 0;
 }
 
-function reconcileTrashCatalogEmptyState() {
-  if (!isTrashCatalogEmpty()) {
-    return false;
-  }
-  showEmptyTrashState();
-  return true;
+function buildCatalogEmptyIndex() {
+  return { total: 0, months: [] };
 }
 
-function reconcileCatalogEmptyAfterGridLoad(index) {
-  const total = index?.total ?? state.photoTotalCount;
-  if (total !== 0 || hasActiveCatalogFilters()) {
-    return false;
+function syncCatalogEmptyChrome(mode) {
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = mode ? 'hidden' : 'visible';
   }
-  if (reconcileTrashCatalogEmptyState()) {
-    return true;
+  enableAppBarButtons();
+  updateFilterChipRailVisibility();
+  if (mode === 'trash' && typeof TrashView !== 'undefined') {
+    TrashView.updateAppBarForMode();
+    TrashView.updateTrashMenuItems();
   }
-  showEmptyLibraryState();
-  return true;
 }
 
-function showFilterZeroState(options = {}) {
-  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
-    if (VirtualGrid.isCatalogFilterZeroActive()) {
-      syncCatalogFilterZeroChrome();
-      return;
-    }
-    void applyPhotoFilters();
-    return;
-  }
+function syncCatalogFilterZeroChrome() {
+  syncCatalogEmptyChrome('filter');
+}
+
+function showPagedFilterEmptyState(options = {}) {
   const datePickerContainer = document.querySelector('.date-picker');
   if (datePickerContainer) {
     datePickerContainer.style.visibility = 'hidden';
@@ -4487,10 +4480,17 @@ function showFilterZeroState(options = {}) {
   updateFilterChipRailVisibility();
 }
 
-function showEmptyTrashState() {
-  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
-    VirtualGrid.destroy();
+function showPagedLibraryEmptyState() {
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
   }
+  renderEmptyLibraryState();
+  enableAppBarButtons();
+  updateFilterChipRailVisibility();
+}
+
+function showPagedTrashEmptyState() {
   state.photos = [];
   state.hasMore = false;
   const datePickerContainer = document.querySelector('.date-picker');
@@ -4506,13 +4506,115 @@ function showEmptyTrashState() {
   }
 }
 
-function syncCatalogFilterZeroChrome() {
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
+/**
+ * Single front door for grid view mode — filter zero, library empty, trash empty, or live grid.
+ * Returns a mode token for tests/logging.
+ */
+function reconcileGridView(options = {}) {
+  const { exhaustedScope = null, index = null } = options;
+  const total = index?.total ?? state.photoTotalCount;
+
+  if (exhaustedScope === 'filter') {
+    if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+      void applyPhotoFilters();
+      return 'filter';
+    }
+    showPagedFilterEmptyState({
+      recentImports: Boolean(state.activeFilters.recentImports),
+    });
+    return 'filter_paged';
   }
-  enableAppBarButtons();
-  updateFilterChipRailVisibility();
+
+  if (isTrashCatalogEmpty()) {
+    if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+      VirtualGrid.enterTrashEmptyMode(buildCatalogEmptyIndex());
+      syncCatalogEmptyChrome('trash');
+      return 'trash_empty';
+    }
+    showPagedTrashEmptyState();
+    return 'trash_empty_paged';
+  }
+
+  if (total === 0 && state.photos.length === 0) {
+    if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+      VirtualGrid.enterLibraryEmptyMode(buildCatalogEmptyIndex(), {
+        heading: getEmptyLibraryHeading(),
+      });
+      syncCatalogEmptyChrome('library');
+      return 'library_empty';
+    }
+    showPagedLibraryEmptyState();
+    return 'library_empty_paged';
+  }
+
+  if (hasActiveGridViewFilters()) {
+    if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+      if (VirtualGrid.isCatalogFilterZeroActive()) {
+        syncCatalogFilterZeroChrome();
+        return 'filter_zero';
+      }
+      const layout = VirtualGrid.getLayout();
+      if ((layout?.totalPhotos ?? 0) === 0) {
+        void applyPhotoFilters();
+        return 'filter';
+      }
+    } else if (
+      state.photos.length > 0 &&
+      getFilteredPhotos(state.photos).length === 0
+    ) {
+      showPagedFilterEmptyState({
+        recentImports: Boolean(state.activeFilters.recentImports),
+      });
+      return 'filter_paged';
+    }
+  }
+
+  if (
+    typeof VirtualGrid !== 'undefined' &&
+    VirtualGrid.isActive() &&
+    VirtualGrid.isCatalogEmptyModeActive()
+  ) {
+    VirtualGrid.exitCatalogEmptyMode();
+  }
+  restoreCatalogFilterZeroChrome();
+  return 'grid';
+}
+
+function reconcileTrashCatalogEmptyState() {
+  if (!isTrashCatalogEmpty()) {
+    return false;
+  }
+  reconcileGridView();
+  return true;
+}
+
+function reconcileCatalogEmptyAfterGridLoad(index) {
+  const total = index?.total ?? state.photoTotalCount;
+  if (total !== 0) {
+    return false;
+  }
+  const mode = reconcileGridView({ index });
+  return mode !== 'grid';
+}
+
+function showFilterZeroState(options = {}) {
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    if (VirtualGrid.isCatalogFilterZeroActive()) {
+      syncCatalogFilterZeroChrome();
+      return;
+    }
+    void applyPhotoFilters();
+    return;
+  }
+  showPagedFilterEmptyState(options);
+}
+
+function showEmptyTrashState() {
+  reconcileGridView();
+}
+
+function showEmptyLibraryState() {
+  reconcileGridView();
 }
 
 function syncGridViewAfterCatalogTransition(result) {
@@ -4522,6 +4624,9 @@ function syncGridViewAfterCatalogTransition(result) {
     return;
   }
   if (result === false) {
+    return;
+  }
+  if (reconcileCatalogEmptyAfterGridLoad({ total: state.photoTotalCount })) {
     return;
   }
   restoreCatalogFilterZeroChrome();
@@ -4542,85 +4647,18 @@ function restoreCatalogFilterZeroChrome() {
 }
 
 function showZeroMatchGridState() {
-  if (reconcileTrashCatalogEmptyState()) {
-    return;
-  }
-  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
-    void applyPhotoFilters();
-    return;
-  }
-  showFilterZeroState({
-    recentImports: Boolean(state.activeFilters.recentImports),
-  });
-}
-
-function showEmptyLibraryState() {
-  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
-    VirtualGrid.destroy();
-  }
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
-  }
-  renderEmptyLibraryState();
-  enableAppBarButtons();
-  updateFilterChipRailVisibility();
+  reconcileGridView();
 }
 
 function showCatalogEmptyState() {
-  if (reconcileTrashCatalogEmptyState()) {
-    return;
-  }
-  showEmptyLibraryState();
+  reconcileGridView();
 }
 
 /**
  * After lightbox scope is exhausted or grid sync finds zero matches.
  */
 function reconcileGridEmptyState({ exhaustedScope = null } = {}) {
-  if (exhaustedScope === 'filter') {
-    if (VirtualGrid.isActive()) {
-      void applyPhotoFilters();
-    } else {
-      showZeroMatchGridState();
-    }
-    return;
-  }
-
-  if (exhaustedScope === 'library' || exhaustedScope === 'timeline') {
-    if (
-      !reconcileTrashCatalogEmptyState() &&
-      state.photoTotalCount === 0 &&
-      state.photos.length === 0
-    ) {
-      showEmptyLibraryState();
-    }
-    return;
-  }
-
-  if (hasActiveGridViewFilters()) {
-    if (VirtualGrid.isActive()) {
-      const layout = VirtualGrid.getLayout();
-      if ((layout?.totalPhotos ?? 0) === 0 && !VirtualGrid.isCatalogFilterZeroActive()) {
-        void applyPhotoFilters();
-        return;
-      }
-    } else if (
-      state.photos.length > 0 &&
-      getFilteredPhotos(state.photos).length === 0
-    ) {
-      showZeroMatchGridState();
-      return;
-    }
-  }
-
-  if (reconcileTrashCatalogEmptyState()) {
-    return;
-  }
-
-  if (state.photoTotalCount === 0 && state.photos.length === 0) {
-    showEmptyLibraryState();
-  }
+  reconcileGridView({ exhaustedScope });
 }
 
 function refreshLibraryMutationControls() {
@@ -7103,8 +7141,17 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     getLibrarySortOrder: () => state.currentSortOrder,
     getCatalogFilterOptions,
     onClearCatalogFilters: clearPhotoFilters,
+    onAddPhotos: triggerImport,
+    onExitTrash: () => {
+      if (typeof TrashView !== 'undefined') {
+        void TrashView.exit();
+      }
+    },
     onCatalogFilterZero: () => {
       syncCatalogFilterZeroChrome();
+    },
+    onCatalogEmptyMode: (mode) => {
+      syncCatalogEmptyChrome(mode);
     },
     mergePhotos: mergePhotosIntoVirtualState,
     comparePhotos: (a, b) =>
@@ -7137,7 +7184,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
       }
       if (
         typeof VirtualGrid !== 'undefined' &&
-        VirtualGrid.isCatalogFilterZeroActive()
+        VirtualGrid.isCatalogEmptyModeActive()
       ) {
         return;
       }
@@ -7387,7 +7434,7 @@ async function hydrateGridForMonthJump(targetMonth) {
     if (
       typeof VirtualGrid !== 'undefined' &&
       VirtualGrid.isActive() &&
-      VirtualGrid.isCatalogFilterZeroActive()
+      VirtualGrid.isCatalogEmptyModeActive()
     ) {
       return;
     }
@@ -13251,10 +13298,12 @@ async function restoreLibraryShellAfterFlowDismiss() {
       return;
     }
 
-    if (VirtualGrid.isActive()) {
-      VirtualGrid.destroy();
+    try {
+      await loadAndRenderPhotos(false);
+    } catch (error) {
+      console.warn('Shell restore after flow dismiss:', error);
     }
-    renderEmptyLibraryState();
+    reconcileGridView();
     enableAppBarButtons();
     return;
   }

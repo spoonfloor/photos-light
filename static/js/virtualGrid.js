@@ -28,8 +28,14 @@ const VirtualGrid = (() => {
   let pendingContainerMount = null;
   /** Canonical unfiltered month histogram — restored when filters clear. */
   let unfilteredMonthIndex = null;
-  /** Catalog filter matched zero photos — overlay inside grid, not alternate renderer. */
-  let catalogFilterZeroActive = false;
+  /** In-grid empty overlay — filter | library | trash (grid shell stays mounted). */
+  let catalogEmptyMode = null;
+
+  const CATALOG_EMPTY_CONTAINER_CLASSES = {
+    filter: 'grid-filter-zero',
+    library: 'grid-library-empty',
+    trash: 'grid-trash-empty',
+  };
 
   function getContainer() {
     return document.getElementById('photoContainer');
@@ -63,70 +69,136 @@ const VirtualGrid = (() => {
     return hooks.getLibrarySortOrder?.() || sortOrder || 'newest';
   }
 
-  function clearCatalogFilterZeroOverlay() {
-    catalogFilterZeroActive = false;
-    contentLayer?.querySelector('.catalog-filter-zero')?.remove();
+  function clearCatalogEmptyOverlay() {
+    catalogEmptyMode = null;
+    contentLayer?.querySelector('.catalog-empty-overlay')?.remove();
     const container = getContainer();
     if (container) {
-      container.classList.remove('grid-filter-zero');
+      container.classList.remove(
+        'grid-catalog-empty',
+        'grid-filter-zero',
+        'grid-library-empty',
+        'grid-trash-empty',
+      );
     }
   }
 
-  function exitFilterZeroMode() {
-    if (!catalogFilterZeroActive) {
+  function exitCatalogEmptyMode() {
+    if (!catalogEmptyMode) {
       return false;
     }
-    clearCatalogFilterZeroOverlay();
+    clearCatalogEmptyOverlay();
     return true;
   }
 
-  function filterZeroViewportHeight() {
+  function exitFilterZeroMode() {
+    if (catalogEmptyMode !== 'filter') {
+      return false;
+    }
+    return exitCatalogEmptyMode();
+  }
+
+  function isCatalogEmptyModeActive() {
+    return catalogEmptyMode !== null;
+  }
+
+  function isCatalogFilterZeroActive() {
+    return catalogEmptyMode === 'filter';
+  }
+
+  function getCatalogEmptyMode() {
+    return catalogEmptyMode;
+  }
+
+  function catalogEmptyViewportHeight() {
     const viewport = window.innerHeight || document.documentElement.clientHeight || 800;
     return Math.max(viewport, 400);
   }
 
-  function mountCatalogFilterZeroOverlay(options = {}) {
+  function mountCatalogEmptyOverlay(mode, options = {}) {
     if (!contentLayer) {
       return;
     }
-    contentLayer.querySelector('.catalog-filter-zero')?.remove();
-    const recentImports = Boolean(options.recentImports);
-    const heading = recentImports ? 'No recent imports' : 'No results found';
-    const detail = recentImports
-      ? 'No import dates are available yet.'
-      : 'No images match the current filters.';
+    contentLayer.querySelector('.catalog-empty-overlay')?.remove();
+
+    let heading;
+    let detail;
+    let actionLabel;
+    let onAction = null;
+
+    if (mode === 'filter') {
+      const recentImports = Boolean(options.recentImports);
+      heading = recentImports ? 'No recent imports' : 'No results found';
+      detail = recentImports
+        ? 'No import dates are available yet.'
+        : 'No images match the current filters.';
+      actionLabel = 'Clear filters';
+      onAction = () => hooks.onClearCatalogFilters?.();
+    } else if (mode === 'trash') {
+      heading = 'Trash is empty';
+      detail = 'Photos you delete from your library appear here.';
+      actionLabel = 'Back to library';
+      onAction = () => hooks.onExitTrash?.();
+    } else {
+      heading = options.heading || 'This library is empty';
+      detail = options.detail || 'Add some photos to get started.';
+      actionLabel = 'Add photos';
+      onAction = () => hooks.onAddPhotos?.();
+    }
+
     const overlay = document.createElement('div');
-    overlay.className = 'catalog-filter-zero';
-    overlay.innerHTML = `
-      <div class="catalog-filter-zero-inner">
-        <div class="catalog-filter-zero-copy">
-          <div class="catalog-filter-zero-heading">${heading}</div>
-          <div class="catalog-filter-zero-detail">${detail}</div>
-        </div>
-        <button type="button" class="btn btn-primary catalog-filter-zero-clear">Clear filters</button>
-      </div>
-    `;
-    overlay.querySelector('.catalog-filter-zero-clear')?.addEventListener('click', () => {
-      hooks.onClearCatalogFilters?.();
+    overlay.className = 'catalog-empty-overlay catalog-filter-zero';
+    overlay.dataset.emptyMode = mode;
+
+    const inner = document.createElement('div');
+    inner.className = 'catalog-filter-zero-inner';
+
+    const copy = document.createElement('div');
+    copy.className = 'catalog-filter-zero-copy';
+
+    const headingEl = document.createElement('div');
+    headingEl.className = 'catalog-filter-zero-heading';
+    headingEl.textContent = heading;
+
+    const detailEl = document.createElement('div');
+    detailEl.className = 'catalog-filter-zero-detail';
+    detailEl.textContent = detail;
+
+    copy.appendChild(headingEl);
+    copy.appendChild(detailEl);
+
+    const actionBtn = document.createElement('button');
+    actionBtn.type = 'button';
+    actionBtn.className = 'btn btn-primary catalog-empty-overlay-action';
+    actionBtn.textContent = actionLabel;
+    actionBtn.addEventListener('click', () => {
+      onAction?.();
     });
+
+    inner.appendChild(copy);
+    inner.appendChild(actionBtn);
+    overlay.appendChild(inner);
     contentLayer.appendChild(overlay);
   }
 
-  /** Filter-empty mode — in-grid overlay; grid shell stays visible (never height 0). */
-  function enterFilterZeroMode(indexPayload, filterOptions = {}) {
+  /** In-grid empty mode — overlay inside virtual grid shell (never height 0). */
+  function enterCatalogEmptyMode(mode, indexPayload, options = {}) {
     const container = getContainer();
-    if (!container || !contentLayer) {
+    if (!container || !contentLayer || !mode) {
       return false;
     }
 
-    const wasZero = catalogFilterZeroActive;
+    const wasSameMode = catalogEmptyMode === mode;
+    if (catalogEmptyMode && !wasSameMode) {
+      clearCatalogEmptyOverlay();
+    }
 
     monthInflight.clear();
     hydratedMonths = new Set();
-    if (!wasZero) {
+    if (!wasSameMode) {
       clearMountedMonths();
     } else {
-      contentLayer.querySelector('.catalog-filter-zero')?.remove();
+      contentLayer.querySelector('.catalog-empty-overlay')?.remove();
     }
     clearComfortLayer();
 
@@ -139,7 +211,7 @@ const VirtualGrid = (() => {
     GridLayout.publishCssVars(container, layout);
     updateLabelGate();
 
-    const viewportHeight = filterZeroViewportHeight();
+    const viewportHeight = catalogEmptyViewportHeight();
     if (spacer) {
       spacer.style.height = `${viewportHeight}px`;
     }
@@ -147,14 +219,21 @@ const VirtualGrid = (() => {
       canvas.style.height = `${viewportHeight}px`;
     }
 
-    container.classList.add('grid-filter-zero');
-    mountCatalogFilterZeroOverlay({
-      recentImports: Boolean(filterOptions.importSets),
-    });
-    catalogFilterZeroActive = true;
+    container.classList.remove(
+      'grid-filter-zero',
+      'grid-library-empty',
+      'grid-trash-empty',
+    );
+    container.classList.add('grid-catalog-empty');
+    container.classList.add(CATALOG_EMPTY_CONTAINER_CLASSES[mode] || 'grid-catalog-empty');
+    mountCatalogEmptyOverlay(mode, options);
+    catalogEmptyMode = mode;
     window.scrollTo({ top: 0, behavior: 'instant' });
 
-    hooks.onCatalogFilterZero?.(filterOptions);
+    if (mode === 'filter') {
+      hooks.onCatalogFilterZero?.(options);
+    }
+    hooks.onCatalogEmptyMode?.(mode, options);
 
     if (hooks.onIndexReady) {
       hooks.onIndexReady(indexPayload);
@@ -163,6 +242,20 @@ const VirtualGrid = (() => {
       hooks.onLayoutApplied(layout);
     }
     return true;
+  }
+
+  function enterFilterZeroMode(indexPayload, filterOptions = {}) {
+    return enterCatalogEmptyMode('filter', indexPayload, {
+      recentImports: Boolean(filterOptions.importSets),
+    });
+  }
+
+  function enterLibraryEmptyMode(indexPayload, options = {}) {
+    return enterCatalogEmptyMode('library', indexPayload, options);
+  }
+
+  function enterTrashEmptyMode(indexPayload, options = {}) {
+    return enterCatalogEmptyMode('trash', indexPayload, options);
   }
 
   function applyCatalogFilterZeroMatch(indexPayload, filterOptions = {}) {
@@ -1178,7 +1271,7 @@ const VirtualGrid = (() => {
     }
     const container = getContainer();
     if (container) {
-      container.classList.remove('grid-root', 'grid-paged', 'grid-labels-gated', 'grid-filter-zero');
+      container.classList.remove('grid-root', 'grid-paged', 'grid-labels-gated', 'grid-catalog-empty', 'grid-filter-zero', 'grid-library-empty', 'grid-trash-empty');
       container.style.removeProperty('--grid-cols');
       container.style.removeProperty('--grid-cell-px');
     }
@@ -1205,7 +1298,7 @@ const VirtualGrid = (() => {
     monthInflight.clear();
     hooks = {};
     unfilteredMonthIndex = null;
-    catalogFilterZeroActive = false;
+    catalogEmptyMode = null;
   }
 
   function jumpToMonth(monthKey, options = {}) {
@@ -1953,7 +2046,7 @@ const VirtualGrid = (() => {
   /** Frame-0 feedback: pending placeholders + comfort before index fetch completes. */
   function beginCatalogViewTransition(options = {}) {
     const { preserveScroll = true, axisChangeExpected = false } = options;
-    exitFilterZeroMode();
+    exitCatalogEmptyMode();
 
     const scrollTop = getScrollElement().scrollTop;
     const preserveMonth =
@@ -2034,7 +2127,7 @@ const VirtualGrid = (() => {
 
     const scrollPreserveMonth = axisChanged ? null : preserveMonth;
 
-    exitFilterZeroMode();
+    exitCatalogEmptyMode();
 
     if (clearMonthCache) {
       monthCache.clear();
@@ -2264,7 +2357,7 @@ const VirtualGrid = (() => {
    * Update layout + mounted sections in place. Month hydration cache stays warm.
    */
   function applyCatalogFilterWarm(indexPayload, preserveMonth) {
-    exitFilterZeroMode();
+    exitCatalogEmptyMode();
 
     if (!applyLayoutGeometryFromIndex(indexPayload)) {
       return false;
@@ -2468,8 +2561,13 @@ const VirtualGrid = (() => {
     getPhaseAState,
     isActive,
     isCatalogFilterZeroActive,
+    isCatalogEmptyModeActive,
+    getCatalogEmptyMode,
     enterFilterZeroMode,
+    enterLibraryEmptyMode,
+    enterTrashEmptyMode,
     exitFilterZeroMode,
+    exitCatalogEmptyMode,
     fetchMonthPhotos,
     getGlobalIndexForPhotoId,
     resolveGlobalIndexForPhotoId,

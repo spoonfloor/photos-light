@@ -282,12 +282,33 @@ class TestGridHandoffContract(unittest.TestCase):
         self.assertNotIn("VirtualGrid.destroy()", zero_body)
         self.assertIn("function enterFilterZeroMode", self.virtual_grid_js)
         self.assertIn("function exitFilterZeroMode", self.virtual_grid_js)
-        enter_body = _function_body(self.virtual_grid_js, "enterFilterZeroMode")
+        enter_body = _function_body(self.virtual_grid_js, "enterCatalogEmptyMode")
         self.assertNotIn("spacer.style.height = '0px'", enter_body)
         self.assertNotIn("canvas.style.height = '0px'", enter_body)
-        self.assertIn("filterZeroViewportHeight", enter_body)
+        self.assertIn("catalogEmptyViewportHeight", enter_body)
         warm_body = _function_body(self.virtual_grid_js, "applyCatalogFilterWarm")
-        self.assertIn("exitFilterZeroMode()", warm_body)
+        self.assertIn("exitCatalogEmptyMode()", warm_body)
+
+    def test_reconcile_grid_view_unifies_empty_states(self):
+        self.assertIn("function reconcileGridView", self.main_js)
+        library_body = _function_body(self.main_js, "showEmptyLibraryState")
+        trash_body = _function_body(self.main_js, "showEmptyTrashState")
+        self.assertIn("reconcileGridView", library_body)
+        self.assertIn("reconcileGridView", trash_body)
+        self.assertNotIn("VirtualGrid.destroy()", library_body)
+        self.assertNotIn("VirtualGrid.destroy()", trash_body)
+        reconcile_body = _function_body(self.main_js, "reconcileGridEmptyState")
+        self.assertIn("reconcileGridView", reconcile_body)
+        self.assertIn("function enterLibraryEmptyMode", self.virtual_grid_js)
+        self.assertIn("function enterTrashEmptyMode", self.virtual_grid_js)
+        self.assertIn("function enterCatalogEmptyMode", self.virtual_grid_js)
+        self.assertIn("function exitCatalogEmptyMode", self.virtual_grid_js)
+
+    def test_catalog_empty_hooks_wired(self):
+        hooks_body = _function_body(self.main_js, "buildVirtualGridInitHooks")
+        self.assertIn("onAddPhotos", hooks_body)
+        self.assertIn("onExitTrash", hooks_body)
+        self.assertIn("onCatalogEmptyMode", hooks_body)
 
     def test_filter_fetch_skips_comfort_strip(self):
         body = _function_body(self.virtual_grid_js, "transitionCatalogView")
@@ -317,7 +338,7 @@ class TestGridHandoffContract(unittest.TestCase):
         hooks_body = _function_body(self.main_js, "buildVirtualGridInitHooks")
         self.assertIn("onCatalogFilterZero", hooks_body)
         self.assertIn("syncCatalogFilterZeroChrome()", hooks_body)
-        enter_body = _function_body(self.virtual_grid_js, "enterFilterZeroMode")
+        enter_body = _function_body(self.virtual_grid_js, "enterCatalogEmptyMode")
         self.assertIn("hooks.onCatalogFilterZero", enter_body)
 
     def test_histogram_sync_requires_server_index(self):

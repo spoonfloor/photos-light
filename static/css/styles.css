@@ -453,15 +453,22 @@ body.trash-view-active #lightboxDownloadBtn {
   color: var(--filter-chip-text-active-hover);
 }
 
-.grid-root.grid-filter-zero .grid-content-layer {
+.grid-root.grid-catalog-empty .grid-content-layer,
+.grid-root.grid-filter-zero .grid-content-layer,
+.grid-root.grid-library-empty .grid-content-layer,
+.grid-root.grid-trash-empty .grid-content-layer {
   bottom: 0;
   min-height: 100%;
 }
 
-.grid-root.grid-filter-zero .grid-canvas {
+.grid-root.grid-catalog-empty .grid-canvas,
+.grid-root.grid-filter-zero .grid-canvas,
+.grid-root.grid-library-empty .grid-canvas,
+.grid-root.grid-trash-empty .grid-canvas {
   overflow: visible;
 }
 
+.catalog-empty-overlay,
 .catalog-filter-zero {
   position: relative;
   z-index: 2;
