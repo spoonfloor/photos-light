@@ -1,5 +1,5 @@
 // Photo Viewer - Main Entry Point
-const MAIN_JS_VERSION = 'v438';
+const MAIN_JS_VERSION = 'v439';
 console.log(`🚀 main.js loaded: ${MAIN_JS_VERSION}`);
 
 /** Photos fetched per viewport window (initial open + each scroll load). */
@@ -8,7 +8,7 @@ const PHOTO_PAGE_SIZE = 400;
 const IMPORT_SET_LIMIT = 5;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '459';
+const STATIC_ASSET_VERSION = '460';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -1811,6 +1811,8 @@ function updateDeleteButtonVisibility() {
   if (typeof TrashView !== 'undefined') {
     TrashView.updateRestoreButtonVisibility();
   }
+
+  updateUtilityMenuAvailability();
 }
 
 // =====================
@@ -5821,6 +5823,9 @@ function reloadOpenLightboxMedia(photoId) {
     return;
   }
 
+  if (typeof LightboxVideoControls !== 'undefined') {
+    LightboxVideoControls.unmount();
+  }
   content.innerHTML = '';
   content.style.backgroundColor = 'transparent';
   loadMediaIntoContent(content, photo, isVideo, {
@@ -6051,7 +6056,7 @@ async function handleLightboxRotate() {
 }
 
 const SAVE_LAST_PATH_KEY = 'save.lastPath';
-let lightboxSaveInProgress = false;
+let photoExportInProgress = false;
 
 async function getSavePickerInitialPath() {
   const stickyPath = localStorage.getItem(SAVE_LAST_PATH_KEY);
@@ -6071,59 +6076,71 @@ async function getSavePickerInitialPath() {
   return null;
 }
 
+async function getSaveDestination({
+  title = 'Save photo',
+  subtitle = 'Choose where to save this file',
+} = {}) {
+  const initialPath = await getSavePickerInitialPath();
+  const pickerOptions = {
+    intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
+    title,
+    subtitle,
+    primaryActionLabel: 'Save',
+    lastPathStorageKey: SAVE_LAST_PATH_KEY,
+  };
+  if (initialPath) {
+    pickerOptions.initialPath = initialPath;
+  }
+  return FolderPicker.show(pickerOptions);
+}
+
+async function exportPhotoToFolder(photoId, destFolder) {
+  const response = await fetch('/api/photo/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      photo_id: photoId,
+      destination: destFolder,
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (response.status === 404 && result.error === 'Photo not found') {
+      await handleStalePhoto(photoId);
+    }
+    throw new Error(result.error || 'Save failed');
+  }
+
+  return result;
+}
+
 async function saveLightboxPhoto(photoId) {
   if (!getViewCapabilities().download) {
     return;
   }
-  if (lightboxSaveInProgress || !photoId) {
+  if (photoExportInProgress || !photoId) {
     return;
   }
 
-  lightboxSaveInProgress = true;
+  photoExportInProgress = true;
   const downloadBtn = document.getElementById('lightboxDownloadBtn');
   if (downloadBtn) {
     downloadBtn.disabled = true;
   }
 
   try {
-    const initialPath = await getSavePickerInitialPath();
-    const pickerOptions = {
-      intent: FolderPicker.INTENT.GENERIC_FOLDER_SELECTION,
+    const destFolder = await getSaveDestination({
       title: 'Save photo',
       subtitle: 'Choose where to save this file',
-      primaryActionLabel: 'Save',
-      lastPathStorageKey: SAVE_LAST_PATH_KEY,
-    };
-    if (initialPath) {
-      pickerOptions.initialPath = initialPath;
-    }
-
-    const destFolder = await FolderPicker.show(pickerOptions);
+    });
     if (!destFolder) {
       return;
     }
 
     showToast('Saving…', 'info');
     const hadPendingRotation = getRotationStillNeeded(photoId) !== 0;
-
-    const response = await fetch('/api/photo/export', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        photo_id: photoId,
-        destination: destFolder,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      if (response.status === 404 && error.error === 'Photo not found') {
-        await handleStalePhoto(photoId);
-      }
-      throw new Error(error.error || 'Save failed');
-    }
-
-    const result = await response.json();
+    const result = await exportPhotoToFolder(photoId, destFolder);
     const savedPath = result.path || destFolder;
     let message = `Saved to ${savedPath}`;
     if (hadPendingRotation) {
@@ -6134,10 +6151,79 @@ async function saveLightboxPhoto(photoId) {
     console.error('Save photo failed:', error);
     showToast(`Save failed: ${error.message}`, 'error');
   } finally {
-    lightboxSaveInProgress = false;
+    photoExportInProgress = false;
     if (downloadBtn) {
       downloadBtn.disabled = state.lightboxClosing;
     }
+    updateUtilityMenuAvailability();
+  }
+}
+
+async function saveSelectedPhotos() {
+  if (!getViewCapabilities().download) {
+    return;
+  }
+  const selectedIds = Array.from(state.selectedPhotos);
+  if (photoExportInProgress || selectedIds.length === 0) {
+    return;
+  }
+
+  photoExportInProgress = true;
+  updateUtilityMenuAvailability();
+
+  try {
+    const destFolder = await getSaveDestination({
+      title: selectedIds.length === 1 ? 'Save selected item' : 'Save selected items',
+      subtitle:
+        selectedIds.length === 1
+          ? 'Choose where to save this file'
+          : 'Choose where to save these files',
+    });
+    if (!destFolder) {
+      return;
+    }
+
+    showToast(
+      selectedIds.length === 1
+        ? 'Saving…'
+        : `Saving ${selectedIds.length} files…`,
+      'info',
+    );
+
+    const failures = [];
+    for (const photoId of selectedIds) {
+      try {
+        await exportPhotoToFolder(photoId, destFolder);
+      } catch (error) {
+        failures.push({ photoId, error });
+        console.error(`Save selected photo ${photoId} failed:`, error);
+      }
+    }
+
+    const savedCount = selectedIds.length - failures.length;
+    if (savedCount > 0 && failures.length === 0) {
+      showToast(
+        savedCount === 1
+          ? `Saved to ${destFolder}`
+          : `Saved ${savedCount} files to ${destFolder}`,
+        null,
+        4000,
+      );
+    } else if (savedCount > 0) {
+      showToast(
+        `Saved ${savedCount} of ${selectedIds.length} files to ${destFolder}`,
+        'error',
+        5000,
+      );
+    } else if (failures.length > 0) {
+      showToast(`Save failed: ${failures[0].error.message}`, 'error');
+    }
+  } catch (error) {
+    console.error('Save selected photos failed:', error);
+    showToast(`Save failed: ${error.message}`, 'error');
+  } finally {
+    photoExportInProgress = false;
+    updateUtilityMenuAvailability();
   }
 }
 
@@ -6380,6 +6466,21 @@ function handleLightboxKeyboard(e) {
     if (window.PickerUtils?.activatePrimaryActionForEnter()) {
       e.preventDefault();
     }
+  } else if (e.key === ' ' && state.lightboxOpen) {
+    if (visibleOverlay) {
+      return;
+    }
+    const lightboxVideo = document.querySelector(
+      '#lightboxContent .lightbox-video-stage video',
+    );
+    if (
+      lightboxVideo &&
+      typeof LightboxVideoControls !== 'undefined' &&
+      document.activeElement?.tagName !== 'INPUT'
+    ) {
+      e.preventDefault();
+      LightboxVideoControls.togglePlay();
+    }
   } else if (e.key === 'ArrowLeft' && state.lightboxOpen) {
     if (visibleOverlay) {
       return;
@@ -6489,24 +6590,37 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
   const dims = calculateMediaDimensions(photo, rotationDegrees);
 
   if (isVideo) {
-    // For video, show placeholder and load
     const frame = createLightboxMediaFrame();
     const placeholder = createPlaceholder(photo, dims);
-    frame.appendChild(placeholder);
+    const stage = document.createElement('div');
+    stage.className = 'lightbox-video-stage';
+
     content.appendChild(frame);
 
     const video = document.createElement('video');
     video.className = 'lightbox-media-element';
-    video.src = `/api/photo/${photo.id}/file`;
-    video.controls = true;
+    video.src = getPhotoFileUrl(photo.id);
     video.autoplay = true;
     video.playsInline = true;
+    video.preload = 'auto';
+    applyLightboxMediaStyles(frame, placeholder, photo, rotationDegrees);
     applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
     video.style.backgroundColor = '#2a2a2a';
+
+    stage.appendChild(placeholder);
+    stage.appendChild(video);
+    frame.appendChild(stage);
+
+    if (typeof LightboxVideoControls !== 'undefined') {
+      LightboxVideoControls.mount(stage, video);
+    }
 
     video.addEventListener('loadedmetadata', () => {
       setLightboxVisualState(photo.id, video, 0);
       applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
+      if (typeof LightboxVideoControls !== 'undefined') {
+        LightboxVideoControls.resetTransport();
+      }
     });
 
     video.addEventListener('loadeddata', () => {
@@ -6538,7 +6652,6 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
       }
     });
 
-    frame.appendChild(video);
   } else {
     // For images, preload in memory first
     const img = new Image();
@@ -6655,6 +6768,9 @@ async function openLightbox(photoIndex) {
   rebaseLightboxRotationSessionForReload(photo.id);
 
   // Clear previous content
+  if (typeof LightboxVideoControls !== 'undefined') {
+    LightboxVideoControls.unmount();
+  }
   content.innerHTML = '';
   content.style.backgroundColor = 'transparent';
 
@@ -6819,6 +6935,9 @@ async function closeLightbox({ commitRotations = true } = {}) {
   }
 
   // Stop any playing videos
+  if (typeof LightboxVideoControls !== 'undefined') {
+    LightboxVideoControls.unmount();
+  }
   const video = overlay.querySelector('video');
   if (video) {
     video.pause();
@@ -9963,10 +10082,18 @@ async function loadUtilitiesMenu() {
     document.body.insertAdjacentHTML('beforeend', html);
 
     // Wire up menu items
+    const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
     const switchLibraryBtn = document.getElementById('switchLibraryBtn');
     const convertToLibraryBtn = document.getElementById('convertToLibraryBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
     const closeLibraryBtn = document.getElementById('closeLibraryBtn');
+
+    if (downloadSelectedBtn) {
+      downloadSelectedBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        void saveSelectedPhotos();
+      });
+    }
 
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
@@ -10106,6 +10233,17 @@ function hideUtilitiesMenu() {
 function updateUtilityMenuAvailability() {
   const hasDatabase = state.hasDatabase;
   const hasPhotos = state.photos && state.photos.length > 0;
+  const caps = getViewCapabilities();
+  const hasSelectedPhotos = state.selectedPhotos.size > 0;
+
+  const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
+  if (downloadSelectedBtn) {
+    downloadSelectedBtn.hidden = !caps.download;
+  }
+  enableMenuItem(
+    'downloadSelectedBtn',
+    hasDatabase && hasSelectedPhotos && caps.download && !photoExportInProgress,
+  );
 
   // Switch library - ALWAYS available (never disabled)
   enableMenuItem('switchLibraryBtn', true);

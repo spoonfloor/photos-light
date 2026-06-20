@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from io import BytesIO
 from typing import Callable, Optional, Tuple
 
@@ -354,45 +355,88 @@ def video_playback_error_message(file_path: str, error: Exception) -> str:
     return "Cannot prepare video preview"
 
 
-def video_to_browser_mp4_buffer(file_path: str, *, timeout: int = 300) -> BytesIO:
-    """Remux or transcode a library video into fragmented MP4 bytes for browser playback."""
+def browser_mp4_encode_args(file_path: str) -> list[str]:
+    """Return ffmpeg encode/remux args for browser-safe fragmented MP4."""
     codec = get_video_codec_name(file_path)
     if codec == "h264":
-        encode_args = ["-c", "copy"]
-    else:
-        encode_args = [
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-        ]
+        return ["-c", "copy"]
+    return [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+    ]
 
-    cmd = [
+
+def browser_mp4_ffmpeg_command(file_path: str) -> list[str]:
+    """Build an ffmpeg command that writes fragmented MP4 to stdout."""
+    return [
         "ffmpeg",
+        "-nostdin",
+        "-loglevel",
+        "error",
         "-y",
         "-i",
         file_path,
-        *encode_args,
+        *browser_mp4_encode_args(file_path),
         "-movflags",
         FRAGMENTED_MP4_MOVFLAGS,
         "-f",
         "mp4",
         "pipe:1",
     ]
-    result = subprocess.run(cmd, capture_output=True, timeout=timeout)
-    if result.returncode != 0 or not result.stdout:
-        stderr = (result.stderr or b"").decode(errors="replace").strip()
-        raise RuntimeError(stderr or "ffmpeg failed to prepare browser video")
 
-    buffer = BytesIO(result.stdout)
+
+def iter_browser_mp4_chunks(
+    file_path: str,
+    *,
+    chunk_size: int = 65536,
+    timeout: int = 300,
+):
+    """Yield fragmented MP4 bytes from ffmpeg stdout for browser <video> playback."""
+    proc = subprocess.Popen(
+        browser_mp4_ffmpeg_command(file_path),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        if proc.stdout is None:
+            raise RuntimeError("ffmpeg failed to open stdout pipe")
+
+        deadline = time.monotonic() + timeout if timeout else None
+        while True:
+            if deadline and time.monotonic() > deadline:
+                proc.kill()
+                raise RuntimeError("ffmpeg timed out preparing browser video")
+
+            chunk = proc.stdout.read(chunk_size)
+            if not chunk:
+                break
+            yield chunk
+
+        return_code = proc.wait(timeout=30)
+        if return_code != 0:
+            raise RuntimeError("ffmpeg failed to prepare browser video")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        if proc.stdout is not None:
+            proc.stdout.close()
+
+
+def video_to_browser_mp4_buffer(file_path: str, *, timeout: int = 300) -> BytesIO:
+    """Remux or transcode a library video into fragmented MP4 bytes for browser playback."""
+    buffer = BytesIO()
+    for chunk in iter_browser_mp4_chunks(file_path, timeout=timeout):
+        buffer.write(chunk)
     buffer.seek(0)
     return buffer
 

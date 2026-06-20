@@ -149,12 +149,12 @@ from image_pixels import (
     generate_still_square_thumbnail,
     generate_video_square_thumbnail,
     needs_browser_video_proxy,
+    iter_browser_mp4_chunks,
     preview_decode_error_message,
     still_image_to_jpeg_buffer,
     thumbnail_cache_path,
     video_mimetype_for_extension,
     video_playback_error_message,
-    video_to_browser_mp4_buffer,
 )
 
 # Register HEIF/HEIC support for PIL
@@ -1935,6 +1935,29 @@ def get_photo_thumbnail(photo_id):
         print(f"❌ Error generating thumbnail for photo {photo_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+def _browser_video_proxy_response(full_path):
+    """Stream fragmented MP4 from ffmpeg; peek first chunk so errors return 422."""
+    chunk_iter = iter_browser_mp4_chunks(full_path)
+    try:
+        first_chunk = next(chunk_iter)
+    except StopIteration:
+        return None, RuntimeError("ffmpeg produced no output")
+    except Exception as exc:
+        return None, exc
+
+    if not first_chunk:
+        return None, RuntimeError("ffmpeg produced no output")
+
+    @stream_with_context
+    def generate():
+        yield first_chunk
+        for chunk in chunk_iter:
+            yield chunk
+
+    return Response(generate(), mimetype='video/mp4'), None
+
+
 @app.route('/api/photo/<int:photo_id>/file')
 @handle_db_corruption
 def get_photo_file(photo_id):
@@ -1968,12 +1991,11 @@ def get_photo_file(photo_id):
 
         if ext in VIDEO_EXTENSIONS:
             if needs_browser_video_proxy(full_path):
-                try:
-                    buffer = video_to_browser_mp4_buffer(full_path)
-                except Exception as e:
-                    print(f"Error preparing browser video for photo {photo_id}: {e}")
-                    return jsonify({'error': video_playback_error_message(full_path, e)}), 422
-                return send_file(buffer, mimetype='video/mp4')
+                response, error = _browser_video_proxy_response(full_path)
+                if error is not None:
+                    print(f"Error preparing browser video for photo {photo_id}: {error}")
+                    return jsonify({'error': video_playback_error_message(full_path, error)}), 422
+                return response
             return send_file(full_path, mimetype=video_mimetype_for_extension(ext))
         
         directory = os.path.dirname(full_path)
@@ -3404,13 +3426,11 @@ def get_trash_photo_file(photo_id):
         file_type = photo_data.get('file_type')
         ext = os.path.splitext(full_path)[1].lower()
         if file_type == 'video':
-            if needs_browser_video_proxy(ext):
-                buffer = video_to_browser_mp4_buffer(full_path)
-                return send_file(
-                    BytesIO(buffer),
-                    mimetype='video/mp4',
-                    download_name=os.path.basename(full_path),
-                )
+            if needs_browser_video_proxy(full_path):
+                response, error = _browser_video_proxy_response(full_path)
+                if error is not None:
+                    return jsonify({'error': video_playback_error_message(full_path, error)}), 422
+                return response
             return send_file(full_path, mimetype=video_mimetype_for_extension(ext))
         return send_file(full_path)
     except Exception as e:

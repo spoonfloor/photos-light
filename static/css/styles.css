@@ -256,6 +256,7 @@ body.trash-view-active.filter-chip-rail-visible {
 #restoreBtn[hidden],
 #addPhotoBtn[hidden],
 #editDateBtn[hidden],
+#downloadSelectedBtn[hidden],
 #switchLibraryBtn[hidden],
 #convertToLibraryBtn[hidden],
 #closeLibraryBtn[hidden],
@@ -1061,6 +1062,153 @@ body.trash-view-active #lightboxDownloadBtn {
 .lightbox-media-frame .lightbox-media-placeholder {
   width: 100%;
   height: 100%;
+}
+
+/* Lightbox video — custom transport overlay (see lightboxVideoControls.js) */
+.lightbox-video-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+
+.lightbox-video-stage:fullscreen,
+.lightbox-video-stage:-webkit-full-screen {
+  background: #000;
+}
+
+.lightbox-video-stage:fullscreen .lightbox-media-element,
+.lightbox-video-stage:-webkit-full-screen .lightbox-media-element,
+.lightbox-video-stage:fullscreen .lightbox-media-placeholder,
+.lightbox-video-stage:-webkit-full-screen .lightbox-media-placeholder {
+  background: #000;
+}
+
+.lightbox-video-stage .lightbox-media-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.lightbox-video-stage .lightbox-media-element {
+  z-index: 1;
+}
+
+.lightbox-video-controls-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.lightbox-video-controls-overlay.lightbox-video-controls-hidden {
+  visibility: hidden;
+}
+
+.lightbox-video-controls-overlay.lightbox-video-controls-hidden
+  .lightbox-video-controls-inner {
+  pointer-events: none;
+}
+
+.lightbox-video-controls-gradient {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 120px;
+  z-index: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent);
+  pointer-events: none;
+}
+
+.lightbox-video-controls-inner {
+  position: relative;
+  z-index: 1;
+  padding: 0 12px 10px;
+  pointer-events: auto;
+  color: #fff;
+}
+
+.lightbox-video-controls-inner .material-symbols-outlined,
+.lightbox-video-time-display {
+  color: #fff;
+}
+
+.lightbox-video-controls-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 32px;
+}
+
+.lightbox-video-ctrl-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.lightbox-video-ctrl-btn .material-symbols-outlined {
+  font-size: 22px;
+  color: #fff;
+}
+
+.lightbox-video-play-icon {
+  font-variation-settings:
+    'FILL' 1,
+    'wght' 500,
+    'GRAD' 0,
+    'opsz' 24;
+}
+
+.lightbox-video-time-display {
+  font-size: 13px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.lightbox-video-controls-spacer {
+  flex: 1;
+}
+
+.lightbox-video-progress-track {
+  position: relative;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.lightbox-video-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: #fff;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.lightbox-video-progress-input {
+  position: absolute;
+  inset: -6px 0;
+  width: 100%;
+  height: calc(100% + 12px);
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 /* Lightbox info panel */
