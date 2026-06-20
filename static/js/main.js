@@ -8189,6 +8189,8 @@ async function applyPhotoFiltersAsync() {
       selectedIds: isSelectionViewFilterActive()
         ? state.selectedPhotos
         : null,
+      selectedAnchorIds:
+        state.selectedPhotos.size > 0 ? state.selectedPhotos : null,
       catalogFilterPhoto: getCatalogFilterPredicate(),
       signal: abortController.signal,
     });

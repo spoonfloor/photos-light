@@ -3,7 +3,7 @@
  *
  * | Kind            | Priority   | Use when |
  * |-----------------|------------|----------|
- * | date-then-row   | date→content | Date jumper, filter toggle (starred on/off) |
+ * | date-then-row   | date→content | Date jumper, filter toggle (starred/selected on/off) |
  * | freeze-row      | content    | Sort toggle, mutations, undo |
  * | month-header    | legacy     | Default catalog preserve, histogram month target |
  */
@@ -44,27 +44,59 @@ const GridScrollAnchor = (() => {
     return starTurningOn || starTurningOff;
   }
 
-  function starFilterTurningOn(filterOptions, previousMonthIndex) {
-    return (
-      !wasStarredFilterActive(previousMonthIndex) && Boolean(filterOptions.starred)
-    );
+  function wasSelectionFilterActive(previousMonthIndex) {
+    return Boolean(previousMonthIndex?.selectionScope);
   }
 
-  function starFilterTurningOff(filterOptions, previousMonthIndex) {
-    return (
-      wasStarredFilterActive(previousMonthIndex) && !filterOptions.starred
-    );
+  function isSelectionFilterTransition(previousMonthIndex, selectionActive) {
+    const turningOn =
+      !wasSelectionFilterActive(previousMonthIndex) && Boolean(selectionActive);
+    const turningOff =
+      wasSelectionFilterActive(previousMonthIndex) && !selectionActive;
+    return turningOn || turningOff;
   }
 
-  function isStarredFilterToggle(
-    trigger,
-    filterOptions,
-    previousMonthIndex,
-  ) {
-    return (
-      trigger === TRIGGER.FILTER_TOGGLE &&
-      isStarredFilterTransition(filterOptions, previousMonthIndex)
-    );
+  function isFilterHotRowToggle(trigger) {
+    return trigger === TRIGGER.FILTER_TOGGLE;
+  }
+
+  /** Single unambiguous filter transition → DATE_THEN_ROW criteria; combo/clear-all → null. */
+  function resolveFilterHotRowCriteria(context = {}) {
+    const {
+      trigger,
+      filterOptions = {},
+      previousMonthIndex = null,
+      selectionActive = false,
+      selectedAnchorIds = null,
+    } = context;
+
+    if (!isFilterHotRowToggle(trigger)) {
+      return null;
+    }
+
+    const transitions = [];
+    if (isStarredFilterTransition(filterOptions, previousMonthIndex)) {
+      transitions.push({ kind: 'first-matching', match: 'starred' });
+    }
+    if (
+      isSelectionFilterTransition(previousMonthIndex, selectionActive) &&
+      selectedAnchorIds?.size
+    ) {
+      transitions.push({
+        kind: 'first-matching',
+        match: 'selected',
+        selectedIds: selectedAnchorIds,
+      });
+    }
+
+    if (transitions.length !== 1) {
+      return null;
+    }
+
+    return {
+      kind: KIND.DATE_THEN_ROW,
+      criteria: transitions[0],
+    };
   }
 
   function resolveScrollAnchor(context = {}) {
@@ -80,6 +112,8 @@ const GridScrollAnchor = (() => {
       alignToHomeGridTop = false,
       targetMonth = null,
       axisChanged = false,
+      selectionActive = false,
+      selectedAnchorIds = null,
     } = context;
 
     if (!layout || layout.provisional) {
@@ -103,17 +137,15 @@ const GridScrollAnchor = (() => {
       };
     }
 
-    if (
-      isStarredFilterToggle(
-        trigger,
-        filterOptions,
-        previousMonthIndex,
-      )
-    ) {
-      return {
-        kind: KIND.DATE_THEN_ROW,
-        criteria: 'first-starred',
-      };
+    const filterHotRowAnchor = resolveFilterHotRowCriteria({
+      trigger,
+      filterOptions,
+      previousMonthIndex,
+      selectionActive,
+      selectedAnchorIds,
+    });
+    if (filterHotRowAnchor) {
+      return filterHotRowAnchor;
     }
 
     const wantsFreezeRow =
@@ -125,11 +157,7 @@ const GridScrollAnchor = (() => {
       wantsFreezeRow &&
       preserveScroll &&
       !scrollTargetMonth &&
-      !isStarredFilterToggle(
-        trigger,
-        filterOptions,
-        previousMonthIndex,
-      )
+      !filterHotRowAnchor
     ) {
       const rowAnchor = GridLayout.findTopVisibleRowAnchor(
         layout,
@@ -244,9 +272,10 @@ const GridScrollAnchor = (() => {
     HOME_SCROLL_EPSILON,
     APP_BAR_OFFSET,
     wasStarredFilterActive,
-    starFilterTurningOn,
-    starFilterTurningOff,
-    isStarredFilterToggle,
+    wasSelectionFilterActive,
+    isStarredFilterTransition,
+    isSelectionFilterTransition,
+    resolveFilterHotRowCriteria,
     resolveScrollAnchor,
     effectiveScrollAnchor,
     applyScrollAnchor,

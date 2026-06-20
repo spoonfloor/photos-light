@@ -2043,8 +2043,25 @@ const VirtualGrid = (() => {
   }
 
   /** First matching row in the current catalog, using already-cached month data only. */
+  function photoMatchesHotCriteria(photo, criteria) {
+    if (!photo || !criteria) {
+      return false;
+    }
+    const match =
+      criteria.match ??
+      (criteria === 'first-starred' ? 'starred' : null);
+    if (match === 'starred') {
+      return photo.rating === 5;
+    }
+    if (match === 'selected') {
+      const idSet = criteria.selectedIds;
+      return Boolean(idSet?.has(Number(photo.id)));
+    }
+    return false;
+  }
+
   function findHotRowInCachedCatalog(criteria, targetLayout = layout) {
-    if (!targetLayout?.sections?.length) {
+    if (!targetLayout?.sections?.length || !criteria) {
       return null;
     }
     const columns = targetLayout.columnLayout?.columns ?? 1;
@@ -2055,7 +2072,7 @@ const VirtualGrid = (() => {
       }
       const visible = visibleMonthPhotos(photos);
       for (let localIndex = 0; localIndex < visible.length; localIndex += 1) {
-        if (criteria === 'first-starred' && visible[localIndex].rating !== 5) {
+        if (!photoMatchesHotCriteria(visible[localIndex], criteria)) {
           continue;
         }
         return {
@@ -2068,7 +2085,7 @@ const VirtualGrid = (() => {
   }
 
   async function findHotRowInCatalog(criteria, targetLayout = layout) {
-    if (!targetLayout?.sections?.length) {
+    if (!targetLayout?.sections?.length || !criteria) {
       return null;
     }
     const columns = targetLayout.columnLayout?.columns ?? 1;
@@ -2079,7 +2096,7 @@ const VirtualGrid = (() => {
       }
       const visible = visibleMonthPhotos(photos);
       for (let localIndex = 0; localIndex < visible.length; localIndex += 1) {
-        if (criteria === 'first-starred' && visible[localIndex].rating !== 5) {
+        if (!photoMatchesHotCriteria(visible[localIndex], criteria)) {
           continue;
         }
         return {
@@ -2157,7 +2174,7 @@ const VirtualGrid = (() => {
     });
     if (
       context.trigger === GridScrollAnchor.TRIGGER.FILTER_TOGGLE &&
-      context.filterOptions
+      anchor.kind === GridScrollAnchor.KIND.DATE_THEN_ROW
     ) {
       return prepareFilterScrollAnchor(anchor);
     }
@@ -2364,6 +2381,7 @@ const VirtualGrid = (() => {
       sortOrderNext = librarySortOrder(),
       filterOptions = {},
       selectedIds = null,
+      selectedAnchorIds = null,
       catalogFilterPhoto = null,
       scrollTargetMonth = null,
       preserveScroll = true,
@@ -2390,6 +2408,8 @@ const VirtualGrid = (() => {
     const scrollAnchor = captureGridScrollAnchor({
       trigger: transitionTrigger,
       filterOptions,
+      selectionActive,
+      selectedAnchorIds,
       scrollTargetMonth,
       preserveScroll,
       isSortChange,
@@ -2595,12 +2615,14 @@ const VirtualGrid = (() => {
     video = false,
     importSets = null,
     selectedIds = null,
+    selectedAnchorIds = null,
     catalogFilterPhoto = null,
     signal = null,
   } = {}) {
     return transitionCatalogView({
       filterOptions: { starred, video, importSets },
       selectedIds,
+      selectedAnchorIds,
       catalogFilterPhoto,
       requireServerIndex: false,
       signal,
