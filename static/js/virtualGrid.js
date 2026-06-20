@@ -642,7 +642,7 @@ const VirtualGrid = (() => {
   }
 
   function syncComfortAndContent() {
-    if (!layout || catalogFilterZeroActive) {
+    if (!layout || isCatalogEmptyModeActive()) {
       return;
     }
 
@@ -792,7 +792,12 @@ const VirtualGrid = (() => {
   }
 
   function syncTileLayer() {
-    if (!tileLayer || !layout?.columnLayout || tileLayer.classList.contains('grid-comfort-off')) {
+    if (
+      isCatalogEmptyModeActive() ||
+      !tileLayer ||
+      !layout?.columnLayout ||
+      tileLayer.classList.contains('grid-comfort-off')
+    ) {
       return;
     }
 
@@ -1298,6 +1303,7 @@ const VirtualGrid = (() => {
     monthInflight.clear();
     hooks = {};
     unfilteredMonthIndex = null;
+    clearFilterHomeRowAnchor();
     catalogEmptyMode = null;
   }
 
@@ -2518,10 +2524,6 @@ const VirtualGrid = (() => {
   function getPhaseAState() {
     publishPhaseATestState(layout?.provisional ? 'provisional' : 'refined');
     return window.__gridPhaseA || null;
-  }
-
-  function isCatalogFilterZeroActive() {
-    return catalogFilterZeroActive;
   }
 
   function isActive() {
