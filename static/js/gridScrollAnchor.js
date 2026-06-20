@@ -3,7 +3,7 @@
  *
  * | Kind            | Priority   | Use when |
  * |-----------------|------------|----------|
- * | date-then-row   | date→content | Date jumper, filter toggle (starred/selected on/off) |
+ * | date-then-row   | date→content | Date jumper, filter chip toggle |
  * | freeze-row      | content    | Sort toggle, mutations, undo |
  * | month-header    | legacy     | Default catalog preserve, histogram month target |
  */
@@ -32,16 +32,49 @@ const GridScrollAnchor = (() => {
     );
   }
 
+  const FILTER_HOT_ROW_MATCHERS = Object.freeze({
+    starred: Object.freeze({
+      wasActive: (previousMonthIndex) =>
+        Boolean(previousMonthIndex?.starred && previousMonthIndex?.filtered),
+      isActive: (filterOptions) => Boolean(filterOptions.starred),
+      criteria: Object.freeze({ kind: 'first-matching', match: 'starred' }),
+    }),
+    video: Object.freeze({
+      wasActive: (previousMonthIndex) =>
+        Boolean(previousMonthIndex?.video && previousMonthIndex?.filtered),
+      isActive: (filterOptions) => Boolean(filterOptions.video),
+      criteria: Object.freeze({ kind: 'first-matching', match: 'video' }),
+    }),
+  });
+
+  function wasPhotoFilterActive(match, previousMonthIndex) {
+    return Boolean(FILTER_HOT_ROW_MATCHERS[match]?.wasActive(previousMonthIndex));
+  }
+
+  function isPhotoFilterTransition(match, filterOptions, previousMonthIndex) {
+    const matcher = FILTER_HOT_ROW_MATCHERS[match];
+    if (!matcher) {
+      return false;
+    }
+    const wasActive = matcher.wasActive(previousMonthIndex);
+    const isActive = matcher.isActive(filterOptions);
+    return (!wasActive && isActive) || (wasActive && !isActive);
+  }
+
   function wasStarredFilterActive(previousMonthIndex) {
-    return Boolean(previousMonthIndex?.starred && previousMonthIndex?.filtered);
+    return wasPhotoFilterActive('starred', previousMonthIndex);
   }
 
   function isStarredFilterTransition(filterOptions, previousMonthIndex) {
-    const starTurningOn =
-      !wasStarredFilterActive(previousMonthIndex) && Boolean(filterOptions.starred);
-    const starTurningOff =
-      wasStarredFilterActive(previousMonthIndex) && !filterOptions.starred;
-    return starTurningOn || starTurningOff;
+    return isPhotoFilterTransition('starred', filterOptions, previousMonthIndex);
+  }
+
+  function wasVideoFilterActive(previousMonthIndex) {
+    return wasPhotoFilterActive('video', previousMonthIndex);
+  }
+
+  function isVideoFilterTransition(filterOptions, previousMonthIndex) {
+    return isPhotoFilterTransition('video', filterOptions, previousMonthIndex);
   }
 
   function wasSelectionFilterActive(previousMonthIndex) {
@@ -60,7 +93,44 @@ const GridScrollAnchor = (() => {
     return trigger === TRIGGER.FILTER_TOGGLE;
   }
 
-  /** Single unambiguous filter transition → DATE_THEN_ROW criteria; combo/clear-all → null. */
+  const FIRST_VISIBLE_FILTER_ROW = Object.freeze({
+    kind: 'first-visible-after-filter',
+  });
+
+  function filterActiveAfterToggle(filterOptions, selectionActive) {
+    return catalogFilterActive(filterOptions) || Boolean(selectionActive);
+  }
+
+  function collectRemovedFilterCriteria({
+    filterOptions = {},
+    previousMonthIndex = null,
+    selectionActive = false,
+    selectedAnchorIds = null,
+  } = {}) {
+    const removed = [];
+
+    Object.values(FILTER_HOT_ROW_MATCHERS).forEach((matcher) => {
+      if (matcher.wasActive(previousMonthIndex) && !matcher.isActive(filterOptions)) {
+        removed.push(matcher.criteria);
+      }
+    });
+
+    if (
+      wasSelectionFilterActive(previousMonthIndex) &&
+      !selectionActive &&
+      selectedAnchorIds?.size
+    ) {
+      removed.push({
+        kind: 'first-matching',
+        match: 'selected',
+        selectedIds: selectedAnchorIds,
+      });
+    }
+
+    return removed;
+  }
+
+  /** Filter chip toggle → resulting catalog's hot row; last-filter OFF → removed filter's row. */
   function resolveFilterHotRowCriteria(context = {}) {
     const {
       trigger,
@@ -74,28 +144,27 @@ const GridScrollAnchor = (() => {
       return null;
     }
 
-    const transitions = [];
-    if (isStarredFilterTransition(filterOptions, previousMonthIndex)) {
-      transitions.push({ kind: 'first-matching', match: 'starred' });
-    }
-    if (
-      isSelectionFilterTransition(previousMonthIndex, selectionActive) &&
-      selectedAnchorIds?.size
-    ) {
-      transitions.push({
-        kind: 'first-matching',
-        match: 'selected',
-        selectedIds: selectedAnchorIds,
-      });
+    if (filterActiveAfterToggle(filterOptions, selectionActive)) {
+      return {
+        kind: KIND.DATE_THEN_ROW,
+        criteria: FIRST_VISIBLE_FILTER_ROW,
+      };
     }
 
-    if (transitions.length !== 1) {
+    const removed = collectRemovedFilterCriteria({
+      filterOptions,
+      previousMonthIndex,
+      selectionActive,
+      selectedAnchorIds,
+    });
+
+    if (removed.length !== 1) {
       return null;
     }
 
     return {
       kind: KIND.DATE_THEN_ROW,
-      criteria: transitions[0],
+      criteria: removed[0],
     };
   }
 
@@ -272,8 +341,10 @@ const GridScrollAnchor = (() => {
     HOME_SCROLL_EPSILON,
     APP_BAR_OFFSET,
     wasStarredFilterActive,
+    wasVideoFilterActive,
     wasSelectionFilterActive,
     isStarredFilterTransition,
+    isVideoFilterTransition,
     isSelectionFilterTransition,
     resolveFilterHotRowCriteria,
     resolveScrollAnchor,

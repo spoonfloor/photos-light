@@ -2047,11 +2047,17 @@ const VirtualGrid = (() => {
     if (!photo || !criteria) {
       return false;
     }
+    if (criteria.kind === 'first-visible-after-filter') {
+      return true;
+    }
     const match =
       criteria.match ??
       (criteria === 'first-starred' ? 'starred' : null);
     if (match === 'starred') {
       return photo.rating === 5;
+    }
+    if (match === 'video') {
+      return photo.file_type === 'video';
     }
     if (match === 'selected') {
       const idSet = criteria.selectedIds;
@@ -2117,10 +2123,7 @@ const VirtualGrid = (() => {
   }
 
   function prepareFilterScrollAnchor(anchor) {
-    if (anchor?.kind !== GridScrollAnchor.KIND.DATE_THEN_ROW) {
-      return anchor;
-    }
-    return resolveHotRowAnchorSync(anchor);
+    return anchor;
   }
 
   function queuePendingScrollAnchor(anchor) {

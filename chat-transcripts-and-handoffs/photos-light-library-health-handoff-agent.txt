@@ -1,0 +1,237 @@
+PHOTOS LIGHT — AGENT HANDOFF (CHAT 1 of 2)
+Library Open Health Contract — Migration Prompts + Health Check on Switch
+============================================================================
+Repo: /Users/erichenry/Desktop/photos-light
+Desktop handoff created: 2026-06-18
+
+READ FIRST: .cursor/rules/high-before-low.mdc
+READ SECOND: This file, top to bottom, before editing anything.
+
+Companion chat (DO NOT do in this chat): Desktop/photos-light-midflow-error-recovery-handoff-agent.txt
+That chat owns Add/Clean/Convert inflight failures. This chat owns startup/switch/critical-error health.
+
+bugs-to-be-fixed.md items covered HERE:
+  - Health check on switch library
+  - Handle migration prompts
+
+bugs-to-be-fixed.md item NOT covered here:
+  - Error handling for import/runtime issues → companion chat
+
+Decision: FIX (not kill, not defer).
+
+============================================================================
+MISSION (one sentence)
+============================================================================
+
+Ship one canonical library-health → user-action contract so users with legacy
+schema DBs are never stranded on a dead-end modal at startup or after switch.
+
+Phrase: **One health report, one action map, many entry points**
+  (startup status, picker switch, critical-error modal).
+
+============================================================================
+NON-NEGOTIABLES
+============================================================================
+
+DO:
+  - Extend db_health.DBHealthReport as the single classifier (already exists).
+  - Unify API payloads via one payload builder (status + recommended actions).
+  - Wire frontend CTAs to those actions (Migrate, Rebuild, Open library, etc.).
+  - Add/extend contract tests in test_db_health_consistency.py.
+  - Match existing patterns (recover-database, rebuild-database, switch_library).
+  - Keep switch_library auto-migrate on the happy path (tests already expect it).
+  - Back up DB before user-initiated migrate (see Safety).
+
+DO NOT:
+  - Add a third parallel health-check path in app.py or main.js.
+  - Invent Convert-only or flow-specific migration logic.
+  - Auto-migrate silently on GET /api/library/status (hidden side effect on read).
+  - Stack tactical modal button patches without fixing the API contract.
+  - Touch FlowController / Add / Clean / Convert inflight error paths (companion chat).
+  - Touch Open-library performance path (runLibraryRecoveryJourney fast path).
+  - Expand into picker "Create new" / empty-library-state UX unless required for migrate recovery.
+  - Mix unrelated backend verification sweeps (Clean Index, thumbnails, HEIC, etc.).
+
+============================================================================
+CURRENT DIAGNOSIS (verified — do not re-litigate without new evidence)
+============================================================================
+
+1. Backend classifier is good; contract is incomplete
+   db_health.py — DBHealthReport has can_migrate, can_use_anyway, get_recommended_actions()
+   app.py build_library_status_payload() (~4250) — missing can_migrate, recommended_actions
+
+2. Startup path strands users
+   init() → checkLibraryHealthAndInit() → GET /api/library/status
+   main.js case 'needs_migration' → showCriticalErrorModal('db_needs_migration')
+   Modal offers only "Open library" and "Reload" — neither runs migration → loop
+
+3. Switch path: happy path works; failure path unwired
+   switch_library() auto-migrates MISSING_COLUMNS/MIXED_SCHEMA
+   On failure: 400 { status: 'needs_migration', action: 'migrate', ... }
+   switchToLibrary() treats any !response.ok as generic throw → toast, no recovery UI
+
+4. No dedicated migrate API for configured library
+   migrate_db.check_and_migrate_schema() used inside switch_library only
+   POST /api/library/recover-database exists for corrupt
+   NO POST /api/library/migrate for configured library at startup
+
+5. Schema tooling is current (db_schema v4). Wire existing migrator; don't re-litigate version.
+
+============================================================================
+TARGET ARCHITECTURE
+============================================================================
+
+  db_health.check_database_health() → DBHealthReport
+              ↓
+  build_library_health_payload()   ← extend/rename build_library_status_payload
+              ↓
+    ┌─────────┼─────────┐
+    │         │         │
+ GET status  POST switch  POST /api/library/migrate (new)
+    └─────────┼─────────┘
+              ↓
+  Frontend action router (main.js)
+    - showCriticalErrorModal
+    - switchToLibrary
+
+Minimum payload additions (backward compatible):
+  recommended_actions: ['migrate', ...]   ← report.get_recommended_actions()
+  can_migrate: bool                       ← report.can_migrate
+  action: 'migrate' | 'rebuild' | ...     ← primary recommended (switch compat)
+
+Frontend action map:
+  migrate    → POST /api/library/migrate → re-check status → load grid
+  rebuild    → startRebuildDatabase() (pattern from db_missing modal)
+  create_new → existing create-library flow (don't break switch missing DB)
+  continue   → ONLY if degraded mode is real; omit if broken/no-op
+  abort      → Open library (picker) / first-run shell
+
+db_needs_migration modal should mirror db_missing pattern:
+  Primary:   "Update database" (migrate)
+  Secondary: "Open library" (picker)
+  Remove/demote useless "Reload" unless it re-runs migrate
+
+============================================================================
+DELIVERABLES (all required for done)
+============================================================================
+
+[ ] 1. Single payload builder
+      Include can_migrate + recommended_actions + primary action.
+      Same builder in library_status() and switch_library() health paths.
+
+[ ] 2. POST /api/library/migrate
+      Operates on configured library (or validated library_path/db_path).
+      check_database_health → if not migratable, 400 structured payload
+      → backup → check_and_migrate_schema → re-check → success/failure payload.
+      Do not switch libraries as side effect unless established pattern.
+
+[ ] 3. Frontend migrate action
+      startLibraryMigration() (or similar) → new endpoint.
+      showCriticalErrorModal('db_needs_migration'): primary CTA runs migrate.
+      switchToLibrary(): on needs_migration / action migrate → recovery UI, not toast.
+
+[ ] 4. Switch failure parity
+      Auto-migrate failure returns same payload shape as status; user can recover.
+
+[ ] 5. Tests — test_db_health_consistency.py (gate)
+      - needs_migration payload includes can_migrate + recommended_actions
+      - POST migrate on legacy DB → healthy
+      - POST migrate on already-healthy → appropriate response
+      - Switch failure → needs_migration payload (fixture or mock if needed)
+
+[ ] 6. Manual smoke (document in commit or test docstring)
+      Legacy DB fixture → configure → migration modal → Update → grid loads
+      Repeat via picker switch
+
+[ ] 7. bugs-to-be-fixed.md
+      Mark done: "Handle migration prompts", "Health check on switch library"
+
+============================================================================
+SAFETY (migration-specific — non-optional)
+============================================================================
+
+Before first write in /api/library/migrate:
+  Copy DB to .library/backups/ (grep backup, DB_BACKUP_DIR for existing pattern).
+
+Never DELETE or overwrite user media during schema migration.
+
+Extend migrate_db return value for API use (structured success/failure), don't rely
+only on stdout prints.
+
+============================================================================
+OUT OF SCOPE (stop if you drift here)
+============================================================================
+
+  - Import SSE / Add flow error recovery
+  - Clean / Convert inflight fatal catch blocks
+  - Execute rebuild SSE progress (except reuse startRebuildDatabase pattern)
+  - Index rebuild resume capability
+  - Picker label/copy ("Select this location" → "Open")
+  - New-library empty state landing
+  - apiFetchJson adoption
+  - Packaged .app rebuild unless final prod sign-off needed
+    (then: ./packaging/build.sh per .cursor/rules/rebuild-app-for-prod-testing.mdc)
+
+============================================================================
+KEY FILES (read in order before coding)
+============================================================================
+
+  1. db_health.py
+  2. app.py — build_library_status_payload, library_status, switch_library,
+              recover_library_database
+  3. migrate_db.py — check_and_migrate_schema
+  4. test_db_health_consistency.py
+  5. static/js/main.js — showCriticalErrorModal, checkLibraryHealthAndInit,
+                          switchToLibrary, startRebuildDatabase
+  6. library_layout.py — resolve_db_path, backups
+  7. bugs-to-be-fixed.md
+
+Reference patterns to copy (not reinvent):
+  - db_missing modal + startRebuildDatabase (~5142)
+  - recover_library_database endpoint (~5220)
+  - test_switch_library_missing_columns_migrates_and_succeeds
+
+============================================================================
+IMPLEMENTATION ORDER
+============================================================================
+
+  1. Extend payload builder + tests (no UI)
+  2. Add /api/library/migrate + tests
+  3. Fix db_needs_migration modal + startup flow
+  4. Fix switchToLibrary failure handling
+  5. Manual smoke + bugs-to-be-fixed.md
+  6. Run: python3 -m pytest test_db_health_consistency.py -q
+
+============================================================================
+DEFINITION OF DONE
+============================================================================
+
+  - Legacy-schema library at startup: one button migrates, library opens. No dead-end.
+  - Switch to legacy library: auto-migrate still works; failure shows same migrate UI.
+  - Contract tests green; no duplicate health logic outside db_health + one builder.
+  - bugs-to-be-fixed.md updated for both items.
+
+============================================================================
+ANTI-PATTERNS (stop immediately if doing these)
+============================================================================
+
+  - if (needsMigration) branches in 5 places instead of one handleLibraryHealthAction()
+  - Modal copy-only fix without /api/library/migrate
+  - Removing switch_library auto-migrate (regresses tests)
+  - Fixing import overlay stuck state in this chat
+  - TODO deferral — explicitly rejected
+
+============================================================================
+DEFAULT ANSWERS (don't block on user)
+============================================================================
+
+  Auto-migrate on switch vs confirm?
+    → Keep auto-migrate on switch (tested). User confirm for startup modal + migrate endpoint.
+
+  Show "continue anyway" for can_continue?
+    → Only if degraded mode works. Prefer migrate-only primary CTA.
+
+  Reload button?
+    → Remove or replace with "Try again" that re-runs migrate/status, not blind reload.
+
+Stay on the contract. Ship the vertical slice. Do not bleed into Chat 2.

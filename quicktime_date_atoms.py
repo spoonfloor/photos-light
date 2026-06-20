@@ -17,6 +17,10 @@ from datetime import datetime, timezone
 from typing import Iterator, List, Optional, Tuple
 
 QUICKTIME_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
+UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+# ffprobe reads mvhd v0 creation/modification as Unix seconds when the raw
+# value is below this QuickTime-epoch offset, so pre-1970 dates must use v1.
+FFPROBE_V0_UNIX_EPOCH_THRESHOLD = int((UNIX_EPOCH - QUICKTIME_EPOCH).total_seconds())
 CANONICAL_DB_DATE_FORMAT = "%Y:%m:%d %H:%M:%S"
 PATCH_ARTIFACT_SUFFIXES = (".bak", ".atompatch")
 TIME_ATOM_TYPES = frozenset({b"mvhd", b"tkhd", b"mdhd"})
@@ -168,7 +172,9 @@ def _find_boxes(data: bytearray, start: int, end: int, box_type: bytes) -> List[
 
 
 def _needs_v1_time_atom(target_seconds: int) -> bool:
-    return target_seconds < 0 or target_seconds > 0xFFFFFFFF
+    if target_seconds < 0 or target_seconds > 0xFFFFFFFF:
+        return True
+    return target_seconds < FFPROBE_V0_UNIX_EPOCH_THRESHOLD
 
 
 def _upgrade_time_atom_payload(payload: bytes, target_seconds: int) -> bytes:

@@ -1,0 +1,1009 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Photos Light — Video Lightbox POC</title>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200"
+    />
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        color: #fff;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .material-symbols-outlined {
+        font-family: 'Material Symbols Outlined';
+        font-weight: normal;
+        font-style: normal;
+        font-size: 24px;
+        line-height: 1;
+        letter-spacing: normal;
+        text-transform: none;
+        display: inline-block;
+        white-space: nowrap;
+        font-feature-settings: 'liga';
+        -webkit-font-smoothing: antialiased;
+        color: white;
+        user-select: none;
+        pointer-events: none;
+      }
+
+      /* --- Picker --- */
+      .picker-screen {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+
+      .picker-card {
+        width: min(420px, 100%);
+        padding: 32px;
+        background: #1a1a1a;
+        border: 1px solid #2a2a2a;
+        border-radius: 12px;
+        text-align: center;
+      }
+
+      .picker-card h1 {
+        margin: 0 0 8px;
+        font-size: 1.25rem;
+        font-weight: 600;
+      }
+
+      .picker-card p {
+        margin: 0 0 24px;
+        color: #aaa;
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      .picker-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 20px;
+        background: #fff;
+        color: #111;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .picker-btn:hover {
+        background: #e8e8e8;
+      }
+
+      .picker-hint {
+        margin-top: 16px;
+        font-size: 0.75rem;
+        color: #666;
+      }
+
+      #fileInput {
+        display: none;
+      }
+
+      /* --- Lightbox (matches static/css/styles.css) --- */
+      .lightbox-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: #000;
+        display: none;
+        flex-direction: column;
+        overflow: hidden;
+        z-index: 100;
+      }
+
+      .lightbox-overlay.open {
+        display: flex;
+      }
+
+      .lightbox-top-bar {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 80px;
+        background: linear-gradient(
+          to bottom,
+          rgba(0, 0, 0, 0.95),
+          transparent
+        );
+        display: flex;
+        align-items: flex-start;
+        padding: 20px;
+        z-index: 3;
+      }
+
+      .lightbox-spacer {
+        flex: 1;
+      }
+
+      .lightbox-icon-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        cursor: pointer;
+        background: none;
+        border: none;
+        padding: 0;
+      }
+
+      .lightbox-icon-button:hover {
+        opacity: 0.85;
+      }
+
+      .lightbox-nav-btn {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 48px;
+        height: 48px;
+        background: rgba(0, 0, 0, 0.5);
+        border: none;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10;
+      }
+
+      .lightbox-nav-btn:hover {
+        background: rgba(0, 0, 0, 0.7);
+      }
+
+      .lightbox-nav-btn.inactive {
+        opacity: 0.3;
+        pointer-events: none;
+      }
+
+      .lightbox-nav-btn .material-symbols-outlined {
+        font-size: 36px;
+      }
+
+      .lightbox-nav-left {
+        left: 20px;
+      }
+
+      .lightbox-nav-right {
+        right: 20px;
+      }
+
+      .lightbox-content {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      .lightbox-overlay.info-open .lightbox-content {
+        flex: 0 0 calc(100vh - 100px);
+      }
+
+      /* Frame sizing driven by JS — same rules as calculateMediaDimensions */
+      .lightbox-media-frame {
+        position: relative;
+        flex-shrink: 0;
+        overflow: hidden;
+      }
+
+      .video-stage {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        background: #000;
+      }
+
+      .video-stage:fullscreen,
+      .video-stage:-webkit-full-screen {
+        background: #000;
+      }
+
+      .video-stage:fullscreen .lightbox-media-element,
+      .video-stage:-webkit-full-screen .lightbox-media-element,
+      .video-stage:fullscreen .lightbox-media-placeholder,
+      .video-stage:-webkit-full-screen .lightbox-media-placeholder {
+        background: #000;
+      }
+
+      .lightbox-media-placeholder {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        width: 100%;
+        height: 100%;
+        background: #2a2a2a;
+        pointer-events: none;
+      }
+
+      .lightbox-media-element {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        max-width: none;
+        max-height: none;
+        z-index: 1;
+        background: #2a2a2a;
+      }
+
+      /* Bottom overlay controls — Chrome-style layout, no ⋮ menu */
+      .video-controls-overlay {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 2;
+        pointer-events: none;
+      }
+
+      .video-controls-overlay.controls-hidden {
+        visibility: hidden;
+      }
+
+      .video-controls-overlay.controls-hidden .controls-inner {
+        pointer-events: none;
+      }
+
+      .controls-gradient {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 120px;
+        z-index: 0;
+        background: linear-gradient(to top, rgba(0, 0, 0, 0.9), transparent);
+        pointer-events: none;
+      }
+
+      .controls-inner {
+        position: relative;
+        z-index: 1;
+        padding: 0 12px 10px;
+        pointer-events: auto;
+        color: #fff;
+      }
+
+      .controls-inner .material-symbols-outlined,
+      .controls-inner .time-display {
+        color: #fff;
+      }
+
+      .controls-inner .ctrl-btn:hover {
+        opacity: 1;
+      }
+
+      .controls-top-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        min-height: 32px;
+      }
+
+      .ctrl-btn {
+        width: 32px;
+        height: 32px;
+        border: none;
+        background: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        flex-shrink: 0;
+      }
+
+      .ctrl-btn:hover {
+        opacity: 0.85;
+      }
+
+      .controls-inner .ctrl-btn:hover {
+        opacity: 1;
+      }
+
+      .ctrl-btn .material-symbols-outlined {
+        font-size: 22px;
+        color: #fff;
+      }
+
+      #playIcon {
+        font-variation-settings:
+          'FILL' 1,
+          'wght' 500,
+          'GRAD' 0,
+          'opsz' 24;
+      }
+
+      .time-display {
+        font-size: 13px;
+        color: #fff;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        user-select: none;
+      }
+
+      .controls-spacer {
+        flex: 1;
+      }
+
+      .progress-track {
+        position: relative;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.35);
+        border-radius: 2px;
+        cursor: pointer;
+      }
+
+      .progress-fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 0%;
+        background: #fff;
+        border-radius: 2px;
+        pointer-events: none;
+      }
+
+      .progress-input {
+        position: absolute;
+        inset: -6px 0;
+        width: 100%;
+        height: calc(100% + 12px);
+        margin: 0;
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .lightbox-info-panel {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(0, 0, 0, 0.95);
+        padding: 20px 28px;
+        z-index: 4;
+        display: none;
+      }
+
+      .lightbox-overlay.info-open .lightbox-info-panel {
+        display: block;
+      }
+
+      .info-row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 8px;
+        font-size: 0.9rem;
+      }
+
+      .info-label {
+        color: #888;
+        min-width: 72px;
+      }
+
+      .info-value {
+        color: #fff;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="picker-screen" id="pickerScreen">
+      <div class="picker-card">
+        <h1>Video Lightbox POC</h1>
+        <p>
+          Custom bottom-overlay controls matching the current lightbox player
+          layout. Frame sizing uses the same rules as Photos Light.
+        </p>
+        <button class="picker-btn" id="pickBtn" type="button">
+          <span class="material-symbols-outlined">video_library</span>
+          Choose videos
+        </button>
+        <p class="picker-hint">.mov, .mp4, .m4v supported</p>
+        <input
+          id="fileInput"
+          type="file"
+          accept="video/*,.mov,.mp4,.m4v"
+          multiple
+        />
+      </div>
+    </div>
+
+    <div class="lightbox-overlay" id="lightbox">
+      <div class="lightbox-top-bar">
+        <button class="lightbox-icon-button" id="backBtn" aria-label="Close">
+          <span class="material-symbols-outlined">arrow_back</span>
+        </button>
+        <div class="lightbox-spacer"></div>
+        <button class="lightbox-icon-button" id="infoBtn" aria-label="Info">
+          <span class="material-symbols-outlined">info</span>
+        </button>
+      </div>
+
+      <button
+        class="lightbox-nav-btn lightbox-nav-left"
+        id="prevBtn"
+        aria-label="Previous"
+      >
+        <span class="material-symbols-outlined">chevron_left</span>
+      </button>
+      <button
+        class="lightbox-nav-btn lightbox-nav-right"
+        id="nextBtn"
+        aria-label="Next"
+      >
+        <span class="material-symbols-outlined">chevron_right</span>
+      </button>
+
+      <div class="lightbox-content" id="lightboxContent">
+        <div class="lightbox-media-frame" id="mediaFrame">
+          <div class="video-stage" id="videoStage">
+            <div class="lightbox-media-placeholder" id="mediaPlaceholder"></div>
+            <video
+              id="video"
+              class="lightbox-media-element"
+              playsinline
+              preload="auto"
+            ></video>
+            <div class="video-controls-overlay controls-hidden" id="videoControlsOverlay">
+              <div class="controls-gradient"></div>
+              <div class="controls-inner">
+                <div class="controls-top-row">
+                  <button class="ctrl-btn" id="playBtn" aria-label="Play">
+                    <span class="material-symbols-outlined" id="playIcon"
+                      >play_arrow</span
+                    >
+                  </button>
+                  <span class="time-display" id="timeDisplay">0:00 / 0:00</span>
+                  <div class="controls-spacer"></div>
+                  <button
+                    class="ctrl-btn"
+                    id="loopBtn"
+                    aria-label="Loop on"
+                    aria-pressed="true"
+                  >
+                    <span class="material-symbols-outlined" id="loopIcon"
+                      >repeat</span
+                    >
+                  </button>
+                  <button class="ctrl-btn" id="volumeBtn" aria-label="Mute">
+                    <span class="material-symbols-outlined" id="volumeIcon"
+                      >volume_up</span
+                    >
+                  </button>
+                  <button
+                    class="ctrl-btn"
+                    id="fullscreenBtn"
+                    aria-label="Full screen"
+                  >
+                    <span class="material-symbols-outlined">fullscreen</span>
+                  </button>
+                </div>
+                <div class="progress-track" id="progressTrack">
+                  <div class="progress-fill" id="progressFill"></div>
+                  <input
+                    class="progress-input"
+                    id="scrubber"
+                    type="range"
+                    min="0"
+                    max="1000"
+                    value="0"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lightbox-info-panel" id="infoPanel">
+        <div class="info-row">
+          <span class="info-label">Filename:</span>
+          <span class="info-value" id="infoFilename">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Size:</span>
+          <span class="info-value" id="infoSize">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Clip:</span>
+          <span class="info-value" id="infoClip">—</span>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      /** @type {{ file: File, url: string }[]} */
+      let clips = [];
+      let index = 0;
+      let scrubbing = false;
+      let wasPlayingBeforeScrub = false;
+      let muted = false;
+      let loopEnabled = true;
+
+      const CONTROLS_HIDE_MS = 3000;
+      let controlsHideTimer = null;
+      let isPointerOverVideoStage = false;
+
+      function isVideoFullscreen() {
+        return document.fullscreenElement === videoStage;
+      }
+
+      const pickerScreen = document.getElementById('pickerScreen');
+      const fileInput = document.getElementById('fileInput');
+      const pickBtn = document.getElementById('pickBtn');
+      const lightbox = document.getElementById('lightbox');
+      const mediaFrame = document.getElementById('mediaFrame');
+      const videoStage = document.getElementById('videoStage');
+      const mediaPlaceholder = document.getElementById('mediaPlaceholder');
+      const videoControlsOverlay = document.getElementById('videoControlsOverlay');
+      const video = document.getElementById('video');
+      const playBtn = document.getElementById('playBtn');
+      const playIcon = document.getElementById('playIcon');
+      const loopBtn = document.getElementById('loopBtn');
+      const loopIcon = document.getElementById('loopIcon');
+      const volumeBtn = document.getElementById('volumeBtn');
+      const volumeIcon = document.getElementById('volumeIcon');
+      const fullscreenBtn = document.getElementById('fullscreenBtn');
+      const scrubber = document.getElementById('scrubber');
+      const progressFill = document.getElementById('progressFill');
+      const timeDisplay = document.getElementById('timeDisplay');
+      const prevBtn = document.getElementById('prevBtn');
+      const nextBtn = document.getElementById('nextBtn');
+      const backBtn = document.getElementById('backBtn');
+      const infoBtn = document.getElementById('infoBtn');
+      const infoFilename = document.getElementById('infoFilename');
+      const infoSize = document.getElementById('infoSize');
+      const infoClip = document.getElementById('infoClip');
+
+      /** Mirrors static/js/main.js calculateMediaDimensions (no rotation for video). */
+      function calculateMediaDimensions(displayW, displayH) {
+        const viewportH = lightbox.classList.contains('info-open')
+          ? window.innerHeight - 100
+          : window.innerHeight;
+        const viewportW = window.innerWidth;
+        const viewportAR = viewportW / viewportH;
+
+        if (!displayW || !displayH) {
+          return {
+            width: '100vw',
+            height: '75vw',
+            maxHeight: `${viewportH}px`,
+          };
+        }
+
+        const displayAR = displayW / displayH;
+        if (displayAR > viewportAR) {
+          return {
+            width: '100vw',
+            height: `calc(100vw / ${displayAR})`,
+          };
+        }
+        return {
+          width: `calc(${viewportH}px * ${displayAR})`,
+          height: `${viewportH}px`,
+        };
+      }
+
+      function applyFrameDimensions(dims) {
+        mediaFrame.style.position = 'relative';
+        mediaFrame.style.flexShrink = '0';
+        mediaFrame.style.width = dims.width || '';
+        mediaFrame.style.height = dims.height || '';
+        mediaFrame.style.maxHeight = dims.maxHeight || '';
+        mediaFrame.style.overflow = 'hidden';
+      }
+
+      function applyFrameSizing() {
+        applyFrameDimensions(
+          calculateMediaDimensions(video.videoWidth, video.videoHeight),
+        );
+      }
+
+      function applyFallbackFrameSizing() {
+        applyFrameDimensions(calculateMediaDimensions(0, 0));
+      }
+
+      function showMediaPlaceholder() {
+        mediaPlaceholder.hidden = false;
+        video.style.backgroundColor = '#2a2a2a';
+        applyFallbackFrameSizing();
+      }
+
+      function hideMediaPlaceholder() {
+        mediaPlaceholder.hidden = true;
+        video.style.backgroundColor = 'transparent';
+      }
+
+      function formatTime(seconds) {
+        if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${String(s).padStart(2, '0')}`;
+      }
+
+      function formatSize(bytes) {
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      }
+
+      function updateTimeDisplay() {
+        timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;
+      }
+
+      function updateProgress() {
+        if (!video.duration) return;
+        const pct = (video.currentTime / video.duration) * 100;
+        progressFill.style.width = `${pct}%`;
+        if (!scrubbing) {
+          scrubber.value = String(
+            Math.round((video.currentTime / video.duration) * 1000),
+          );
+        }
+        updateTimeDisplay();
+      }
+
+      function revokeAll() {
+        clips.forEach((c) => URL.revokeObjectURL(c.url));
+        clips = [];
+      }
+
+      function setPlayIcon(playing) {
+        playIcon.textContent = playing ? 'pause' : 'play_arrow';
+        playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+      }
+
+      function setVolumeIcon() {
+        const icon =
+          muted || video.volume === 0
+            ? 'volume_off'
+            : video.volume < 0.5
+              ? 'volume_down'
+              : 'volume_up';
+        volumeIcon.textContent = icon;
+        volumeBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+      }
+
+      function applyLoopState() {
+        video.loop = loopEnabled;
+        loopIcon.textContent = loopEnabled
+          ? 'repeat'
+          : 'horizontal_align_right';
+        loopBtn.setAttribute('aria-pressed', String(loopEnabled));
+        loopBtn.setAttribute(
+          'aria-label',
+          loopEnabled ? 'Loop on' : 'Loop off',
+        );
+      }
+
+      function clearControlsHideTimer() {
+        if (controlsHideTimer !== null) {
+          clearTimeout(controlsHideTimer);
+          controlsHideTimer = null;
+        }
+      }
+
+      function showPlayControls() {
+        if (!scrubbing && !isVideoFullscreen() && !isPointerOverVideoStage) {
+          return;
+        }
+        videoControlsOverlay.classList.remove('controls-hidden');
+      }
+
+      function hidePlayControls() {
+        videoControlsOverlay.classList.add('controls-hidden');
+      }
+
+      function scheduleControlsHide() {
+        clearControlsHideTimer();
+        if (
+          !lightbox.classList.contains('open') ||
+          scrubbing ||
+          (!isVideoFullscreen() && !isPointerOverVideoStage)
+        ) {
+          return;
+        }
+        controlsHideTimer = setTimeout(hidePlayControls, CONTROLS_HIDE_MS);
+      }
+
+      function onVideoStagePointerActivity() {
+        if (isVideoFullscreen()) {
+          showPlayControls();
+          scheduleControlsHide();
+          return;
+        }
+        if (!isPointerOverVideoStage) return;
+        showPlayControls();
+        scheduleControlsHide();
+      }
+
+      function onVideoStageEnter() {
+        isPointerOverVideoStage = true;
+        if (isVideoFullscreen()) return;
+        showPlayControls();
+        scheduleControlsHide();
+      }
+
+      function onVideoStageLeave() {
+        isPointerOverVideoStage = false;
+        if (isVideoFullscreen()) return;
+        clearControlsHideTimer();
+        hidePlayControls();
+      }
+
+      function resetControlsAfterFullscreenChange() {
+        clearControlsHideTimer();
+        isPointerOverVideoStage = videoStage.matches(':hover');
+        if (isVideoFullscreen()) {
+          hidePlayControls();
+          return;
+        }
+        if (isPointerOverVideoStage) {
+          showPlayControls();
+          scheduleControlsHide();
+        } else {
+          hidePlayControls();
+        }
+      }
+
+      function updateNavButtons() {
+        prevBtn.classList.toggle('inactive', index <= 0);
+        nextBtn.classList.toggle('inactive', index >= clips.length - 1);
+      }
+
+      function updateInfo() {
+        const clip = clips[index];
+        if (!clip) return;
+        infoFilename.textContent = clip.file.name;
+        infoSize.textContent = formatSize(clip.file.size);
+        infoClip.textContent = `${index + 1} of ${clips.length}`;
+      }
+
+      function showLightbox() {
+        pickerScreen.style.display = 'none';
+        lightbox.classList.add('open');
+        document.body.style.overflow = 'hidden';
+        isPointerOverVideoStage = false;
+        hidePlayControls();
+      }
+
+      function closeLightbox() {
+        clearControlsHideTimer();
+        isPointerOverVideoStage = false;
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        lightbox.classList.remove('open', 'info-open');
+        document.body.style.overflow = '';
+        pickerScreen.style.display = '';
+        hidePlayControls();
+        showMediaPlaceholder();
+        revokeAll();
+        index = 0;
+      }
+
+      function loadClip(newIndex, autoplay = true) {
+        if (newIndex < 0 || newIndex >= clips.length) return;
+        index = newIndex;
+        const clip = clips[index];
+
+        showMediaPlaceholder();
+
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        video.src = clip.url;
+        video.muted = muted;
+        applyLoopState();
+        video.load();
+
+        updateNavButtons();
+        updateInfo();
+        setPlayIcon(false);
+        scrubber.value = '0';
+        progressFill.style.width = '0%';
+        timeDisplay.textContent = '0:00 / 0:00';
+        if (isVideoFullscreen()) {
+          hidePlayControls();
+        } else if (!isPointerOverVideoStage) {
+          hidePlayControls();
+        } else {
+          onVideoStagePointerActivity();
+        }
+
+        const onLoadedMetadata = () => {
+          applyFrameSizing();
+          updateTimeDisplay();
+          video.removeEventListener('loadedmetadata', onLoadedMetadata);
+        };
+
+        const onLoadedData = () => {
+          hideMediaPlaceholder();
+          if (autoplay) {
+            video.play().catch(() => setPlayIcon(false));
+          }
+          video.removeEventListener('loadeddata', onLoadedData);
+        };
+
+        video.addEventListener('loadedmetadata', onLoadedMetadata);
+        video.addEventListener('loadeddata', onLoadedData);
+      }
+
+      function openWithFiles(fileList) {
+        revokeAll();
+        clips = Array.from(fileList).map((file) => ({
+          file,
+          url: URL.createObjectURL(file),
+        }));
+        if (!clips.length) return;
+        index = 0;
+        showLightbox();
+        loadClip(0, true);
+      }
+
+      pickBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files?.length) openWithFiles(fileInput.files);
+        fileInput.value = '';
+      });
+
+      playBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onVideoStagePointerActivity();
+        if (video.paused) video.play().catch(() => {});
+        else video.pause();
+      });
+
+      loopBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        loopEnabled = !loopEnabled;
+        applyLoopState();
+        onVideoStagePointerActivity();
+      });
+
+      volumeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        muted = !muted;
+        video.muted = muted;
+        setVolumeIcon();
+        onVideoStagePointerActivity();
+      });
+
+      fullscreenBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onVideoStagePointerActivity();
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        } else {
+          videoStage.requestFullscreen().catch(() => {});
+        }
+      });
+
+      video.addEventListener('play', () => setPlayIcon(true));
+      video.addEventListener('pause', () => setPlayIcon(false));
+      video.addEventListener('ended', () => setPlayIcon(false));
+      video.addEventListener('timeupdate', updateProgress);
+
+      scrubber.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        scrubbing = true;
+        wasPlayingBeforeScrub = !video.paused;
+        video.pause();
+        showPlayControls();
+        clearControlsHideTimer();
+      });
+
+      scrubber.addEventListener('input', (e) => {
+        e.stopPropagation();
+        onVideoStagePointerActivity();
+        if (!video.duration) return;
+        const t = (Number(scrubber.value) / 1000) * video.duration;
+        video.currentTime = t;
+        progressFill.style.width = `${(video.currentTime / video.duration) * 100}%`;
+        updateTimeDisplay();
+      });
+
+      scrubber.addEventListener('pointerup', (e) => {
+        e.stopPropagation();
+        scrubbing = false;
+        if (wasPlayingBeforeScrub) video.play().catch(() => {});
+        scheduleControlsHide();
+      });
+
+      videoStage.addEventListener('mouseenter', onVideoStageEnter);
+      videoStage.addEventListener('mouseleave', onVideoStageLeave);
+      videoStage.addEventListener('mousemove', onVideoStagePointerActivity);
+
+      videoStage.addEventListener('click', (e) => {
+        if (e.target.closest('.controls-inner')) return;
+        playBtn.click();
+      });
+
+      prevBtn.addEventListener('click', () => loadClip(index - 1, true));
+      nextBtn.addEventListener('click', () => loadClip(index + 1, true));
+      backBtn.addEventListener('click', closeLightbox);
+
+      infoBtn.addEventListener('click', () => {
+        lightbox.classList.toggle('info-open');
+        applyFrameSizing();
+      });
+
+      window.addEventListener('resize', () => {
+        if (lightbox.classList.contains('open') && video.videoWidth) {
+          applyFrameSizing();
+        }
+      });
+
+      document.addEventListener('fullscreenchange', () => {
+        fullscreenBtn.querySelector('.material-symbols-outlined').textContent =
+          document.fullscreenElement ? 'fullscreen_exit' : 'fullscreen';
+        resetControlsAfterFullscreenChange();
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (!lightbox.classList.contains('open')) return;
+        if (e.key === 'Escape') {
+          if (document.fullscreenElement)
+            document.exitFullscreen().catch(() => {});
+          else closeLightbox();
+        }
+        if (e.key === 'ArrowLeft') loadClip(index - 1, true);
+        if (e.key === 'ArrowRight') loadClip(index + 1, true);
+        if (e.key === ' ') {
+          e.preventDefault();
+          playBtn.click();
+        }
+        if (e.key === 'i') {
+          lightbox.classList.toggle('info-open');
+          applyFrameSizing();
+        }
+        if (e.key === 'm') {
+          volumeBtn.click();
+        }
+        if (e.key === 'l') {
+          loopBtn.click();
+        }
+        if (e.key === 'f') fullscreenBtn.click();
+      });
+
+      applyLoopState();
+      setVolumeIcon();
+    </script>
+  </body>
+</html>

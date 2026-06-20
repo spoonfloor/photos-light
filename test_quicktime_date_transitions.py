@@ -133,6 +133,15 @@ class QuickTimeDateTransitionMatrixTest(unittest.TestCase):
                 self.assertFalse(os.path.exists(f"{work_path}.bak"))
                 self.assertFalse(os.path.exists(f"{work_path}.atompatch"))
 
+    def test_pre_1970_date_survives_ffprobe_cross_check(self):
+        """mvhd v0 values before 1970-01-01 are misread by ffprobe as Unix seconds."""
+        work_path = os.path.join(self._tmpdir.name, "pre_1970_ffprobe.mov")
+        target = "1918:06:19 22:48:00"
+        self._prepare_at_date(work_path, "2026:06:19 22:48:00")
+        write_and_verify_media_date(work_path, target)
+        self.assertEqual(read_mvhd_canonical_date(work_path), target)
+        self.assertEqual(read_video_creation_time(work_path), target)
+
 
 @unittest.skipUnless(_ffmpeg_available(), "ffmpeg/ffprobe required")
 class QuickTimeRealFixtureTransitionTest(unittest.TestCase):

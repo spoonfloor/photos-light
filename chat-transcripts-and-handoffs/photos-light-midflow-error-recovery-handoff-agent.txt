@@ -1,0 +1,281 @@
+PHOTOS LIGHT — AGENT HANDOFF (CHAT 2 of 2)
+Mid-Flow Error Recovery — Import / Runtime Failures via FlowController
+============================================================================
+Repo: /Users/erichenry/Desktop/photos-light
+Desktop handoff created: 2026-06-18
+
+READ FIRST: .cursor/rules/high-before-low.mdc
+READ SECOND: This file, top to bottom, before editing anything.
+
+Companion chat (DO NOT do in this chat): Desktop/photos-light-library-health-handoff-agent.txt
+That chat owns startup/switch/migration critical-error health. This chat owns inflight ops.
+
+bugs-to-be-fixed.md item covered HERE:
+  - Error handling for import/runtime issues
+
+bugs-to-be-fixed.md items NOT covered here:
+  - Health check on switch library
+  - Handle migration prompts
+  - Index rebuild resume (separate deferred item — don't implement resume logic here)
+
+Decision: FIX (not kill, not defer).
+
+============================================================================
+MISSION (one sentence)
+============================================================================
+
+Every fatal mid-flow failure (network drop, SSE error, unhandled exception) must
+leave the user with a guaranteed exit: dismiss overlay, restore library shell,
+and optionally refresh grid — using the shipped FlowController, not one-offs.
+
+Phrase: **Cancel and error share the same teardown contract.**
+
+============================================================================
+ARCHITECTURE CONTEXT (already shipped — extend, don't replace)
+============================================================================
+
+  static/js/flowController.js
+    - cancelRecovery(flowKey, { reloadGrid?, skipConfirm?, resolveValue? })
+    - dismissOverlay(flowKey, { reloadGrid? })
+    - settleAllFlows({ exceptFlowKey?, reloadGrid? })
+    - syncOverlayPhase(flowKey, overlayPhase)
+
+  static/js/main.js
+    - registerAddFlowAdapter / registerCleanFlowAdapter / registerConvertFlowAdapter
+    - restoreLibraryShellAfterFlowDismiss() — shell restore after dismiss/cancel
+
+  Shipped fix precedent: Terraform Cancel/Go Back stalled state (2026-06-13)
+    → FlowController.cancelRecovery('convert') + restoreLibraryShellAfterFlowDismiss
+
+Your job: make ERROR paths as reliable as CANCEL paths.
+
+============================================================================
+NON-NEGOTIABLES
+============================================================================
+
+DO:
+  - Route fatal flow failures through FlowController (cancelRecovery or dismissOverlay)
+    or a single new FlowController.failRecovery() ONLY if cancelRecovery can't fit
+    without lying to the user (e.g. skip confirm on error is OK).
+  - Always end in one of: idle lifecycle, visible dismiss CTA, or restored shell.
+  - Audit Add, Clean, Convert first; then rebuild-database SSE if in scope.
+  - Extend test_grid_handoff_contract.py if you add/change flow recovery wiring
+    (repo already asserts restoreLibraryShellAfterFlowDismiss + settleAllFlows).
+  - Match existing overlay phase / scorecard patterns per flow.
+  - Prefer skipConfirm: true on error teardown (user already knows it failed).
+
+DO NOT:
+  - Add a fourth parallel reset/toggle helper per flow.
+  - Add per-flow *State.logLines or debug-only sync helpers.
+  - Fix only one flow while siblings still use the old pattern.
+  - Touch db_health, migration API, showCriticalErrorModal needs_migration (Chat 1).
+  - Touch Open-library performance path or runLibraryRecoveryJourney architecture.
+  - Implement index rebuild RESUME (checkpoint resume) — out of scope.
+  - Stack toast-only fixes that leave overlay blocking interaction.
+  - Rebuild .app unless final prod verification (./packaging/build.sh).
+
+============================================================================
+KNOWN GAPS (verified — start audit here)
+============================================================================
+
+ADD (import) — flowKey 'add'
+  File: static/js/main.js
+
+  Good:
+    - closeImportOverlay / cancelImport → FlowController.cancelRecovery('add')
+    - startImportFromPaths catch: toast + hideImportOverlay (network/stream fail)
+
+  Gaps:
+    - handleImportEvent event === 'error': sets status text + showDone only;
+      does NOT sync lifecycle, may leave inflight state / blocked chrome
+    - Fatal catch calls hideImportOverlay directly, bypasses FlowController
+    - Stream ends without complete/error event → may hang in inflight
+    - finishImportSession in finally may run without clearing overlay phase
+
+  Target: error → set error UI → FlowController.dismissOverlay('add') or
+          dedicated error-complete phase with Done wired to dismissOverlay;
+          ensure restoreLibraryShellAfterFlowDismiss when appropriate.
+
+CLEAN — flowKey 'clean'
+  File: static/js/main.js (~11368–11400)
+
+  Good:
+    - AbortError / CANCELLED → FlowController.cancelRecovery('clean')
+
+  Gaps:
+    - Generic catch: endCleanLibraryWorkingUi + toast + showCleanLibraryButtons('cancel')
+      but NO FlowController.cancelRecovery / dismissOverlay / shell restore
+    - User may remain in inflight lifecycle with broken cancel semantics
+    - Preflight scan failures (~11329, ~11783): toast + buttons, no FlowController
+
+  Target: fatal error → skipConfirm cancelRecovery OR dismissOverlay with
+          reloadGrid policy matching partial progress (likely true if work saved).
+
+CONVERT — flowKey 'convert'
+  File: static/js/main.js executeTerraformFlow (~13671)
+
+  Good:
+    - AbortError → FlowController.cancelRecovery('convert', { reloadGrid: false })
+
+  Gaps:
+    - Generic catch: toast + re-show progress overlay + complete details section
+      WITHOUT cancelRecovery — user can be stuck (Cancel/Go Back may not work)
+    - Inconsistent with abort path that correctly uses FlowController
+
+  Target: fatal error → error-complete overlay OR cancelRecovery with
+          restoreShellAfterCancel; never leave overlay in ambiguous inflight phase.
+
+REBUILD DATABASE (not a registered flow — legacy overlay)
+  File: static/js/main.js executeRebuildDatabase (~2172)
+
+  Gaps:
+    - EventSource 'error': shows message + Close on cancelBtn; no shell restore,
+      no grid rehydrate guarantee, cancelBtn may still say "Cancel" elsewhere
+    - Not wired to FlowController (acceptable IF you add minimal shared teardown
+      helper OR document as intentional exception with guaranteed Close → hide +
+      enableAppBarButtons)
+
+  Scope decision (default): fix Close path to always hide overlay + restore shell;
+  do NOT register rebuild as a fourth flow unless unavoidable.
+
+LIBRARY RECOVERY JOURNEY (open-folder path)
+  File: static/js/main.js runLibraryRecoveryJourney
+
+  Good: failure copy + promptLibraryRecoveryDock + finishLibraryRecoveryJourney
+
+  In scope ONLY if audit finds inflight SSE failure without finishLibraryRecoveryJourney.
+  Do NOT refactor open-library performance path.
+
+============================================================================
+TARGET BEHAVIOR (per flow)
+============================================================================
+
+For each flow fatal exit:
+
+  1. Stop inflight UI (spinners, tickers, EventSource/SSE readers)
+  2. Abort controller if still active (skip user confirm on error)
+  3. Show concise error in overlay OR toast (overlay preferred if already open)
+  4. Present exactly one primary exit: "Close" / "Done" → dismissOverlay OR
+     cancelRecovery(skipConfirm: true) with correct reloadGrid
+  5. syncOverlayPhase(flowKey, null) — lifecycle returns to idle
+  6. restoreLibraryShellAfterFlowDismiss when overlay hid and grid/shell may be blank
+  7. reloadGrid when partial work may have changed catalog (policy per flow)
+
+reloadGrid policy (defaults — don't block on user):
+  Add:    true if importedCount > 0, else false
+  Clean:  true (checkpoint may have saved progress)
+  Convert: false unless library switch completed (usually false on failure)
+
+============================================================================
+DELIVERABLES (all required for done)
+============================================================================
+
+[ ] 1. Audit checklist (brief comment in commit or PR body)
+      List every catch / SSE error handler in Add, Clean, Convert, rebuild execute.
+      Mark each: fixed | already OK | intentional exception.
+
+[ ] 2. Unified error teardown for Add, Clean, Convert
+      No fatal catch leaves lifecycle !== idle with blocking overlay and no CTA.
+
+[ ] 3. Rebuild execute: Close always hides overlay + restores usable shell.
+
+[ ] 4. Contract test updates (test_grid_handoff_contract.py)
+      Assert error/fatal paths reference FlowController or shared teardown helper
+      (mirror existing cancelRecovery / restoreLibraryShellAfterFlowDismiss checks).
+
+[ ] 5. Manual smoke script (document in commit)
+      - Add: start import → kill backend or trigger SSE error → Close works, grid usable
+      - Clean: trigger execute failure → Close/Cancel works
+      - Convert: trigger terraform failure → user can exit overlay
+      - Rebuild: EventSource error → Close works
+
+[ ] 6. bugs-to-be-fixed.md
+      Mark done: "Error handling for import/runtime issues"
+
+============================================================================
+OUT OF SCOPE (stop if you drift here)
+============================================================================
+
+  - POST /api/library/migrate, db_needs_migration modal, switch_library health (Chat 1)
+  - Index rebuild RESUME after interrupt (separate deferred item)
+  - Execute rebuild SSE progress feature work (only error exit parity here)
+  - Per-file import error counting UX (already has error count; don't redesign)
+  - apiFetchJson adoption
+  - Clean Index / thumbnail verification sweeps
+  - New flowController.js features beyond one small failRecovery helper if needed
+
+============================================================================
+KEY FILES (read in order)
+============================================================================
+
+  1. static/js/flowController.js — cancelRecovery, dismissOverlay, settleAllFlows
+  2. static/js/main.js
+       - registerAddFlowAdapter (~9590)
+       - registerCleanFlowAdapter (~11835)
+       - registerConvertFlowAdapter (~13319)
+       - startImportFromPaths / handleImportEvent (~15899 / ~16070)
+       - runCleanLibrary / executeCleanLibrary (~11300)
+       - executeTerraformFlow (~13600)
+       - executeRebuildDatabase (~2172)
+       - restoreLibraryShellAfterFlowDismiss (~13270)
+  3. test_grid_handoff_contract.py — flow handoff contract assertions
+  4. bugs-to-be-fixed.md
+  5. bugs-fixed.md entry pattern (Terraform cancel fix ~2026-06-13)
+
+Optional backend read (only if SSE never emits error event):
+  app.py import-from-paths, clean execute, terraform SSE routes
+
+============================================================================
+IMPLEMENTATION ORDER
+============================================================================
+
+  1. Read flowController + three registerFlow adapters; map all catch blocks.
+  2. Fix Convert fatal catch (worst stuck-user precedent after cancel fix).
+  3. Fix Clean generic catch to match AbortError path.
+  4. Fix Add SSE error + fatal catch to use FlowController.
+  5. Fix rebuild execute Close path.
+  6. Update test_grid_handoff_contract.py.
+  7. Manual smoke + bugs-to-be-fixed.md.
+
+If adding FlowController.failRecovery():
+  - Must delegate to same teardown as cancelRecovery with skipConfirm: true
+  - Do NOT duplicate adapter logic in main.js in 3 places
+
+============================================================================
+DEFINITION OF DONE
+============================================================================
+
+  - No reproduction path where overlay blocks app with no working Close/Cancel/Done.
+  - Add/Clean/Convert fatal errors use same lifecycle teardown as cancel (modulo confirm).
+  - Rebuild error state always exits via Close.
+  - Contract tests updated; pytest test_grid_handoff_contract.py passes.
+  - bugs-to-be-fixed.md item marked done.
+
+============================================================================
+ANTI-PATTERNS (stop immediately)
+============================================================================
+
+  - showToast + return while overlay stays display:block and lifecycle inflight
+  - hideImportOverlay / closeCleanLibraryOverlayImmediate copy-pasted in new catches
+    without syncOverlayPhase(null)
+  - Convert error path that re-shows overlay without registering complete/error phase
+  - Fixing migration modal in this chat
+  - Per-flow fourth reset helper instead of FlowController extension
+
+============================================================================
+DEFAULT ANSWERS (don't block on user)
+============================================================================
+
+  New FlowController.failRecovery vs reuse cancelRecovery?
+    → Reuse cancelRecovery({ skipConfirm: true }) first. New method only if semantically wrong.
+
+  reloadGrid on error?
+    → Add: only if photos imported. Clean: yes. Convert: no unless switch succeeded.
+
+  Show error inside overlay vs toast only?
+    → If overlay already open: error in overlay + dismiss CTA. Toast optional secondary.
+
+  Backend changes?
+    → Only if audit proves SSE never emits error on server failure. Prefer frontend teardown first.
+
+Stay on FlowController parity. Ship all three flows. Do not bleed into Chat 1.
