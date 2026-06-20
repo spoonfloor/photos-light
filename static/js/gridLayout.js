@@ -368,15 +368,6 @@ const GridLayout = (() => {
     return Math.max(0, rowY - anchorViewportY);
   }
 
-  /** scrollTop so the month's first photo row sits at the home grid-top slot. */
-  function scrollTopForMonthAtHomeGridTop(layout, monthKey) {
-    const section = findSectionForMonth(layout, monthKey);
-    if (!section) {
-      return null;
-    }
-    return scrollTopToAlignRow(layout, section, 0, homeGridTopDocumentY(layout));
-  }
-
   function monthOrdinal(monthKey) {
     if (!monthKey || monthKey === 'undated') {
       return Number.NaN;
@@ -680,7 +671,6 @@ const GridLayout = (() => {
     findSectionForMonth,
     findSectionForGlobalIndex,
     scrollTopForMonth,
-    scrollTopForMonthAtHomeGridTop,
     homeGridTopDocumentY,
     rowDocumentY,
     scrollTopToAlignRow,

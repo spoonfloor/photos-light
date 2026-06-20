@@ -3,8 +3,7 @@
  *
  * | Kind            | Priority   | Use when |
  * |-----------------|------------|----------|
- * | date-home       | date       | Date jumper |
- * | date-then-row   | date→content | Filter toggle from home (starred on/off) |
+ * | date-then-row   | date→content | Date jumper, filter toggle (starred on/off) |
  * | freeze-row      | content    | Sort toggle, mutations, undo |
  * | month-header    | legacy     | Default catalog preserve, histogram month target |
  */
@@ -21,7 +20,6 @@ const GridScrollAnchor = (() => {
   });
 
   const KIND = Object.freeze({
-    DATE_HOME: 'date-home',
     DATE_THEN_ROW: 'date-then-row',
     FREEZE_ROW: 'freeze-row',
     MONTH_HEADER: 'month-header',
@@ -93,8 +91,14 @@ const GridScrollAnchor = (() => {
       if (!month) {
         return { kind: KIND.NONE };
       }
+      if (alignToHomeGridTop) {
+        return {
+          kind: KIND.DATE_THEN_ROW,
+          row: { month, rowIndex: 0 },
+        };
+      }
       return {
-        kind: alignToHomeGridTop ? KIND.DATE_HOME : KIND.MONTH_HEADER,
+        kind: KIND.MONTH_HEADER,
         month,
       };
     }
@@ -186,18 +190,6 @@ const GridScrollAnchor = (() => {
     };
 
     switch (anchor.kind) {
-      case KIND.DATE_HOME: {
-        const resolved = GridLayout.resolveJumpMonth(
-          layout,
-          anchor.month,
-          monthIndex,
-          sortOrder,
-        );
-        const top = resolved
-          ? GridLayout.scrollTopForMonthAtHomeGridTop(layout, resolved)
-          : null;
-        return scrollToTop(top);
-      }
       case KIND.DATE_THEN_ROW: {
         const homeTopY = GridLayout.homeGridTopDocumentY(layout);
         if (anchor.row) {
