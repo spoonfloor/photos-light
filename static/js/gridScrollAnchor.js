@@ -62,11 +62,9 @@ const GridScrollAnchor = (() => {
     trigger,
     filterOptions,
     previousMonthIndex,
-    viewportZone,
   ) {
     return (
       trigger === TRIGGER.FILTER_TOGGLE &&
-      viewportZone === 'timeline-home' &&
       isStarredFilterTransition(filterOptions, previousMonthIndex)
     );
   }
@@ -84,7 +82,6 @@ const GridScrollAnchor = (() => {
       alignToHomeGridTop = false,
       targetMonth = null,
       axisChanged = false,
-      viewportZone = scrollTop <= HOME_SCROLL_EPSILON ? 'timeline-home' : 'mid-scroll',
     } = context;
 
     if (!layout || layout.provisional) {
@@ -107,10 +104,12 @@ const GridScrollAnchor = (() => {
         trigger,
         filterOptions,
         previousMonthIndex,
-        viewportZone,
       )
     ) {
-      return { kind: KIND.DATE_THEN_ROW, criteria: 'first-starred' };
+      return {
+        kind: KIND.DATE_THEN_ROW,
+        criteria: 'first-starred',
+      };
     }
 
     const wantsFreezeRow =
@@ -126,7 +125,6 @@ const GridScrollAnchor = (() => {
         trigger,
         filterOptions,
         previousMonthIndex,
-        viewportZone,
       )
     ) {
       const rowAnchor = GridLayout.findTopVisibleRowAnchor(

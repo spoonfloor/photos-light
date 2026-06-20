@@ -28,8 +28,6 @@ const VirtualGrid = (() => {
   let pendingContainerMount = null;
   /** Canonical unfiltered month histogram — restored when filters clear. */
   let unfilteredMonthIndex = null;
-  /** Semantic viewport zone: a row is intentionally aligned to the home grid slot. */
-  let viewportZone = 'timeline-home';
   /** Pending anchor waiting on content data before applying. */
   let pendingScrollAnchor = null;
   let pendingScrollAnchorToken = 0;
@@ -855,30 +853,6 @@ const VirtualGrid = (() => {
     });
   }
 
-  function markUserLeftTimelineHome() {
-    viewportZone = 'mid-scroll';
-  }
-
-  function handlePotentialUserScrollIntent(event) {
-    const navigationKeys = new Set([
-      'ArrowDown',
-      'ArrowUp',
-      'PageDown',
-      'PageUp',
-      'Home',
-      'End',
-      ' ',
-    ]);
-    if (event?.type === 'keydown' && !navigationKeys.has(event.key)) {
-      return;
-    }
-    markUserLeftTimelineHome();
-  }
-
-  function markTimelineHome() {
-    viewportZone = 'timeline-home';
-  }
-
   function clearPendingScrollAnchor() {
     pendingScrollAnchor = null;
     pendingScrollAnchorToken += 1;
@@ -1061,16 +1035,10 @@ const VirtualGrid = (() => {
 
   function bindScroll() {
     window.addEventListener('scroll', scheduleSync, { passive: true });
-    window.addEventListener('wheel', handlePotentialUserScrollIntent, { passive: true });
-    window.addEventListener('touchmove', handlePotentialUserScrollIntent, { passive: true });
-    window.addEventListener('keydown', handlePotentialUserScrollIntent);
   }
 
   function unbindScroll() {
     window.removeEventListener('scroll', scheduleSync);
-    window.removeEventListener('wheel', handlePotentialUserScrollIntent);
-    window.removeEventListener('touchmove', handlePotentialUserScrollIntent);
-    window.removeEventListener('keydown', handlePotentialUserScrollIntent);
   }
 
   function applyProvisionalMount(plan) {
@@ -1343,7 +1311,6 @@ const VirtualGrid = (() => {
     monthInflight.clear();
     hooks = {};
     unfilteredMonthIndex = null;
-    viewportZone = 'timeline-home';
     clearPendingScrollAnchor();
     catalogEmptyMode = null;
   }
@@ -2075,13 +2042,6 @@ const VirtualGrid = (() => {
     };
   }
 
-  function isTimelineHomeZone() {
-    return (
-      viewportZone === 'timeline-home' ||
-      getScrollElement().scrollTop <= GridScrollAnchor.HOME_SCROLL_EPSILON
-    );
-  }
-
   /** First matching row in the current catalog, using already-cached month data only. */
   function findHotRowInCachedCatalog(criteria, targetLayout = layout) {
     if (!targetLayout?.sections?.length) {
@@ -2135,7 +2095,7 @@ const VirtualGrid = (() => {
     if (anchor?.kind !== GridScrollAnchor.KIND.DATE_THEN_ROW || anchor.row) {
       return anchor;
     }
-    const row = findHotRowInCachedCatalog(anchor.criteria);
+    const row = findHotRowInCachedCatalog(anchor.criteria, layout);
     return row ? { ...anchor, row } : anchor;
   }
 
@@ -2157,7 +2117,7 @@ const VirtualGrid = (() => {
     void (async () => {
       let row = null;
       try {
-        row = await findHotRowInCatalog(anchor.criteria);
+        row = await findHotRowInCatalog(anchor.criteria, layout);
       } catch (error) {
         console.warn('Unable to resolve grid hot-row anchor:', error);
         return;
@@ -2184,12 +2144,6 @@ const VirtualGrid = (() => {
     if (!applied) {
       return false;
     }
-    if (
-      resolvedAnchor.kind === GridScrollAnchor.KIND.DATE_HOME ||
-      resolvedAnchor.kind === GridScrollAnchor.KIND.DATE_THEN_ROW
-    ) {
-      markTimelineHome();
-    }
     scheduleSync();
     return true;
   }
@@ -2199,7 +2153,6 @@ const VirtualGrid = (() => {
       scrollTop: getScrollElement().scrollTop,
       layout,
       previousMonthIndex: monthIndex,
-      viewportZone: isTimelineHomeZone() ? 'timeline-home' : 'mid-scroll',
       ...context,
     });
     if (
