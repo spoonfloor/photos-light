@@ -1359,6 +1359,8 @@ function applyDatePickerFromYears(years, anchorMonth = null) {
     yearPicker.value = String(orderedYears[0]);
   }
 
+  refreshDatePickerMonthAvailability();
+
   const datePickerContainer = document.querySelector('.date-picker');
   if (datePickerContainer) {
     datePickerContainer.style.visibility = 'visible';
@@ -1441,6 +1443,164 @@ let datePickerUpdatingFromScroll = false;
 let datePickerLastSyncedMonth = null;
 let datePickerScrollListenerBound = false;
 
+/** Calendar month keys (YYYY-MM) that exist in the current grid catalog. */
+function getDatePickerAvailableMonths() {
+  if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+    const index = VirtualGrid.getMonthIndex?.();
+    if (index?.months?.length) {
+      return index.months
+        .map((entry) => entry.month)
+        .filter((monthKey) => isCalendarMonthKey(monthKey));
+    }
+  }
+
+  const fromDom = new Set();
+  document.querySelectorAll('.month-section[data-month]').forEach((section) => {
+    const monthKey = section.dataset.month;
+    if (isCalendarMonthKey(monthKey)) {
+      fromDom.add(monthKey);
+    }
+  });
+  return [...fromDom];
+}
+
+function applyDatePickerMonthDisabledState(year, availableMonths) {
+  const monthPicker = document.getElementById('monthPicker');
+  if (!monthPicker) {
+    return;
+  }
+
+  if (!availableMonths?.length) {
+    for (const option of monthPicker.options) {
+      option.disabled = false;
+    }
+    return;
+  }
+
+  const activeMonthsInYear = new Set(
+    availableMonths
+      .filter((monthKey) => monthKey.slice(0, 4) === String(year))
+      .map((monthKey) => parseInt(monthKey.slice(5, 7), 10)),
+  );
+  const hasAnyInYear = activeMonthsInYear.size > 0;
+
+  for (const option of monthPicker.options) {
+    const monthNum = parseInt(option.value, 10);
+    option.disabled = hasAnyInYear && !activeMonthsInYear.has(monthNum);
+  }
+}
+
+/**
+ * Keep month disabled states in sync with the catalog; co-select when the
+ * current month+year is no longer a valid destination (e.g. after filter).
+ */
+function refreshDatePickerMonthAvailability() {
+  const monthPicker = document.getElementById('monthPicker');
+  const yearPicker = document.getElementById('yearPicker');
+  if (!monthPicker || !yearPicker || monthPicker.disabled) {
+    return;
+  }
+
+  const availableMonths = getDatePickerAvailableMonths();
+  const year = yearPicker.value;
+  applyDatePickerMonthDisabledState(year, availableMonths);
+
+  if (!availableMonths.length || datePickerUpdatingFromScroll) {
+    return;
+  }
+
+  const monthNum = parseInt(monthPicker.value, 10);
+  const currentKey = `${year}-${String(monthNum).padStart(2, '0')}`;
+  const selectedOption = monthPicker.options[monthPicker.selectedIndex];
+  if (availableMonths.includes(currentKey) && !selectedOption?.disabled) {
+    return;
+  }
+
+  const resolved = GridLayout.nearestMonthInIndex(
+    currentKey,
+    availableMonths,
+    state.currentSortOrder || 'newest',
+  );
+  if (!resolved || resolved === currentKey) {
+    return;
+  }
+
+  const [resolvedYear, resolvedMonthNum] = [
+    resolved.slice(0, 4),
+    parseInt(resolved.slice(5, 7), 10),
+  ];
+  datePickerUpdatingFromScroll = true;
+  yearPicker.value = resolvedYear;
+  monthPicker.value = String(resolvedMonthNum);
+  applyDatePickerMonthDisabledState(resolvedYear, availableMonths);
+  datePickerLastSyncedMonth = resolved;
+  requestAnimationFrame(() => {
+    datePickerUpdatingFromScroll = false;
+  });
+}
+
+/** After year change: pick the best month in that year, then refresh disabled states. */
+function coSelectDatePickerForYearChange() {
+  const monthPicker = document.getElementById('monthPicker');
+  const yearPicker = document.getElementById('yearPicker');
+  if (!monthPicker || !yearPicker) {
+    return null;
+  }
+
+  const availableMonths = getDatePickerAvailableMonths();
+  const year = yearPicker.value;
+  const monthNum = parseInt(monthPicker.value, 10);
+  const preferred = `${year}-${String(monthNum).padStart(2, '0')}`;
+
+  if (!availableMonths.length) {
+    applyDatePickerMonthDisabledState(year, availableMonths);
+    return preferred;
+  }
+
+  const resolved =
+    GridLayout.nearestMonthInIndex(
+      preferred,
+      availableMonths,
+      state.currentSortOrder || 'newest',
+    ) || preferred;
+  const resolvedYear = resolved.slice(0, 4);
+  const resolvedMonthNum = parseInt(resolved.slice(5, 7), 10);
+
+  datePickerUpdatingFromScroll = true;
+  yearPicker.value = resolvedYear;
+  monthPicker.value = String(resolvedMonthNum);
+  applyDatePickerMonthDisabledState(resolvedYear, availableMonths);
+  datePickerLastSyncedMonth = resolved;
+  requestAnimationFrame(() => {
+    datePickerUpdatingFromScroll = false;
+  });
+  return resolved;
+}
+
+function performDatePickerJump(targetMonth) {
+  if (
+    typeof VirtualGrid !== 'undefined' &&
+    VirtualGrid.isActive() &&
+    VirtualGrid.isCatalogEmptyModeActive()
+  ) {
+    return;
+  }
+
+  if (VirtualGrid.isActive()) {
+    if (VirtualGrid.jumpToMonth(targetMonth, { alignToHomeGridTop: true })) {
+      return;
+    }
+  }
+
+  const monthSection = document.getElementById(`month-${targetMonth}`);
+  if (monthSection) {
+    scrollToMonthSection(targetMonth);
+    return;
+  }
+
+  void hydrateGridForMonthJump(targetMonth);
+}
+
 function setDatePickerMonthValue(monthKey) {
   const monthPicker = document.getElementById('monthPicker');
   const yearPicker = document.getElementById('yearPicker');
@@ -1452,6 +1612,7 @@ function setDatePickerMonthValue(monthKey) {
   datePickerUpdatingFromScroll = true;
   yearPicker.value = year;
   monthPicker.value = parseInt(month, 10).toString();
+  applyDatePickerMonthDisabledState(year, getDatePickerAvailableMonths());
   datePickerLastSyncedMonth = monthKey;
   requestAnimationFrame(() => {
     datePickerUpdatingFromScroll = false;
@@ -1557,37 +1718,30 @@ function wireDatePicker() {
 
   ensureDatePickerScrollListener();
 
-  const handleDateChange = () => {
-    if (datePickerUpdatingFromScroll) return;
-    if (
-      typeof VirtualGrid !== 'undefined' &&
-      VirtualGrid.isActive() &&
-      VirtualGrid.isCatalogEmptyModeActive()
-    ) {
+  const handleDatePickerJumpRequest = () => {
+    if (datePickerUpdatingFromScroll) {
       return;
     }
-
-    const month = monthPicker.value.padStart(2, '0');
-    const year = yearPicker.value;
-    const targetMonth = `${year}-${month}`;
-
-    if (VirtualGrid.isActive()) {
-      if (VirtualGrid.jumpToMonth(targetMonth)) {
-        return;
-      }
-    }
-
-    const monthSection = document.getElementById(`month-${targetMonth}`);
-    if (monthSection) {
-      scrollToMonthSection(targetMonth);
+    const monthPickerEl = document.getElementById('monthPicker');
+    const yearPickerEl = document.getElementById('yearPicker');
+    if (!monthPickerEl || !yearPickerEl) {
       return;
     }
-
-    void hydrateGridForMonthJump(targetMonth);
+    const month = monthPickerEl.value.padStart(2, '0');
+    const year = yearPickerEl.value;
+    performDatePickerJump(`${year}-${month}`);
   };
 
-  monthPicker.addEventListener('change', handleDateChange);
-  yearPicker.addEventListener('change', handleDateChange);
+  monthPicker.addEventListener('change', handleDatePickerJumpRequest);
+  yearPicker.addEventListener('change', () => {
+    if (datePickerUpdatingFromScroll) {
+      return;
+    }
+    const targetMonth = coSelectDatePickerForYearChange();
+    if (targetMonth) {
+      performDatePickerJump(targetMonth);
+    }
+  });
 
   state.onMonthsRendered = () => {
     datePickerLastSyncedMonth = null;
@@ -4475,6 +4629,7 @@ async function refreshActiveVirtualGridMonthIndex(options = {}) {
   if (reconcileCatalogEmptyAfterGridLoad({ total: state.photoTotalCount })) {
     return 'catalog_empty';
   }
+  refreshDatePickerMonthAvailability();
   return result;
 }
 
@@ -4667,6 +4822,7 @@ function syncGridViewAfterCatalogTransition(result) {
   ensureGridInteractionsWired();
   applySelectionStateToGrid();
   updateMonthCircleStates();
+  refreshDatePickerMonthAvailability();
 }
 
 function restoreCatalogFilterZeroChrome() {
@@ -7263,12 +7419,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
       syncCatalogEmptyChrome(mode);
     },
     mergePhotos: mergePhotosIntoVirtualState,
-    comparePhotos: (a, b) =>
-      comparePhotosForLibrarySort(
-        a,
-        b,
-        effectiveSort,
-      ),
+    comparePhotos: (a, b) => comparePhotosForLibrarySort(a, b),
     findPhotoInState: (photoId) =>
       state.photos.find((photo) => photo.id === Number(photoId)) || null,
     filterPhoto: getActiveVirtualGridFilterPhoto(),
@@ -7299,12 +7450,14 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
       }
       datePickerLastSyncedMonth = null;
       scheduleDatePickerFromScrollSync();
+      refreshDatePickerMonthAvailability();
     },
     onIndexReady: (index) => {
       state.photoTotalCount = index.total;
       state.importMonthKeys = index.import_month_keys || null;
       state.hasDatabase = true;
       state.hasMore = false;
+      refreshDatePickerMonthAvailability();
     },
     onMonthMounted: () => {
       applySelectionStateToGrid();
@@ -7323,6 +7476,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
       enableAppBarButtons();
       datePickerLastSyncedMonth = null;
       scheduleDatePickerFromScrollSync();
+      refreshDatePickerMonthAvailability();
     },
   };
 }
@@ -7548,7 +7702,7 @@ async function hydrateGridForMonthJump(targetMonth) {
       return;
     }
     if (VirtualGrid.isActive()) {
-      if (VirtualGrid.jumpToMonth(targetMonth)) {
+      if (VirtualGrid.jumpToMonth(targetMonth, { alignToHomeGridTop: true })) {
         return;
       }
     }

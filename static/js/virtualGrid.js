@@ -28,6 +28,11 @@ const VirtualGrid = (() => {
   let pendingContainerMount = null;
   /** Canonical unfiltered month histogram — restored when filters clear. */
   let unfilteredMonthIndex = null;
+  /** Semantic viewport zone: a row is intentionally aligned to the home grid slot. */
+  let viewportZone = 'timeline-home';
+  /** Pending anchor waiting on content data before applying. */
+  let pendingScrollAnchor = null;
+  let pendingScrollAnchorToken = 0;
   /** In-grid empty overlay — filter | library | trash (grid shell stays mounted). */
   let catalogEmptyMode = null;
 
@@ -850,6 +855,35 @@ const VirtualGrid = (() => {
     });
   }
 
+  function markUserLeftTimelineHome() {
+    viewportZone = 'mid-scroll';
+  }
+
+  function handlePotentialUserScrollIntent(event) {
+    const navigationKeys = new Set([
+      'ArrowDown',
+      'ArrowUp',
+      'PageDown',
+      'PageUp',
+      'Home',
+      'End',
+      ' ',
+    ]);
+    if (event?.type === 'keydown' && !navigationKeys.has(event.key)) {
+      return;
+    }
+    markUserLeftTimelineHome();
+  }
+
+  function markTimelineHome() {
+    viewportZone = 'timeline-home';
+  }
+
+  function clearPendingScrollAnchor() {
+    pendingScrollAnchor = null;
+    pendingScrollAnchorToken += 1;
+  }
+
   function updateLabelGate() {
     const container = getContainer();
     if (!container) {
@@ -1027,10 +1061,16 @@ const VirtualGrid = (() => {
 
   function bindScroll() {
     window.addEventListener('scroll', scheduleSync, { passive: true });
+    window.addEventListener('wheel', handlePotentialUserScrollIntent, { passive: true });
+    window.addEventListener('touchmove', handlePotentialUserScrollIntent, { passive: true });
+    window.addEventListener('keydown', handlePotentialUserScrollIntent);
   }
 
   function unbindScroll() {
     window.removeEventListener('scroll', scheduleSync);
+    window.removeEventListener('wheel', handlePotentialUserScrollIntent);
+    window.removeEventListener('touchmove', handlePotentialUserScrollIntent);
+    window.removeEventListener('keydown', handlePotentialUserScrollIntent);
   }
 
   function applyProvisionalMount(plan) {
@@ -1303,7 +1343,8 @@ const VirtualGrid = (() => {
     monthInflight.clear();
     hooks = {};
     unfilteredMonthIndex = null;
-    clearFilterHomeRowAnchor();
+    viewportZone = 'timeline-home';
+    clearPendingScrollAnchor();
     catalogEmptyMode = null;
   }
 
@@ -1322,22 +1363,20 @@ const VirtualGrid = (() => {
       return false;
     }
 
-    const top = GridLayout.scrollTopForMonth(
+    const anchor = GridScrollAnchor.resolveScrollAnchor({
+      trigger: GridScrollAnchor.TRIGGER.DATE_JUMP,
       layout,
-      resolvedMonth,
-      options.appBarOffset,
-    );
-    if (top === null) {
+      targetMonth: resolvedMonth,
+      alignToHomeGridTop: Boolean(options.alignToHomeGridTop),
+    });
+    if (!applyGridScrollAnchor(anchor, { behavior: options.behavior ?? 'instant' })) {
       return false;
     }
 
-    const behavior = options.behavior ?? 'instant';
-    window.scrollTo({ top, behavior });
-    scheduleSync();
     publishGridThumbSync('jumpToMonth', {
       month: monthKey,
       resolvedMonth,
-      behavior,
+      behavior: options.behavior ?? 'instant',
     });
     return true;
   }
@@ -1535,7 +1574,10 @@ const VirtualGrid = (() => {
       return 'zero';
     }
 
-    if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+    if (!patchLayoutGeometryFromIndex(patchedIndex, {
+      trigger: GridScrollAnchor.TRIGGER.MUTATION,
+      preserveScroll: true,
+    })) {
       return false;
     }
 
@@ -1642,7 +1684,10 @@ const VirtualGrid = (() => {
 
     if (monthCounts.size) {
       const patchedIndex = GridLayout.patchPhotoDeletes(monthIndex, monthCounts);
-      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+      if (!patchLayoutGeometryFromIndex(patchedIndex, {
+        trigger: GridScrollAnchor.TRIGGER.MUTATION,
+        preserveScroll: true,
+      })) {
         return null;
       }
     } else {
@@ -1713,7 +1758,10 @@ const VirtualGrid = (() => {
           delta,
         );
       });
-      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+      if (!patchLayoutGeometryFromIndex(patchedIndex, {
+        trigger: GridScrollAnchor.TRIGGER.MUTATION,
+        preserveScroll: true,
+      })) {
         return false;
       }
     } else {
@@ -1800,7 +1848,10 @@ const VirtualGrid = (() => {
     }
 
     if (visibleRemoved > 0 || visibleAdded > 0) {
-      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+      if (!patchLayoutGeometryFromIndex(patchedIndex, {
+        trigger: GridScrollAnchor.TRIGGER.MUTATION,
+        preserveScroll: true,
+      })) {
         monthCache.set(sourceMonth, beforeOldPhotos);
         monthCache.set(newMonth, beforeNewPhotos);
         return null;
@@ -1886,7 +1937,10 @@ const VirtualGrid = (() => {
           delta,
         );
       });
-      if (!applyLayoutGeometryFromIndex(patchedIndex)) {
+      if (!patchLayoutGeometryFromIndex(patchedIndex, {
+        trigger: GridScrollAnchor.TRIGGER.MUTATION,
+        preserveScroll: true,
+      })) {
         return false;
       }
     } else {
@@ -2014,25 +2068,195 @@ const VirtualGrid = (() => {
     };
   }
 
-  function restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth) {
-    if (preserveMonth) {
-      const resolvedMonth = GridLayout.resolveJumpMonth(
-        layout,
-        preserveMonth,
-        indexPayload,
-        sortOrder,
-      );
-      if (resolvedMonth) {
-        scrollToMonth(resolvedMonth);
-        return;
+  function getScrollAnchorHelpers() {
+    return {
+      sortOrder: librarySortOrder(),
+      monthIndex,
+    };
+  }
+
+  function isTimelineHomeZone() {
+    return (
+      viewportZone === 'timeline-home' ||
+      getScrollElement().scrollTop <= GridScrollAnchor.HOME_SCROLL_EPSILON
+    );
+  }
+
+  /** First matching row in the current catalog, using already-cached month data only. */
+  function findHotRowInCachedCatalog(criteria, targetLayout = layout) {
+    if (!targetLayout?.sections?.length) {
+      return null;
+    }
+    const columns = targetLayout.columnLayout?.columns ?? 1;
+    for (const section of targetLayout.sections) {
+      const photos = monthCache.get(section.month);
+      if (!photos?.length) {
+        continue;
+      }
+      const visible = visibleMonthPhotos(photos);
+      for (let localIndex = 0; localIndex < visible.length; localIndex += 1) {
+        if (criteria === 'first-starred' && visible[localIndex].rating !== 5) {
+          continue;
+        }
+        return {
+          month: section.month,
+          rowIndex: Math.floor(localIndex / columns),
+        };
       }
     }
-    const anchor = indexPayload?.months?.[0]?.month || null;
-    if (anchor) {
-      scrollToMonth(anchor);
-    } else {
-      window.scrollTo({ top: 0, behavior: 'instant' });
+    return null;
+  }
+
+  async function findHotRowInCatalog(criteria, targetLayout = layout) {
+    if (!targetLayout?.sections?.length) {
+      return null;
     }
+    const columns = targetLayout.columnLayout?.columns ?? 1;
+    for (const section of targetLayout.sections) {
+      let photos = monthCache.get(section.month);
+      if (!photos) {
+        photos = await fetchMonthPhotos(section.month);
+      }
+      const visible = visibleMonthPhotos(photos);
+      for (let localIndex = 0; localIndex < visible.length; localIndex += 1) {
+        if (criteria === 'first-starred' && visible[localIndex].rating !== 5) {
+          continue;
+        }
+        return {
+          month: section.month,
+          rowIndex: Math.floor(localIndex / columns),
+        };
+      }
+    }
+    return null;
+  }
+
+  function resolveHotRowAnchorSync(anchor) {
+    if (anchor?.kind !== GridScrollAnchor.KIND.DATE_THEN_ROW || anchor.row) {
+      return anchor;
+    }
+    const row = findHotRowInCachedCatalog(anchor.criteria);
+    return row ? { ...anchor, row } : anchor;
+  }
+
+  function prepareFilterScrollAnchor(anchor) {
+    if (anchor?.kind !== GridScrollAnchor.KIND.DATE_THEN_ROW) {
+      return anchor;
+    }
+    return resolveHotRowAnchorSync(anchor);
+  }
+
+  function queuePendingScrollAnchor(anchor) {
+    if (anchor?.kind !== GridScrollAnchor.KIND.DATE_THEN_ROW) {
+      return;
+    }
+    const token = pendingScrollAnchorToken + 1;
+    pendingScrollAnchorToken = token;
+    pendingScrollAnchor = anchor;
+
+    void (async () => {
+      let row = null;
+      try {
+        row = await findHotRowInCatalog(anchor.criteria);
+      } catch (error) {
+        console.warn('Unable to resolve grid hot-row anchor:', error);
+        return;
+      }
+      if (pendingScrollAnchorToken !== token || !row) {
+        return;
+      }
+      const resolved = { ...anchor, row };
+      pendingScrollAnchor = resolved;
+      if (applyGridScrollAnchor(resolved)) {
+        clearPendingScrollAnchor();
+      }
+    })();
+  }
+
+  function applyGridScrollAnchor(anchor, { behavior = 'instant' } = {}) {
+    const resolvedAnchor = resolveHotRowAnchorSync(anchor);
+    const applied = GridScrollAnchor.applyScrollAnchor(
+      resolvedAnchor,
+      layout,
+      getScrollAnchorHelpers(),
+      { behavior },
+    );
+    if (!applied) {
+      return false;
+    }
+    if (
+      resolvedAnchor.kind === GridScrollAnchor.KIND.DATE_HOME ||
+      resolvedAnchor.kind === GridScrollAnchor.KIND.DATE_THEN_ROW
+    ) {
+      markTimelineHome();
+    }
+    scheduleSync();
+    return true;
+  }
+
+  function captureGridScrollAnchor(context) {
+    const anchor = GridScrollAnchor.resolveScrollAnchor({
+      scrollTop: getScrollElement().scrollTop,
+      layout,
+      previousMonthIndex: monthIndex,
+      viewportZone: isTimelineHomeZone() ? 'timeline-home' : 'mid-scroll',
+      ...context,
+    });
+    if (
+      context.trigger === GridScrollAnchor.TRIGGER.FILTER_TOGGLE &&
+      context.filterOptions
+    ) {
+      return prepareFilterScrollAnchor(anchor);
+    }
+    if (
+      context.trigger === GridScrollAnchor.TRIGGER.SORT_TOGGLE ||
+      context.trigger === GridScrollAnchor.TRIGGER.MUTATION
+    ) {
+      clearPendingScrollAnchor();
+    }
+    return anchor;
+  }
+
+  function restoreScrollAfterLayoutChange(
+    indexPayload,
+    scrollAnchor,
+    { previousScrollTop = 0, maxScrollTop = 0 } = {},
+  ) {
+    const anchor = scrollAnchor || { kind: GridScrollAnchor.KIND.NONE };
+    clearPendingScrollAnchor();
+    if (applyGridScrollAnchor(anchor)) {
+      return;
+    }
+    if (anchor.kind === GridScrollAnchor.KIND.DATE_THEN_ROW) {
+      queuePendingScrollAnchor(anchor);
+      return;
+    }
+    if (previousScrollTop > maxScrollTop + 1) {
+      GridScrollAnchor.fallbackScrollAfterLayout(
+        indexPayload,
+        layout,
+        getScrollAnchorHelpers(),
+      );
+      scheduleSync();
+      return;
+    }
+    if (previousScrollTop > 0) {
+      window.scrollTo({ top: Math.min(previousScrollTop, maxScrollTop), behavior: 'instant' });
+      scheduleSync();
+    }
+  }
+
+  function patchLayoutGeometryFromIndex(indexPayload, scrollAnchorContext = null) {
+    const anchor = scrollAnchorContext
+      ? captureGridScrollAnchor(scrollAnchorContext)
+      : null;
+    if (!applyLayoutGeometryFromIndex(indexPayload)) {
+      return false;
+    }
+    if (anchor && anchor.kind !== GridScrollAnchor.KIND.NONE) {
+      applyGridScrollAnchor(anchor);
+    }
+    return true;
   }
 
   function reindexForSort(indexPayload, sortOrderNext) {
@@ -2090,7 +2314,7 @@ const VirtualGrid = (() => {
     }
   }
 
-  function applySortOrderInstant(sortOrderNext, preserveMonth) {
+  function applySortOrderInstant(sortOrderNext, scrollAnchor = null) {
     const sourceIndex = unfilteredMonthIndex || monthIndex;
     if (!sourceIndex || layout?.provisional) {
       return false;
@@ -2105,7 +2329,15 @@ const VirtualGrid = (() => {
     resortAllMonthCaches();
     rememberUnfilteredIndex(reindexed);
 
-    if (!applyCatalogFilterWarm(reindexed, preserveMonth)) {
+    const anchor =
+      scrollAnchor ||
+      captureGridScrollAnchor({
+        trigger: GridScrollAnchor.TRIGGER.SORT_TOGGLE,
+        preserveScroll: true,
+        isSortChange: true,
+      });
+
+    if (!applyCatalogFilterWarm(reindexed, null, { scrollAnchor: anchor })) {
       return false;
     }
 
@@ -2118,20 +2350,18 @@ const VirtualGrid = (() => {
   function finishCatalogViewLayout(
     indexPayload,
     {
-      preserveMonth = null,
       scrollTargetMonth = null,
       wasProvisional = false,
       previousScrollTop = 0,
       clearMonthCache = false,
       axisChanged = false,
+      scrollAnchor = null,
     } = {},
   ) {
     const container = getContainer();
     if (!container) {
       return false;
     }
-
-    const scrollPreserveMonth = axisChanged ? null : preserveMonth;
 
     exitCatalogEmptyMode();
 
@@ -2153,20 +2383,21 @@ const VirtualGrid = (() => {
       nextHeight - (window.innerHeight || document.documentElement.clientHeight),
     );
 
-    if (scrollTargetMonth) {
-      scrollToMonth(scrollTargetMonth);
-    } else if (wasProvisional) {
-      restoreScrollMonthAfterLayoutChange(indexPayload, scrollPreserveMonth);
-    } else if (scrollPreserveMonth) {
-      restoreScrollMonthAfterLayoutChange(indexPayload, scrollPreserveMonth);
-    } else if (previousScrollTop > maxScrollTop + 1) {
-      const anchor = indexPayload?.months?.[0]?.month || null;
-      if (anchor) {
-        scrollToMonth(anchor);
-      } else {
-        window.scrollTo({ top: 0, behavior: 'instant' });
-      }
+    let anchor = GridScrollAnchor.effectiveScrollAnchor(scrollAnchor, axisChanged);
+    if (
+      scrollTargetMonth &&
+      (!anchor || anchor.kind === GridScrollAnchor.KIND.NONE)
+    ) {
+      anchor = {
+        kind: GridScrollAnchor.KIND.MONTH_HEADER,
+        month: scrollTargetMonth,
+      };
     }
+
+    restoreScrollAfterLayoutChange(indexPayload, anchor, {
+      previousScrollTop,
+      maxScrollTop,
+    });
 
     return true;
   }
@@ -2197,25 +2428,23 @@ const VirtualGrid = (() => {
     const hasFilter = hasCatalogFilter || selectionActive;
     const previousAxis = monthIndex?.section_axis || 'date_taken';
     const scrollTop = getScrollElement().scrollTop;
-    const preserveMonth =
-      layout && !layout.provisional && preserveScroll && !scrollTargetMonth
-        ? GridLayout.findMonthAtScrollTop(layout, scrollTop, 80)
-        : null;
-
     const currentSort = monthIndex?.sort || sortOrder;
+    const isSortChange =
+      !requireServerIndex && !hasFilter && sortOrderNext !== currentSort;
+    const transitionTrigger = isSortChange
+      ? GridScrollAnchor.TRIGGER.SORT_TOGGLE
+      : GridScrollAnchor.TRIGGER.FILTER_TOGGLE;
+    const scrollAnchor = captureGridScrollAnchor({
+      trigger: transitionTrigger,
+      filterOptions,
+      scrollTargetMonth,
+      preserveScroll,
+      isSortChange,
+    });
     const isSortOnly =
-      !requireServerIndex &&
-      !hasFilter &&
-      sortOrderNext !== currentSort &&
-      (unfilteredMonthIndex || monthIndex);
+      isSortChange && (unfilteredMonthIndex || monthIndex);
 
-    if (
-      isSortOnly &&
-      applySortOrderInstant(
-        sortOrderNext,
-        scrollTargetMonth || preserveMonth,
-      )
-    ) {
+    if (isSortOnly && applySortOrderInstant(sortOrderNext, scrollAnchor)) {
       return true;
     }
 
@@ -2243,7 +2472,7 @@ const VirtualGrid = (() => {
       if (
         applyCatalogFilterWarm(
           indexPayload,
-          axisChanged ? null : preserveMonth,
+          GridScrollAnchor.effectiveScrollAnchor(scrollAnchor, axisChanged),
         )
       ) {
         if (hooks.onIndexReady) {
@@ -2256,7 +2485,7 @@ const VirtualGrid = (() => {
       if (
         applyCatalogFilterWarm(
           indexPayload,
-          axisChanged ? null : preserveMonth,
+          GridScrollAnchor.effectiveScrollAnchor(scrollAnchor, axisChanged),
         )
       ) {
         if (hooks.onIndexReady) {
@@ -2268,7 +2497,6 @@ const VirtualGrid = (() => {
 
     const axisChangeExpected =
       Boolean(filterOptions.importSets) && previousAxis !== 'import';
-    let transitionPreserveMonth = preserveMonth;
     let previousScrollTop = scrollTop;
 
     if (!hasCatalogFilter) {
@@ -2276,7 +2504,6 @@ const VirtualGrid = (() => {
         preserveScroll: preserveScroll && !scrollTargetMonth,
         axisChangeExpected,
       });
-      transitionPreserveMonth = transition.preserveMonth;
       previousScrollTop = transition.scrollTop;
     }
 
@@ -2339,7 +2566,7 @@ const VirtualGrid = (() => {
       if (
         applyCatalogFilterWarm(
           indexPayload,
-          axisChanged ? null : transitionPreserveMonth,
+          GridScrollAnchor.effectiveScrollAnchor(scrollAnchor, axisChanged),
         )
       ) {
         if (hooks.onIndexReady) {
@@ -2350,20 +2577,22 @@ const VirtualGrid = (() => {
     }
 
     return finishCatalogViewLayout(indexPayload, {
-      preserveMonth: transitionPreserveMonth,
       scrollTargetMonth,
       wasProvisional,
       previousScrollTop,
       clearMonthCache: requireServerIndex,
       axisChanged,
+      scrollAnchor,
     });
   }
 
   /**
    * Update layout + mounted sections in place. Month hydration cache stays warm.
    */
-  function applyCatalogFilterWarm(indexPayload, preserveMonth) {
+  function applyCatalogFilterWarm(indexPayload, scrollAnchor = null) {
     exitCatalogEmptyMode();
+
+    const wasFiltered = Boolean(monthIndex?.filtered);
 
     if (!applyLayoutGeometryFromIndex(indexPayload)) {
       return false;
@@ -2374,22 +2603,33 @@ const VirtualGrid = (() => {
     const activeMonths = new Set(
       (layout?.sections || []).map((section) => section.month),
     );
+    const filterStateChanged = Boolean(indexPayload?.filtered) !== wasFiltered;
 
     for (const monthKey of [...mountedMonths]) {
       if (!activeMonths.has(monthKey)) {
         unmountMonth(monthKey);
         hydratedMonths.delete(monthKey);
-        continue;
       }
-      if (hydratedMonths.has(monthKey) && monthCache.has(monthKey)) {
-        rebuildMountedHydratedMonth(monthKey);
-      } else {
-        unmountMonth(monthKey);
+    }
+
+    if (filterStateChanged || indexPayload?.filtered) {
+      for (const monthKey of activeMonths) {
+        if (mountedMonths.has(monthKey)) {
+          unmountMonth(monthKey);
+        }
+      }
+    } else {
+      for (const monthKey of activeMonths) {
+        if (hydratedMonths.has(monthKey) && monthCache.has(monthKey)) {
+          rebuildMountedHydratedMonth(monthKey);
+        } else if (mountedMonths.has(monthKey)) {
+          unmountMonth(monthKey);
+        }
       }
     }
 
     scheduleSync();
-    restoreScrollMonthAfterLayoutChange(indexPayload, preserveMonth);
+    restoreScrollAfterLayoutChange(indexPayload, scrollAnchor);
     return true;
   }
 
@@ -2521,6 +2761,10 @@ const VirtualGrid = (() => {
     return layout;
   }
 
+  function getMonthIndex() {
+    return monthIndex;
+  }
+
   function getPhaseAState() {
     publishPhaseATestState(layout?.provisional ? 'provisional' : 'refined');
     return window.__gridPhaseA || null;
@@ -2542,6 +2786,8 @@ const VirtualGrid = (() => {
     destroy,
     commitContainerMount,
     cancelPendingContainerMount,
+    captureScrollAnchor: (context) => captureGridScrollAnchor(context),
+    applyScrollAnchor: (anchor, options) => applyGridScrollAnchor(anchor, options),
     jumpToMonth,
     scrollToMonth,
     invalidateMonth,
@@ -2560,6 +2806,7 @@ const VirtualGrid = (() => {
     applyCatalogFilter,
     scheduleSync,
     getLayout,
+    getMonthIndex,
     getPhaseAState,
     isActive,
     isCatalogFilterZeroActive,

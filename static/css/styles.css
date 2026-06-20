@@ -374,6 +374,10 @@ body.trash-view-active #lightboxDownloadBtn {
   border-color: var(--accent-color);
 }
 
+.date-picker-select option:disabled {
+  color: #666;
+}
+
 .app-bar-wrapper .title {
   font-size: var(--app-bar-title-size);
   font-weight: 300;

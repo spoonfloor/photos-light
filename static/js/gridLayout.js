@@ -247,6 +247,136 @@ const GridLayout = (() => {
     return Math.max(0, section.yStart - appBarOffset);
   }
 
+  /** Document Y of the first photo row when scrolled to timeline home (scrollTop 0). */
+  function homeGridTopDocumentY(layout) {
+    const section = layout?.sections?.[0];
+    if (!section) {
+      return 0;
+    }
+    const headerBand = layout.columnLayout?.rhythm?.headerBand ?? DEFAULT_RHYTHM.headerBand;
+    return section.yStart + headerBand;
+  }
+
+  /** Document Y of a photo row within a month section (local index in full month order). */
+  function rowDocumentY(layout, section, localIndex) {
+    if (!section || localIndex < 0) {
+      return null;
+    }
+    const columnLayout = layout?.columnLayout;
+    if (!columnLayout) {
+      return null;
+    }
+    const headerBand = columnLayout.rhythm?.headerBand ?? DEFAULT_RHYTHM.headerBand;
+    const rowIndex = Math.floor(localIndex / columnLayout.columns);
+    return (
+      section.yStart +
+      headerBand +
+      rowIndex * (columnLayout.cellHeight + columnLayout.gap)
+    );
+  }
+
+  /** scrollTop so row localIndex aligns with alignToDocumentY (e.g. home grid top). */
+  function scrollTopToAlignRow(layout, section, localIndex, alignToDocumentY) {
+    const rowY = rowDocumentY(layout, section, localIndex);
+    if (rowY === null) {
+      return null;
+    }
+    return Math.max(0, rowY - alignToDocumentY);
+  }
+
+  /** scrollTop so a month row (by row index) aligns with alignToDocumentY. */
+  function scrollTopToAlignRowIndex(layout, month, rowIndex, alignToDocumentY) {
+    const section = findSectionForMonth(layout, month);
+    const columnLayout = layout?.columnLayout;
+    if (!section || !columnLayout || rowIndex < 0) {
+      return null;
+    }
+    const maxRows = Math.ceil(section.count / columnLayout.columns);
+    const clampedRow = Math.min(
+      Math.max(0, rowIndex),
+      Math.max(0, maxRows - 1),
+    );
+    const localIndex = clampedRow * columnLayout.columns;
+    return scrollTopToAlignRow(layout, section, localIndex, alignToDocumentY);
+  }
+
+  /** Top photo row at the viewport anchor line — for sort-order scroll freeze. */
+  function findTopVisibleRowAnchor(layout, scrollTop, appBarOffset = 80) {
+    const sections = layout?.sections;
+    const columnLayout = layout?.columnLayout;
+    if (!sections?.length || !columnLayout) {
+      return null;
+    }
+
+    const anchorLine = Math.max(0, scrollTop + appBarOffset);
+    let section = sections[0];
+    for (const candidate of sections) {
+      if (candidate.yStart <= anchorLine) {
+        section = candidate;
+      } else {
+        break;
+      }
+    }
+
+    const headerBand = columnLayout.rhythm?.headerBand ?? DEFAULT_RHYTHM.headerBand;
+    const rowStride = columnLayout.cellHeight + columnLayout.gap;
+    const gridTop = section.yStart + headerBand;
+    let rowIndex = 0;
+    if (anchorLine >= gridTop && rowStride > 0) {
+      rowIndex = Math.floor((anchorLine - gridTop) / rowStride);
+    }
+
+    const maxRows = Math.ceil(section.count / columnLayout.columns);
+    rowIndex = Math.min(Math.max(0, rowIndex), Math.max(0, maxRows - 1));
+
+    const localIndex = rowIndex * columnLayout.columns;
+    const rowY = rowDocumentY(layout, section, localIndex);
+    if (rowY === null) {
+      return null;
+    }
+
+    return {
+      month: section.month,
+      rowIndex,
+      anchorViewportY: rowY - scrollTop,
+    };
+  }
+
+  /** scrollTop that keeps the same month row at anchorViewportY after layout change. */
+  function scrollTopToPreserveRowViewportY(
+    layout,
+    month,
+    rowIndex,
+    anchorViewportY,
+  ) {
+    const section = findSectionForMonth(layout, month);
+    const columnLayout = layout?.columnLayout;
+    if (!section || !columnLayout || anchorViewportY == null) {
+      return null;
+    }
+
+    const maxRows = Math.ceil(section.count / columnLayout.columns);
+    const clampedRow = Math.min(
+      Math.max(0, rowIndex),
+      Math.max(0, maxRows - 1),
+    );
+    const localIndex = clampedRow * columnLayout.columns;
+    const rowY = rowDocumentY(layout, section, localIndex);
+    if (rowY === null) {
+      return null;
+    }
+    return Math.max(0, rowY - anchorViewportY);
+  }
+
+  /** scrollTop so the month's first photo row sits at the home grid-top slot. */
+  function scrollTopForMonthAtHomeGridTop(layout, monthKey) {
+    const section = findSectionForMonth(layout, monthKey);
+    if (!section) {
+      return null;
+    }
+    return scrollTopToAlignRow(layout, section, 0, homeGridTopDocumentY(layout));
+  }
+
   function monthOrdinal(monthKey) {
     if (!monthKey || monthKey === 'undated') {
       return Number.NaN;
@@ -550,6 +680,13 @@ const GridLayout = (() => {
     findSectionForMonth,
     findSectionForGlobalIndex,
     scrollTopForMonth,
+    scrollTopForMonthAtHomeGridTop,
+    homeGridTopDocumentY,
+    rowDocumentY,
+    scrollTopToAlignRow,
+    scrollTopToAlignRowIndex,
+    findTopVisibleRowAnchor,
+    scrollTopToPreserveRowViewportY,
     nearestMonthInIndex,
     resolveJumpMonth,
     findMonthAtScrollTop,
