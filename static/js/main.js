@@ -177,6 +177,7 @@ const state = {
   currentOffset: 0, // Loaded row count in the current window
   photosNextCursor: null, // Keyset cursor for the next scroll page
   photoTotalCount: 0, // Total rows in DB (windowed load)
+  libraryStarredCount: null, // Starred rows in DB (null until first refresh)
   loadingMore: false, // Scroll-triggered page in flight
   navigateToMonth: null, // Month to navigate to after closing lightbox (e.g., '2025-12')
   hasDatabase: false, // Track whether database exists and is healthy
@@ -4930,6 +4931,9 @@ function initLibraryMutationEngine() {
       state.libraryMutationPending = count;
       refreshLibraryMutationControls();
     },
+    onStarCountDelta: (delta) => {
+      adjustLibraryStarredCount(delta);
+    },
   });
 }
 
@@ -7488,8 +7492,54 @@ function resetPhotoWindowState() {
   state.currentOffset = 0;
   state.photosNextCursor = null;
   state.photoTotalCount = 0;
+  state.libraryStarredCount = null;
   state.hasMore = false;
   state.loadingMore = false;
+}
+
+function setLibraryStarredCount(count) {
+  const normalized = Math.max(0, Number(count) || 0);
+  if (state.libraryStarredCount === normalized) {
+    return;
+  }
+  state.libraryStarredCount = normalized;
+  updateUtilityMenuAvailability();
+}
+
+function adjustLibraryStarredCount(delta) {
+  if (!Number.isFinite(delta) || delta === 0) {
+    return;
+  }
+  const current = state.libraryStarredCount;
+  if (current === null) {
+    void refreshLibraryStarredCount();
+    return;
+  }
+  setLibraryStarredCount(current + delta);
+}
+
+async function refreshLibraryStarredCount() {
+  if (!state.hasDatabase || !getViewCapabilities().star) {
+    setLibraryStarredCount(0);
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/photos/favorites');
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    const count = Number(payload.count);
+    if (Number.isFinite(count)) {
+      setLibraryStarredCount(count);
+      return;
+    }
+    const photos = Array.isArray(payload.photos) ? payload.photos : [];
+    setLibraryStarredCount(photos.length);
+  } catch (error) {
+    console.error('❌ Failed to refresh starred count:', error);
+  }
 }
 
 function isRecentImportsFilterActive() {
@@ -7588,6 +7638,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     },
     onReady: (index) => {
       updateUtilityMenuAvailability();
+      void refreshLibraryStarredCount();
       if (reconcileCatalogEmptyAfterGridLoad(index)) {
         return;
       }
@@ -10066,6 +10117,168 @@ async function undoImport() {
 
 let utilitiesMenuLoaded = false;
 
+function createClearStarsSnapshot(starredPhotos) {
+  return {
+    entries: starredPhotos.map((photo) => ({
+      photoId: Number(photo.id),
+      previousRating: photo.rating === 5 ? 5 : null,
+    })),
+  };
+}
+
+function applyClearStarsOptimistically(snapshot) {
+  const photoIds = snapshot.entries.map((entry) => entry.photoId);
+  LibraryMutation.applyBulkStarClear(photoIds);
+  setLibraryStarredCount(0);
+
+  if (state.activeFilters.starred) {
+    showFilterZeroState();
+    return;
+  }
+
+  if (!VirtualGrid.isActive()) {
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+  }
+}
+
+function restoreClearStarsOptimism(snapshot, photoIds = null) {
+  if (!snapshot?.entries?.length) {
+    return;
+  }
+
+  const revertSet =
+    photoIds === null ? null : new Set(photoIds.map((id) => Number(id)));
+  const entries = snapshot.entries.filter(
+    (entry) => revertSet === null || revertSet.has(entry.photoId),
+  );
+  if (!entries.length) {
+    return;
+  }
+
+  LibraryMutation.revertBulkStarClear(entries);
+  adjustLibraryStarredCount(
+    entries.filter((entry) => entry.previousRating === 5).length,
+  );
+
+  if (state.activeFilters.starred) {
+    void applyPhotoFilters();
+    return;
+  }
+
+  if (!VirtualGrid.isActive()) {
+    renderPhotoGrid(getFilteredPhotos(state.photos), false);
+    setupThumbnailLazyLoading();
+  }
+}
+
+async function clearAllStars() {
+  if (!getViewCapabilities().star || !state.hasDatabase) {
+    return;
+  }
+
+  let favoritesPayload;
+  try {
+    const response = await fetch('/api/photos/favorites');
+    if (!response.ok) {
+      showToast('Failed to load starred photos', null);
+      return;
+    }
+    favoritesPayload = await response.json();
+  } catch (error) {
+    console.error('❌ Failed to load starred photos:', error);
+    showToast('Failed to load starred photos', null);
+    return;
+  }
+
+  const starredPhotos = Array.isArray(favoritesPayload.photos)
+    ? favoritesPayload.photos
+    : [];
+  const starredCount = favoritesPayload.count ?? starredPhotos.length;
+  if (!starredCount) {
+    showToast('No starred photos', null);
+    return;
+  }
+
+  showDialogOld(
+    'Clear stars',
+    starredCount === 1
+      ? 'Remove the star from 1 photo across your library?'
+      : `Remove stars from all ${starredCount} starred photos in your library?`,
+    () => {
+      void runClearAllStars(starredPhotos);
+    },
+    'Clear stars',
+  );
+}
+
+async function runClearAllStars(starredPhotos) {
+  const snapshot = createClearStarsSnapshot(starredPhotos);
+
+  try {
+    await enqueueLibraryMutation({
+      applyOptimistic: () => {
+        applyClearStarsOptimistically(snapshot);
+      },
+      revertOptimistic: () => {
+        restoreClearStarsOptimism(snapshot);
+      },
+      execute: async () => {
+        const response = await fetch('/api/photos/bulk-favorite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ all: true, rating: 0 }),
+        });
+
+        if (!response.ok) {
+          const errorPayload = await response.json().catch(() => ({}));
+          return {
+            ok: false,
+            error: errorPayload.error || `Clear stars failed: ${response.status}`,
+          };
+        }
+
+        const result = await response.json();
+        return { ok: true, ...result };
+      },
+      onSuccess: async (result) => {
+        const failedIds = (result.errors || [])
+          .map((entry) => Number(entry.photo_id))
+          .filter((photoId) => Number.isFinite(photoId));
+
+        if (failedIds.length > 0) {
+          restoreClearStarsOptimism(snapshot, failedIds);
+        }
+
+        await syncGridAfterHistogramChange();
+        updateFilterChipUI();
+        void refreshLibraryStarredCount();
+
+        const successCount = result.success_count ?? 0;
+        const errorCount = result.error_count ?? failedIds.length;
+        if (successCount > 0 && errorCount > 0) {
+          showToast(
+            `Cleared stars on ${successCount} photo${successCount !== 1 ? 's' : ''}; ${errorCount} failed`,
+            null,
+          );
+        } else if (successCount > 0) {
+          showToast(
+            `Cleared stars on ${successCount} photo${successCount !== 1 ? 's' : ''}`,
+            null,
+          );
+        } else if (errorCount > 0) {
+          showToast('Failed to clear stars', null);
+        } else {
+          showToast('No starred photos', null);
+        }
+      },
+      failureToast: 'Failed to clear stars',
+    });
+  } catch (error) {
+    console.error('❌ Clear stars error:', error);
+  }
+}
+
 /**
  * Load utilities menu fragment
  */
@@ -10082,11 +10295,19 @@ async function loadUtilitiesMenu() {
     document.body.insertAdjacentHTML('beforeend', html);
 
     // Wire up menu items
+    const clearStarsBtn = document.getElementById('clearStarsBtn');
     const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
     const switchLibraryBtn = document.getElementById('switchLibraryBtn');
     const convertToLibraryBtn = document.getElementById('convertToLibraryBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
     const closeLibraryBtn = document.getElementById('closeLibraryBtn');
+
+    if (clearStarsBtn) {
+      clearStarsBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        void clearAllStars();
+      });
+    }
 
     if (downloadSelectedBtn) {
       downloadSelectedBtn.addEventListener('click', () => {
@@ -10168,6 +10389,7 @@ async function loadUtilitiesMenu() {
 
     // Update menu item availability
     updateUtilityMenuAvailability();
+    void refreshLibraryStarredCount();
   } catch (error) {
     console.error('❌ Failed to load utilities menu:', error);
   }
@@ -10194,6 +10416,7 @@ async function toggleUtilitiesMenu() {
   } else {
     // Update menu availability before showing
     updateUtilityMenuAvailability();
+    void refreshLibraryStarredCount();
 
     // Position menu below the button
     const btnRect = utilitiesBtn.getBoundingClientRect();
@@ -10235,6 +10458,11 @@ function updateUtilityMenuAvailability() {
   const hasPhotos = state.photos && state.photos.length > 0;
   const caps = getViewCapabilities();
   const hasSelectedPhotos = state.selectedPhotos.size > 0;
+
+  enableMenuItem(
+    'clearStarsBtn',
+    hasDatabase && caps.star && (state.libraryStarredCount ?? 0) > 0,
+  );
 
   const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
   if (downloadSelectedBtn) {

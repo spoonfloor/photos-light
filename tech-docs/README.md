@@ -66,6 +66,7 @@ This folder contains deep-dive technical documentation, implementation notes, an
 
 ### Architecture & cleanup
 
+- `GREENFIELD_LIBRARY_DESIGN.md` - **Target architecture:** blue-sky rebuild design (three layers, overlay event log, stable photo_id, migration/agent legibility)
 - `LIBRARY_MUTATION_CONTRACT.md` - **Canonical:** file-as-SOT mutation contract (optimistic UI, server pipeline, grid sync tiers, execution order)
 - `ARCHITECTURE_FRAGMENTATION_AUDIT.md` - Dead code removal log, fragmentation hotspots, restore instructions (`cleanup/dead-code` branch)
 - `GRID_HYDRATION_BUGS.md` - **Open:** stale grid after Clean, bulk date edit thumbnail 404s (session cache + reload path)

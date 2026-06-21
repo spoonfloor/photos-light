@@ -270,7 +270,8 @@ class TestGridHandoffContract(unittest.TestCase):
         refresh_body = _function_body(body, "refreshMonthIndex")
         self.assertIn("return transitionCatalogView", apply_filter_body)
         self.assertIn("return transitionCatalogView", refresh_body)
-        self.assertIn("function beginCatalogViewTransition", body)
+        self.assertIn("function enterUnknownLayoutPhase", body)
+        self.assertIn("function exitUnknownLayoutPhase", body)
         self.assertIn("function applySortOrderInstant", body)
 
     def test_filter_zero_keeps_virtual_grid_alive(self):
@@ -310,13 +311,27 @@ class TestGridHandoffContract(unittest.TestCase):
         self.assertIn("onExitTrash", hooks_body)
         self.assertIn("onCatalogEmptyMode", hooks_body)
 
-    def test_filter_fetch_skips_comfort_strip(self):
+    def test_filter_fetch_shows_comfort_before_index(self):
         body = _function_body(self.virtual_grid_js, "transitionCatalogView")
         fetch_at = body.find("await fetch(")
         self.assertGreaterEqual(fetch_at, 0)
-        has_filter_branch = body.find("if (!hasCatalogFilter)")
-        self.assertGreaterEqual(has_filter_branch, 0)
-        self.assertLess(has_filter_branch, fetch_at)
+        pre_fetch = body[:fetch_at]
+        comfort_at = pre_fetch.find("enterUnknownLayoutPhase(")
+        self.assertGreaterEqual(comfort_at, 0)
+
+    def test_unknown_layout_phase_is_comfort_only(self):
+        sync_body = _function_body(self.virtual_grid_js, "syncComfortAndContent")
+        self.assertIn("isUnknownLayoutPhase()", sync_body)
+        self.assertIn("paintUnknownLayoutOnly", sync_body)
+        enter_body = _function_body(self.virtual_grid_js, "enterUnknownLayoutPhase")
+        self.assertIn("gridPhase = GRID_PHASE.UNKNOWN", enter_body)
+        self.assertNotIn("mountPlaceholderSection", enter_body)
+        apply_filters_body = _function_body(self.main_js, "applyPhotoFilters")
+        self.assertNotIn("enterUnknownLayoutPhase", apply_filters_body)
+        transition_body = _function_body(self.virtual_grid_js, "transitionCatalogView")
+        fetch_at = transition_body.find("await fetch(")
+        self.assertGreaterEqual(fetch_at, 0)
+        self.assertIn("enterUnknownLayoutPhase(", transition_body[:fetch_at])
 
     def test_filter_fetch_keeps_zero_overlay_until_result(self):
         body = _function_body(self.virtual_grid_js, "transitionCatalogView")

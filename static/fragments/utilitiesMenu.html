@@ -1,9 +1,19 @@
 <!-- Utilities Dropdown Menu — Rebuild thumbnails removed from UI Apr 2026 (capability kept: API + JS below). -->
 <div class="utilities-menu" id="utilitiesMenu" style="display: none">
+  <button class="utilities-menu-item" id="clearStarsBtn">
+    <span class="utilities-menu-icon-composite" aria-hidden="true">
+      <span class="material-symbols-outlined">hide_source</span>
+      <span class="material-symbols-outlined filled">star</span>
+    </span>
+    <span>Clear stars</span>
+  </button>
+
   <button class="utilities-menu-item" id="downloadSelectedBtn">
     <span class="material-symbols-outlined">download</span>
     <span>Download</span>
   </button>
+
+  <div class="utilities-menu-divider"></div>
 
   <button class="utilities-menu-item" id="switchLibraryBtn">
     <span class="material-symbols-outlined">folder_open</span>
@@ -29,7 +39,7 @@
 
   <button class="utilities-menu-item" id="viewTrashBtn">
     <span class="material-symbols-outlined">delete</span>
-    <span>Trash</span>
+    <span>Open trash</span>
   </button>
 
   <button class="utilities-menu-item" id="restoreAllTrashBtn" hidden>

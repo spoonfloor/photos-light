@@ -242,10 +242,43 @@ const LibraryMutation = (() => {
     }
     const slot = getOrCreateSlot(photoId);
     const current = effectiveTarget(slot);
-    slot.targetRating = isStarred(current) ? null : 5;
+    const wasStarred = isStarred(current);
+    slot.targetRating = wasStarred ? null : 5;
     slot.generation += 1;
+    hooks.onStarCountDelta?.(wasStarred ? -1 : 1);
     applyStarUi(photoId, slot.targetRating);
     enqueuePhotoId(photoId);
+  }
+
+  function applyBulkStarClear(photoIds) {
+    if (!photoIds?.length) {
+      return;
+    }
+    for (const photoId of photoIds) {
+      const slot = getOrCreateSlot(photoId);
+      slot.targetRating = null;
+      slot.generation += 1;
+      removePhotoFromQueue(photoId);
+      applyStarUi(photoId, null);
+    }
+  }
+
+  function revertBulkStarClear(entries) {
+    if (!entries?.length) {
+      return;
+    }
+    for (const entry of entries) {
+      const photoId = entry.photoId;
+      const previousRating = normalizeRating(entry.previousRating);
+      let slot = photoWriteSlots.get(photoId);
+      if (slot) {
+        slot.targetRating = undefined;
+        slot.confirmedRating = previousRating;
+        slot.generation += 1;
+        removePhotoFromQueue(photoId);
+      }
+      applyStarUi(photoId, previousRating);
+    }
   }
 
   function isLightboxStarFilled(photoId) {
@@ -407,6 +440,7 @@ const LibraryMutation = (() => {
 
     slot.targetRating = undefined;
     applyStarUi(photoId, slot.confirmedRating);
+    hooks.onStarCountDelta?.(isStarred(slot.confirmedRating) ? 1 : -1);
     removePhotoFromQueue(photoId);
     hooks.showToast?.(error.message || 'Failed to update star', null);
   }
@@ -793,6 +827,8 @@ const LibraryMutation = (() => {
   return {
     init,
     togglePhotoStar,
+    applyBulkStarClear,
+    revertBulkStarClear,
     enqueueGenericJob,
     enqueueDateEditJob,
     enqueuePhotoRotate,

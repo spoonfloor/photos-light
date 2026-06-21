@@ -322,6 +322,58 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
         self.assertEqual(row["rating"], 5)
         self.assertFalse(os.path.exists(old_full_path))
 
+    def test_bulk_favorite_all_clears_starred_photos(self):
+        date_taken = "2026:04:12 09:30:15"
+        starred_id, starred_rel, starred_full, _ = self._insert_photo(
+            file_bytes=b"starred-photo",
+            date_taken=date_taken,
+            rating=5,
+        )
+        unstarred_id, _, unstarred_full, _ = self._insert_photo(
+            file_bytes=b"plain-photo",
+            date_taken=date_taken,
+            rating=None,
+        )
+
+        with patch("file_operations.extract_exif_rating", side_effect=[5, None]), patch(
+            "file_operations.strip_exif_rating",
+            return_value=True,
+        ) as strip_mock:
+            response = self.client.post(
+                "/api/photos/bulk-favorite",
+                json={"all": True, "rating": 0},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["success_count"], 1)
+        self.assertEqual(payload["error_count"], 0)
+        strip_mock.assert_called_once_with(starred_full)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        starred_row = conn.execute(
+            "SELECT rating FROM photos WHERE id = ?",
+            (starred_id,),
+        ).fetchone()
+        unstarred_row = conn.execute(
+            "SELECT rating FROM photos WHERE id = ?",
+            (unstarred_id,),
+        ).fetchone()
+        conn.close()
+
+        self.assertIsNone(starred_row["rating"])
+        self.assertIsNone(unstarred_row["rating"])
+        self.assertTrue(os.path.exists(unstarred_full))
+
+    def test_bulk_favorite_all_requires_rating_zero(self):
+        response = self.client.post(
+            "/api/photos/bulk-favorite",
+            json={"all": True, "rating": 5},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("rating 0", response.get_json()["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

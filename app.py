@@ -6585,7 +6585,8 @@ def bulk_favorite():
     POST body:
         {
             "photo_ids": [1, 2, 3],
-            "rating": 5  // 0-5 (5 = favorite, 0 = unfavorite)
+            "rating": 5,  // 0-5 (5 = favorite, 0 = unfavorite)
+            "all": false    // when true with rating 0, clears stars for entire library
         }
     
     Returns:
@@ -6596,14 +6597,23 @@ def bulk_favorite():
         }
     """
     try:
-        data = request.json
-        photo_ids = data.get('photo_ids', [])
+        data = request.json or {}
+        photo_ids = data.get('photo_ids') or []
         rating = int(data.get('rating', 5))
+        clear_all = bool(data.get('all'))
         
         if not 0 <= rating <= 5:
             return jsonify({'error': 'Rating must be 0-5'}), 400
-        
-        if not photo_ids:
+
+        if clear_all:
+            if rating != 0:
+                return jsonify({'error': 'all=true requires rating 0'}), 400
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM photos WHERE rating = 5")
+            photo_ids = [row['id'] for row in cursor.fetchall()]
+            conn.close()
+        elif not photo_ids:
             return jsonify({'error': 'No photo_ids provided'}), 400
         
         success_count = 0
