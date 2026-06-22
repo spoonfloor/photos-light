@@ -4399,9 +4399,28 @@ function createDateEditOptimisticSnapshot(edits) {
   };
 }
 
-function applyDateEditOptimistically(snapshot) {
-  let scrollTargetMonth = null;
+function dateEditClusterMonth(edits, monthField) {
+  if (!edits?.length) {
+    return null;
+  }
+  const months = new Set(
+    edits.map((edit) => edit[monthField]).filter(Boolean),
+  );
+  return months.size === 1 ? [...months][0] : null;
+}
 
+async function scrollDateEditBatchToHome(edits, monthField) {
+  if (!edits?.length || typeof VirtualGrid === 'undefined' || !VirtualGrid.isActive()) {
+    return false;
+  }
+  const photoIds = edits.map((edit) => edit.photoId);
+  return VirtualGrid.scrollBatchToHome(
+    photoIds,
+    dateEditClusterMonth(edits, monthField),
+  );
+}
+
+function applyDateEditOptimistically(snapshot) {
   snapshot.edits.forEach((edit) => {
     patchLibraryPhotoFields(edit.photoId, edit.newFields);
 
@@ -4423,9 +4442,6 @@ function applyDateEditOptimistically(snapshot) {
         VirtualGrid.invalidateMonth(edit.newMonth);
         VirtualGrid.scheduleSync();
       }
-      if (!scrollTargetMonth) {
-        scrollTargetMonth = edit.newMonth;
-      }
       return;
     }
 
@@ -4438,12 +4454,6 @@ function applyDateEditOptimistically(snapshot) {
     renderPhotoGrid(getFilteredPhotos(state.photos), false);
     setupThumbnailLazyLoading();
   }
-
-  if (scrollTargetMonth && VirtualGrid.isActive()) {
-    VirtualGrid.scrollToMonth(scrollTargetMonth);
-  }
-
-  return scrollTargetMonth;
 }
 
 function restoreDateEditOptimism(snapshot, photoIds = null) {
@@ -5071,6 +5081,10 @@ async function finalizeDateEditSettlement(result, options = {}) {
   confirmDateEditFromServer(confirmedPhotos);
   await populateDatePicker();
   hideDateChangeProgressOverlay();
+
+  if (snapshot?.edits?.length) {
+    await scrollDateEditBatchToHome(snapshot.edits, 'newMonth');
+  }
 
   if (clearSelection) {
     deselectAllPhotos();
@@ -9329,6 +9343,18 @@ async function deletePhotos(photoIds) {
   }
 }
 
+function undoDateEditClusterMonth(originalDates) {
+  if (!originalDates?.length) {
+    return null;
+  }
+  const months = new Set(
+    originalDates
+      .map((entry) => monthKeyFromExifDate(entry.originalDate))
+      .filter(Boolean),
+  );
+  return months.size === 1 ? [...months][0] : null;
+}
+
 /**
  * Undo date edit by restoring original dates
  */
@@ -9350,6 +9376,14 @@ async function undoDateEdit(originalDates) {
 
     if (allSucceeded) {
       await syncGridAfterHistogramChange();
+
+      const photoIds = originalDates.map((entry) => entry.id);
+      if (typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive()) {
+        await VirtualGrid.scrollBatchToHome(
+          photoIds,
+          undoDateEditClusterMonth(originalDates),
+        );
+      }
 
       showToast('Date change undone', null);
     } else {

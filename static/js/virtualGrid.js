@@ -3019,15 +3019,15 @@ const VirtualGrid = (() => {
     };
   }
 
-  /** First photo in current catalog order among the given ids. */
-  async function resolveFirstCatalogPhotoRowAnchor(photoIds) {
+  /** First photo in catalog order among ids, optionally limited to one month. */
+  async function resolveFirstCatalogPhotoRowAnchor(photoIds, monthHint = null) {
     if (!layout?.sections || !photoIds?.length) {
       return null;
     }
 
     let bestGlobalIndex = null;
     for (const rawId of photoIds) {
-      const globalIndex = await resolveGlobalIndexForPhotoId(rawId);
+      const globalIndex = await resolveGlobalIndexForPhotoId(rawId, monthHint);
       if (globalIndex === null) {
         continue;
       }
@@ -3048,33 +3048,17 @@ const VirtualGrid = (() => {
     return applyGridScrollAnchor(GridScrollAnchor.homeRowAnchor(month, rowIndex));
   }
 
+  /** Batch → first id in catalog order at home row; monthHint scopes to one cluster. */
+  async function scrollBatchToHome(photoIds, monthHint = null) {
+    if (!isActive() || !photoIds?.length || !layout || layout.provisional) {
+      return false;
+    }
+    const row = await resolveFirstCatalogPhotoRowAnchor(photoIds, monthHint);
+    return row ? scrollRowToHome(row) : false;
+  }
+
   async function scrollPhotosToHome(photoIds) {
-    if (!isActive()) {
-      warnScrollAnchor('scroll skipped: virtual grid inactive');
-      return false;
-    }
-    if (!photoIds?.length) {
-      warnScrollAnchor('scroll skipped: no photo ids');
-      return false;
-    }
-    if (!layout || layout.provisional) {
-      warnScrollAnchor('scroll skipped: layout not ready', {
-        provisional: Boolean(layout?.provisional),
-      });
-      return false;
-    }
-    const row = await resolveFirstCatalogPhotoRowAnchor(photoIds);
-    if (!row) {
-      warnScrollAnchor('scroll skipped: photo row not found in catalog', {
-        photoIds,
-      });
-      return false;
-    }
-    const applied = scrollRowToHome(row);
-    if (!applied) {
-      warnScrollAnchor('scroll apply failed', { row });
-    }
-    return applied;
+    return scrollBatchToHome(photoIds);
   }
 
   function isActive() {
@@ -3098,6 +3082,7 @@ const VirtualGrid = (() => {
     jumpToMonth,
     scrollToMonth,
     scrollRowToHome,
+    scrollBatchToHome,
     scrollPhotosToHome,
     resolvePhotoRowAnchor,
     invalidateMonth,
