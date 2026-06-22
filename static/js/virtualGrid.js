@@ -274,33 +274,90 @@ const VirtualGrid = (() => {
     return enterFilterZeroMode(indexPayload, filterOptions);
   }
 
-  async function fetchMonthPhotos(monthKey) {
-    if (monthCache.has(monthKey)) {
-      return monthCache.get(monthKey);
+  function gridFilterCacheSuffix({ starred = false, video = false, importSets = null } = {}) {
+    const flags = [];
+    if (starred) {
+      flags.push('starred');
     }
-    if (monthInflight.has(monthKey)) {
-      return monthInflight.get(monthKey);
+    if (video) {
+      flags.push('video');
+    }
+    if (importSets) {
+      flags.push(`import:${importSets}`);
+    }
+    return flags.length ? flags.join(',') : 'all';
+  }
+
+  function activeCatalogFilterOptions() {
+    if (monthIndex?.filtered) {
+      return {
+        starred: Boolean(monthIndex.starred),
+        video: Boolean(monthIndex.video),
+        importSets: monthIndex.import_sets ?? null,
+      };
+    }
+    const fromHooks = hooks.getCatalogFilterOptions?.();
+    if (fromHooks && (fromHooks.starred || fromHooks.video || fromHooks.importSets)) {
+      return fromHooks;
+    }
+    return { starred: false, video: false, importSets: null };
+  }
+
+  function monthCacheKey(monthKey, filterOptions = activeCatalogFilterOptions()) {
+    return `${monthKey}|${gridFilterCacheSuffix(filterOptions)}`;
+  }
+
+  function bareMonthFromCacheKey(cacheKey) {
+    const pipe = cacheKey.indexOf('|');
+    return pipe === -1 ? cacheKey : cacheKey.slice(0, pipe);
+  }
+
+  function buildMonthPhotosUrl(
+    monthKey,
+    filterOptions = activeCatalogFilterOptions(),
+  ) {
+    const params = new URLSearchParams({
+      month: monthKey,
+      sort: librarySortOrder(),
+    });
+    if (filterOptions.starred) {
+      params.set('starred', '1');
+    }
+    if (filterOptions.video) {
+      params.set('video', '1');
+    }
+    if (filterOptions.importSets) {
+      params.set('import_sets', String(filterOptions.importSets));
+    }
+    return `${gridCatalogApiRoot()}/month?${params.toString()}`;
+  }
+
+  async function fetchMonthPhotos(monthKey) {
+    const cacheKey = monthCacheKey(monthKey);
+    if (monthCache.has(cacheKey)) {
+      return monthCache.get(cacheKey);
+    }
+    if (monthInflight.has(cacheKey)) {
+      return monthInflight.get(cacheKey);
     }
 
     const promise = (async () => {
-      const response = await fetch(
-        `${gridCatalogApiRoot()}/month?month=${encodeURIComponent(monthKey)}&sort=${librarySortOrder()}`,
-      );
+      const response = await fetch(buildMonthPhotosUrl(monthKey));
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || `Failed to load month ${monthKey}`);
       }
       const photos = data.photos || [];
-      monthCache.set(monthKey, photos);
+      monthCache.set(cacheKey, photos);
       mergePhotosIntoState(photos);
       return photos;
     })();
 
-    monthInflight.set(monthKey, promise);
+    monthInflight.set(cacheKey, promise);
     try {
       return await promise;
     } finally {
-      monthInflight.delete(monthKey);
+      monthInflight.delete(cacheKey);
     }
   }
 
@@ -467,7 +524,7 @@ const VirtualGrid = (() => {
       mountedMonths.add(monthKey);
       committedMonths.add(monthKey);
       if (existing.classList.contains('virtual-month-placeholder')) {
-        const photos = monthCache.get(monthKey);
+        const photos = monthCache.get(monthCacheKey(monthKey));
         if (photos) {
           hydrateMonthSection(monthKey, section, photos);
         }
@@ -475,7 +532,7 @@ const VirtualGrid = (() => {
       return true;
     }
 
-    const photos = monthCache.get(monthKey);
+    const photos = monthCache.get(monthCacheKey(monthKey));
     if (!photos) {
       return false;
     }
@@ -708,7 +765,7 @@ const VirtualGrid = (() => {
     mountBuffer.forEach((section) => {
       if (
         hydratedMonths.has(section.month) &&
-        monthCache.has(section.month) &&
+        monthCache.has(monthCacheKey(section.month)) &&
         mountHydratedMonthSection(section)
       ) {
         return;
@@ -1377,7 +1434,11 @@ const VirtualGrid = (() => {
   }
 
   function invalidateMonth(monthKey) {
-    monthCache.delete(monthKey);
+    for (const cacheKey of [...monthCache.keys()]) {
+      if (bareMonthFromCacheKey(cacheKey) === monthKey) {
+        monthCache.delete(cacheKey);
+      }
+    }
     committedMonths.delete(monthKey);
     hydratedMonths.delete(monthKey);
     if (mountedMonths.has(monthKey)) {
@@ -1433,10 +1494,13 @@ const VirtualGrid = (() => {
   }
 
   function findCachedPhoto(photoId) {
-    for (const [monthKey, photos] of monthCache.entries()) {
+    for (const [cacheKey, photos] of monthCache.entries()) {
       const photo = photos.find((item) => item.id === photoId);
       if (photo) {
-        return { monthKey, photo, photos };
+        const monthKey = cacheKey.includes('|')
+          ? cacheKey.slice(0, cacheKey.indexOf('|'))
+          : cacheKey;
+        return { monthKey, cacheKey, photo, photos };
       }
     }
     return null;
@@ -1457,16 +1521,18 @@ const VirtualGrid = (() => {
   }
 
   function insertPhotoInMonthCache(monthKey, photo) {
-    const existing = monthCache.get(monthKey) || [];
+    const cacheKey = monthCacheKey(monthKey);
+    const existing = monthCache.get(cacheKey) || [];
     const without = existing.filter((entry) => entry.id !== photo.id);
     const next = sortMonthPhotos([...without, photo]);
-    monthCache.set(monthKey, next);
+    monthCache.set(cacheKey, next);
     return next;
   }
 
   async function fetchMonthPhotosFresh(monthKey) {
-    monthCache.delete(monthKey);
-    monthInflight.delete(monthKey);
+    const cacheKey = monthCacheKey(monthKey);
+    monthCache.delete(cacheKey);
+    monthInflight.delete(cacheKey);
     return fetchMonthPhotos(monthKey);
   }
 
@@ -1474,10 +1540,10 @@ const VirtualGrid = (() => {
     try {
       const serverPhotos = await fetchMonthPhotosFresh(newMonth);
       const without = serverPhotos.filter((entry) => entry.id !== photoId);
-      monthCache.set(newMonth, sortMonthPhotos([...without, movedPhoto]));
+      monthCache.set(monthCacheKey(newMonth), sortMonthPhotos([...without, movedPhoto]));
     } catch (error) {
       console.error(`Failed to hydrate ${newMonth} after month move:`, error);
-      monthCache.set(newMonth, [movedPhoto]);
+      monthCache.set(monthCacheKey(newMonth), [movedPhoto]);
     }
     rebuildMountedHydratedMonth(newMonth);
     scheduleSync();
@@ -1614,7 +1680,7 @@ const VirtualGrid = (() => {
       return true;
     }
 
-    const photos = monthCache.get(monthKey) || [];
+    const photos = monthCache.get(monthCacheKey(monthKey)) || [];
     const visiblePhotos = visibleMonthPhotos(photos);
     if (!visiblePhotos.length) {
       unmountMonth(monthKey);
@@ -1646,26 +1712,31 @@ const VirtualGrid = (() => {
     const monthCounts = new Map();
     const affectedMonths = new Set();
 
-    for (const [monthKey, photos] of monthCache.entries()) {
+    for (const [cacheKey, photos] of monthCache.entries()) {
       const removedPhotos = photos.filter((photo) => idSet.has(photo.id));
       if (!removedPhotos.length) {
         continue;
       }
 
-      affectedMonths.add(monthKey);
+      const bareMonth = bareMonthFromCacheKey(cacheKey);
+      affectedMonths.add(bareMonth);
       token.months.push({
-        monthKey,
+        monthKey: bareMonth,
+        cacheKey,
         beforePhotos: [...photos],
         removedPhotos,
       });
       monthCache.set(
-        monthKey,
+        cacheKey,
         photos.filter((photo) => !idSet.has(photo.id)),
       );
 
       const visibleRemoved = removedPhotos.filter(isPhotoVisibleInCurrentIndex).length;
       if (visibleRemoved > 0) {
-        monthCounts.set(monthKey, visibleRemoved);
+        monthCounts.set(
+          bareMonth,
+          (monthCounts.get(bareMonth) || 0) + visibleRemoved,
+        );
       }
     }
 
@@ -1707,13 +1778,14 @@ const VirtualGrid = (() => {
     const monthCounts = new Map();
     const affectedMonths = new Set();
 
-    token.months.forEach(({ monthKey, beforePhotos, removedPhotos }) => {
+    token.months.forEach(({ monthKey, cacheKey, beforePhotos, removedPhotos }) => {
       const restorePhotos = removedPhotos.filter((photo) => idSet.has(photo.id));
       if (!restorePhotos.length) {
         return;
       }
 
-      const currentPhotos = monthCache.get(monthKey) || [];
+      const bucketKey = cacheKey || monthCacheKey(monthKey);
+      const currentPhotos = monthCache.get(bucketKey) || [];
       const currentIds = new Set(currentPhotos.map((photo) => photo.id));
       const restoreIds = new Set(restorePhotos.map((photo) => photo.id));
       const beforeIds = new Set(beforePhotos.map((photo) => photo.id));
@@ -1727,7 +1799,7 @@ const VirtualGrid = (() => {
         }
       });
 
-      monthCache.set(monthKey, nextPhotos);
+      monthCache.set(bucketKey, nextPhotos);
       affectedMonths.add(monthKey);
 
       const visibleRestored = restorePhotos.filter(isPhotoVisibleInCurrentIndex).length;
@@ -1770,7 +1842,8 @@ const VirtualGrid = (() => {
 
     const id = Number(photoId);
     let sourceMonth = oldMonth;
-    let sourcePhotos = monthCache.get(oldMonth) || [];
+    let sourceCacheKey = monthCacheKey(sourceMonth);
+    let sourcePhotos = monthCache.get(sourceCacheKey) || [];
     let sourceIndex = sourcePhotos.findIndex((photo) => photo.id === id);
 
     if (sourceIndex === -1) {
@@ -1779,6 +1852,7 @@ const VirtualGrid = (() => {
         return null;
       }
       sourceMonth = cached.monthKey;
+      sourceCacheKey = cached.cacheKey || monthCacheKey(sourceMonth);
       sourcePhotos = cached.photos;
       sourceIndex = sourcePhotos.findIndex((photo) => photo.id === id);
       if (sourceIndex === -1) {
@@ -1789,17 +1863,18 @@ const VirtualGrid = (() => {
     const beforeOldPhotos = [...sourcePhotos];
     const movedPhoto = { ...sourcePhotos[sourceIndex], ...updatedPhoto };
     const afterOldPhotos = sourcePhotos.filter((photo) => photo.id !== id);
-    monthCache.set(sourceMonth, afterOldPhotos);
+    monthCache.set(sourceCacheKey, afterOldPhotos);
 
-    const newMonthPhotos = monthCache.get(newMonth) || [];
+    const newCacheKey = monthCacheKey(newMonth);
+    const newMonthPhotos = monthCache.get(newCacheKey) || [];
     const beforeNewPhotos = [...newMonthPhotos];
     const destCountBefore = monthIndexCount(newMonth);
     let destHydrateAsync = false;
 
-    if (monthCache.has(newMonth)) {
+    if (monthCache.has(newCacheKey)) {
       insertPhotoInMonthCache(newMonth, movedPhoto);
     } else if (destCountBefore === 0) {
-      monthCache.set(newMonth, [movedPhoto]);
+      monthCache.set(newCacheKey, [movedPhoto]);
     } else {
       destHydrateAsync = true;
     }
@@ -1843,8 +1918,8 @@ const VirtualGrid = (() => {
         trigger: GridScrollAnchor.TRIGGER.MUTATION,
         preserveScroll: true,
       })) {
-        monthCache.set(sourceMonth, beforeOldPhotos);
-        monthCache.set(newMonth, beforeNewPhotos);
+        monthCache.set(sourceCacheKey, beforeOldPhotos);
+        monthCache.set(newCacheKey, beforeNewPhotos);
         return null;
       }
     } else {
@@ -1865,7 +1940,10 @@ const VirtualGrid = (() => {
     if (!cached) {
       return false;
     }
-    monthCache.set(cached.monthKey, sortMonthPhotos(cached.photos));
+    monthCache.set(
+      cached.cacheKey || monthCacheKey(cached.monthKey),
+      sortMonthPhotos(cached.photos),
+    );
     return rebuildMountedHydratedMonth(cached.monthKey);
   }
 
@@ -1899,12 +1977,14 @@ const VirtualGrid = (() => {
           return;
         }
 
-        const currentNewPhotos = monthCache.get(newMonth) || [];
+        const newCacheKey = monthCacheKey(newMonth);
+        const oldCacheKey = monthCacheKey(oldMonth);
+        const currentNewPhotos = monthCache.get(newCacheKey) || [];
         monthCache.set(
-          newMonth,
+          newCacheKey,
           currentNewPhotos.filter((photo) => photo.id !== photoId),
         );
-        monthCache.set(oldMonth, [...oldMonthBeforePhotos]);
+        monthCache.set(oldCacheKey, [...oldMonthBeforePhotos]);
         affectedMonths.add(oldMonth);
         affectedMonths.add(newMonth);
 
@@ -2096,7 +2176,7 @@ const VirtualGrid = (() => {
     }
     const columns = targetLayout.columnLayout?.columns ?? 1;
     for (const section of targetLayout.sections) {
-      const photos = monthCache.get(section.month);
+      const photos = monthCache.get(monthCacheKey(section.month));
       if (!photos?.length) {
         continue;
       }
@@ -2120,7 +2200,7 @@ const VirtualGrid = (() => {
     }
     const columns = targetLayout.columnLayout?.columns ?? 1;
     for (const section of targetLayout.sections) {
-      let photos = monthCache.get(section.month);
+      let photos = monthCache.get(monthCacheKey(section.month));
       if (!photos) {
         photos = await fetchMonthPhotos(section.month);
       }
@@ -2146,8 +2226,19 @@ const VirtualGrid = (() => {
     return row ? { ...anchor, row } : anchor;
   }
 
-  function prepareFilterScrollAnchor(anchor) {
-    return anchor;
+  function prepareFilterScrollAnchor(anchor, indexPayload = null) {
+    if (
+      anchor?.kind !== GridScrollAnchor.KIND.DATE_THEN_ROW ||
+      anchor.criteria?.kind !== 'first-visible-after-filter' ||
+      anchor.row ||
+      !indexPayload?.first_month
+    ) {
+      return anchor;
+    }
+    return {
+      ...anchor,
+      row: { month: indexPayload.first_month, rowIndex: 0 },
+    };
   }
 
   function queuePendingScrollAnchor(anchor) {
@@ -2219,7 +2310,10 @@ const VirtualGrid = (() => {
     scrollAnchor,
     { previousScrollTop = 0, maxScrollTop = 0 } = {},
   ) {
-    const anchor = scrollAnchor || { kind: GridScrollAnchor.KIND.NONE };
+    const anchor = prepareFilterScrollAnchor(
+      scrollAnchor || { kind: GridScrollAnchor.KIND.NONE },
+      indexPayload,
+    );
     clearPendingScrollAnchor();
     if (applyGridScrollAnchor(anchor)) {
       return;
@@ -2695,7 +2789,7 @@ const VirtualGrid = (() => {
       }
     } else {
       for (const monthKey of activeMonths) {
-        if (hydratedMonths.has(monthKey) && monthCache.has(monthKey)) {
+        if (hydratedMonths.has(monthKey) && monthCache.has(monthCacheKey(monthKey))) {
           rebuildMountedHydratedMonth(monthKey);
         } else if (mountedMonths.has(monthKey)) {
           unmountMonth(monthKey);
@@ -2754,14 +2848,27 @@ const VirtualGrid = (() => {
     return hooks.filterPhoto ? photos.filter(hooks.filterPhoto) : photos;
   }
 
+  function normalizedPhotoId(photoId) {
+    const normalized = Number(photoId);
+    return Number.isFinite(normalized) ? normalized : null;
+  }
+
   function globalIndexInSection(section, photos, photoId) {
+    const normalizedId = normalizedPhotoId(photoId);
+    if (normalizedId === null) {
+      return null;
+    }
     const localIndex = visibleMonthPhotos(photos).findIndex(
-      (photo) => photo.id === photoId,
+      (photo) => Number(photo.id) === normalizedId,
     );
     if (localIndex === -1) {
       return null;
     }
     return section.globalStart + localIndex;
+  }
+
+  function warnScrollAnchor(reason, detail = {}) {
+    console.warn(`[GridScrollAnchor] ${reason}`, detail);
   }
 
   /** Grid timeline index for a photo (DOM or loaded month cache). */
@@ -2777,7 +2884,7 @@ const VirtualGrid = (() => {
       return null;
     }
     for (const section of layout.sections) {
-      const photos = monthCache.get(section.month);
+      const photos = monthCache.get(monthCacheKey(section.month));
       if (!photos) {
         continue;
       }
@@ -2789,26 +2896,74 @@ const VirtualGrid = (() => {
     return null;
   }
 
-  /** Load month if needed, then resolve grid timeline index. */
-  async function resolveGlobalIndexForPhotoId(photoId, monthKey) {
-    const cached = getGlobalIndexForPhotoId(photoId);
-    if (cached !== null) {
-      return cached;
-    }
-    if (!layout?.sections || !monthKey) {
-      return null;
-    }
-    const section = GridLayout.findSectionForMonth(layout, monthKey);
-    if (!section) {
-      return null;
-    }
+  async function globalIndexInSectionFromFetch(section, monthKey, photoId) {
     let photos;
     try {
       photos = await fetchMonthPhotos(monthKey);
-    } catch {
+    } catch (error) {
+      warnScrollAnchor('month fetch failed during photo lookup', {
+        month: monthKey,
+        photoId,
+        error,
+      });
       return null;
     }
     return globalIndexInSection(section, photos, photoId);
+  }
+
+  /** Load month bucket(s) if needed, then resolve grid timeline index. */
+  async function resolveGlobalIndexForPhotoId(photoId, monthHint = null) {
+    const normalizedId = normalizedPhotoId(photoId);
+    if (normalizedId === null || !layout?.sections?.length) {
+      return null;
+    }
+
+    const cached = getGlobalIndexForPhotoId(normalizedId);
+    if (cached !== null) {
+      return cached;
+    }
+
+    const sections = layout.sections;
+    const hintedMonth =
+      monthHint ||
+      resolvePhotoForSelectionScope(normalizedId)?.month ||
+      null;
+
+    if (hintedMonth) {
+      const hintedSection = GridLayout.findSectionForMonth(layout, hintedMonth);
+      if (hintedSection) {
+        const hintedIndex = await globalIndexInSectionFromFetch(
+          hintedSection,
+          hintedMonth,
+          normalizedId,
+        );
+        if (hintedIndex !== null) {
+          return hintedIndex;
+        }
+      }
+    }
+
+    for (const section of sections) {
+      if (hintedMonth && section.month === hintedMonth) {
+        continue;
+      }
+      const globalIndex = await globalIndexInSectionFromFetch(
+        section,
+        section.month,
+        normalizedId,
+      );
+      if (globalIndex !== null) {
+        return globalIndex;
+      }
+    }
+
+    return null;
+  }
+
+  /** Photo id → { month, rowIndex } for scroll-to-home and related anchors. */
+  async function resolvePhotoRowAnchor(photoId, monthHint = null) {
+    const globalIndex = await resolveGlobalIndexForPhotoId(photoId, monthHint);
+    return globalIndex === null ? null : rowAnchorFromGlobalIndex(globalIndex);
   }
 
   /** Photo at a grid timeline index (loads month bucket on demand). */
@@ -2847,6 +3002,81 @@ const VirtualGrid = (() => {
     return window.__gridPhaseA || null;
   }
 
+  /** Month + row index for a grid timeline index. */
+  function rowAnchorFromGlobalIndex(globalIndex) {
+    if (!layout?.sections || globalIndex == null || globalIndex < 0) {
+      return null;
+    }
+    const section = GridLayout.findSectionForGlobalIndex(layout, globalIndex);
+    if (!section) {
+      return null;
+    }
+    const columns = layout.columnLayout?.columns ?? 1;
+    const localIndex = globalIndex - section.globalStart;
+    return {
+      month: section.month,
+      rowIndex: Math.floor(localIndex / columns),
+    };
+  }
+
+  /** First photo in current catalog order among the given ids. */
+  async function resolveFirstCatalogPhotoRowAnchor(photoIds) {
+    if (!layout?.sections || !photoIds?.length) {
+      return null;
+    }
+
+    let bestGlobalIndex = null;
+    for (const rawId of photoIds) {
+      const globalIndex = await resolveGlobalIndexForPhotoId(rawId);
+      if (globalIndex === null) {
+        continue;
+      }
+      if (bestGlobalIndex === null || globalIndex < bestGlobalIndex) {
+        bestGlobalIndex = globalIndex;
+      }
+    }
+
+    return bestGlobalIndex === null
+      ? null
+      : rowAnchorFromGlobalIndex(bestGlobalIndex);
+  }
+
+  function scrollRowToHome({ month, rowIndex = 0 } = {}) {
+    if (!layout || !month) {
+      return false;
+    }
+    return applyGridScrollAnchor(GridScrollAnchor.homeRowAnchor(month, rowIndex));
+  }
+
+  async function scrollPhotosToHome(photoIds) {
+    if (!isActive()) {
+      warnScrollAnchor('scroll skipped: virtual grid inactive');
+      return false;
+    }
+    if (!photoIds?.length) {
+      warnScrollAnchor('scroll skipped: no photo ids');
+      return false;
+    }
+    if (!layout || layout.provisional) {
+      warnScrollAnchor('scroll skipped: layout not ready', {
+        provisional: Boolean(layout?.provisional),
+      });
+      return false;
+    }
+    const row = await resolveFirstCatalogPhotoRowAnchor(photoIds);
+    if (!row) {
+      warnScrollAnchor('scroll skipped: photo row not found in catalog', {
+        photoIds,
+      });
+      return false;
+    }
+    const applied = scrollRowToHome(row);
+    if (!applied) {
+      warnScrollAnchor('scroll apply failed', { row });
+    }
+    return applied;
+  }
+
   function isActive() {
     const container = getContainer();
     return Boolean(
@@ -2867,6 +3097,9 @@ const VirtualGrid = (() => {
     applyScrollAnchor: (anchor, options) => applyGridScrollAnchor(anchor, options),
     jumpToMonth,
     scrollToMonth,
+    scrollRowToHome,
+    scrollPhotosToHome,
+    resolvePhotoRowAnchor,
     invalidateMonth,
     invalidateAllMonths,
     patchCachedPhotos,

@@ -323,6 +323,29 @@ def _deleted_filter_clause(starred: bool = False, video: bool = False) -> tuple[
     return ' WHERE ' + ' AND '.join(clauses), params
 
 
+def _deleted_row_matches_grid_filter(row, starred: bool = False, video: bool = False) -> bool:
+    if not starred and not video:
+        return True
+    if starred:
+        rating = row['rating']
+        if rating is not None:
+            try:
+                rating = int(rating)
+            except (TypeError, ValueError):
+                rating = None
+        if rating != 5:
+            return False
+    if video and row['file_type'] != 'video':
+        return False
+    return True
+
+
+def _trash_index_first_month(ordered_months, *, starred=False, video=False):
+    if not ordered_months or not (starred or video):
+        return None
+    return ordered_months[0]
+
+
 def build_trash_month_index(
     cursor,
     sort_order: str = 'newest',
@@ -358,6 +381,7 @@ def build_trash_month_index(
         'starred': starred,
         'video': video,
         'filtered': bool(starred or video),
+        'first_month': _trash_index_first_month(ordered, starred=starred, video=video),
     }
 
 
@@ -581,15 +605,20 @@ def fetch_deleted_photos_for_grid_month(
     month_key,
     sort_order,
     *,
+    starred=False,
+    video=False,
     month_key_for_photo_grid: Callable,
     month_bounds_for_sql: Callable,
     photo_grid_select_unused=None,
 ):
-    del photo_grid_select_unused
-    rows = cursor.execute(DELETED_PHOTO_GRID_SELECT).fetchall()
+    del photo_grid_select_unused, month_bounds_for_sql
+    where, params = _deleted_filter_clause(starred, video)
+    rows = cursor.execute(f"{DELETED_PHOTO_GRID_SELECT}{where}", params).fetchall()
     matched = []
     for row in rows:
         if month_key_for_photo_grid(row['date_taken'], row['original_path']) != month_key:
+            continue
+        if not _deleted_row_matches_grid_filter(row, starred=starred, video=video):
             continue
         matched.append(row)
 

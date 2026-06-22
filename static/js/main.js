@@ -9362,6 +9362,17 @@ async function undoDateEdit(originalDates) {
 }
 
 /**
+ * Photo IDs from a restore response that can be moved back to trash via undo.
+ */
+function undoableRestoreIds(result) {
+  if (!result?.processed_ids?.length) {
+    return [];
+  }
+  const merged = new Set((result.merged_ids || []).map(Number));
+  return result.processed_ids.filter((id) => !merged.has(Number(id)));
+}
+
+/**
  * Undo delete by restoring from trash
  */
 async function undoDelete(photoIds) {
@@ -9393,6 +9404,52 @@ async function undoDelete(photoIds) {
     });
   } catch (error) {
     console.error('❌ Restore error:', error);
+  }
+}
+
+/**
+ * Undo restore by moving photos back to trash
+ */
+async function undoRestore(photoIds) {
+  if (!photoIds?.length) {
+    return;
+  }
+
+  try {
+    await enqueueLibraryMutation({
+      applyOptimistic: () => {},
+      revertOptimistic: () => {},
+      execute: async () => {
+        const response = await fetch('/api/photos/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photo_ids: photoIds }),
+        });
+
+        if (!response.ok) {
+          return { ok: false, error: `Delete failed: ${response.status}` };
+        }
+
+        const result = await response.json();
+        return { ok: true, ...result };
+      },
+      onSuccess: async (result) => {
+        await syncGridAfterHistogramChange();
+
+        const count = result.deleted || 0;
+        if (count > 0) {
+          showToast(
+            `Moved ${count} photo${count > 1 ? 's' : ''} back to trash`,
+            null,
+          );
+        } else {
+          showToast('Nothing to undo', null);
+        }
+      },
+      failureToast: 'Undo failed',
+    });
+  } catch (error) {
+    console.error('❌ Undo restore error:', error);
   }
 }
 
@@ -9827,7 +9884,7 @@ function wireImportOverlay() {
   if (doneBtn) {
     doneBtn.addEventListener('click', async () => {
       if (window.importedPhotoIds && window.importedPhotoIds.length > 0) {
-        scrollToImportedPhoto(window.importedPhotoIds);
+        await scrollToImportedPhoto(window.importedPhotoIds);
       }
       await FlowController.dismissOverlay('add', { reloadGrid: false });
     });
@@ -9936,40 +9993,20 @@ async function closeImportOverlay() {
 }
 
 /**
- * Scroll to first imported photo based on current sort order
+ * Scroll to first imported photo row at timeline home (respects current sort order).
+ * @returns {Promise<boolean>} true when scroll was applied
  */
-function scrollToImportedPhoto(photoIds) {
-  if (!photoIds || photoIds.length === 0) return;
-
-  const firstVisibleId = photoIds.find((id) => {
-    return (
-      document.querySelector(`[data-id="${id}"]`) ||
-      document.querySelector(`[data-photo-id="${id}"]`)
-    );
-  });
-
-  if (!firstVisibleId) {
-    return;
+async function scrollToImportedPhoto(photoIds) {
+  if (!photoIds?.length) {
+    return false;
   }
 
-  if (VirtualGrid.isActive()) {
-    const card = document.querySelector(`[data-id="${firstVisibleId}"]`);
-    const monthKey = card?.closest('[data-month]')?.dataset?.month;
-    if (monthKey && VirtualGrid.scrollToMonth(monthKey)) {
-      return;
-    }
+  if (typeof VirtualGrid === 'undefined' || !VirtualGrid.isActive()) {
+    console.warn('[Import] scroll skipped: virtual grid not active');
+    return false;
   }
 
-  const element =
-    document.querySelector(`[data-id="${firstVisibleId}"]`) ||
-    document.querySelector(`[data-photo-id="${firstVisibleId}"]`);
-  if (element) {
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    element.style.outline = '3px solid #6366f1';
-    setTimeout(() => {
-      element.style.outline = '';
-    }, 2000);
-  }
+  return VirtualGrid.scrollPhotosToHome(photoIds);
 }
 
 /**

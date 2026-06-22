@@ -195,10 +195,7 @@ const GridScrollAnchor = (() => {
         return { kind: KIND.NONE };
       }
       if (alignToHomeGridTop) {
-        return {
-          kind: KIND.DATE_THEN_ROW,
-          row: { month, rowIndex: 0 },
-        };
+        return homeRowAnchor(month, 0);
       }
       return {
         kind: KIND.MONTH_HEADER,
@@ -326,6 +323,14 @@ const GridScrollAnchor = (() => {
     }
   }
 
+  /** Align a month row with timeline home (first photo row at scrollTop 0). */
+  function homeRowAnchor(month, rowIndex = 0) {
+    return {
+      kind: KIND.DATE_THEN_ROW,
+      row: { month, rowIndex },
+    };
+  }
+
   function fallbackScrollAfterLayout(indexPayload, layout, helpers = {}) {
     const month = indexPayload?.months?.[0]?.month || null;
     if (month) {
@@ -347,6 +352,7 @@ const GridScrollAnchor = (() => {
     isVideoFilterTransition,
     isSelectionFilterTransition,
     resolveFilterHotRowCriteria,
+    homeRowAnchor,
     resolveScrollAnchor,
     effectiveScrollAnchor,
     applyScrollAnchor,

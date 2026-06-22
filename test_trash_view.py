@@ -112,6 +112,7 @@ class TrashViewTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["restored"], 1)
         self.assertEqual(payload["merged"], 0)
+        self.assertEqual(payload["merged_ids"], [])
         self.assertTrue(
             os.path.exists(os.path.join(self.library_path, "2024/2024-01-15/photo.jpg"))
         )
@@ -164,6 +165,7 @@ class TrashViewTests(unittest.TestCase):
         self.assertEqual(payload["restored"], 1)
         self.assertEqual(payload["merged"], 1)
         self.assertEqual(payload["processed_ids"], [1])
+        self.assertEqual(payload["merged_ids"], [1])
 
         conn = sqlite3.connect(self.db_path)
         deleted_count = conn.execute("SELECT COUNT(*) FROM deleted_photos").fetchone()[0]

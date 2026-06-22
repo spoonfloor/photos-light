@@ -1574,19 +1574,35 @@ def _parse_grid_filter_query_args(starred_arg=None, video_arg=None):
     return starred, video
 
 
+def _photos_grid_filter_clause(starred=False, video=False):
+    """Shared AND-clause for starred/video grid reads (month_index + month hydrate)."""
+    clauses = []
+    params = []
+    if starred:
+        clauses.append('rating = 5')
+    if video:
+        clauses.append('file_type = ?')
+        params.append('video')
+    if not clauses:
+        return '', params
+    return ' AND ' + ' AND '.join(clauses), params
+
+
+def _grid_index_first_month(ordered_months, *, starred=False, video=False):
+    if not ordered_months or not (starred or video):
+        return None
+    return ordered_months[0]
+
+
 def _count_photos_in_import_month(cursor, import_month, *, starred=False, video=False):
-    query = """
+    filter_sql, filter_params = _photos_grid_filter_clause(starred, video)
+    query = f"""
         SELECT COUNT(*) FROM photos
         WHERE date_added IS NOT NULL
           AND substr(date_added, 1, 7) = ?
+          {filter_sql}
     """
-    params = [import_month]
-    if starred:
-        query += ' AND rating = 5'
-    if video:
-        query += ' AND file_type = ?'
-        params.append('video')
-    return cursor.execute(query, params).fetchone()[0]
+    return cursor.execute(query, [import_month, *filter_params]).fetchone()[0]
 
 
 def build_import_set_month_index(cursor, import_set_limit, *, starred=False, video=False):
@@ -1608,6 +1624,7 @@ def build_import_set_month_index(cursor, import_set_limit, *, starred=False, vid
             'count': count,
         })
         total += count
+    ordered_month_keys = [entry['month'] for entry in months]
     return {
         'months': months,
         'total': total,
@@ -1619,6 +1636,11 @@ def build_import_set_month_index(cursor, import_set_limit, *, starred=False, vid
         'import_month_keys': import_months,
         'section_axis': 'import',
         'filtered': True,
+        'first_month': _grid_index_first_month(
+            ordered_month_keys,
+            starred=starred,
+            video=video,
+        ),
     }
 
 
@@ -1639,14 +1661,9 @@ def build_month_index(
             video=video,
         )
 
-    query = 'SELECT date_taken, current_path FROM photos WHERE 1=1'
-    params = []
-    if starred:
-        query += ' AND rating = 5'
-    if video:
-        query += ' AND file_type = ?'
-        params.append('video')
-    rows = cursor.execute(query, params).fetchall()
+    filter_sql, filter_params = _photos_grid_filter_clause(starred, video)
+    query = f'SELECT date_taken, current_path FROM photos WHERE 1=1{filter_sql}'
+    rows = cursor.execute(query, filter_params).fetchall()
     month_counts = defaultdict(int)
     for row in rows:
         month = month_key_for_photo_grid(row['date_taken'], row['current_path'])
@@ -1665,6 +1682,7 @@ def build_month_index(
         'video': video,
         'section_axis': 'date_taken',
         'filtered': bool(starred or video),
+        'first_month': _grid_index_first_month(ordered, starred=starred, video=video),
     }
 
 
@@ -1698,17 +1716,26 @@ def get_cached_month_index(
     return MONTH_INDEX_CACHE[cache_key]
 
 
-def fetch_photos_for_import_month(cursor, import_month, sort_order='newest'):
-    """Load all photos imported in one YYYY-MM bucket, sorted by date taken."""
+def fetch_photos_for_import_month(
+    cursor,
+    import_month,
+    sort_order='newest',
+    *,
+    starred=False,
+    video=False,
+):
+    """Load photos imported in one YYYY-MM bucket, optionally filtered."""
     lower, upper = import_month_bounds_for_sql(import_month)
+    filter_sql, filter_params = _photos_grid_filter_clause(starred, video)
     rows = cursor.execute(
         f"""
         {PHOTO_GRID_SELECT}
         WHERE date_added IS NOT NULL
           AND date_added >= ?
           AND date_added < ?
+          {filter_sql}
         """,
-        (lower, upper),
+        (lower, upper, *filter_params),
     ).fetchall()
 
     dated = [row for row in rows if row['date_taken']]
@@ -1726,15 +1753,35 @@ def fetch_photos_for_import_month(cursor, import_month, sort_order='newest'):
     return [photo_row_to_grid_dict(row) for row in rows]
 
 
-def fetch_photos_for_grid_month(cursor, month_key, sort_order='newest'):
-    """Load all photos belonging to one grid month bucket."""
+def fetch_photos_for_grid_month(
+    cursor,
+    month_key,
+    sort_order='newest',
+    *,
+    starred=False,
+    video=False,
+):
+    """Load photos belonging to one grid month bucket, optionally filtered."""
     import_month = decode_import_cluster_key(month_key)
     if import_month is not None:
-        return fetch_photos_for_import_month(cursor, import_month, sort_order)
+        return fetch_photos_for_import_month(
+            cursor,
+            import_month,
+            sort_order,
+            starred=starred,
+            video=video,
+        )
 
+    filter_sql, filter_params = _photos_grid_filter_clause(starred, video)
     if month_key == 'undated':
         rows = cursor.execute(
-            f"{PHOTO_GRID_SELECT} WHERE date_taken IS NULL ORDER BY current_path ASC, id ASC",
+            f"""
+            {PHOTO_GRID_SELECT}
+            WHERE date_taken IS NULL
+              {filter_sql}
+            ORDER BY current_path ASC, id ASC
+            """,
+            filter_params,
         ).fetchall()
         rows = [
             row for row in rows
@@ -1751,16 +1798,18 @@ def fetch_photos_for_grid_month(cursor, month_key, sort_order='newest'):
             WHERE date_taken IS NOT NULL
               AND date_taken >= ?
               AND date_taken < ?
+              {filter_sql}
             """,
-            (lower, upper),
+            (lower, upper, *filter_params),
         ).fetchall()
         path_rows = cursor.execute(
             f"""
             {PHOTO_GRID_SELECT}
             WHERE date_taken IS NULL
               AND current_path LIKE ?
+              {filter_sql}
             """,
-            (path_prefix + '%',),
+            (path_prefix + '%', *filter_params),
         ).fetchall()
         rows = list(dated_rows) + list(path_rows)
 
@@ -1813,6 +1862,10 @@ def get_photos_for_month():
     try:
         month_key = request.args.get('month')
         sort_order = request.args.get('sort', 'newest')
+        starred, video = _parse_grid_filter_query_args(
+            request.args.get('starred'),
+            request.args.get('video'),
+        )
         if not month_key:
             return jsonify({
                 'error': 'month parameter required (format: YYYY-MM, undated, or import:…)',
@@ -1820,13 +1873,22 @@ def get_photos_for_month():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        photos = fetch_photos_for_grid_month(cursor, month_key, sort_order)
+        photos = fetch_photos_for_grid_month(
+            cursor,
+            month_key,
+            sort_order,
+            starred=starred,
+            video=video,
+        )
         conn.close()
         return jsonify({
             'month': month_key,
             'photos': photos,
             'count': len(photos),
             'sort': sort_order,
+            'starred': starred,
+            'video': video,
+            'filtered': bool(starred or video),
         })
     except Exception as e:
         app.logger.error(f"Error fetching month photos: {e}")
@@ -3083,6 +3145,7 @@ def _restore_photo_ids(cursor, photo_ids, trash_dir):
     restored_count = 0
     merged_count = 0
     processed_ids = []
+    merged_ids = []
     errors = []
 
     for photo_id in photo_ids:
@@ -3103,6 +3166,7 @@ def _restore_photo_ids(cursor, photo_ids, trash_dir):
             restored_count += 1
             if outcome == 'merged':
                 merged_count += 1
+                merged_ids.append(photo_id)
                 print(
                     f"    ✓ Merged with live photo {live_photo_id}",
                     flush=True,
@@ -3119,7 +3183,7 @@ def _restore_photo_ids(cursor, photo_ids, trash_dir):
             print(f"    ❌ Error: {e}")
             error_logger.error(f"Restore failed for photo {photo_id}: {e}")
 
-    return restored_count, merged_count, processed_ids, errors
+    return restored_count, merged_count, processed_ids, merged_ids, errors
 
 
 @app.route('/api/photos/restore', methods=['POST'])
@@ -3139,7 +3203,7 @@ def restore_photos():
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        restored_count, merged_count, processed_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
+        restored_count, merged_count, processed_ids, merged_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
         
         if restored_count > 0:
             commit_row_mutation(conn)
@@ -3153,6 +3217,7 @@ def restore_photos():
             'restored': restored_count,
             'merged': merged_count,
             'processed_ids': processed_ids,
+            'merged_ids': merged_ids,
             'total': len(photo_ids),
         }
 
@@ -3270,6 +3335,10 @@ def get_trash_month_photos():
     try:
         month_key = request.args.get('month')
         sort_order = request.args.get('sort', 'newest')
+        starred, video = _parse_grid_filter_query_args(
+            request.args.get('starred'),
+            request.args.get('video'),
+        )
         if not month_key:
             return jsonify({'error': 'month parameter required (format: YYYY-MM)'}), 400
         helpers = _trash_grid_helpers()
@@ -3279,6 +3348,8 @@ def get_trash_month_photos():
             cursor,
             month_key,
             sort_order,
+            starred=starred,
+            video=video,
             month_key_for_photo_grid=helpers['month_key_for_photo_grid'],
             month_bounds_for_sql=helpers['month_bounds_for_sql'],
         )
@@ -3287,6 +3358,9 @@ def get_trash_month_photos():
             'photos': photos,
             'count': len(photos),
             'month': month_key,
+            'starred': starred,
+            'video': video,
+            'filtered': bool(starred or video),
         }))
     except Exception as e:
         app.logger.error(f"Error fetching trash month photos: {e}")
@@ -3506,7 +3580,7 @@ def restore_all_trash_photos():
             return jsonify({'restored': 0, 'total': 0})
 
         print(f"\n↩️  RESTORE ALL REQUEST: {len(photo_ids)} photos")
-        restored_count, merged_count, processed_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
+        restored_count, merged_count, processed_ids, merged_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
         if restored_count > 0:
             commit_row_mutation(conn)
         else:
@@ -3517,6 +3591,7 @@ def restore_all_trash_photos():
             'restored': restored_count,
             'merged': merged_count,
             'processed_ids': processed_ids,
+            'merged_ids': merged_ids,
             'total': len(photo_ids),
         }
         if errors:

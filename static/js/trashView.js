@@ -475,9 +475,10 @@ const TrashView = (() => {
                 processedIds,
               );
             }
+            const undoIds = undoableRestoreIds(result);
             showToast(
               formatRestoreResultToast(restoredCount, mergedCount),
-              null,
+              undoIds.length ? () => undoRestore(undoIds) : null,
             );
           } else {
             showToast('Nothing to restore', null);
@@ -540,7 +541,11 @@ const TrashView = (() => {
                   mergedCount,
                   { restoreAll: true },
                 );
-                showToast(toastMessage || 'Nothing to restore', null);
+                const undoIds = undoableRestoreIds(result);
+                showToast(
+                  toastMessage || 'Nothing to restore',
+                  undoIds.length ? () => undoRestore(undoIds) : null,
+                );
               },
               failureToast: 'Restore all failed',
             });

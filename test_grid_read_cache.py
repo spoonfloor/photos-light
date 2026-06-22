@@ -204,6 +204,65 @@ class GridReadCacheTest(unittest.TestCase):
         self.assertTrue(video["filtered"])
         self.assertEqual(video["total"], 1)
         self.assertEqual(video["months"], [{"month": "1900-01", "count": 1}])
+        self.assertEqual(video["first_month"], "1900-01")
+
+    def test_month_hydrate_respects_video_filter(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename, current_path, date_taken, content_hash,
+                file_size, file_type, width, height, rating
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "still.jpg",
+                "1900/1900-01-02/still.jpg",
+                "1900:01:02 00:00:00",
+                "hashjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+                100,
+                "photo",
+                1,
+                1,
+                None,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename, current_path, date_taken, content_hash,
+                file_size, file_type, width, height, rating
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "clip.mov",
+                "1900/1900-01-03/clip.mov",
+                "1900:01:03 00:00:00",
+                "hashkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+                100,
+                "video",
+                1,
+                1,
+                None,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        photo_app.invalidate_grid_read_caches()
+
+        unfiltered = self.client.get(
+            "/api/photos/month?month=1900-01&sort=newest",
+        ).get_json()
+        self.assertEqual(unfiltered["count"], 3)
+        self.assertFalse(unfiltered["filtered"])
+
+        video = self.client.get(
+            "/api/photos/month?month=1900-01&sort=newest&video=1",
+        ).get_json()
+        self.assertTrue(video["filtered"])
+        self.assertEqual(video["count"], 1)
+        self.assertEqual(len(video["photos"]), 1)
+        self.assertEqual(video["photos"][0]["file_type"], "video")
 
     def test_toggle_favorite_invalidates_starred_month_index_cache(self):
         photo_dir = os.path.join(self.library_path, "1900", "1900-01-01")
