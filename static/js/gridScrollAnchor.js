@@ -267,13 +267,48 @@ const GridScrollAnchor = (() => {
     return anchor;
   }
 
+  function viewportHeightFromHelpers(helpers = {}) {
+    return (
+      helpers.viewportHeight ??
+      (typeof window !== 'undefined' ? window.innerHeight : null) ??
+      (typeof document !== 'undefined' ? document.documentElement?.clientHeight : null) ??
+      0
+    );
+  }
+
+  function layoutMaxScrollTop(layout, viewportHeight) {
+    return Math.max(0, (layout?.totalHeight ?? 0) - viewportHeight);
+  }
+
+  function domMaxScrollTop(viewportHeight, domMaxScrollTopOverride = 0) {
+    if (domMaxScrollTopOverride > 0) {
+      return domMaxScrollTopOverride;
+    }
+    if (typeof document === 'undefined') {
+      return 0;
+    }
+    const scrollEl = document.scrollingElement || document.documentElement;
+    return Math.max(0, (scrollEl?.scrollHeight ?? 0) - viewportHeight);
+  }
+
+  /** Match browser scroll bounds: request the anchor position, then clamp to legal range. */
+  function clampSortScrollTop(top, layout, viewportHeight, domMaxScrollTopOverride = 0) {
+    if (top === null) {
+      return null;
+    }
+    const layoutMax = layoutMaxScrollTop(layout, viewportHeight);
+    const domMax = domMaxScrollTop(viewportHeight, domMaxScrollTopOverride);
+    const edgeMax = domMax > 0 ? domMax : layoutMax;
+    return Math.min(Math.max(0, top), edgeMax);
+  }
+
   function applyScrollAnchor(anchor, layout, helpers = {}, options = {}) {
     if (!layout || !anchor || anchor.kind === KIND.NONE) {
       return false;
     }
 
     const behavior = options.behavior ?? 'instant';
-    const { sortOrder = 'newest', monthIndex = null } = helpers;
+    const { sortOrder = 'newest', monthIndex = null, viewportHeight = null, domMaxScrollTop = 0 } = helpers;
 
     const scrollToTop = (top) => {
       if (top === null) {
@@ -298,11 +333,20 @@ const GridScrollAnchor = (() => {
         return false;
       }
       case KIND.FREEZE_ROW: {
-        const top = GridLayout.scrollTopToPreserveRowViewportY(
+        const viewport = viewportHeightFromHelpers(helpers);
+        const preservedTop = GridLayout.scrollTopToPreserveRowViewportY(
           layout,
           anchor.month,
           anchor.rowIndex,
           anchor.anchorViewportY,
+        );
+        const top = clampSortScrollTop(
+          preservedTop === null
+            ? null
+            : preservedTop + (anchor.domScrollSlack || 0),
+          layout,
+          viewport,
+          domMaxScrollTop,
         );
         return scrollToTop(top);
       }
@@ -355,6 +399,9 @@ const GridScrollAnchor = (() => {
     homeRowAnchor,
     resolveScrollAnchor,
     effectiveScrollAnchor,
+    clampSortScrollTop,
+    layoutMaxScrollTop,
+    domMaxScrollTop,
     applyScrollAnchor,
     fallbackScrollAfterLayout,
   };

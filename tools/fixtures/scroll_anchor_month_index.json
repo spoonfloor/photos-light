@@ -1,0 +1,97 @@
+{
+  "catalog_revision": 1,
+  "filtered": false,
+  "first_month": null,
+  "months": [
+    {
+      "count": 1,
+      "month": "2099-01"
+    },
+    {
+      "count": 1,
+      "month": "2089-01"
+    },
+    {
+      "count": 7,
+      "month": "2080-01"
+    },
+    {
+      "count": 3,
+      "month": "2079-01"
+    },
+    {
+      "count": 7,
+      "month": "2070-01"
+    },
+    {
+      "count": 1,
+      "month": "2069-01"
+    },
+    {
+      "count": 24,
+      "month": "2060-01"
+    },
+    {
+      "count": 7,
+      "month": "2050-01"
+    },
+    {
+      "count": 1,
+      "month": "2008-12"
+    },
+    {
+      "count": 5,
+      "month": "2004-10"
+    },
+    {
+      "count": 25,
+      "month": "2004-09"
+    },
+    {
+      "count": 10,
+      "month": "2004-08"
+    },
+    {
+      "count": 1,
+      "month": "2004-07"
+    },
+    {
+      "count": 3,
+      "month": "2004-06"
+    },
+    {
+      "count": 15,
+      "month": "2004-05"
+    },
+    {
+      "count": 4,
+      "month": "2004-02"
+    },
+    {
+      "count": 4,
+      "month": "2004-01"
+    },
+    {
+      "count": 1,
+      "month": "1998-01"
+    },
+    {
+      "count": 1,
+      "month": "1979-10"
+    },
+    {
+      "count": 4,
+      "month": "1950-05"
+    },
+    {
+      "count": 12,
+      "month": "1900-01"
+    }
+  ],
+  "section_axis": "date_taken",
+  "sort": "newest",
+  "starred": false,
+  "total": 137,
+  "undated_count": 0,
+  "video": false
+}

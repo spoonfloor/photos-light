@@ -1,0 +1,205 @@
+{
+  "recipeVersion": 1,
+  "tolerance": {
+    "midScrollTop": 10,
+    "midRowViewportY": 5,
+    "edgeScrollTop": 0
+  },
+  "setup": {
+    "containerWidth": 812,
+    "viewportHeight": 977,
+    "appBarOffset": 80,
+    "domMaxScrollTop": 9425
+  },
+  "monthIndex": {
+    "total": 137,
+    "sort": "newest",
+    "months": [
+      { "count": 1, "month": "2089-01" },
+      { "count": 8, "month": "2080-01" },
+      { "count": 3, "month": "2079-01" },
+      { "count": 7, "month": "2070-01" },
+      { "count": 1, "month": "2069-01" },
+      { "count": 24, "month": "2060-01" },
+      { "count": 7, "month": "2050-01" },
+      { "count": 1, "month": "2008-12" },
+      { "count": 5, "month": "2004-10" },
+      { "count": 25, "month": "2004-09" },
+      { "count": 10, "month": "2004-08" },
+      { "count": 1, "month": "2004-07" },
+      { "count": 3, "month": "2004-06" },
+      { "count": 15, "month": "2004-05" },
+      { "count": 4, "month": "2004-02" },
+      { "count": 4, "month": "2004-01" },
+      { "count": 1, "month": "1979-10" },
+      { "count": 4, "month": "1950-05" },
+      { "count": 12, "month": "1900-01" }
+    ]
+  },
+  "steps": [
+    {
+      "id": "top-scooter-setup",
+      "expect": {
+        "scrollTop": 0,
+        "sort": "newest",
+        "headMonth": "2089-01",
+        "anchorMonth": "2089-01",
+        "row": 0,
+        "rowViewportY": 56
+      }
+    },
+    {
+      "id": "top-scooter-to-oldest-bottom",
+      "action": {
+        "type": "sort-toggle",
+        "fromSort": "newest",
+        "toSort": "oldest",
+        "sourceAnchor": {
+          "month": "2089-01",
+          "row": 0,
+          "rowViewportY": 194,
+          "domScrollSlack": 138
+        }
+      },
+      "expect": {
+        "scrollTop": 9425,
+        "sort": "oldest",
+        "headMonth": "1900-01",
+        "anchorMonth": "2080-01",
+        "row": 0,
+        "rowViewportY": 83
+      }
+    },
+    {
+      "id": "smoke-a-setup",
+      "expect": {
+        "scrollTop": 226,
+        "sort": "newest",
+        "headMonth": "2089-01",
+        "anchorMonth": "2080-01",
+        "row": 0,
+        "rowViewportY": 134
+      }
+    },
+    {
+      "id": "smoke-b-newest-to-oldest",
+      "action": {
+        "type": "sort-toggle",
+        "fromSort": "newest",
+        "toSort": "oldest",
+        "sourceAnchor": {
+          "month": "2089-01",
+          "row": 0,
+          "rowViewportY": -32,
+          "domScrollSlack": 138
+        }
+      },
+      "expect": {
+        "scrollTop": 9425,
+        "sort": "oldest",
+        "headMonth": "1900-01",
+        "anchorMonth": "2080-01",
+        "row": 0,
+        "rowViewportY": 83
+      }
+    },
+    {
+      "id": "smoke-c-oldest-to-newest",
+      "action": {
+        "type": "sort-toggle",
+        "fromSort": "oldest",
+        "toSort": "newest",
+        "sourceAnchor": {
+          "month": "2079-01",
+          "row": 0,
+          "rowViewportY": -83,
+          "domScrollSlack": 138
+        }
+      },
+      "expect": {
+        "scrollTop": 1089,
+        "sort": "newest",
+        "headMonth": "2089-01",
+        "anchorMonth": "2070-01",
+        "row": 0,
+        "rowViewportY": 83
+      }
+    },
+    {
+      "id": "smoke-d-bottom-setup",
+      "expect": {
+        "scrollTop": 9425,
+        "sort": "newest",
+        "headMonth": "2089-01",
+        "anchorMonth": "1950-05",
+        "row": 0,
+        "rowViewportY": -121
+      }
+    },
+    {
+      "id": "smoke-e-newest-bottom-to-oldest",
+      "action": {
+        "type": "sort-toggle",
+        "fromSort": "newest",
+        "toSort": "oldest",
+        "sourceAnchor": {
+          "month": "1950-05",
+          "row": 0,
+          "rowViewportY": 17,
+          "domScrollSlack": 138
+        }
+      },
+      "expect": {
+        "scrollTop": 889,
+        "sort": "oldest",
+        "headMonth": "1900-01",
+        "anchorMonth": "1950-05",
+        "row": 0,
+        "rowViewportY": -121
+      }
+    },
+    {
+      "id": "case2-setup",
+      "expect": {
+        "scrollTop": 3030,
+        "sort": "newest",
+        "headMonth": "2089-01",
+        "anchorMonth": "2060-01",
+        "row": 5,
+        "rowViewportY": -26
+      }
+    },
+    {
+      "id": "case2-after-oldest",
+      "action": {
+        "type": "sort-toggle",
+        "fromSort": "newest",
+        "toSort": "oldest"
+      },
+      "expect": {
+        "scrollTop": 8114,
+        "sort": "oldest",
+        "headMonth": "1900-01",
+        "anchorMonth": "2060-01",
+        "row": 5,
+        "rowViewportY": -26
+      }
+    },
+    {
+      "id": "case2-after-newest",
+      "action": {
+        "type": "sort-toggle",
+        "fromSort": "oldest",
+        "toSort": "newest"
+      },
+      "expect": {
+        "scrollTop": 3030,
+        "sort": "newest",
+        "headMonth": "2089-01",
+        "anchorMonth": "2060-01",
+        "row": 5,
+        "rowViewportY": -26
+      }
+    }
+  ]
+}

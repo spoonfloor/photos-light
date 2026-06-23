@@ -2140,9 +2140,14 @@ const VirtualGrid = (() => {
   }
 
   function getScrollAnchorHelpers() {
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight || 0;
+    const scrollEl = getScrollElement();
     return {
       sortOrder: librarySortOrder(),
       monthIndex,
+      viewportHeight,
+      domMaxScrollTop: Math.max(0, (scrollEl?.scrollHeight ?? 0) - viewportHeight),
     };
   }
 
@@ -2283,7 +2288,90 @@ const VirtualGrid = (() => {
     return true;
   }
 
+  function findTopmostVisiblePhotoRowAnchor() {
+    const container = getContainer();
+    const sections = layout?.sections;
+    const columns = layout?.columnLayout?.columns ?? 0;
+    if (!container || !sections?.length || !columns) {
+      return null;
+    }
+
+    const viewportTop = GridScrollAnchor.APP_BAR_OFFSET;
+    const viewportBottom =
+      window.innerHeight || document.documentElement.clientHeight || 0;
+    let best = null;
+
+    container.querySelectorAll('.photo-card[data-index]').forEach((card) => {
+      const rect = card.getBoundingClientRect();
+      if (rect.bottom <= viewportTop || rect.top >= viewportBottom) {
+        return;
+      }
+
+      const month =
+        card.closest('[data-month]')?.dataset.month || card.dataset.month || null;
+      const section = sections.find((candidate) => candidate.month === month);
+      const globalIndex = parseInt(card.dataset.index, 10);
+      if (!section || Number.isNaN(globalIndex)) {
+        return;
+      }
+
+      const localIndex = globalIndex - section.globalStart;
+      if (localIndex < 0 || localIndex >= section.count) {
+        return;
+      }
+
+      const candidate = {
+        month,
+        rowIndex: Math.floor(localIndex / columns),
+        anchorViewportY: rect.top,
+        left: rect.left,
+      };
+
+      if (
+        !best ||
+        candidate.anchorViewportY < best.anchorViewportY ||
+        (
+          candidate.anchorViewportY === best.anchorViewportY &&
+          candidate.left < best.left
+        )
+      ) {
+        best = candidate;
+      }
+    });
+
+    if (!best) {
+      return null;
+    }
+
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight || 0;
+    const scrollEl = getScrollElement();
+    const domMaxScrollTop = Math.max(0, (scrollEl?.scrollHeight ?? 0) - viewportHeight);
+    const layoutMaxScrollTop = Math.max(
+      0,
+      (layout?.totalHeight ?? 0) - viewportHeight,
+    );
+
+    return {
+      kind: GridScrollAnchor.KIND.FREEZE_ROW,
+      month: best.month,
+      rowIndex: best.rowIndex,
+      anchorViewportY: best.anchorViewportY,
+      domScrollSlack: Math.max(0, domMaxScrollTop - layoutMaxScrollTop),
+    };
+  }
+
   function captureGridScrollAnchor(context) {
+    if (
+      context.trigger === GridScrollAnchor.TRIGGER.SORT_TOGGLE
+    ) {
+      const visibleRowAnchor = findTopmostVisiblePhotoRowAnchor();
+      if (visibleRowAnchor) {
+        clearPendingScrollAnchor();
+        return visibleRowAnchor;
+      }
+    }
+
     const anchor = GridScrollAnchor.resolveScrollAnchor({
       scrollTop: getScrollElement().scrollTop,
       layout,
@@ -2308,7 +2396,12 @@ const VirtualGrid = (() => {
   function restoreScrollAfterLayoutChange(
     indexPayload,
     scrollAnchor,
-    { previousScrollTop = 0, maxScrollTop = 0 } = {},
+    {
+      previousScrollTop = 0,
+      maxScrollTop = 0,
+      domMaxScrollTop = 0,
+      allowPixelFallback = true,
+    } = {},
   ) {
     const anchor = prepareFilterScrollAnchor(
       scrollAnchor || { kind: GridScrollAnchor.KIND.NONE },
@@ -2331,7 +2424,7 @@ const VirtualGrid = (() => {
       scheduleSync();
       return;
     }
-    if (previousScrollTop > 0) {
+    if (previousScrollTop > 0 && allowPixelFallback) {
       window.scrollTo({ top: Math.min(previousScrollTop, maxScrollTop), behavior: 'instant' });
       scheduleSync();
     }
@@ -2503,7 +2596,11 @@ const VirtualGrid = (() => {
         isSortChange: true,
       });
 
-    if (!applyCatalogFilterWarm(reindexed, anchor)) {
+    if (!applyCatalogFilterWarm(
+      reindexed,
+      anchor,
+      { allowPixelFallback: false },
+    )) {
       return false;
     }
 
@@ -2756,11 +2853,22 @@ const VirtualGrid = (() => {
   /**
    * Update layout + mounted sections in place. Month hydration cache stays warm.
    */
-  function applyCatalogFilterWarm(indexPayload, scrollAnchor = null) {
+  function applyCatalogFilterWarm(
+    indexPayload,
+    scrollAnchor = null,
+    { allowPixelFallback = true } = {},
+  ) {
     exitCatalogEmptyMode();
     exitUnknownLayoutPhase({ restore: false });
 
     const wasFiltered = Boolean(monthIndex?.filtered);
+    const scrollTopBefore = getScrollElement().scrollTop;
+    const viewportHeight =
+      window.innerHeight || document.documentElement.clientHeight;
+    const domMaxScrollTopBefore = Math.max(
+      0,
+      getScrollElement().scrollHeight - viewportHeight,
+    );
 
     if (!applyLayoutGeometryFromIndex(indexPayload)) {
       return false;
@@ -2798,7 +2906,17 @@ const VirtualGrid = (() => {
     }
 
     scheduleSync();
-    restoreScrollAfterLayoutChange(indexPayload, scrollAnchor);
+    const maxScrollTop = Math.max(
+      0,
+      (layout?.totalHeight ?? 0) -
+        (window.innerHeight || document.documentElement.clientHeight),
+    );
+    restoreScrollAfterLayoutChange(indexPayload, scrollAnchor, {
+      previousScrollTop: scrollTopBefore,
+      maxScrollTop,
+      domMaxScrollTop: domMaxScrollTopBefore,
+      allowPixelFallback,
+    });
     return true;
   }
 

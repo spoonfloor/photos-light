@@ -1,0 +1,105 @@
+{
+  "containerWidth": 812,
+  "viewportHeight": 900,
+  "appBarOffset": 80,
+  "monthIndexFixture": "scroll_anchor_month_index.json",
+  "tolerance": {
+    "midScrollTop": 15,
+    "midRowViewportY": 5,
+    "edgeScrollTop": 0
+  },
+  "cases": {
+    "case1_near_head_roundtrip": {
+      "steps": [
+        {
+          "id": "setup",
+          "scrollTop": 129,
+          "sort": "newest",
+          "expect": {
+            "scrollTop": 129,
+            "sort": "newest",
+            "headMonth": "2099-01",
+            "anchorMonth": "2099-01",
+            "row": 0,
+            "rowViewportY": -73
+          }
+        },
+        {
+          "id": "toggle_to_oldest",
+          "action": "toggle",
+          "toSort": "oldest",
+          "expect": {
+            "scrollTop": 10033,
+            "sort": "oldest",
+            "headMonth": "1900-01",
+            "anchorMonth": "2080-01",
+            "row": 1,
+            "rowViewportY": -17
+          },
+          "mustNot": {
+            "scrollTop": 0,
+            "anchorMonth": "1900-01",
+            "row": 0,
+            "rowViewportY": 56
+          }
+        },
+        {
+          "id": "toggle_to_newest",
+          "action": "toggle",
+          "toSort": "newest",
+          "expect": {
+            "scrollTop": 0,
+            "sort": "newest",
+            "headMonth": "2099-01",
+            "anchorMonth": "2099-01",
+            "row": 0,
+            "rowViewportY": 56
+          }
+        }
+      ]
+    },
+    "case2_mid_scroll_roundtrip": {
+      "steps": [
+        {
+          "id": "setup",
+          "scrollTop": 3337,
+          "sort": "newest",
+          "expect": {
+            "scrollTop": 3337,
+            "sort": "newest",
+            "headMonth": "2099-01",
+            "anchorMonth": "2060-01",
+            "row": 5,
+            "rowViewportY": -29
+          }
+        },
+        {
+          "id": "toggle_to_oldest",
+          "action": "toggle",
+          "toSort": "oldest",
+          "expect": {
+            "scrollTop": 8421,
+            "sort": "oldest",
+            "headMonth": "1900-01",
+            "anchorMonth": "2060-01",
+            "row": 5,
+            "rowViewportY": -29
+          }
+        },
+        {
+          "id": "toggle_to_newest",
+          "action": "toggle",
+          "toSort": "newest",
+          "expect": {
+            "scrollTop": 3337,
+            "sort": "newest",
+            "headMonth": "2099-01",
+            "anchorMonth": "2060-01",
+            "row": 5,
+            "rowViewportY": -29
+          }
+        }
+      ]
+    }
+  }
+}
