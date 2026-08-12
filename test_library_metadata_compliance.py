@@ -80,6 +80,7 @@ class RepairFileMetadataComplianceTest(unittest.TestCase):
                     can_bake_losslessly=lambda _path: False,
                     extract_exif_rating=lambda _path: 0,
                     lossless_rotation_extensions=frozenset({".jpg"}),
+                    needs_embedded_date=lambda _path: False,
                 )
             )
 
@@ -89,11 +90,15 @@ class RepairFileMetadataComplianceTest(unittest.TestCase):
             with open(full_path, "wb") as handle:
                 handle.write(b"photo")
 
-            result = repair_file_metadata_compliance(
-                full_path,
-                ext=".jpg",
-                deps=self._scan_deps(),
-            )
+            with patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
+            ):
+                result = repair_file_metadata_compliance(
+                    full_path,
+                    ext=".jpg",
+                    deps=self._scan_deps(),
+                )
 
             self.assertTrue(result.fixed)
             self.assertEqual([event.action for event in result.log_events], ["rating_stripped"])
@@ -104,11 +109,15 @@ class RepairFileMetadataComplianceTest(unittest.TestCase):
             with open(full_path, "wb") as handle:
                 handle.write(b"photo")
 
-            result = repair_file_metadata_compliance(
-                full_path,
-                ext=".jpg",
-                deps=self._scan_deps(extract_exif_rating=lambda _path: None),
-            )
+            with patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
+            ):
+                result = repair_file_metadata_compliance(
+                    full_path,
+                    ext=".jpg",
+                    deps=self._scan_deps(extract_exif_rating=lambda _path: None),
+                )
 
             self.assertFalse(result.fixed)
             self.assertEqual(result.log_events, [])

@@ -275,6 +275,9 @@ class ImportInvarianceContractTest(unittest.TestCase):
         ), patch("make_library_perfect.get_orientation_flag", return_value=1), patch(
             "make_library_perfect.read_dimensions",
             return_value=(640, 480),
+        ), patch(
+            "normalization_repair.file_needs_embedded_date_repair",
+            return_value=False,
         ):
             result = run_db_normalization_engine(library_path, db_path=db_path)
 

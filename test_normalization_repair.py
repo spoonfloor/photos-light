@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from tempfile import TemporaryDirectory
 from typing import Optional
+from unittest.mock import patch
 
 from normalization_repair import (
     RepairDependencies,
@@ -226,17 +227,21 @@ class NormalizationRepairTest(unittest.TestCase):
             with open(full_path, "wb") as handle:
                 handle.write(b"photo")
 
-            identity = normalize_repair_scan_identity(
-                full_path,
-                ext=".jpg",
-                stat_result=os.stat(full_path),
-                deps=_scan_deps(
-                    hash_cache=_HashCache(content_hash),
-                    get_orientation_flag=lambda _path: 6,
-                    can_bake_losslessly=lambda _path: True,
-                    canonicalize_photo_file=lambda *_args, **_kwargs: canonical_photo,
-                ),
-            )
+            with patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
+            ):
+                identity = normalize_repair_scan_identity(
+                    full_path,
+                    ext=".jpg",
+                    stat_result=os.stat(full_path),
+                    deps=_scan_deps(
+                        hash_cache=_HashCache(content_hash),
+                        get_orientation_flag=lambda _path: 6,
+                        can_bake_losslessly=lambda _path: True,
+                        canonicalize_photo_file=lambda *_args, **_kwargs: canonical_photo,
+                    ),
+                )
 
         self.assertIsNotNone(identity)
         assert identity is not None
@@ -250,24 +255,61 @@ class NormalizationRepairTest(unittest.TestCase):
     def test_normalize_repair_scan_identity_returns_video_identity(self):
         content_hash = "def67890" + ("1" * 56)
         with TemporaryDirectory() as tmpdir:
-            full_path = os.path.join(tmpdir, "clip.mov")
+            full_path = os.path.join(tmpdir, "img_20260412_deadbeef.mov")
             with open(full_path, "wb") as handle:
                 handle.write(b"video")
 
-            identity = normalize_repair_scan_identity(
-                full_path,
-                ext=".mov",
-                stat_result=os.stat(full_path),
-                deps=_scan_deps(hash_cache=_HashCache(content_hash)),
-            )
+            with patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
+            ), patch(
+                "normalization_repair.read_media_date",
+                return_value="2026:04:12 00:00:00",
+            ):
+                identity = normalize_repair_scan_identity(
+                    full_path,
+                    ext=".mov",
+                    stat_result=os.stat(full_path),
+                    deps=_scan_deps(hash_cache=_HashCache(content_hash)),
+                )
 
         self.assertIsNotNone(identity)
         assert identity is not None
         self.assertEqual(identity.file_type, "video")
         self.assertEqual(identity.content_hash, content_hash)
         self.assertEqual(identity.duplicate_key, content_hash)
-        self.assertEqual(identity.date_taken, "2026:04:12 09:30:15")
+        self.assertEqual(identity.date_taken, "2026:04:12 00:00:00")
         self.assertEqual((identity.width, identity.height), (640, 480))
+
+    def test_repair_file_metadata_compliance_video_embeds_date(self):
+        content_hash = "video123" + ("0" * 56)
+        with TemporaryDirectory() as tmpdir:
+            full_path = os.path.join(tmpdir, "clip.mov")
+            with open(full_path, "wb") as handle:
+                handle.write(b"video")
+
+            with patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=True,
+            ), patch(
+                "normalization_repair.ensure_embedded_media_date",
+                return_value=("1900:01:01 00:00:00", True),
+            ):
+                result = repair_file_metadata_compliance(
+                    full_path,
+                    ext=".mov",
+                    deps=_scan_deps(hash_cache=_HashCache(content_hash)),
+                )
+
+            self.assertTrue(result.fixed)
+            self.assertEqual(
+                [event.action for event in result.log_events],
+                ["date_metadata_canonicalized"],
+            )
+            self.assertEqual(
+                result.log_events[0].payload["date"],
+                "1900:01:01 00:00:00",
+            )
 
     def test_repair_file_metadata_compliance_video_strips_rating(self):
         content_hash = "video123" + ("0" * 56)
@@ -276,15 +318,22 @@ class NormalizationRepairTest(unittest.TestCase):
             with open(full_path, "wb") as handle:
                 handle.write(b"video")
 
-            result = repair_file_metadata_compliance(
-                full_path,
-                ext=".mov",
-                deps=_scan_deps(
-                    hash_cache=_HashCache(content_hash),
-                    extract_exif_rating=lambda _path: 0,
-                    strip_exif_rating=lambda _path: True,
-                ),
-            )
+            with patch(
+                "normalization_repair.ensure_embedded_media_date",
+                return_value=("2026:04:12 09:30:15", False),
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
+            ):
+                result = repair_file_metadata_compliance(
+                    full_path,
+                    ext=".mov",
+                    deps=_scan_deps(
+                        hash_cache=_HashCache(content_hash),
+                        extract_exif_rating=lambda _path: 0,
+                        strip_exif_rating=lambda _path: True,
+                    ),
+                )
 
             self.assertTrue(result.fixed)
             self.assertEqual(result.content_hash, content_hash)
@@ -297,16 +346,26 @@ class NormalizationRepairTest(unittest.TestCase):
             with open(full_path, "wb") as handle:
                 handle.write(b"video")
 
-            identity = normalize_repair_scan_identity(
-                full_path,
-                ext=".mov",
-                stat_result=os.stat(full_path),
-                deps=_scan_deps(
-                    hash_cache=_HashCache(content_hash),
-                    extract_exif_rating=lambda _path: 0,
-                    strip_exif_rating=lambda _path: True,
-                ),
-            )
+            with patch(
+                "normalization_repair.ensure_embedded_media_date",
+                return_value=("2026:04:12 09:30:15", False),
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
+            ), patch(
+                "normalization_repair.read_media_date",
+                return_value="2026:04:12 09:30:15",
+            ):
+                identity = normalize_repair_scan_identity(
+                    full_path,
+                    ext=".mov",
+                    stat_result=os.stat(full_path),
+                    deps=_scan_deps(
+                        hash_cache=_HashCache(content_hash),
+                        extract_exif_rating=lambda _path: 0,
+                        strip_exif_rating=lambda _path: True,
+                    ),
+                )
 
         self.assertIsNotNone(identity)
         assert identity is not None
@@ -415,6 +474,25 @@ class NormalizationRepairTest(unittest.TestCase):
                     can_bake_losslessly=lambda _path: False,
                     extract_exif_rating=lambda _path: None,
                     lossless_rotation_extensions=frozenset({".jpg"}),
+                    needs_embedded_date=lambda _path: False,
+                )
+            )
+
+    def test_file_needs_metadata_compliance_true_when_embedded_date_missing(self):
+        with TemporaryDirectory() as tmpdir:
+            full_path = os.path.join(tmpdir, "photo.jpg")
+            with open(full_path, "wb") as handle:
+                handle.write(b"photo")
+
+            self.assertTrue(
+                file_needs_metadata_compliance(
+                    full_path,
+                    ".jpg",
+                    get_orientation_flag=lambda _path: 1,
+                    can_bake_losslessly=lambda _path: False,
+                    extract_exif_rating=lambda _path: None,
+                    lossless_rotation_extensions=frozenset({".jpg"}),
+                    needs_embedded_date=lambda _path: True,
                 )
             )
 

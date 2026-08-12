@@ -7,6 +7,9 @@ from unittest.mock import patch
 from media_dates import (
     MediaDateVerificationError,
     UnsupportedMediaDateWrite,
+    UNKNOWN_PHOTO_DATE_TAKEN,
+    ensure_embedded_media_date,
+    file_needs_embedded_date_repair,
     metadata_write_policy,
     write_and_verify_media_date,
     write_and_verify_video_date,
@@ -128,6 +131,79 @@ class MediaDatePolicyTest(unittest.TestCase):
 
             with open(video_path, "rb") as handle:
                 self.assertEqual(handle.read(), b"video-redated")
+
+
+class EnsureEmbeddedMediaDateTest(unittest.TestCase):
+    def test_unwritable_extension_skips_write(self):
+        with TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "clip.avi")
+            with open(path, "wb") as handle:
+                handle.write(b"video")
+
+            with patch(
+                "media_dates.read_media_date",
+                return_value=UNKNOWN_PHOTO_DATE_TAKEN,
+            ), patch("media_dates.write_and_verify_media_date") as write_mock:
+                resolved, wrote = ensure_embedded_media_date(
+                    path,
+                    allow_mtime_fallback=False,
+                )
+
+        self.assertEqual(resolved, UNKNOWN_PHOTO_DATE_TAKEN)
+        self.assertFalse(wrote)
+        write_mock.assert_not_called()
+
+    def test_writes_when_embedded_missing(self):
+        with TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "photo.jpg")
+            with open(path, "wb") as handle:
+                handle.write(b"jpg")
+
+            with patch(
+                "media_dates.read_media_date",
+                return_value=UNKNOWN_PHOTO_DATE_TAKEN,
+            ), patch(
+                "media_dates.trusted_embedded_date_matches",
+                return_value=False,
+            ), patch("media_dates.write_and_verify_media_date") as write_mock:
+                resolved, wrote = ensure_embedded_media_date(
+                    path,
+                    allow_mtime_fallback=False,
+                )
+
+        self.assertEqual(resolved, UNKNOWN_PHOTO_DATE_TAKEN)
+        self.assertTrue(wrote)
+        write_mock.assert_called_once_with(path, UNKNOWN_PHOTO_DATE_TAKEN)
+
+    def test_noop_when_embedded_already_matches(self):
+        with TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "img_20260412_deadbeef.jpg")
+            with open(path, "wb") as handle:
+                handle.write(b"jpg")
+
+            target = "2026:04:12 09:30:15"
+            with patch(
+                "media_dates.read_media_date",
+                return_value=target,
+            ), patch(
+                "media_dates.trusted_embedded_date_matches",
+                return_value=True,
+            ), patch("media_dates.write_and_verify_media_date") as write_mock:
+                resolved, wrote = ensure_embedded_media_date(
+                    path,
+                    resolved_date=target,
+                )
+
+        self.assertEqual(resolved, target)
+        self.assertFalse(wrote)
+        write_mock.assert_not_called()
+
+    def test_file_needs_embedded_date_repair_false_for_avi(self):
+        with TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "clip.avi")
+            with open(path, "wb") as handle:
+                handle.write(b"video")
+            self.assertFalse(file_needs_embedded_date_repair(path))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,9 @@ Auto-fix (this module):
   - ``rating_zero`` — strip EXIF rating=0 via ``strip_exif_rating``
   - ``unbaked_rotation`` — bake orientation when losslessly bakeable (photos via
     ``canonicalize_photo_file``; videos via ``bake_orientation``)
+  - embedded date taken — writable containers embed resolved date via
+    ``media_dates.ensure_embedded_media_date`` (incl. ``1900:01:01 00:00:00``);
+    not yet a fast-audit metadata kind (Phase C audit alignment)
 
 Blocking (audit only; not repaired here):
   - ``corrupted_media``, layout/path issues, ``db_hash_mismatch``, mole/ghost DB

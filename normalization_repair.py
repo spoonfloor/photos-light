@@ -14,7 +14,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from library_cleanliness import media_kind_for_extension, parse_metadata_datetime
+from library_cleanliness import media_kind_for_extension
+from media_dates import (
+    MediaDateError,
+    ensure_embedded_media_date,
+    file_needs_embedded_date_repair,
+    read_media_date,
+)
 from normalization_contract import REPAIR_POLICY, NormalizationPolicy
 from normalization_core import duplicate_key_for_file, expected_canonical_rel_path
 
@@ -135,8 +141,13 @@ def file_needs_metadata_compliance(
     can_bake_losslessly: Callable[[str], bool],
     extract_exif_rating: Callable[[str], Optional[int]],
     lossless_rotation_extensions: frozenset[str],
+    needs_embedded_date: Optional[Callable[[str], bool]] = None,
 ) -> bool:
-    """Return True when ``run_fast_library_audit`` would flag auto-fixable metadata."""
+    """Return True when auto-fixable metadata work is needed.
+
+    Covers orientation bake, rating=0 strip, and missing/mismatched embedded
+    dates on writable containers (same ``media_dates`` policy as Add / date edit).
+    """
     file_type = media_kind_for_extension(ext) or "photo"
     orientation = get_orientation_flag(full_path)
     if file_type == "photo":
@@ -144,7 +155,15 @@ def file_needs_metadata_compliance(
             return True
     elif orientation not in (None, 1) and ext in lossless_rotation_extensions:
         return True
-    return extract_exif_rating(full_path) == 0
+    if extract_exif_rating(full_path) == 0:
+        return True
+    date_check = needs_embedded_date or (
+        lambda path: file_needs_embedded_date_repair(
+            path,
+            allow_mtime_fallback=False,
+        )
+    )
+    return bool(date_check(full_path))
 
 
 def _photo_repair_log_events(
@@ -189,8 +208,8 @@ def repair_file_metadata_compliance(
     Apply auto-fixable metadata compliance fixes for one in-library media file.
 
     Matches the metadata slice used during Clean scan/repair and shared with
-    Convert's pre-audit compliance pass. Only mutates files that would fail
-    ``run_fast_library_audit`` metadata checks.
+    Convert's pre-audit compliance pass. Only mutates files that need orientation
+    bake, rating=0 strip, or embedded-date repair (writable containers).
     """
     if not file_needs_metadata_compliance(
         full_path,
@@ -249,6 +268,25 @@ def repair_file_metadata_compliance(
             raise RepairFileError(f"Failed to strip rating=0 from {full_path}")
         metadata_changed = True
         log_events.append(RepairLogEvent("rating_stripped"))
+
+    if file_needs_embedded_date_repair(full_path, allow_mtime_fallback=False):
+        try:
+            date_taken, date_wrote = ensure_embedded_media_date(
+                full_path,
+                allow_mtime_fallback=False,
+            )
+        except MediaDateError as exc:
+            raise RepairFileError(
+                f"Failed to embed media date for {full_path}: {exc}"
+            ) from exc
+        if date_wrote:
+            metadata_changed = True
+            log_events.append(
+                RepairLogEvent(
+                    "date_metadata_canonicalized",
+                    {"date": date_taken},
+                )
+            )
 
     if not metadata_changed:
         return MetadataComplianceResult(fixed=False, log_events=log_events)
@@ -487,10 +525,8 @@ def normalize_repair_scan_identity(
     if not duplicate_key:
         return None
 
-    date_taken, date_obj = parse_metadata_datetime(
-        deps.extract_exif_date(full_path),
-        stat_result.st_mtime,
-    )
+    date_taken = read_media_date(full_path, allow_mtime_fallback=False)
+    date_obj = datetime.strptime(date_taken, "%Y:%m:%d %H:%M:%S")
     width, height = deps.read_dimensions(full_path)
     rating = deps.extract_exif_rating(full_path)
 

@@ -112,6 +112,11 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         ), patch("app.subprocess.run", return_value=self.fake_subprocess_result), patch(
             "clean_library_fast_audit.run_fast_library_audit",
             return_value=audit_issues,
+        ), patch(
+            # Convert fixtures use synthetic bytes; date-embed is covered by
+            # test_media_date_contract / EnsureEmbeddedMediaDateTest.
+            "normalization_repair.file_needs_embedded_date_repair",
+            return_value=False,
         ):
             response = self.client.post(
                 "/api/library/terraform",
@@ -633,6 +638,9 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         ), patch(
             "library_metadata_compliance.verify_media_file",
             return_value=(True, "mock"),
+        ), patch(
+            "normalization_repair.file_needs_embedded_date_repair",
+            return_value=False,
         ), patch("app.subprocess.run", return_value=self.fake_subprocess_result):
             response = self.client.post(
                 "/api/library/terraform",
@@ -709,6 +717,9 @@ class ConvertInvarianceContractTest(unittest.TestCase):
         ), patch(
             "library_metadata_compliance.verify_media_file",
             side_effect=real_verify_media_file,
+        ), patch(
+            "normalization_repair.file_needs_embedded_date_repair",
+            return_value=False,
         ), patch("app.subprocess.run", return_value=self.fake_subprocess_result):
             response = self.client.post(
                 "/api/library/terraform",

@@ -1015,6 +1015,11 @@ class CleanLibrarySkipUnchangedTest(unittest.TestCase):
         ), patch(
             "clean_library_fast_audit.compute_hash_legacy",
             side_effect=self._audit_file_hash,
+        ), patch(
+            # Fixture bytes are not real JPEGs; date-embed coverage lives in
+            # test_media_date_contract. Treat seeded DB date as already embedded.
+            "normalization_repair.file_needs_embedded_date_repair",
+            return_value=False,
         ):
             return run_db_normalization_engine(tmpdir, db_path=db_path, resume=False)
 

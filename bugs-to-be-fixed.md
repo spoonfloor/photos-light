@@ -100,35 +100,20 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 ### Clean must embed date taken (1900 fallback for unknown)
 
 **Priority:** High (correctness + product anatomy)  
-**Status:** Open  
+**Status:** Done (Phase B slice 6 — 2026-08-12)  
 **Batch:** Library kernel / cleanliness convergence  
 **Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (Phase B, slice 6)  
-**Related:** **Incremental compliance-on-mutation**; `media_dates.py` (`read_media_date`, `write_and_verify_media_date`, `metadata_write_policy`); `library_cleanliness.py` TBD criterion #1 (usable library date — “not audited or repaired by Clean / Convert yet”); `photo_canonicalization.py` (`canonicalize_photo_file`)
+**Related:** **Incremental compliance-on-mutation**; `media_dates.py` (`ensure_embedded_media_date`, `read_media_date`, `write_and_verify_media_date`); `normalization_repair.py`; `photo_canonicalization.py`
 
-**Summary:** **Clean library** must write **date taken** into embedded metadata for every file whose container supports it, using the shared read/write rulebook. When no trustworthy capture date exists, embed the deterministic unknown placeholder **`1900:01:01 00:00:00`** (not NULL, not path-only inference, not silent skip).
+**Shipped:**
 
-**Problems today:**
+- Shared `ensure_embedded_media_date` / `file_needs_embedded_date_repair` in `media_dates.py` (incl. `1900:01:01 00:00:00`)
+- Clean skip + compliance detect missing/mismatched embedded dates on writable containers
+- Video repair embeds via the same writer; scan identity uses `read_media_date(..., allow_mtime_fallback=False)`
+- Photos continue through `canonicalize_photo_file` write-back; skip path no longer ignores date-only drift
+- Contract tests: `test_media_date_contract.CleanRepairEmbedDateContractTest`, `test_media_dates.EnsureEmbeddedMediaDateTest`
 
-- Clean audit/repair paths resolve `date_taken` for DB and canonical paths but do not consistently **write back** missing or mismatched embedded dates on disk
-- Photos: `canonicalize_photo_file` writes via `write_photo_date_metadata` when metadata changed or embedded ≠ resolved date — but full Clean v2 repair / video paths may skip embed
-- Videos: audit identity uses `read_media_date(..., allow_mtime_fallback=False)` only — no symmetric `write_and_verify_media_date` when embedded is absent
-- Files with no real date may remain without embedded metadata while DB/path use `1900/1900-01-01/` — breaks “embedded matches DB” invariant and re-open / export / other-app reads
-
-**Target fix (one vertical slice):**
-
-1. After resolving `date_taken` (read precedence in `media_dates.py`), if `metadata_write_policy(ext)` allows write and embedded ≠ resolved (or missing), call `write_and_verify_media_date` with resolved value — including **`UNKNOWN_PHOTO_DATE_TAKEN`** when that is the resolved date
-2. Wire through Clean v2 repair (`normalization_repair.py`, `make_library_clean_v2.py`) and any parallel canonicalize paths — same policy as Add / date edit / compliance-on-mutation
-3. Fail closed on writable containers when verify-after-write fails; unsupported extensions skip embed (existing `UnsupportedMediaDateWrite` behavior)
-4. Contract tests: photo + mov/mp4/mkv samples with missing embedded → Clean embeds resolved date; undated photo → embedded `1900:01:01`; basename-only date → embedded matches basename date
-
-**Definition of done:**
-
-- Every Clean-repaired file with a writable date container has embedded metadata matching DB `date_taken`
-- Unknown-date media embeds `1900:01:01 00:00:00` and lives under `1900/1900-01-01/` with matching basename
-- No duplicate date-write logic outside `media_dates.py` + shared canonicalize/repair primitives
-- `test_media_date_contract.py` (or Clean contract tests) cover missing-embedded repair for photo and at least one video writer path
-
-**Out of scope:** Inventing dates from mtime during Clean (ingest-only `allow_mtime_fallback`); changing read precedence; transcode / Convert date migration
+**Out of scope (still deferred):** fast-audit date criterion (Phase C); inventing dates from mtime during Clean; library-wide EXIF star strip
 
 ---
 

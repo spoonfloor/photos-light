@@ -33,6 +33,12 @@ Write policy (``metadata_write_policy`` / ``write_and_verify_media_date``)
   patch via ``quicktime_date_atoms``; verify via mvhd read + ffmpeg decode.
 - Other writable videos: ffmpeg metadata copy + ffprobe verify; exiftool fallback.
 - Unsupported containers: ``UnsupportedMediaDateWrite`` — callers fail closed.
+
+Repair / mutate embed (``ensure_embedded_media_date``)
+------------------------------------------------------
+Writable containers must embed the resolved date — including
+``UNKNOWN_PHOTO_DATE_TAKEN`` (``1900:01:01 00:00:00``) — so disk matches DB.
+Unwritable extensions skip; writable verify failures fail closed.
 """
 
 from __future__ import annotations
@@ -324,6 +330,69 @@ def read_media_date(
         return parsed.strftime(CANONICAL_DB_DATE_FORMAT)
 
     return UNKNOWN_PHOTO_DATE_TAKEN
+
+
+def trusted_embedded_date_matches(file_path: str, resolved_date: str) -> bool:
+    """True when trusted embedded metadata already equals ``resolved_date``."""
+    parse_canonical_media_date(resolved_date)
+    ext = os.path.splitext(file_path)[1].lower()
+    basename_date = parse_canonical_basename_date(os.path.basename(file_path))
+    embedded_raw = read_embedded_media_date(file_path)
+    if not embedded_raw or is_embedded_date_untrusted(ext, embedded_raw, basename_date):
+        return False
+    normalized = normalize_raw_metadata_date(embedded_raw)
+    return normalized == resolved_date
+
+
+def file_needs_embedded_date_repair(
+    file_path: str,
+    *,
+    allow_mtime_fallback: bool = False,
+    resolved_date: Optional[str] = None,
+) -> bool:
+    """True when the container is writable and embedded date ≠ resolved date."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if not metadata_write_policy(ext).writable:
+        return False
+    if resolved_date is None:
+        resolved_date = read_media_date(
+            file_path,
+            allow_mtime_fallback=allow_mtime_fallback,
+        )
+    else:
+        parse_canonical_media_date(resolved_date)
+    return not trusted_embedded_date_matches(file_path, resolved_date)
+
+
+def ensure_embedded_media_date(
+    file_path: str,
+    *,
+    resolved_date: Optional[str] = None,
+    allow_mtime_fallback: bool = False,
+) -> tuple[str, bool]:
+    """Ensure writable containers embed the resolved library date.
+
+    Returns ``(resolved_date, wrote)``. Unwritable/unsupported extensions skip
+    the write (``wrote=False``). Writable containers fail closed on verify errors.
+    Unknown dates use ``UNKNOWN_PHOTO_DATE_TAKEN`` (``1900:01:01 00:00:00``).
+    """
+    if resolved_date is None:
+        resolved_date = read_media_date(
+            file_path,
+            allow_mtime_fallback=allow_mtime_fallback,
+        )
+    else:
+        parse_canonical_media_date(resolved_date)
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if not metadata_write_policy(ext).writable:
+        return resolved_date, False
+
+    if trusted_embedded_date_matches(file_path, resolved_date):
+        return resolved_date, False
+
+    write_and_verify_media_date(file_path, resolved_date)
+    return resolved_date, True
 
 
 def write_and_verify_video_date(file_path: str, new_date: str) -> None:

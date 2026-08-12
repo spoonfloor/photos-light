@@ -256,7 +256,7 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 
 **Still open (later slices):**
 
-- Embed dates on all writable repair paths (slice 6); open reconcile / Clean UX (Phase C)
+- Open reconcile / Clean UX (Phase C)
 
 **Existing building blocks (reuse, do not restart):**
 
@@ -276,11 +276,18 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 
 ### 5. Embed date taken (1900 fallback)
 
+**Status:** Shipped (Phase B slice 6 — 2026-08-12)
+
 **Related criterion:** `library_cleanliness.py` TBD #1 (usable library date)
 
 When resolving `date_taken` via `media_dates.py`, writable containers get embedded metadata matching DB — including `1900:01:01 00:00:00` for unknown dates.
 
-Wire through Clean v2 repair and parallel canonicalize paths; same policy as Add / date edit / compliance-on-mutation.
+**Shipped:**
+
+- `ensure_embedded_media_date` / `file_needs_embedded_date_repair` in `media_dates.py`
+- Clean/Convert compliance + Clean skip path detect and repair missing/mismatched embeds
+- Video repair scan embeds via shared writer; identity uses `read_media_date(..., allow_mtime_fallback=False)`
+- Contract tests: `test_media_date_contract.CleanRepairEmbedDateContractTest` (photo 1900 + basename + mkv writer path)
 
 **Definition of done:**
 
@@ -383,7 +390,7 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - [x] Star-blind `duplicate_key` wired through import, Clean, finalize (Phase A slice 3 — 2026-08-12)
 - [x] Rotate → full finalize; canonical path after hash change (Phase B slice 4 — 2026-08-12)
 - [x] Trash/restore on shared compliance primitives (Phase B slice 5 — 2026-08-12)
-- [ ] Embedded dates on all writable repair/mutation paths (1900 unknown)
+- [x] Embedded dates on all writable repair/mutation paths (1900 unknown) (Phase B slice 6 — 2026-08-12)
 - [ ] Background open reconcile; no Clean prompt on healthy library
 - [ ] One audit predicate set shared by reconcile, Inspect (when built), and Clean
 - [ ] Clean documented and scoped as exceptional full-batch repair

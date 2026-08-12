@@ -10,10 +10,20 @@ from unittest.mock import patch
 from db_schema import create_database_schema
 from library_sync import synchronize_library_generator
 from media_dates import (
+    ensure_embedded_media_date,
     read_media_date,
     write_and_verify_media_date,
 )
-from photo_canonicalization import UNKNOWN_PHOTO_DATE_TAKEN as PHOTO_UNKNOWN
+from normalization_repair import (
+    RepairScanDependencies,
+    normalize_repair_scan_identity,
+    repair_file_metadata_compliance,
+)
+from photo_canonicalization import (
+    UNKNOWN_PHOTO_DATE_TAKEN as PHOTO_UNKNOWN,
+    canonicalize_photo_file,
+    write_photo_date_metadata,
+)
 import app as photo_app
 
 
@@ -412,6 +422,181 @@ class QuickTimePatchArtifactContractTest(unittest.TestCase):
         conn.close()
         self.assertEqual(row["date_taken"], transitions[-1])
         self.assertTrue(row["current_path"].startswith("2100/2100-06-13/"))
+
+
+class CleanRepairEmbedDateContractTest(unittest.TestCase):
+    """Clean/repair must embed resolved dates (incl. 1900) on writable containers."""
+
+    class _HashCache:
+        def __init__(self, content_hash="abcd1234" + ("0" * 56)):
+            self.content_hash = content_hash
+            self.calls = 0
+
+        def get_hash(self, _path):
+            self.calls += 1
+            return self.content_hash, False
+
+    def _photo_scan_deps(self, **overrides):
+        values = {
+            "hash_cache": self._HashCache(),
+            "extract_exif_date": lambda _path: None,
+            "extract_exif_rating": lambda _path: None,
+            "strip_exif_rating": lambda _path: True,
+            "get_orientation_flag": lambda _path: 1,
+            "can_bake_losslessly": lambda _path: False,
+            "bake_orientation": lambda _path: (False, "No orientation", None),
+            "canonicalize_photo_file": canonicalize_photo_file,
+            "write_photo_date_metadata": write_photo_date_metadata,
+            "read_dimensions": lambda _path: (640, 480),
+            "lossless_rotation_extensions": frozenset({".jpg", ".jpeg", ".png"}),
+        }
+        values.update(overrides)
+        return RepairScanDependencies(**values)
+
+    def test_undated_photo_repair_embeds_1900_placeholder(self):
+        with TemporaryDirectory() as tmpdir:
+            photo_path = os.path.join(tmpdir, "loose.jpg")
+            with open(photo_path, "wb") as handle:
+                handle.write(b"jpg-bytes")
+
+            state = {"date": None}
+            written = []
+
+            def fake_extract(_path):
+                return state["date"]
+
+            def fake_write(path, date):
+                written.append((path, date))
+                state["date"] = date
+
+            deps = self._photo_scan_deps(
+                extract_exif_date=fake_extract,
+                write_photo_date_metadata=fake_write,
+            )
+            with patch(
+                "media_dates.read_embedded_media_date",
+                side_effect=lambda _path: state["date"],
+            ):
+                identity = normalize_repair_scan_identity(
+                    photo_path,
+                    ext=".jpg",
+                    stat_result=os.stat(photo_path),
+                    deps=deps,
+                )
+
+            self.assertIsNotNone(identity)
+            assert identity is not None
+            self.assertEqual(identity.date_taken, PHOTO_UNKNOWN)
+            self.assertTrue(identity.metadata_cleaned)
+            self.assertEqual(written, [(photo_path, PHOTO_UNKNOWN)])
+
+    def test_basename_only_photo_embeds_basename_date(self):
+        with TemporaryDirectory() as tmpdir:
+            photo_path = os.path.join(tmpdir, "img_20260412_deadbeef.jpg")
+            with open(photo_path, "wb") as handle:
+                handle.write(b"jpg-bytes")
+
+            state = {"date": None}
+            written = []
+            expected = "2026:04:12 00:00:00"
+
+            def fake_extract(_path):
+                return state["date"]
+
+            def fake_write(path, date):
+                written.append((path, date))
+                state["date"] = date
+
+            deps = self._photo_scan_deps(
+                extract_exif_date=fake_extract,
+                write_photo_date_metadata=fake_write,
+            )
+            with patch(
+                "media_dates.read_embedded_media_date",
+                side_effect=lambda _path: state["date"],
+            ):
+                identity = normalize_repair_scan_identity(
+                    photo_path,
+                    ext=".jpg",
+                    stat_result=os.stat(photo_path),
+                    deps=deps,
+                )
+
+            self.assertIsNotNone(identity)
+            assert identity is not None
+            self.assertEqual(identity.date_taken, expected)
+            self.assertTrue(identity.metadata_cleaned)
+            self.assertEqual(written, [(photo_path, expected)])
+
+    def test_video_repair_embeds_resolved_date_via_shared_writer(self):
+        with TemporaryDirectory() as tmpdir:
+            video_path = os.path.join(tmpdir, "img_19001127_deadbeef.mkv")
+            with open(video_path, "wb") as handle:
+                handle.write(b"video")
+
+            written = []
+
+            def fake_ensure(path, *, resolved_date=None, allow_mtime_fallback=False):
+                date = resolved_date or "1900:11:27 00:00:00"
+                written.append((path, date, allow_mtime_fallback))
+                return date, True
+
+            deps = self._photo_scan_deps(hash_cache=self._HashCache("deadbeef" + ("1" * 56)))
+            with patch(
+                "normalization_repair.ensure_embedded_media_date",
+                side_effect=fake_ensure,
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=True,
+            ), patch(
+                "normalization_repair.read_media_date",
+                return_value="1900:11:27 00:00:00",
+            ):
+                result = repair_file_metadata_compliance(
+                    video_path,
+                    ext=".mkv",
+                    deps=deps,
+                )
+                identity = normalize_repair_scan_identity(
+                    video_path,
+                    ext=".mkv",
+                    stat_result=os.stat(video_path),
+                    deps=deps,
+                )
+
+            self.assertTrue(result.fixed)
+            self.assertEqual(
+                [event.action for event in result.log_events],
+                ["date_metadata_canonicalized"],
+            )
+            self.assertEqual(result.log_events[0].payload["date"], "1900:11:27 00:00:00")
+            self.assertIsNotNone(identity)
+            assert identity is not None
+            self.assertEqual(identity.date_taken, "1900:11:27 00:00:00")
+            self.assertTrue(identity.metadata_cleaned)
+            self.assertTrue(written)
+            self.assertEqual(written[0][0], video_path)
+            self.assertEqual(written[0][1], "1900:11:27 00:00:00")
+            self.assertFalse(written[0][2])
+
+    def test_ensure_embedded_media_date_writes_1900_for_undated_photo(self):
+        with TemporaryDirectory() as tmpdir:
+            photo_path = os.path.join(tmpdir, "snapshot.jpg")
+            with open(photo_path, "wb") as handle:
+                handle.write(b"jpg")
+
+            with patch(
+                "media_dates.read_embedded_media_date",
+                return_value=None,
+            ), patch("media_dates.write_and_verify_media_date") as write_mock:
+                resolved, wrote = ensure_embedded_media_date(
+                    photo_path,
+                    allow_mtime_fallback=False,
+                )
+
+            self.assertEqual(resolved, PHOTO_UNKNOWN)
+            self.assertTrue(wrote)
+            write_mock.assert_called_once_with(photo_path, PHOTO_UNKNOWN)
 
 
 if __name__ == "__main__":
