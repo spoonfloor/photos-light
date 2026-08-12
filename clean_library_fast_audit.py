@@ -13,7 +13,6 @@ import sqlite3
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from db_health import DBStatus, check_database_health
-from file_operations import extract_exif_rating
 from hash_cache import compute_hash_legacy
 from library_cleanliness import (
     IGNORED_LIBRARY_FILES,
@@ -46,6 +45,9 @@ from clean_library_media_utils import (
     verify_media_file,
     visible_directory_entries,
 )
+from file_operations import extract_exif_rating
+from normalization_repair import collect_auto_fixable_metadata_issues
+from rotation_utils import LOSSLESS_ROTATION_EXTENSIONS
 
 CANONICAL_BASENAME_RE = re.compile(
     r"^img_\d{8}_[0-9a-f]{8}\.[a-z0-9]+$",
@@ -281,14 +283,17 @@ def run_fast_library_audit(
             active_media_paths.add(rel_path)
 
             if include_metadata_checks:
-                file_type = media_kind_for_extension(ext) or "photo"
-                if file_type == "photo":
-                    orientation = get_orientation_flag(full_path)
-                    if orientation not in (None, 1) and can_bake_losslessly(full_path):
-                        issues.append(format_issue("unbaked_rotation", rel_path, str(orientation)))
-                rating = extract_exif_rating(full_path)
-                if rating == 0:
-                    issues.append(format_issue("rating_zero", rel_path))
+                for meta_issue in collect_auto_fixable_metadata_issues(
+                    full_path,
+                    ext,
+                    get_orientation_flag=get_orientation_flag,
+                    can_bake_losslessly=can_bake_losslessly,
+                    extract_exif_rating=extract_exif_rating,
+                    lossless_rotation_extensions=frozenset(LOSSLESS_ROTATION_EXTENSIONS),
+                ):
+                    issues.append(
+                        format_issue(meta_issue.kind, rel_path, meta_issue.detail)
+                    )
 
             file_hash: Optional[str] = None
             row = db_by_path.get(rel_path)

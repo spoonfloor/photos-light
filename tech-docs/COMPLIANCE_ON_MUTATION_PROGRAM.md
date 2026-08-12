@@ -257,7 +257,6 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 **Still open (later slices):**
 
 - Clean UX shrink / no Clean prompt on healthy library (Phase C slice 9)
-- Audit rule alignment + lazy rating strip (Phase C slice 8)
 
 **Existing building blocks (reuse, do not restart):**
 
@@ -321,7 +320,30 @@ Cheap background pass on library open:
 
 ---
 
-### 7. Shrink Clean UX
+### 7. Audit alignment + lazy rating strip
+
+**Status:** Shipped (Phase C slice 8 — 2026-08-12)
+
+Shared auto-fixable metadata kinds for Clean audit + compliance, plus lazy EXIF star strip only when a file is already being rewritten.
+
+**Shipped:**
+
+- `collect_auto_fixable_metadata_issues` / `AUTO_FIXABLE_METADATA_KINDS` in `normalization_repair.py` (`rating_zero`, `unbaked_rotation`, `embedded_date_mismatch`)
+- `clean_library_fast_audit.py` + `library_metadata_compliance.py` consume the same kinds
+- Lazy strip of **any** EXIF Rating/RatingPercent during photo canonicalize, video compliance repair, and `finalize_mutated_media` (invalidates precomputed hash after strip)
+- Non-zero EXIF stars alone do **not** trigger Clean/compliance (no library-wide star walk)
+- Clean rebuild preserves DB-only stars when EXIF is stripped (`_merge_scan_rating`)
+- Contract tests: `test_clean_library_fast_audit`, `test_normalization_repair`, `test_media_finalization`, `test_library_metadata_compliance`
+
+**Definition of done:**
+
+- Audit and compliance agree on auto-fixable metadata kinds
+- Mutation/repair pipelines strip legacy EXIF ratings when already touching the file
+- Non-zero EXIF rating alone does not mark a file non-compliant
+
+---
+
+### 8. Shrink Clean UX
 
 - Document: Clean / **Verify & repair** for legacy, tampering, repair — not day-to-day hygiene
 - UI: no routine Clean nudge when health check passes
@@ -399,8 +421,8 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - [x] Trash/restore on shared compliance primitives (Phase B slice 5 — 2026-08-12)
 - [x] Embedded dates on all writable repair/mutation paths (1900 unknown) (Phase B slice 6 — 2026-08-12)
 - [x] Background open reconcile on library open (Phase C slice 7 — 2026-08-12)
+- [x] Audit/compliance share auto-fixable metadata kinds; lazy EXIF rating strip on mutation (Phase C slice 8 — 2026-08-12)
 - [ ] No Clean prompt on healthy library (slice 9 UX)
-- [ ] One audit predicate set shared by reconcile, Inspect (when built), and Clean
 - [ ] Clean documented and scoped as exceptional full-batch repair
 - [ ] Contract tests cover above; packaged `.app` smoke green
 

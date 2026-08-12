@@ -230,6 +230,40 @@ class MediaFinalizationTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["current_path"], "2026/2026-04-12/img_20260412_oldhash.jpg")
 
+    def test_finalize_lazily_strips_nonzero_exif_rating_before_hash(self):
+        photo_id, old_full_path = self._insert_photo(
+            current_path="2026/2026-04-12/img_20260412_oldhash.jpg",
+            content_hash="oldhash1",
+        )
+        stripped = []
+        hashed = []
+
+        def _compute_hash(path):
+            hashed.append(path)
+            return "newhash8"
+
+        result = finalize_mutated_media(
+            conn=self.conn,
+            photo_id=photo_id,
+            library_path=self.library_path,
+            current_rel_path="2026/2026-04-12/img_20260412_oldhash.jpg",
+            date_taken="2026:04:12 09:30:15",
+            old_hash="oldhash1",
+            build_canonical_path=build_canonical_photo_path,
+            compute_hash=_compute_hash,
+            get_dimensions=lambda _: (480, 640),
+            delete_thumbnail_for_hash=self.deleted_thumbnails.append,
+            extract_exif_rating=lambda _path: 5,
+            strip_exif_rating=lambda path: stripped.append(path) or True,
+            precomputed_hash="stale-precomputed-hash",
+        )
+        self.conn.commit()
+
+        self.assertEqual(stripped, [old_full_path])
+        self.assertEqual(hashed, [old_full_path])
+        self.assertEqual(result.content_hash, "newhash8")
+        self.assertNotEqual(result.content_hash, "stale-precomputed-hash")
+
 
 if __name__ == "__main__":
     unittest.main()

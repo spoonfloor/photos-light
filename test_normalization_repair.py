@@ -496,6 +496,59 @@ class NormalizationRepairTest(unittest.TestCase):
                 )
             )
 
+    def test_file_needs_metadata_compliance_false_for_nonzero_exif_rating_alone(self):
+        """Legacy EXIF stars are not an auto-fix trigger (lazy strip only)."""
+        with TemporaryDirectory() as tmpdir:
+            full_path = os.path.join(tmpdir, "photo.jpg")
+            with open(full_path, "wb") as handle:
+                handle.write(b"photo")
+
+            self.assertFalse(
+                file_needs_metadata_compliance(
+                    full_path,
+                    ".jpg",
+                    get_orientation_flag=lambda _path: 1,
+                    can_bake_losslessly=lambda _path: False,
+                    extract_exif_rating=lambda _path: 5,
+                    lossless_rotation_extensions=frozenset({".jpg"}),
+                    needs_embedded_date=lambda _path: False,
+                )
+            )
+
+    def test_repair_lazily_strips_nonzero_exif_rating_when_already_repairing(self):
+        content_hash = "video123" + ("0" * 56)
+        with TemporaryDirectory() as tmpdir:
+            full_path = os.path.join(tmpdir, "clip.mov")
+            with open(full_path, "wb") as handle:
+                handle.write(b"video")
+
+            stripped = []
+
+            with patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=True,
+            ), patch(
+                "normalization_repair.ensure_embedded_media_date",
+                return_value=("1900:01:01 00:00:00", True),
+            ):
+                result = repair_file_metadata_compliance(
+                    full_path,
+                    ext=".mov",
+                    deps=_scan_deps(
+                        hash_cache=_HashCache(content_hash),
+                        extract_exif_rating=lambda _path: 5,
+                        strip_exif_rating=lambda path: stripped.append(path) or True,
+                    ),
+                )
+
+            self.assertTrue(result.fixed)
+            self.assertEqual(stripped, [full_path])
+            self.assertIn("rating_stripped", [event.action for event in result.log_events])
+            self.assertIn(
+                "date_metadata_canonicalized",
+                [event.action for event in result.log_events],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

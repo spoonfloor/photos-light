@@ -90,10 +90,11 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 
 **Still deferred (program later slices):**
 
-- Lazy rating-tag strip when a file is already in the repair pipeline (Phase C)
 - Full overlay.log model / export sidecar
 
-**Out of scope:** Full overlay.log.jsonl split, export sidecar for stars, perceptual/near-duplicate detection
+**Shipped (Phase C slice 8 — 2026-08-12):** Lazy EXIF rating strip when a file is already in repair/mutation (`canonicalize_photo_file`, video compliance repair, `finalize_mutated_media`). Non-zero EXIF stars alone do not trigger Clean.
+
+**Out of scope:** Full overlay.log.jsonl split, export sidecar for stars, perceptual/near-duplicate detection, library-wide EXIF star strip
 
 ---
 
@@ -113,7 +114,9 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 - Photos continue through `canonicalize_photo_file` write-back; skip path no longer ignores date-only drift
 - Contract tests: `test_media_date_contract.CleanRepairEmbedDateContractTest`, `test_media_dates.EnsureEmbeddedMediaDateTest`
 
-**Out of scope (still deferred):** fast-audit date criterion (Phase C); inventing dates from mtime during Clean; library-wide EXIF star strip
+**Out of scope (still deferred):** inventing dates from mtime during Clean; library-wide EXIF star strip
+
+**Also shipped (Phase C slice 8):** fast audit + compliance share `embedded_date_mismatch` via `collect_auto_fixable_metadata_issues`.
 
 ---
 

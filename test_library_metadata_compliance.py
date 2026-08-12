@@ -34,6 +34,7 @@ class MetadataComplianceSpecTest(unittest.TestCase):
         )
         self.assertIn("rating_zero", METADATA_COMPLIANCE_SPEC["auto_fix_kinds"])
         self.assertIn("unbaked_rotation", METADATA_COMPLIANCE_SPEC["auto_fix_kinds"])
+        self.assertIn("embedded_date_mismatch", METADATA_COMPLIANCE_SPEC["auto_fix_kinds"])
         self.assertIn("corrupted_media", METADATA_COMPLIANCE_SPEC["blocking_kinds"])
         self.assertIn("db_hash_mismatch", METADATA_COMPLIANCE_SPEC["blocking_kinds"])
 
@@ -191,6 +192,9 @@ class EnsureLibraryMetadataComplianceTest(unittest.TestCase):
                         "rating_stripped": True,
                     },
                 )(),
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
             ), patch(
                 "clean_library_fast_audit.verify_media_file",
                 return_value=(True, "mock"),

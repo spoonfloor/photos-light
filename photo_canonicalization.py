@@ -110,12 +110,14 @@ def canonicalize_photo_file(
     baked, _, _ = bake_orientation(file_path)
     orientation_baked = bool(baked)
 
-    rating = extract_exif_rating(file_path) if extract_exif_rating else None
+    # Capture EXIF rating for DB/app truth, then lazily strip any Rating tags from
+    # the file while we are already rewriting metadata (no library-wide EXIF walk).
+    exif_rating = extract_exif_rating(file_path) if extract_exif_rating else None
+    rating_for_db = None if exif_rating in (None, 0) else int(exif_rating)
     rating_stripped = False
-    if rating == 0 and strip_exif_rating:
+    if exif_rating is not None and strip_exif_rating:
         if not strip_exif_rating(file_path):
-            raise RuntimeError(f"Failed to strip rating=0 from {file_path}")
-        rating = None
+            raise RuntimeError(f"Failed to strip EXIF rating from {file_path}")
         rating_stripped = True
 
     metadata_changed = orientation_baked or rating_stripped
@@ -145,7 +147,7 @@ def canonicalize_photo_file(
         file_size=os.path.getsize(file_path),
         width=width,
         height=height,
-        rating=rating if rating != 0 else None,
+        rating=rating_for_db,
         metadata_changed=metadata_changed,
         orientation_baked=orientation_baked,
         rating_stripped=rating_stripped,

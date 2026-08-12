@@ -90,6 +90,9 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
             ), patch(
                 "clean_library_fast_audit.get_orientation_flag",
                 return_value=1,
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
             ):
                 issues = run_fast_library_audit(tmpdir, db_path=db_path)
 
@@ -122,6 +125,9 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
             ), patch(
                 "clean_library_fast_audit.get_orientation_flag",
                 return_value=1,
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
             ):
                 issues = run_fast_library_audit(tmpdir, db_path=db_path)
 
@@ -200,6 +206,9 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
             ), patch(
                 "clean_library_fast_audit.get_orientation_flag",
                 return_value=1,
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
             ):
                 issues = run_fast_library_audit(tmpdir, db_path=db_path)
 
@@ -237,6 +246,9 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
             ), patch(
                 "clean_library_fast_audit.get_orientation_flag",
                 return_value=1,
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
             ):
                 run_fast_library_audit(
                     tmpdir,
@@ -284,6 +296,9 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
             ), patch(
                 "clean_library_fast_audit.get_orientation_flag",
                 return_value=1,
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=False,
             ):
                 with self.assertRaises(FastAuditCancelled):
                     run_fast_library_audit(
@@ -291,6 +306,38 @@ class CleanLibraryFastAuditTest(unittest.TestCase):
                         db_path=db_path,
                         cancel_check=cancel_check,
                     )
+
+    def test_audit_flags_embedded_date_mismatch_via_shared_predicates(self):
+        with TemporaryDirectory() as tmpdir:
+            db_path, conn = self._create_library_db(tmpdir)
+            conn.close()
+            rel_path = os.path.join("2026", "2026-04-12", "img_20260412_abcd1234.jpg")
+            full_path = os.path.join(tmpdir, rel_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "wb") as handle:
+                handle.write(b"photo")
+
+            with patch(
+                "clean_library_fast_audit.verify_media_file",
+                return_value=(True, "mock"),
+            ), patch(
+                "clean_library_fast_audit.compute_hash_legacy",
+                return_value=("abcd1234" + ("0" * 56), False),
+            ), patch(
+                "clean_library_fast_audit.extract_exif_rating",
+                return_value=None,
+            ), patch(
+                "clean_library_fast_audit.get_orientation_flag",
+                return_value=1,
+            ), patch(
+                "normalization_repair.file_needs_embedded_date_repair",
+                return_value=True,
+            ):
+                issues = run_fast_library_audit(tmpdir, db_path=db_path)
+
+            kinds = [issue["kind"] for issue in issues]
+            self.assertIn("embedded_date_mismatch", kinds)
+            self.assertIn("mole_missing_from_db", kinds)
 
 
 if __name__ == "__main__":

@@ -7,13 +7,16 @@ single truth test; this module owns only the prep slice.
 
 Compliance spec (mirrors ``run_fast_library_audit`` with ``include_metadata_checks``):
 
-Auto-fix (this module):
+Auto-fix (this module) — same kinds as ``collect_auto_fixable_metadata_issues``:
   - ``rating_zero`` — strip EXIF rating=0 via ``strip_exif_rating``
   - ``unbaked_rotation`` — bake orientation when losslessly bakeable (photos via
     ``canonicalize_photo_file``; videos via ``bake_orientation``)
-  - embedded date taken — writable containers embed resolved date via
-    ``media_dates.ensure_embedded_media_date`` (incl. ``1900:01:01 00:00:00``);
-    not yet a fast-audit metadata kind (Phase C audit alignment)
+  - ``embedded_date_mismatch`` — writable containers embed resolved date via
+    ``media_dates.ensure_embedded_media_date`` (incl. ``1900:01:01 00:00:00``)
+
+Lazy (only while already repairing/mutating a file; not an audit trigger):
+  - any non-zero EXIF Rating/RatingPercent is stripped so legacy stars leave the
+    portable layer without a library-wide EXIF walk
 
 Blocking (audit only; not repaired here):
   - ``corrupted_media``, layout/path issues, ``db_hash_mismatch``, mole/ghost DB
@@ -38,6 +41,7 @@ from library_cleanliness import IGNORED_LIBRARY_FILES, is_supported_media_extens
 from library_filesystem import iter_library_walk
 from library_layout import resolve_db_path
 from normalization_repair import (
+    AUTO_FIXABLE_METADATA_KINDS,
     RepairFileError,
     RepairScanDependencies,
     repair_file_metadata_compliance,
@@ -56,8 +60,8 @@ CancelCheck = Optional[Callable[[], bool]]
 
 
 METADATA_COMPLIANCE_SPEC: Dict[str, Any] = {
-    "audit_metadata_kinds": ["rating_zero", "unbaked_rotation"],
-    "auto_fix_kinds": ["rating_zero", "unbaked_rotation"],
+    "audit_metadata_kinds": list(AUTO_FIXABLE_METADATA_KINDS),
+    "auto_fix_kinds": list(AUTO_FIXABLE_METADATA_KINDS),
     "blocking_kinds": [
         "corrupted_media",
         "misnamed_or_misfiled",

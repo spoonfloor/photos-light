@@ -83,12 +83,39 @@ def finalize_mutated_media(
     duplicate_trash_dir: Optional[str] = None,
     precomputed_hash: Optional[str] = None,
     defer_thumbnail_cleanup: bool = False,
+    strip_exif_rating: Optional[Callable[[str], bool]] = None,
+    extract_exif_rating: Optional[Callable[[str], Optional[int]]] = None,
 ) -> FinalizeMediaResult:
     rollback_moves: List[Tuple[str, str]] = []
     pending_thumbnail_hash: Optional[str] = None
     full_path = os.path.join(library_path, current_rel_path)
     if not os.path.exists(full_path):
         raise FileNotFoundError(f"Cannot finalize missing file: {current_rel_path}")
+
+    # Lazy EXIF rating strip while this file is already in a mutation pipeline.
+    # Stars remain DB/app truth; do not library-wide strip untouched files.
+    if extract_exif_rating is None or strip_exif_rating is None:
+        from file_operations import (
+            extract_exif_rating as default_extract_exif_rating,
+            strip_exif_rating as default_strip_exif_rating,
+        )
+
+        if extract_exif_rating is None:
+            extract_exif_rating = default_extract_exif_rating
+        if strip_exif_rating is None:
+            strip_exif_rating = default_strip_exif_rating
+
+    try:
+        if extract_exif_rating(full_path) is not None:
+            if not strip_exif_rating(full_path):
+                raise RuntimeError(f"Failed to strip EXIF rating from {current_rel_path}")
+            # Rating strip changes bytes — ignore any caller-supplied precomputed hash.
+            precomputed_hash = None
+    except RuntimeError:
+        raise
+    except Exception:
+        # extract failures: continue without strip rather than blocking mutation
+        pass
 
     dimensions = get_dimensions(full_path)
     width, height = dimensions if dimensions else (None, None)

@@ -133,6 +133,63 @@ class MetadataComplianceResult:
     log_events: List[RepairLogEvent] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class MetadataIssue:
+    """One auto-fixable metadata finding shared by audit and compliance."""
+
+    kind: str
+    detail: str = ""
+
+
+AUTO_FIXABLE_METADATA_KINDS = (
+    "rating_zero",
+    "unbaked_rotation",
+    "embedded_date_mismatch",
+)
+
+
+def collect_auto_fixable_metadata_issues(
+    full_path: str,
+    ext: str,
+    *,
+    get_orientation_flag: Callable[[str], Optional[int]],
+    can_bake_losslessly: Callable[[str], bool],
+    extract_exif_rating: Callable[[str], Optional[int]],
+    lossless_rotation_extensions: frozenset[str],
+    needs_embedded_date: Optional[Callable[[str], bool]] = None,
+) -> List[MetadataIssue]:
+    """Return auto-fixable metadata issues for one file.
+
+    Shared by Clean/Convert compliance and ``run_fast_library_audit``.
+
+    Non-zero EXIF ratings are intentionally **not** listed: legacy stars stay on
+    disk until a file is already in the repair/mutation pipeline (lazy strip).
+    ``rating_zero`` remains an explicit auto-fix trigger.
+    """
+    issues: List[MetadataIssue] = []
+    file_type = media_kind_for_extension(ext) or "photo"
+    orientation = get_orientation_flag(full_path)
+    if file_type == "photo":
+        if orientation not in (None, 1) and can_bake_losslessly(full_path):
+            issues.append(MetadataIssue("unbaked_rotation", str(orientation)))
+    elif orientation not in (None, 1) and ext in lossless_rotation_extensions:
+        issues.append(MetadataIssue("unbaked_rotation", str(orientation)))
+
+    if extract_exif_rating(full_path) == 0:
+        issues.append(MetadataIssue("rating_zero"))
+
+    date_check = needs_embedded_date or (
+        lambda path: file_needs_embedded_date_repair(
+            path,
+            allow_mtime_fallback=False,
+        )
+    )
+    if date_check(full_path):
+        issues.append(MetadataIssue("embedded_date_mismatch"))
+
+    return issues
+
+
 def file_needs_metadata_compliance(
     full_path: str,
     ext: str,
@@ -148,22 +205,17 @@ def file_needs_metadata_compliance(
     Covers orientation bake, rating=0 strip, and missing/mismatched embedded
     dates on writable containers (same ``media_dates`` policy as Add / date edit).
     """
-    file_type = media_kind_for_extension(ext) or "photo"
-    orientation = get_orientation_flag(full_path)
-    if file_type == "photo":
-        if orientation not in (None, 1) and can_bake_losslessly(full_path):
-            return True
-    elif orientation not in (None, 1) and ext in lossless_rotation_extensions:
-        return True
-    if extract_exif_rating(full_path) == 0:
-        return True
-    date_check = needs_embedded_date or (
-        lambda path: file_needs_embedded_date_repair(
-            path,
-            allow_mtime_fallback=False,
+    return bool(
+        collect_auto_fixable_metadata_issues(
+            full_path,
+            ext,
+            get_orientation_flag=get_orientation_flag,
+            can_bake_losslessly=can_bake_losslessly,
+            extract_exif_rating=extract_exif_rating,
+            lossless_rotation_extensions=lossless_rotation_extensions,
+            needs_embedded_date=needs_embedded_date,
         )
     )
-    return bool(date_check(full_path))
 
 
 def _photo_repair_log_events(
@@ -210,6 +262,9 @@ def repair_file_metadata_compliance(
     Matches the metadata slice used during Clean scan/repair and shared with
     Convert's pre-audit compliance pass. Only mutates files that need orientation
     bake, rating=0 strip, or embedded-date repair (writable containers).
+
+    When already repairing, any EXIF Rating/RatingPercent tag is stripped lazily
+    (including legacy non-zero stars). Non-zero ratings alone do not trigger repair.
     """
     if not file_needs_metadata_compliance(
         full_path,
@@ -263,9 +318,10 @@ def repair_file_metadata_compliance(
         elif baked_orientation is not None:
             log_events.append(RepairLogEvent("orientation_kept", {"message": message}))
 
-    if deps.extract_exif_rating(full_path) == 0:
+    # Lazy strip: any EXIF rating while this file is already in the repair pipeline.
+    if deps.extract_exif_rating(full_path) is not None:
         if not deps.strip_exif_rating(full_path):
-            raise RepairFileError(f"Failed to strip rating=0 from {full_path}")
+            raise RepairFileError(f"Failed to strip EXIF rating from {full_path}")
         metadata_changed = True
         log_events.append(RepairLogEvent("rating_stripped"))
 
@@ -447,6 +503,8 @@ def normalize_repair_scan_identity(
     file_type = media_kind_for_extension(ext) or "photo"
 
     if file_type == "photo":
+        exif_rating = deps.extract_exif_rating(full_path)
+        rating_for_db = None if exif_rating in (None, 0) else int(exif_rating)
         has_metadata_cleanup_signal = file_needs_metadata_compliance(
             full_path,
             ext,
@@ -494,12 +552,14 @@ def normalize_repair_scan_identity(
             date_obj=canonical_photo.date_obj,
             width=canonical_photo.width,
             height=canonical_photo.height,
-            rating=canonical_photo.rating,
+            rating=canonical_photo.rating or rating_for_db,
             metadata_cleaned=canonical_photo.metadata_changed or compliance.fixed,
             has_metadata_cleanup_signal=has_metadata_cleanup_signal,
             log_events=log_events,
         )
 
+    exif_rating = deps.extract_exif_rating(full_path)
+    rating_for_db = None if exif_rating in (None, 0) else int(exif_rating)
     has_metadata_cleanup_signal = file_needs_metadata_compliance(
         full_path,
         ext,
@@ -528,7 +588,6 @@ def normalize_repair_scan_identity(
     date_taken = read_media_date(full_path, allow_mtime_fallback=False)
     date_obj = datetime.strptime(date_taken, "%Y:%m:%d %H:%M:%S")
     width, height = deps.read_dimensions(full_path)
-    rating = deps.extract_exif_rating(full_path)
 
     return RepairScanIdentity(
         file_type=file_type,
@@ -538,7 +597,7 @@ def normalize_repair_scan_identity(
         date_obj=date_obj,
         width=width,
         height=height,
-        rating=rating,
+        rating=rating_for_db,
         metadata_cleaned=metadata_cleaned,
         has_metadata_cleanup_signal=has_metadata_cleanup_signal,
         log_events=log_events,

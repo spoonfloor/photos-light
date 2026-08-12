@@ -423,6 +423,8 @@ def _detail_message_for_issue(issue: Dict[str, str]) -> str:
         return f"{path} has unbaked rotation ({detail})" if detail else f"{path} has unbaked rotation"
     if kind == "rating_zero":
         return f"{path} has rating=0 metadata that should be stripped"
+    if kind == "embedded_date_mismatch":
+        return f"{path} embedded date does not match the resolved library date"
     if kind == "ghost_db_reference":
         return f"{path} is missing on disk but still present in the database"
     if kind == "mole_missing_from_db":
@@ -524,7 +526,7 @@ def summarize_clean_library_issues(issues: List[Dict[str, str]]) -> Dict[str, An
             details["duplicates"].append(_detail_item(issue))
         elif kind in {"corrupted_media", "unsupported_or_nonmedia"}:
             details["unsupported_files"].append(_detail_item(issue))
-        elif kind in {"unbaked_rotation", "rating_zero"}:
+        elif kind in {"unbaked_rotation", "rating_zero", "embedded_date_mismatch"}:
             if path not in trash_paths:
                 details["metadata_cleanup"].append(_detail_item(issue))
         elif kind in {
@@ -596,6 +598,8 @@ def _metadata_cleanup_detail(path: str, issues: List[Dict[str, str]]) -> Dict[st
     for issue in sorted(issues, key=lambda item: item["kind"]):
         if issue["kind"] == "rating_zero":
             parts.append("strip rating=0 metadata")
+        elif issue["kind"] == "embedded_date_mismatch":
+            parts.append("embed resolved date taken")
         elif issue["kind"] == "unbaked_rotation":
             orientation = (issue.get("detail") or "").strip()
             parts.append(
@@ -758,7 +762,7 @@ def summarize_clean_library_operations(
                 misnamed_issues_by_path[path] = issue
             continue
 
-        if kind in {"unbaked_rotation", "rating_zero"}:
+        if kind in {"unbaked_rotation", "rating_zero", "embedded_date_mismatch"}:
             if path in trashed_paths:
                 continue
             metadata_issues_by_path.setdefault(path, []).append(issue)
@@ -1883,12 +1887,37 @@ class LibraryCleaner:
             date_obj=identity.date_obj,
             width=identity.width,
             height=identity.height,
-            rating=identity.rating if identity.rating != 0 else None,
+            rating=_merge_scan_rating(identity.rating, self._db_rating_for_path(rel_path)),
             metadata_cleaned=identity.metadata_cleaned,
             has_metadata_cleanup_signal=identity.has_metadata_cleanup_signal,
             birth_time=get_birth_time(stat_result),
             modified_time=float(stat_result.st_mtime),
         )
+
+    def _db_rating_for_path(self, rel_path: str) -> Optional[int]:
+        """Preserve DB-only stars across Clean rebuild when EXIF was stripped."""
+        if self.db_conn is None:
+            return None
+        row = self.db_conn.execute(
+            "SELECT rating FROM photos WHERE current_path = ?",
+            (rel_path,),
+        ).fetchone()
+        if row is None:
+            return None
+        rating = row["rating"]
+        if rating in (None, 0):
+            return None
+        return int(rating)
+
+    @staticmethod
+    def _merge_scan_rating(
+        identity_rating: Optional[int],
+        db_rating: Optional[int],
+    ) -> Optional[int]:
+        for candidate in (identity_rating, db_rating):
+            if candidate not in (None, 0):
+                return int(candidate)
+        return None
 
     def _count_walk_files(self) -> int:
         """Count supported media files under the library (matches scan progress ticks)."""
