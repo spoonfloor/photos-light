@@ -202,6 +202,7 @@ class DateAddedTrashRestoreTest(unittest.TestCase):
             library_path=self.library_path,
             trash_dir=photo_app.TRASH_DIR,
         )
+        conn.commit()
         conn.close()
         self.assertEqual(status, "restored")
         self.assertIsNone(error)

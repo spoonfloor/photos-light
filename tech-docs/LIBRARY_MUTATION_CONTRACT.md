@@ -131,7 +131,7 @@ Current wiring (audit as of 2026-06):
 | Rotate | ✅ |
 
 New mutators must use the same hook. Use `commit_row_mutation(conn, *, invalidate_histogram=True)` rather than scattering raw `commit()` + invalidation calls.
-Delete and restore are file-first row mutations: verify the move succeeded before changing the DB row, and roll the file move back if row archival/restore fails.
+Delete and restore are file-first row mutations: verify the move succeeded before changing the DB row, and roll the file move back if row archival/restore fails. Restore lands on the shared canonical path when `date_taken` + `content_hash` are present, and merge checks use star-blind `duplicate_key` as well as raw hash. Helpers in `trash_catalog.py` do **not** commit — routes call `commit_row_mutation`.
 
 ### Error shape
 

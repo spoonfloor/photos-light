@@ -246,9 +246,17 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 - Abandoned folders cleaned after path rename (`cleanup_empty_date_folders`)
 - Contract tests: `test_rotate_photo.py`, `test_rotation_heic.py`
 
-**Still open (slice 5+):**
+**Slice 5 (trash/restore) — shipped 2026-08-12:**
 
-- Per-flow logic still scattered in `app.py` vs `normalization_*` for trash/restore and other one-offs
+- Delete/restore stay file-first with verify-before-DB; restore rolls file back into trash if catalog write fails
+- Restore helper no longer mid-commits — route owns `commit_row_mutation`
+- Restore lands on shared canonical path (`build_canonical_photo_path`) when date+hash present
+- Trash archive + restore merge use star-blind identity (same duplicate_key as import/Clean)
+- Contract tests: `test_trash_view.py`, `test_date_added.py` restore path
+
+**Still open (later slices):**
+
+- Embed dates on all writable repair paths (slice 6); open reconcile / Clean UX (Phase C)
 
 **Existing building blocks (reuse, do not restart):**
 
@@ -374,7 +382,7 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - [x] Star toggle: DB-only; no file mutation (Phase A slice 2 — 2026-08-12)
 - [x] Star-blind `duplicate_key` wired through import, Clean, finalize (Phase A slice 3 — 2026-08-12)
 - [x] Rotate → full finalize; canonical path after hash change (Phase B slice 4 — 2026-08-12)
-- [ ] Remaining file mutators (trash/restore, app.py one-offs) on shared compliance primitives
+- [x] Trash/restore on shared compliance primitives (Phase B slice 5 — 2026-08-12)
 - [ ] Embedded dates on all writable repair/mutation paths (1900 unknown)
 - [ ] Background open reconcile; no Clean prompt on healthy library
 - [ ] One audit predicate set shared by reconcile, Inspect (when built), and Clean

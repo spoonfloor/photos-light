@@ -6,12 +6,14 @@ import json
 import os
 import shutil
 from collections import defaultdict
-from typing import Callable, Literal, Optional, Tuple
+from typing import Callable, Iterable, Literal, Optional, Tuple
 
 RestoreOutcome = Literal['restored', 'merged', 'error']
 TrashArchiveOutcome = Literal['archived', 'merged_duplicate']
 
+from library_cleanliness import build_canonical_photo_path
 from library_filesystem import move_file_to_category_trash
+from normalization_contract import compute_duplicate_key
 
 USER_DELETED_TRASH_CATEGORY = 'user_deleted'
 
@@ -62,6 +64,21 @@ def user_trash_dir_for_library(library_path: str) -> str:
     return os.path.join(library_path, '.trash')
 
 
+def _identity_hashes_for_file(
+    full_path: str,
+    *,
+    content_hash: Optional[str] = None,
+) -> list:
+    """Raw content hash plus star-blind duplicate_key when they differ."""
+    hashes = []
+    if content_hash:
+        hashes.append(content_hash)
+    duplicate_key = compute_duplicate_key(full_path, fallback_hash=content_hash)
+    if duplicate_key and duplicate_key not in hashes:
+        hashes.append(duplicate_key)
+    return hashes
+
+
 def deleted_row_for_content_hash(cursor, content_hash: str):
     """Find a user-deleted row whose archived photo_data matches ``content_hash``."""
     if not content_hash:
@@ -77,6 +94,45 @@ def deleted_row_for_content_hash(cursor, content_hash: str):
     ).fetchone()
 
 
+def deleted_row_for_identity_hashes(cursor, identity_hashes: Iterable[str]):
+    """Find a trash row matching any raw or star-blind identity hash."""
+    for identity_hash in identity_hashes:
+        row = deleted_row_for_content_hash(cursor, identity_hash)
+        if row:
+            return row
+    return None
+
+
+def live_row_for_identity_hashes(cursor, identity_hashes: Iterable[str]):
+    """Find a live photos row matching any raw or star-blind identity hash."""
+    for identity_hash in identity_hashes:
+        if not identity_hash:
+            continue
+        row = cursor.execute(
+            "SELECT id, current_path FROM photos WHERE content_hash = ?",
+            (identity_hash,),
+        ).fetchone()
+        if row:
+            return row
+    return None
+
+
+def _canonical_restore_rel_path(photo_data: dict, original_path: str) -> str:
+    """Prefer the shared canonical path when date + hash are available."""
+    date_taken = photo_data.get('date_taken')
+    content_hash = photo_data.get('content_hash')
+    ext = os.path.splitext(original_path)[1] or os.path.splitext(
+        str(photo_data.get('current_path') or '')
+    )[1]
+    if not date_taken or not content_hash or not ext:
+        return original_path
+    try:
+        rel_path, _ = build_canonical_photo_path(date_taken, content_hash, ext)
+        return rel_path
+    except Exception:
+        return original_path
+
+
 def archive_live_photo_to_user_trash(
     cursor,
     *,
@@ -90,12 +146,14 @@ def archive_live_photo_to_user_trash(
     """
     Move one live library photo into user trash.
 
-    When ``content_hash`` already exists in ``deleted_photos``, silently merge:
-    discard the duplicate bytes on disk, refresh ``deleted_at`` on the existing
-    trash row, and do not insert a second grid row (Google Photos trash model).
+    When ``content_hash`` / star-blind ``duplicate_key`` already exists in
+    ``deleted_photos``, silently merge: discard the duplicate bytes on disk,
+    refresh ``deleted_at`` on the existing trash row, and do not insert a second
+    grid row (Google Photos trash model).
 
     Returns ``(outcome, trash_filename, error_message)``.
     ``trash_filename`` is set only for a newly archived row (for callers that log paths).
+    Caller owns the DB transaction — this helper does not commit.
     """
     content_hash = photo_data.get('content_hash')
     original_full_path = os.path.join(library_path, current_path)
@@ -103,7 +161,11 @@ def archive_live_photo_to_user_trash(
     if not os.path.exists(original_full_path):
         return 'archived', None, f'Photo {photo_id} file not found on disk'
 
-    existing_row = deleted_row_for_content_hash(cursor, content_hash) if content_hash else None
+    identity_hashes = _identity_hashes_for_file(
+        original_full_path,
+        content_hash=content_hash,
+    )
+    existing_row = deleted_row_for_identity_hashes(cursor, identity_hashes)
 
     if existing_row:
         existing_data = dict(existing_row)
@@ -171,7 +233,12 @@ def restore_or_merge_deleted_photo(
 ) -> Tuple[RestoreOutcome, Optional[int], Optional[str]]:
     """
     Restore one deleted photo, or merge with a live library copy when the hash
-    already exists in ``photos``.
+    (or star-blind duplicate key) already exists in ``photos``.
+
+    Restores onto the shared canonical path when date_taken + content_hash are
+    present. File moves are verified before DB mutation; on DB failure the file
+    is rolled back into trash. Caller owns the DB transaction — this helper does
+    not commit.
 
     Returns ``(outcome, live_photo_id, error_message)``.
     """
@@ -189,43 +256,76 @@ def restore_or_merge_deleted_photo(
     content_hash = photo_data.get('content_hash')
 
     trash_path = resolve_user_deleted_trash_path(trash_dir, trash_filename)
-    full_path = os.path.join(library_path, original_path)
-
     if not trash_path or not os.path.exists(trash_path):
         return 'error', None, f'Photo {photo_id} file not found in trash'
 
-    live_row = None
-    if content_hash:
-        live_row = cursor.execute(
-            "SELECT id, current_path FROM photos WHERE content_hash = ?",
-            (content_hash,),
-        ).fetchone()
+    identity_hashes = _identity_hashes_for_file(
+        trash_path,
+        content_hash=content_hash,
+    )
+    live_row = live_row_for_identity_hashes(cursor, identity_hashes)
 
     if live_row:
         live_path = os.path.join(library_path, live_row['current_path'])
+        moved_into_missing_live = False
         if not os.path.exists(live_path):
             os.makedirs(os.path.dirname(live_path), exist_ok=True)
             shutil.move(trash_path, live_path)
+            if not os.path.exists(live_path):
+                return 'error', None, f'Failed to verify merged file for photo {photo_id}'
+            moved_into_missing_live = True
         else:
             os.remove(trash_path)
-        cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
-        cursor.connection.commit()
+        try:
+            cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
+        except Exception as error:
+            if moved_into_missing_live and os.path.exists(live_path) and not os.path.exists(trash_path):
+                try:
+                    os.makedirs(os.path.dirname(trash_path), exist_ok=True)
+                    shutil.move(live_path, trash_path)
+                except Exception:
+                    pass
+            return 'error', None, f'Failed to update trash index for photo {photo_id}: {error}'
         return 'merged', live_row['id'], None
+
+    target_rel_path = _canonical_restore_rel_path(photo_data, original_path)
+    full_path = os.path.join(library_path, target_rel_path)
+    if (
+        os.path.exists(full_path)
+        and os.path.abspath(full_path) != os.path.abspath(trash_path)
+    ):
+        return (
+            'error',
+            None,
+            f'Canonical path occupied while restoring photo {photo_id}: {target_rel_path}',
+        )
+
+    photo_data = dict(photo_data)
+    photo_data['current_path'] = target_rel_path
 
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     shutil.move(trash_path, full_path)
     if not os.path.exists(full_path):
         return 'error', None, f'Failed to verify restored file for photo {photo_id}'
 
-    columns = list(photo_data.keys())
-    placeholders = ', '.join(['?' for _ in columns])
-    values = [photo_data[col] for col in columns]
-    cursor.execute(
-        f"INSERT INTO photos ({', '.join(columns)}) VALUES ({placeholders})",
-        values,
-    )
-    cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
-    cursor.connection.commit()
+    try:
+        columns = list(photo_data.keys())
+        placeholders = ', '.join(['?' for _ in columns])
+        values = [photo_data[col] for col in columns]
+        cursor.execute(
+            f"INSERT INTO photos ({', '.join(columns)}) VALUES ({placeholders})",
+            values,
+        )
+        cursor.execute("DELETE FROM deleted_photos WHERE id = ?", (photo_id,))
+    except Exception as error:
+        try:
+            if os.path.exists(full_path) and not os.path.exists(trash_path):
+                os.makedirs(os.path.dirname(trash_path), exist_ok=True)
+                shutil.move(full_path, trash_path)
+        except Exception:
+            pass
+        return 'error', None, f'Failed to restore photo {photo_id} into catalog: {error}'
+
     return 'restored', photo_id, None
 
 

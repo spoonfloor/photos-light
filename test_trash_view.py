@@ -113,16 +113,24 @@ class TrashViewTests(unittest.TestCase):
         self.assertEqual(payload["restored"], 1)
         self.assertEqual(payload["merged"], 0)
         self.assertEqual(payload["merged_ids"], [])
-        self.assertTrue(
-            os.path.exists(os.path.join(self.library_path, "2024/2024-01-15/photo.jpg"))
+
+        from library_cleanliness import build_canonical_photo_path
+
+        expected_rel, _ = build_canonical_photo_path(
+            "2024:01:15 12:00:00",
+            "abc1234",
+            ".jpg",
         )
+        self.assertTrue(os.path.exists(os.path.join(self.library_path, expected_rel)))
 
         conn = sqlite3.connect(self.db_path)
         deleted_count = conn.execute("SELECT COUNT(*) FROM deleted_photos").fetchone()[0]
         live_count = conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+        live_path = conn.execute("SELECT current_path FROM photos WHERE id = 1").fetchone()[0]
         conn.close()
         self.assertEqual(deleted_count, 0)
         self.assertEqual(live_count, 1)
+        self.assertEqual(live_path, expected_rel)
 
     def test_restore_merges_when_live_copy_already_exists(self):
         self.client.post("/api/photos/delete", json={"photo_ids": [1]})
@@ -343,6 +351,138 @@ class TrashViewTests(unittest.TestCase):
             rows[0]["trash_filename"],
         )
         self.assertTrue(os.path.isfile(adopted))
+
+    def test_restore_helper_does_not_commit_caller_owns_transaction(self):
+        from trash_catalog import restore_or_merge_deleted_photo
+
+        self.client.post("/api/photos/delete", json={"photo_ids": [1]})
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        status, restored_id, error = restore_or_merge_deleted_photo(
+            cursor,
+            photo_id=1,
+            trash_dir=photo_app.TRASH_DIR,
+            library_path=self.library_path,
+        )
+        self.assertEqual(status, "restored")
+        self.assertIsNone(error)
+        self.assertEqual(restored_id, 1)
+
+        # Uncommitted: a fresh connection must not see the restore yet.
+        other = sqlite3.connect(self.db_path)
+        self.assertEqual(
+            other.execute("SELECT COUNT(*) FROM deleted_photos").fetchone()[0],
+            1,
+        )
+        self.assertEqual(
+            other.execute("SELECT COUNT(*) FROM photos").fetchone()[0],
+            0,
+        )
+        other.close()
+
+        conn.commit()
+        conn.close()
+
+        other = sqlite3.connect(self.db_path)
+        self.assertEqual(
+            other.execute("SELECT COUNT(*) FROM deleted_photos").fetchone()[0],
+            0,
+        )
+        self.assertEqual(
+            other.execute("SELECT COUNT(*) FROM photos").fetchone()[0],
+            1,
+        )
+        other.close()
+
+    def test_restore_merges_star_blind_when_live_twin_has_stripped_hash(self):
+        """Rated trash copy collapses against unrated live twin (star-blind)."""
+        from file_operations import write_exif_rating
+        from hash_cache import compute_hash_legacy
+        from library_cleanliness import build_canonical_photo_path
+        from PIL import Image
+
+        self.client.post("/api/photos/delete", json={"photo_ids": [1]})
+        # Purge the seeded short-hash fixture so we can use real JPEG hashes.
+        self.client.post("/api/trash/purge", json={"photo_ids": [1]})
+
+        plain = os.path.join(self._tmpdir, "plain.jpg")
+        starred = os.path.join(self._tmpdir, "starred.jpg")
+        Image.new("RGB", (12, 12), (9, 8, 7)).save(plain, "JPEG", quality=95)
+        shutil.copy2(plain, starred)
+        self.assertTrue(write_exif_rating(starred, 5))
+        plain_hash = compute_hash_legacy(plain)
+        starred_hash = compute_hash_legacy(starred)
+        self.assertNotEqual(plain_hash, starred_hash)
+
+        date_taken = "2024:01:15 12:00:00"
+        live_rel, _ = build_canonical_photo_path(date_taken, plain_hash, ".jpg")
+        live_full = os.path.join(self.library_path, live_rel)
+        os.makedirs(os.path.dirname(live_full), exist_ok=True)
+        shutil.copy2(plain, live_full)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                id, original_filename, current_path, date_taken,
+                content_hash, file_size, file_type, width, height, rating
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                10,
+                "plain.jpg",
+                live_rel,
+                date_taken,
+                plain_hash,
+                os.path.getsize(live_full),
+                "photo",
+                12,
+                12,
+                None,
+            ),
+        )
+        # Put starred twin into trash via archive helper path: insert deleted row + file.
+        trash_rel = f"{USER_DELETED_TRASH_CATEGORY}/2024/2024-01-15/starred.jpg"
+        trash_full = os.path.join(photo_app.TRASH_DIR, trash_rel)
+        os.makedirs(os.path.dirname(trash_full), exist_ok=True)
+        shutil.copy2(starred, trash_full)
+        photo_data = {
+            "id": 11,
+            "original_filename": "starred.jpg",
+            "current_path": "misc/starred.jpg",
+            "date_taken": date_taken,
+            "content_hash": starred_hash,
+            "file_size": os.path.getsize(starred),
+            "file_type": "photo",
+            "width": 12,
+            "height": 12,
+            "rating": 5,
+        }
+        conn.execute(
+            """
+            INSERT INTO deleted_photos (id, original_path, trash_filename, deleted_at, photo_data)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (11, "misc/starred.jpg", trash_rel, "2024-01-16T00:00:00", json.dumps(photo_data)),
+        )
+        conn.commit()
+        conn.close()
+
+        response = self.client.post("/api/photos/restore", json={"photo_ids": [11]})
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["restored"], 1)
+        self.assertEqual(payload["merged"], 1)
+
+        conn = sqlite3.connect(self.db_path)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0], 1)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM deleted_photos").fetchone()[0], 0)
+        self.assertEqual(conn.execute("SELECT id FROM photos").fetchone()[0], 10)
+        conn.close()
+        self.assertTrue(os.path.isfile(live_full))
+        self.assertFalse(os.path.exists(trash_full))
 
 
 if __name__ == "__main__":
