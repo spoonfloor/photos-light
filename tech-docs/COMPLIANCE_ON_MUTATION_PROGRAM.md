@@ -1,6 +1,6 @@
 # Compliance-on-Mutation Program
 
-**Status:** Open — program handoff  
+**Status:** Phase C complete — Phase D verification remaining  
 **Last updated:** August 12, 2026  
 **Tracker:** [`bugs-to-be-fixed.md`](../bugs-to-be-fixed.md) (active queue items cross-reference this doc)  
 **North star:** [`GREENFIELD_LIBRARY_DESIGN.md`](GREENFIELD_LIBRARY_DESIGN.md) §6–9, C3, C8 — incremental, not scorched-earth  
@@ -256,7 +256,7 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 
 **Still open (later slices):**
 
-- Clean UX shrink / no Clean prompt on healthy library (Phase C slice 9)
+- Phase D verification / packaged `.app` rebuild
 
 **Existing building blocks (reuse, do not restart):**
 
@@ -345,9 +345,31 @@ Shared auto-fixable metadata kinds for Clean audit + compliance, plus lazy EXIF 
 
 ### 8. Shrink Clean UX
 
-- Document: Clean / **Verify & repair** for legacy, tampering, repair — not day-to-day hygiene
-- UI: no routine Clean nudge when health check passes
-- Clean v2 remains full-batch orchestrator consuming shared modules ([`CLEAN_LIBRARY_V2_HANDOFF.md`](CLEAN_LIBRARY_V2_HANDOFF.md))
+**Status:** Shipped (Phase C slice 9 — 2026-08-12)
+
+Product framing: full-batch Clean is **Verify & repair** — exceptional, not routine hygiene.
+
+**Shipped:**
+
+- Utilities + overlay renamed to **Verify & repair**; explainer states exceptional use (legacy, external edits, something looks wrong)
+- Health gates: empty inventory → Done only; legacy `CLEAN` audit → Done only (no “Continue anyway?” nudge)
+- New empty library via `createAndSwitchLibraryInSubfolder` opens with `switchToLibrary` — no blocking make-perfect
+- Healthy open paths already skip make-perfect (`test_grid_handoff_contract`)
+- Docs: when-to-use section below; Clean v2 remains the full-batch engine
+
+**When to use Verify & repair**
+
+| Situation | Action |
+|-----------|--------|
+| Everyday Add / date edit / rotate / open | Nothing — compliance-on-mutation + open reconcile |
+| First open of a messy/legacy collection | Recovery journey may run full repair |
+| Finder / other-app edits, suspected drift | **Verify & repair** (utilities) |
+| Interrupted prior repair | Resume from checkpoint |
+
+**Definition of done:**
+
+- No routine Clean nudge when health check / empty / clean audit passes
+- Copy scopes the command as exceptional full-batch repair
 
 ---
 
@@ -422,8 +444,8 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - [x] Embedded dates on all writable repair/mutation paths (1900 unknown) (Phase B slice 6 — 2026-08-12)
 - [x] Background open reconcile on library open (Phase C slice 7 — 2026-08-12)
 - [x] Audit/compliance share auto-fixable metadata kinds; lazy EXIF rating strip on mutation (Phase C slice 8 — 2026-08-12)
-- [ ] No Clean prompt on healthy library (slice 9 UX)
-- [ ] Clean documented and scoped as exceptional full-batch repair
+- [x] No Clean prompt on healthy / empty / clean-audit library; Verify & repair exceptional framing (Phase C slice 9 — 2026-08-12)
+- [x] Clean / Verify & repair documented and scoped as exceptional full-batch repair (Phase C slice 9 — 2026-08-12)
 - [ ] Contract tests cover above; packaged `.app` smoke green
 
 ---

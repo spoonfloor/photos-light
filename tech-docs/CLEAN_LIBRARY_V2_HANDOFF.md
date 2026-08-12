@@ -108,19 +108,23 @@ Add Photos and Clean now share normalization identity rules instead of carrying 
 
 ## Product behavior today
 
-### Clean library (Utilities → Clean)
+### Clean library (Utilities → Verify & repair)
+
+Product name: **Verify & repair** (exceptional full-batch repair). Engine modules still use “Clean library” / `make-perfect` identifiers.
 
 1. Overlay opens → checkpoint probe (`GET /api/library/make-perfect/checkpoint`). If resumable, user picks **Continue**, **Start over**, or **Cancel**.
 2. **Cheap inventory preflight** (`GET /api/library/make-perfect/scan`).
-3. Shows **N photos, P videos — about X hours** (or **Resume — about X remaining** if interrupted run exists).
+3. Shows **N photos, P videos — about X hours** (or **Resume — about X remaining** if interrupted run exists). Empty inventory or legacy `CLEAN` audit → **Done** only (no repair nudge).
 4. User clicks **Continue** → streaming clean (`POST /api/library/make-perfect/stream`).
 5. Working UI shows **6 steps** with file progress on scan, organize, rebuild, and final verification. Secondary line: **Total time remaining** (preflight estimate minus elapsed).
 6. Engine runs repair phases, then **blocking final verification** (step 6). Run succeeds only if audit returns zero issues.
 7. Finished UI → grid reloads.
 
-Implementation: `static/js/main.js` → `openUpdateIndexOverlay()` (preflight) → `executeUpdateIndex()` → `streamMakeLibraryPerfect()`.
+Implementation: `static/js/main.js` → `openCleanLibraryOverlay()` (preflight) → `executeUpdateIndex()` → `streamMakeLibraryPerfect()`.
 
-**Cancel** during run = pause (checkpoint preserved; toast: "Cleanup paused. You can continue it later.").
+**Cancel** during run = pause (checkpoint preserved; toast: "Repair paused. You can continue it later from Verify & repair.").
+
+**When to use:** legacy / messy first open, external tampering, or user-initiated recovery — not day-to-day hygiene (see [`COMPLIANCE_ON_MUTATION_PROGRAM.md`](COMPLIANCE_ON_MUTATION_PROGRAM.md) slice 9).
 
 **Legacy engine:** preflight still runs **full audit** (`DIRTY`/`CLEAN` + issue counts). No inventory duration. Resume stubs are no-ops.
 

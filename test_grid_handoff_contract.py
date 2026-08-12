@@ -196,6 +196,28 @@ class TestGridHandoffContract(unittest.TestCase):
         self.assertNotIn("/api/library/make-perfect/scan", body)
         self.assertNotIn("switchToLibraryWithBlockingNormalize", body)
 
+    def test_create_library_in_subfolder_skips_blocking_verify_repair(self):
+        """New empty libraries are healthy — do not auto-run Verify & repair."""
+        body = _function_body(self.main_js, "createAndSwitchLibraryInSubfolder")
+        self.assertIn("switchToLibrary(", body)
+        self.assertNotIn("switchToLibraryWithBlockingNormalize", body)
+        self.assertNotIn("/api/library/make-perfect", body)
+
+    def test_verify_repair_preflight_does_not_nudge_when_audit_clean(self):
+        body = _function_body(self.main_js, "renderCleanLibraryPreflightResult")
+        self.assertIn("Library looks healthy. No Verify & repair needed.", body)
+        self.assertIn("showCleanLibraryButtons('done')", body)
+        self.assertNotIn("Continue anyway?", body)
+
+    def test_verify_repair_product_copy_uses_exceptional_framing(self):
+        self.assertIn(
+            "const CLEAN_LIBRARY_OVERLAY_TITLE = 'Verify & repair';",
+            self.main_js,
+        )
+        utilities = (REPO_ROOT / "static" / "fragments" / "utilitiesMenu.html").read_text()
+        self.assertIn("Verify &amp; repair", utilities)
+        self.assertNotIn(">Clean library<", utilities)
+
     def test_open_existing_library_closes_before_picker(self):
         body = _function_body(self.main_js, "openExistingLibrary")
         begin_at = body.find("await beginLibrarySwapFlow()")

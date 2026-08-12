@@ -149,7 +149,7 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 1. **One pipeline on every mutation** — Add, Convert, date edit, rotate, trash/restore all call the same probe → transform → embed → verify → hash → commit primitives; fail closed (no catalog commit if verify fails). ~~Rotate gap closed~~ (slice 4); ~~trash/restore gap closed~~ (slice 5 — 2026-08-12: file-first verify, route-owned commit, canonical restore path, star-blind merge).
 2. **Verify-after-write everywhere** — reuse `write_photo_date_metadata` verification pattern; no “mostly done” file state.
 3. **Light reconcile on library open** — ~~shipped~~ (Phase C slice 7 — 2026-08-12: `library_open_reconcile.py` background dirty-delta; ghosts + size-drift via shared `repair_file_metadata_compliance`). Full repair stays explicit (**Verify & repair** utilities entry).
-4. **Shrink Clean UX** — first open of legacy/messy libraries and user-initiated repair only; document that routine Clean should be unnecessary on compliant libraries.
+4. **Shrink Clean UX** — ~~shipped~~ (Phase C slice 9 — 2026-08-12: utilities/overlay **Verify & repair**; no Done-vs-Continue nudge on empty / clean audit; new empty libraries skip blocking make-perfect).
 
 **Out of scope for this initiative:**
 

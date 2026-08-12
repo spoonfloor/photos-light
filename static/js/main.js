@@ -10914,13 +10914,17 @@ function setTerraformPreviewActionButtons({ continueDisabled = false } = {}) {
   }
 }
 
-const CLEAN_LIBRARY_OVERLAY_TITLE = 'Clean library';
-const CLEAN_LIBRARY_CONTINUE_TITLE = 'Continue cleanup';
-const CLEAN_LIBRARY_PAUSE_TOAST = 'Cleanup paused. You can continue it later.';
+const CLEAN_LIBRARY_OVERLAY_TITLE = 'Verify & repair';
+const CLEAN_LIBRARY_CONTINUE_TITLE = 'Continue repair';
+const CLEAN_LIBRARY_PAUSE_TOAST =
+  'Repair paused. You can continue it later from Verify & repair.';
 const CLEAN_LIBRARY_PREFLIGHT_EXPLAINER =
-  'This will organize your library, remove duplicates and corrupted media, and fix any database issues.';
+  'Use this for legacy libraries, files changed outside Photos Light, or when something looks wrong. Everyday Add, edit, and open already keep a healthy library aligned — this is a full-library repair, not routine maintenance.';
 const CLEAN_LIBRARY_WORKING_BODY =
-  'Checking media files, repairing issues, and updating library database.';
+  'Checking media files, repairing issues, and updating the library database.';
+const CLEAN_LIBRARY_HEALTHY_EMPTY_STATUS =
+  'Nothing to repair — this library has no media yet.';
+const CLEAN_LIBRARY_FAILED_TOAST = 'Failed to verify & repair library';
 
 const CLEAN_LIBRARY_PREFLIGHT_SCOREBOARD_DELAY_MS = 500;
 const CLEAN_LIBRARY_PREFLIGHT_COUNT_ANIMATION_MS = 1500;
@@ -12031,6 +12035,13 @@ function renderCleanLibraryPreflightResult(scanResult) {
       scanResult.summary?.photo_count ?? scanResult.inventory?.photo_count ?? 0;
     const videos =
       scanResult.summary?.video_count ?? scanResult.inventory?.video_count ?? 0;
+    const total = getCleanLibraryPreflightTotal(scanResult, photos, videos);
+    // Empty libraries are already compliant — do not nudge a full repair run.
+    if (scanResult.status === 'INVENTORY' && Number(total) === 0) {
+      updateCleanLibraryUI(CLEAN_LIBRARY_HEALTHY_EMPTY_STATUS, false);
+      showCleanLibraryButtons('done');
+      return;
+    }
     const timeLabel =
       scanResult.status === 'RESUME'
         ? scanResult.estimated_remaining_display
@@ -12054,10 +12065,17 @@ function renderCleanLibraryPreflightResult(scanResult) {
     setCleanLibraryOverlayPhase('legacy-audit');
     showCleanLibraryStats();
     const issueCount = summary.issue_count ?? summary.operation_count ?? 0;
+    if (scanResult.status === 'CLEAN') {
+      // Health gate: do not prompt a full repair when the yardstick audit is clean.
+      updateCleanLibraryUI(
+        'Library looks healthy. No Verify & repair needed.',
+        false,
+      );
+      showCleanLibraryButtons('done');
+      return;
+    }
     updateCleanLibraryUI(
-      scanResult.status === 'CLEAN'
-        ? 'Library looks clean. Continue anyway?'
-        : `Found ${Number(issueCount).toLocaleString()} issues. Continue to clean?`,
+      `Found ${Number(issueCount).toLocaleString()} issues. Continue to repair?`,
       false,
     );
     showCleanLibraryButtons('cancel', 'proceed');
@@ -12201,10 +12219,10 @@ async function executeCleanLibrary() {
       }
       return;
     }
-    console.error('❌ Failed to clean library:', error);
+    console.error('❌ Failed to verify & repair library:', error);
     endCleanLibraryWorkingUi();
-    updateCleanLibraryUI('Failed to clean library', false);
-    showToast('Failed to clean library', null);
+    updateCleanLibraryUI(CLEAN_LIBRARY_FAILED_TOAST, false);
+    showToast(CLEAN_LIBRARY_FAILED_TOAST, null);
     showCleanLibraryButtons('cancel');
   } finally {
     if (cleanLibraryState) {
@@ -12620,11 +12638,11 @@ async function confirmStopCleanLibraryRun() {
   setCleanLibraryOverlayInert(true);
   try {
     return await showDialog(
-      'Stop cleanup?',
-      'Progress so far will be saved. You can continue later from Clean library.',
+      'Stop repair?',
+      'Progress so far will be saved. You can continue later from Verify & repair.',
       [
-        { text: 'Keep cleaning', value: false, secondary: true },
-        { text: 'Stop cleanup', value: true, primary: true },
+        { text: 'Keep repairing', value: false, secondary: true },
+        { text: 'Stop repair', value: true, primary: true },
       ],
       { overImport: true },
     );
@@ -14861,10 +14879,11 @@ async function createAndSwitchLibraryInSubfolder(parentPath) {
     throw new Error(createResult.error || 'Failed to create library');
   }
 
-  return await switchToLibraryWithBlockingNormalize(
-    libraryPath,
-    createResult.db_path,
-  );
+  // New empty libraries are already compliant — do not run full Verify & repair.
+  return await switchToLibrary(libraryPath, createResult.db_path, {
+    skipTransitionOverlay: true,
+    suppressSuccessToast: false,
+  });
 }
 
 /**
@@ -15814,9 +15833,9 @@ async function openLibraryFromBrowseUnified(selectedPath, checkResult) {
     } else {
       finishDockFlow();
       await showLibraryTransitionOverlay({
-        title: 'Cleaning library',
+        title: 'Repairing library',
         message:
-          'Normalizing your library. Please keep this window open until it finishes.',
+          'Verifying and repairing your library. Please keep this window open until it finishes.',
         libraryPath: selectedPath,
       });
       await requestMakeLibraryPerfect();
@@ -16297,14 +16316,14 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
 }
 
 /**
- * Switch to a library, run blocking POST /api/library/make-perfect (same engine as
- * Clean library), then load the photo grid.
+ * Switch to a library, run blocking Verify & repair (make-perfect engine), then
+ * load the photo grid. Reserved for recovery / legacy paths — not healthy open.
  */
 async function switchToLibraryWithBlockingNormalize(libraryPath, dbPath) {
   await showLibraryTransitionOverlay({
-    title: 'Cleaning library',
+    title: 'Repairing library',
     message:
-      'Normalizing your library. Please keep this window open until it finishes.',
+      'Verifying and repairing your library. Please keep this window open until it finishes.',
     libraryPath,
   });
 
