@@ -4362,6 +4362,21 @@ def update_app_paths(library_path, db_path):
     if TRASH_DIR:
         ensure_user_deleted_trash_dir(TRASH_DIR)
 
+    # Cheap background dirty-delta reconcile — never blocks open/grid load.
+    try:
+        from library_open_reconcile import schedule_open_reconcile_background
+
+        scheduled = schedule_open_reconcile_background(
+            library_path,
+            db_path,
+            generation=get_library_catalog_revision(),
+            invalidate_caches=invalidate_grid_read_caches,
+        )
+        if scheduled:
+            print("  🔄 Open reconcile scheduled (background)")
+    except Exception as exc:
+        print(f"  ⚠️  Open reconcile schedule skipped: {exc}")
+
 
 def primary_health_action(report):
     """Primary user-facing recovery action for a DB health report."""
@@ -5552,7 +5567,8 @@ def switch_library():
         return jsonify({
             'status': 'success',
             'library_path': LIBRARY_PATH,
-            'db_path': DB_PATH
+            'db_path': DB_PATH,
+            'open_reconcile': 'scheduled',
         })
         
     except Exception as e:

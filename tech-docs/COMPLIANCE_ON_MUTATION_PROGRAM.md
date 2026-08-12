@@ -256,7 +256,8 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 
 **Still open (later slices):**
 
-- Open reconcile / Clean UX (Phase C)
+- Clean UX shrink / no Clean prompt on healthy library (Phase C slice 9)
+- Audit rule alignment + lazy rating strip (Phase C slice 8)
 
 **Existing building blocks (reuse, do not restart):**
 
@@ -298,14 +299,20 @@ When resolving `date_taken` via `media_dates.py`, writable containers get embedd
 
 ### 6. Open reconcile (background)
 
+**Status:** Shipped (Phase C slice 7 — 2026-08-12)
+
 Cheap background pass on library open:
 
-- Inventory + dirty delta (paths touched since last verify, watcher flags, recent imports)
-- Applies **same rulebook** as mutation pipeline — not a separate “lite Clean”
-- **Not** user-facing; no blocking modal
-- User not prompted for Clean when library passes cheap health check
+- Inventory + dirty delta (stat-only: ghosts, moles, `file_size` drift)
+- Applies **same** auto-fix metadata rulebook as Clean/Convert (`repair_file_metadata_compliance`) to size-drifted files; removes ghost rows
+- **Not** user-facing; no blocking modal — scheduled from `update_app_paths` / library switch
+- Mole *detection* only (indexing stays Clean/Import); full Clean UX shrink is slice 9
 
-**Inspect integration (later):** Layer 2 dirty delta in Fast Inspect design ([`bugs-to-be-fixed.md`](../bugs-to-be-fixed.md) Inspect item)
+**Shipped:**
+
+- `library_open_reconcile.py` — `collect_open_reconcile_delta`, `run_open_reconcile`, `schedule_open_reconcile_background`
+- State file `.library/open_reconcile_state.json` (allowed metadata)
+- Contract tests: `test_library_open_reconcile.py`
 
 **Definition of done:**
 
@@ -391,7 +398,8 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - [x] Rotate → full finalize; canonical path after hash change (Phase B slice 4 — 2026-08-12)
 - [x] Trash/restore on shared compliance primitives (Phase B slice 5 — 2026-08-12)
 - [x] Embedded dates on all writable repair/mutation paths (1900 unknown) (Phase B slice 6 — 2026-08-12)
-- [ ] Background open reconcile; no Clean prompt on healthy library
+- [x] Background open reconcile on library open (Phase C slice 7 — 2026-08-12)
+- [ ] No Clean prompt on healthy library (slice 9 UX)
 - [ ] One audit predicate set shared by reconcile, Inspect (when built), and Clean
 - [ ] Clean documented and scoped as exceptional full-batch repair
 - [ ] Contract tests cover above; packaged `.app` smoke green

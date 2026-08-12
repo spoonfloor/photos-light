@@ -30,6 +30,7 @@ ALLOWED_LIBRARY_METADATA_FILES: Set[str] = {
     DB_FILENAME,
     f"{DB_FILENAME}-wal",
     f"{DB_FILENAME}-shm",
+    "open_reconcile_state.json",
 }
 IGNORED_LIBRARY_METADATA_FILES: Set[str] = {
     ".DS_Store",

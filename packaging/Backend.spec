@@ -25,6 +25,7 @@ HIDDEN_IMPORTS = [
     "normalization_ingest",
     "normalization_repair",
     "library_metadata_compliance",
+    "library_open_reconcile",
     "normalization_core",
     "normalization_contract",
     "photo_canonicalization",
