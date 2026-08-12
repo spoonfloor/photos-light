@@ -89,40 +89,33 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
         conn.close()
         return photo_id, rel_path, full_path, content_hash
 
-    def _create_thumbnail(self, content_hash):
-        from image_pixels import thumbnail_cache_path
+    def _read_file_bytes(self, path):
+        with open(path, "rb") as fh:
+            return fh.read()
 
-        thumb_path = thumbnail_cache_path(photo_app.THUMBNAIL_CACHE_DIR, content_hash)
-        os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
-        with open(thumb_path, "wb") as fh:
-            fh.write(b"thumb")
-        return thumb_path
-
-    def test_toggle_favorite_finalizes_hash_path_and_thumbnail_after_exif_write(self):
+    def test_toggle_favorite_stars_db_only_without_file_mutation(self):
         date_taken = "2026:04:12 09:30:15"
-        old_bytes = b"favorite-source-bytes"
-        photo_id, old_rel_path, old_full_path, old_hash = self._insert_photo(
-            file_bytes=old_bytes,
+        file_bytes = b"favorite-source-bytes"
+        photo_id, rel_path, full_path, content_hash = self._insert_photo(
+            file_bytes=file_bytes,
             date_taken=date_taken,
         )
-        old_thumb_path = self._create_thumbnail(old_hash)
+        before_bytes = self._read_file_bytes(full_path)
 
-        final_bytes = old_bytes + b"-rating-five"
-        final_hash = hashlib.sha256(final_bytes).hexdigest()
-        final_rel_path, _ = build_canonical_photo_path(date_taken, final_hash, ".jpg")
-        final_full_path = os.path.join(self.library_path, final_rel_path)
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("EXIF rating helpers must not run for DB-only stars")
 
-        def fake_write_exif_rating(file_path, rating):
-            self.assertEqual(file_path, old_full_path)
-            self.assertEqual(rating, 5)
-            with open(file_path, "ab") as fh:
-                fh.write(b"-rating-five")
-            return True
-
-        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
+        with patch("file_operations.extract_exif_rating", side_effect=fail_if_called), patch(
             "file_operations.write_exif_rating",
-            side_effect=fake_write_exif_rating,
-        ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
+            side_effect=fail_if_called,
+        ), patch(
+            "file_operations.strip_exif_rating",
+            side_effect=fail_if_called,
+        ), patch.object(
+            photo_app,
+            "finalize_mutated_media",
+            side_effect=fail_if_called,
+        ):
             response = self.client.post(f"/api/photo/{photo_id}/favorite")
 
         self.assertEqual(response.status_code, 200)
@@ -130,11 +123,10 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
         self.assertEqual(payload["photo_id"], photo_id)
         self.assertEqual(payload["rating"], 5)
         self.assertTrue(payload["favorited"])
-        self.assertEqual(payload["photo"]["path"], final_rel_path)
+        self.assertEqual(payload["photo"]["path"], rel_path)
+        self.assertEqual(payload["photo"]["content_hash"], content_hash)
 
-        self.assertFalse(os.path.exists(old_full_path))
-        self.assertTrue(os.path.exists(final_full_path))
-        self.assertFalse(os.path.exists(old_thumb_path))
+        self.assertEqual(self._read_file_bytes(full_path), before_bytes)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -144,14 +136,44 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
         ).fetchone()
         conn.close()
 
-        self.assertEqual(row["current_path"], final_rel_path)
-        self.assertEqual(row["content_hash"], final_hash)
-        self.assertEqual(row["file_size"], len(final_bytes))
-        self.assertEqual(row["width"], 640)
-        self.assertEqual(row["height"], 480)
+        self.assertEqual(row["current_path"], rel_path)
+        self.assertEqual(row["content_hash"], content_hash)
+        self.assertEqual(row["file_size"], len(file_bytes))
+        self.assertEqual(row["width"], 400)
+        self.assertEqual(row["height"], 300)
         self.assertEqual(row["rating"], 5)
 
-    def test_toggle_favorite_trashes_photo_when_it_becomes_duplicate(self):
+    def test_toggle_favorite_unstars_db_only(self):
+        date_taken = "2026:04:12 09:30:15"
+        file_bytes = b"already-starred"
+        photo_id, rel_path, full_path, content_hash = self._insert_photo(
+            file_bytes=file_bytes,
+            date_taken=date_taken,
+            rating=5,
+        )
+        before_bytes = self._read_file_bytes(full_path)
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("EXIF rating helpers must not run for DB-only stars")
+
+        with patch("file_operations.extract_exif_rating", side_effect=fail_if_called), patch(
+            "file_operations.write_exif_rating",
+            side_effect=fail_if_called,
+        ), patch(
+            "file_operations.strip_exif_rating",
+            side_effect=fail_if_called,
+        ):
+            response = self.client.post(f"/api/photo/{photo_id}/favorite")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertIsNone(payload["rating"])
+        self.assertFalse(payload["favorited"])
+        self.assertEqual(payload["photo"]["path"], rel_path)
+        self.assertEqual(payload["photo"]["content_hash"], content_hash)
+        self.assertEqual(self._read_file_bytes(full_path), before_bytes)
+
+    def test_toggle_favorite_does_not_trash_duplicate(self):
         date_taken = "2026:04:12 09:30:15"
         duplicate_bytes = b"duplicate-source-rated"
         _, duplicate_rel_path, duplicate_full_path, duplicate_hash = self._insert_photo(
@@ -159,50 +181,34 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
             date_taken=date_taken,
             rating=5,
         )
-        self.assertTrue(os.path.exists(duplicate_full_path))
-
-        old_bytes = b"duplicate-source"
         photo_id, old_rel_path, old_full_path, old_hash = self._insert_photo(
-            file_bytes=old_bytes,
+            file_bytes=b"duplicate-source",
             date_taken=date_taken,
         )
-        old_thumb_path = self._create_thumbnail(old_hash)
 
-        self.assertEqual(hashlib.sha256(old_bytes + b"-rated").hexdigest(), duplicate_hash)
-
-        def fake_write_exif_rating(file_path, rating):
-            self.assertEqual(file_path, old_full_path)
-            self.assertEqual(rating, 5)
-            with open(file_path, "ab") as fh:
-                fh.write(b"-rated")
-            return True
-
-        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
-            "file_operations.write_exif_rating",
-            side_effect=fake_write_exif_rating,
-        ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
-            response = self.client.post(f"/api/photo/{photo_id}/favorite")
+        response = self.client.post(f"/api/photo/{photo_id}/favorite")
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
-        self.assertTrue(payload["duplicate_removed"])
-
-        self.assertFalse(os.path.exists(old_full_path))
-        self.assertFalse(os.path.exists(old_thumb_path))
-        trash_duplicates_dir = os.path.join(photo_app.TRASH_DIR, "duplicates")
-        trashed_files = os.listdir(trash_duplicates_dir)
-        self.assertEqual(len(trashed_files), 1)
+        self.assertNotIn("duplicate_removed", payload)
+        self.assertTrue(payload["favorited"])
+        self.assertTrue(os.path.exists(old_full_path))
+        self.assertTrue(os.path.exists(duplicate_full_path))
 
         conn = sqlite3.connect(self.db_path)
-        source_row = conn.execute("SELECT id FROM photos WHERE id = ?", (photo_id,)).fetchone()
+        source_row = conn.execute(
+            "SELECT current_path, content_hash, rating FROM photos WHERE id = ?",
+            (photo_id,),
+        ).fetchone()
         duplicate_row = conn.execute(
             "SELECT current_path, content_hash, rating FROM photos WHERE current_path = ?",
             (duplicate_rel_path,),
         ).fetchone()
         conn.close()
 
-        self.assertIsNone(source_row)
-        self.assertEqual(duplicate_row[0], duplicate_rel_path)
+        self.assertEqual(source_row[0], old_rel_path)
+        self.assertEqual(source_row[1], old_hash)
+        self.assertEqual(source_row[2], 5)
         self.assertEqual(duplicate_row[1], duplicate_hash)
         self.assertEqual(duplicate_row[2], 5)
 
@@ -218,7 +224,7 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
         def fail_if_called(*args, **kwargs):
             raise AssertionError("EXIF write should not run for settled favorite")
 
-        with patch("file_operations.extract_exif_rating", return_value=5), patch(
+        with patch("file_operations.extract_exif_rating", side_effect=fail_if_called), patch(
             "file_operations.write_exif_rating",
             side_effect=fail_if_called,
         ), patch(
@@ -240,91 +246,63 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
 
     def test_set_favorite_explicit_rating_stars_without_toggle(self):
         date_taken = "2026:04:12 09:30:15"
-        old_bytes = b"explicit-star-bytes"
-        photo_id, old_rel_path, old_full_path, old_hash = self._insert_photo(
-            file_bytes=old_bytes,
+        file_bytes = b"explicit-star-bytes"
+        photo_id, rel_path, full_path, content_hash = self._insert_photo(
+            file_bytes=file_bytes,
             date_taken=date_taken,
         )
+        before_bytes = self._read_file_bytes(full_path)
 
-        final_bytes = old_bytes + b"-rating-five"
-        final_hash = hashlib.sha256(final_bytes).hexdigest()
-        final_rel_path, _ = build_canonical_photo_path(date_taken, final_hash, ".jpg")
-
-        def fake_write_exif_rating(file_path, rating):
-            self.assertEqual(rating, 5)
-            with open(file_path, "ab") as fh:
-                fh.write(b"-rating-five")
-            return True
-
-        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
-            "file_operations.write_exif_rating",
-            side_effect=fake_write_exif_rating,
-        ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
-            response = self.client.post(
-                f"/api/photo/{photo_id}/favorite",
-                json={"rating": 5},
-            )
+        response = self.client.post(
+            f"/api/photo/{photo_id}/favorite",
+            json={"rating": 5},
+        )
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertEqual(payload["rating"], 5)
         self.assertTrue(payload["favorited"])
-        self.assertEqual(payload["photo"]["path"], final_rel_path)
-        self.assertFalse(os.path.exists(old_full_path))
+        self.assertEqual(payload["photo"]["path"], rel_path)
+        self.assertEqual(payload["photo"]["content_hash"], content_hash)
+        self.assertEqual(self._read_file_bytes(full_path), before_bytes)
 
-    def test_bulk_favorite_uses_verified_finalize_contract(self):
+    def test_bulk_favorite_updates_db_only(self):
         date_taken = "2026:04:12 09:30:15"
-        old_bytes = b"bulk-star-bytes"
-        photo_id, old_rel_path, old_full_path, old_hash = self._insert_photo(
-            file_bytes=old_bytes,
+        file_bytes = b"bulk-star-bytes"
+        photo_id, rel_path, full_path, content_hash = self._insert_photo(
+            file_bytes=file_bytes,
             date_taken=date_taken,
         )
+        before_bytes = self._read_file_bytes(full_path)
 
-        final_bytes = old_bytes + b"-bulk-rating-five"
-        final_hash = hashlib.sha256(final_bytes).hexdigest()
-        final_rel_path, _ = build_canonical_photo_path(date_taken, final_hash, ".jpg")
-
-        def fake_write_exif_rating(file_path, rating):
-            self.assertEqual(file_path, old_full_path)
-            self.assertEqual(rating, 5)
-            with open(file_path, "ab") as fh:
-                fh.write(b"-bulk-rating-five")
-            return True
-
-        with patch("file_operations.extract_exif_rating", side_effect=[None, 5]), patch(
-            "file_operations.write_exif_rating",
-            side_effect=fake_write_exif_rating,
-        ), patch.object(photo_app, "get_image_dimensions", return_value=(640, 480)):
-            response = self.client.post(
-                "/api/photos/bulk-favorite",
-                json={"photo_ids": [photo_id], "rating": 5},
-            )
+        response = self.client.post(
+            "/api/photos/bulk-favorite",
+            json={"photo_ids": [photo_id], "rating": 5},
+        )
 
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertEqual(payload["success_count"], 1)
         self.assertEqual(payload["error_count"], 0)
-        self.assertEqual(payload["results"][0]["photo"]["path"], final_rel_path)
+        self.assertEqual(payload["results"][0]["photo"]["path"], rel_path)
+        self.assertEqual(payload["results"][0]["photo"]["content_hash"], content_hash)
+        self.assertEqual(self._read_file_bytes(full_path), before_bytes)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT current_path, content_hash, file_size, width, height, rating FROM photos WHERE id = ?",
+            "SELECT current_path, content_hash, rating FROM photos WHERE id = ?",
             (photo_id,),
         ).fetchone()
         conn.close()
 
-        self.assertEqual(row["current_path"], final_rel_path)
-        self.assertEqual(row["content_hash"], final_hash)
-        self.assertEqual(row["file_size"], len(final_bytes))
-        self.assertEqual(row["width"], 640)
-        self.assertEqual(row["height"], 480)
+        self.assertEqual(row["current_path"], rel_path)
+        self.assertEqual(row["content_hash"], content_hash)
         self.assertEqual(row["rating"], 5)
-        self.assertFalse(os.path.exists(old_full_path))
 
-    def test_bulk_favorite_all_clears_starred_photos(self):
+    def test_bulk_favorite_all_clears_starred_photos_db_only(self):
         date_taken = "2026:04:12 09:30:15"
-        starred_id, starred_rel, starred_full, _ = self._insert_photo(
+        starred_id, _, starred_full, _ = self._insert_photo(
             file_bytes=b"starred-photo",
             date_taken=date_taken,
             rating=5,
@@ -334,11 +312,12 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
             date_taken=date_taken,
             rating=None,
         )
+        starred_before = self._read_file_bytes(starred_full)
 
-        with patch("file_operations.extract_exif_rating", side_effect=[5, None]), patch(
-            "file_operations.strip_exif_rating",
-            return_value=True,
-        ) as strip_mock:
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("EXIF strip must not run for DB-only bulk unstar")
+
+        with patch("file_operations.strip_exif_rating", side_effect=fail_if_called):
             response = self.client.post(
                 "/api/photos/bulk-favorite",
                 json={"all": True, "rating": 0},
@@ -348,7 +327,7 @@ class ToggleFavoriteRouteTest(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["success_count"], 1)
         self.assertEqual(payload["error_count"], 0)
-        strip_mock.assert_called_once_with(starred_full)
+        self.assertEqual(self._read_file_bytes(starred_full), starred_before)
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row

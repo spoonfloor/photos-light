@@ -368,8 +368,8 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 
 ## Program definition of done
 
-- [ ] Legacy library at startup: migrate and open without dead-end modal
-- [ ] Star toggle: DB-only; no file mutation
+- [x] Legacy library at startup: migrate and open without dead-end modal (Phase A slice 1 — 2026-08-12)
+- [x] Star toggle: DB-only; no file mutation (Phase A slice 2 — 2026-08-12; star-blind duplicate_key still open)
 - [ ] Star-blind `duplicate_key` wired through import, Clean, finalize
 - [ ] Every file mutation path uses shared compliance primitives; rotate canonical path fixed
 - [ ] Embedded dates on all writable repair/mutation paths (1900 unknown)

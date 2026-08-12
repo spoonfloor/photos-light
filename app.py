@@ -4342,65 +4342,116 @@ def update_app_paths(library_path, db_path):
         ensure_user_deleted_trash_dir(TRASH_DIR)
 
 
+def primary_health_action(report):
+    """Primary user-facing recovery action for a DB health report."""
+    if report.status == DBStatus.MISSING:
+        return 'create_new'
+    if report.status == DBStatus.CORRUPTED:
+        return 'rebuild'
+    if report.can_migrate:
+        return 'migrate'
+    if report.can_use_anyway:
+        return 'continue'
+    return 'abort'
+
+
+def enrich_library_health_payload(payload, report):
+    """Attach canonical action fields from db_health.DBHealthReport."""
+    payload['can_migrate'] = report.can_migrate
+    payload['recommended_actions'] = report.get_recommended_actions()
+    payload['action'] = primary_health_action(report)
+    return payload
+
+
 def build_library_status_payload(library_path, db_path, report):
     """Translate the shared DB health report into library-status API payloads."""
     if report.status == DBStatus.HEALTHY:
-        return {
-            'status': 'healthy',
-            'message': 'Library is ready.',
-            'library_path': library_path,
-            'db_path': db_path,
-            'valid': True,
-        }
+        return enrich_library_health_payload(
+            {
+                'status': 'healthy',
+                'message': 'Library is ready.',
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': True,
+            },
+            report,
+        )
 
     if report.status == DBStatus.MISSING:
-        return {
+        return enrich_library_health_payload(
+            {
+                'status': 'db_missing',
+                'message': report.get_user_message(),
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False,
+            },
+            report,
+        )
+
+    if report.status == DBStatus.CORRUPTED:
+        return enrich_library_health_payload(
+            {
+                'status': 'db_corrupted',
+                'message': report.get_user_message(),
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False,
+                'error': report.error_message,
+            },
+            report,
+        )
+
+    if report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
+        return enrich_library_health_payload(
+            {
+                'status': 'needs_migration',
+                'message': report.get_user_message(),
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': False,
+                'missing_columns': report.missing_columns,
+                'extra_columns': report.extra_columns,
+                'can_continue': report.can_use_anyway,
+            },
+            report,
+        )
+
+    if report.status == DBStatus.EXTRA_COLUMNS:
+        return enrich_library_health_payload(
+            {
+                'status': 'healthy',
+                'message': report.get_user_message(),
+                'library_path': library_path,
+                'db_path': db_path,
+                'valid': True,
+                'extra_columns': report.extra_columns,
+            },
+            report,
+        )
+
+    return enrich_library_health_payload(
+        {
             'status': 'db_missing',
             'message': report.get_user_message(),
             'library_path': library_path,
             'db_path': db_path,
             'valid': False,
-        }
+        },
+        report,
+    )
 
-    if report.status == DBStatus.CORRUPTED:
-        return {
-            'status': 'db_corrupted',
-            'message': report.get_user_message(),
-            'library_path': library_path,
-            'db_path': db_path,
-            'valid': False,
-            'error': report.error_message,
-        }
 
-    if report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
-        return {
-            'status': 'needs_migration',
-            'message': report.get_user_message(),
-            'library_path': library_path,
-            'db_path': db_path,
-            'valid': False,
-            'missing_columns': report.missing_columns,
-            'extra_columns': report.extra_columns,
-            'can_continue': report.can_use_anyway,
-        }
-
-    if report.status == DBStatus.EXTRA_COLUMNS:
-        return {
-            'status': 'healthy',
-            'message': report.get_user_message(),
-            'library_path': library_path,
-            'db_path': db_path,
-            'valid': True,
-            'extra_columns': report.extra_columns,
-        }
-
-    return {
-        'status': 'db_missing',
-        'message': report.get_user_message(),
-        'library_path': library_path,
-        'db_path': db_path,
-        'valid': False,
-    }
+def backup_database_for_migration(library_path, db_path):
+    """Copy the library DB to .db_backups before a user-initiated schema migration."""
+    backup_dir = os.path.join(library_path, '.db_backups')
+    os.makedirs(backup_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_filename = f"photo_library_pre_migrate_{timestamp}.db"
+    backup_path = os.path.join(backup_dir, backup_filename)
+    shutil.copy2(db_path, backup_path)
+    print(f"✅ Created pre-migration DB backup: {backup_filename}")
+    return backup_path
 
 
 @app.route('/api/library/current', methods=['GET'])
@@ -5312,6 +5363,66 @@ def create_library():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/library/migrate', methods=['POST'])
+def migrate_library_database():
+    """Migrate the configured (or specified) library database schema in place."""
+    try:
+        data = request.json or {}
+        library_path = (data.get('library_path') or LIBRARY_PATH or '').strip()
+        db_path = data.get('db_path') or DB_PATH
+
+        if not library_path or not db_path:
+            return jsonify({
+                'status': 'not_configured',
+                'message': 'No library configured for migration.',
+                'valid': False,
+            }), 400
+
+        if not os.path.isdir(library_path):
+            return jsonify({'error': 'Library folder does not exist', 'valid': False}), 400
+
+        abs_library_path = os.path.abspath(library_path)
+        resolved_db_path = resolve_db_path(abs_library_path, db_path)
+        report = check_database_health(resolved_db_path)
+
+        if report.status == DBStatus.HEALTHY:
+            payload = build_library_status_payload(abs_library_path, resolved_db_path, report)
+            payload['migrated'] = False
+            return jsonify(payload)
+
+        if not report.can_migrate:
+            payload = build_library_status_payload(abs_library_path, resolved_db_path, report)
+            payload['migrated'] = False
+            return jsonify(payload), 400
+
+        backup_path = backup_database_for_migration(abs_library_path, resolved_db_path)
+
+        from migrate_db import check_and_migrate_schema
+
+        migrated = check_and_migrate_schema(resolved_db_path)
+        report = check_database_health(resolved_db_path)
+
+        if not migrated or report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
+            payload = build_library_status_payload(abs_library_path, resolved_db_path, report)
+            payload['migrated'] = False
+            payload['backup_path'] = backup_path
+            return jsonify(payload), 400
+
+        configured_library = LIBRARY_PATH and os.path.abspath(LIBRARY_PATH) == abs_library_path
+        if configured_library:
+            update_app_paths(abs_library_path, resolved_db_path)
+            save_config(abs_library_path, resolved_db_path)
+
+        payload = build_library_status_payload(abs_library_path, resolved_db_path, report)
+        payload['migrated'] = True
+        payload['backup_path'] = backup_path
+        return jsonify(payload)
+    except Exception as e:
+        error_logger.error(f"Library migration failed: {e}")
+        print(f"\n❌ Library migration failed: {e}")
+        return jsonify({'error': str(e), 'status': 'error', 'valid': False}), 500
+
+
 @app.route('/api/library/recover-database', methods=['POST'])
 def recover_library_database():
     """Recover a usable canonical DB in an existing folder without destroying evidence."""
@@ -5384,19 +5495,14 @@ def switch_library():
         
         # Handle different health statuses
         if report.status == DBStatus.MISSING:
-            return jsonify({
-                'status': 'needs_action',
-                'action': 'create_new',
-                'message': report.get_user_message()
-            }), 400
-        
+            payload = build_library_status_payload(library_path, db_path, report)
+            payload['status'] = 'needs_action'
+            return jsonify(payload), 400
+
         if report.status == DBStatus.CORRUPTED:
-            return jsonify({
-                'status': 'needs_action',
-                'action': 'rebuild',
-                'message': report.get_user_message(),
-                'error': report.error_message
-            }), 400
+            payload = build_library_status_payload(library_path, db_path, report)
+            payload['status'] = 'needs_action'
+            return jsonify(payload), 400
         
         if report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
             print(f"  🔧 Migrating database schema: {', '.join(report.missing_columns or [])}")
@@ -5407,13 +5513,8 @@ def switch_library():
             print(f"  🏥 Post-migration health check: {report.status.value}")
 
             if not migrated or report.status in [DBStatus.MISSING_COLUMNS, DBStatus.MIXED_SCHEMA]:
-                return jsonify({
-                    'status': 'needs_migration',
-                    'action': 'migrate',
-                    'message': report.get_user_message(),
-                    'missing_columns': report.missing_columns,
-                    'can_continue': report.can_use_anyway
-                }), 400
+                payload = build_library_status_payload(library_path, db_path, report)
+                return jsonify(payload), 400
         
         if report.status == DBStatus.EXTRA_COLUMNS:
             # Extra columns are harmless - warn but allow
@@ -6000,12 +6101,7 @@ def terraform_library():
 # ============================================================================
 
 def set_photo_favorite_rating(photo_id, explicit_rating=None):
-    """Set a photo rating using the file-SOT mutation contract."""
-    from file_operations import extract_exif_rating, write_exif_rating, strip_exif_rating
-
-    conn = None
-    finalize_result = None
-
+    """Set a photo rating in the DB only (overlay truth — no EXIF or file mutation)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -6013,47 +6109,41 @@ def set_photo_favorite_rating(photo_id, explicit_rating=None):
         (photo_id,),
     )
     row = cursor.fetchone()
-    conn.close()
-    conn = None
 
     if not row:
+        conn.close()
         return {'error': 'Photo not found'}, 404
 
     rel_path = row['current_path']
     full_path = os.path.join(LIBRARY_PATH, rel_path)
 
     if not os.path.exists(full_path):
+        conn.close()
         return {'error': 'File not found on disk'}, 404
 
-    current_rating = extract_exif_rating(full_path)
-    if current_rating is None or current_rating == 0:
-        current_rating = 0
-
-    print(f"⭐ Photo {photo_id}: current rating = {current_rating}, toggling...")
+    db_rating_raw = row['rating']
+    db_rating = None if db_rating_raw in (None, 0) else int(db_rating_raw)
+    current_starred = db_rating == 5
 
     if explicit_rating is not None:
         new_rating = int(explicit_rating)
         if not 0 <= new_rating <= 5:
+            conn.close()
             return {'error': 'Rating must be 0-5'}, 400
+        target_db_rating = None if new_rating == 0 else new_rating
     else:
-        new_rating = 0 if current_rating == 5 else 5
+        target_db_rating = None if current_starred else 5
 
-    db_rating_raw = row['rating']
-    db_rating = None if db_rating_raw in (None, 0) else int(db_rating_raw)
-    target_db_rating = None if new_rating == 0 else new_rating
-    file_matches_target = (
-        current_rating == new_rating
-        if new_rating != 0
-        else current_rating == 0
-    )
-    db_matches_target = db_rating == target_db_rating
-
-    if file_matches_target and db_matches_target:
-        print(f"   → Already at rating {new_rating if new_rating != 0 else 'NULL'}; skipping write")
+    if db_rating == target_db_rating:
+        conn.close()
+        print(
+            f"⭐ Photo {photo_id}: already at rating "
+            f"{target_db_rating if target_db_rating is not None else 'NULL'}; skipping write"
+        )
         return {
             'photo_id': photo_id,
             'rating': target_db_rating,
-            'favorited': new_rating == 5,
+            'favorited': target_db_rating == 5,
             'photo': {
                 'id': photo_id,
                 'path': rel_path,
@@ -6063,117 +6153,35 @@ def set_photo_favorite_rating(photo_id, explicit_rating=None):
             },
         }, 200
 
-    if new_rating == 0:
-        print(f"   → Stripping rating from {os.path.basename(full_path)}")
-        if not strip_exif_rating(full_path):
-            error_logger.error(
-                f"Failed to strip EXIF rating for photo {photo_id}: {full_path}"
-            )
-            return {'error': 'Failed to update EXIF rating'}, 500
-        verified_rating = extract_exif_rating(full_path)
-        if verified_rating not in (None, 0):
-            error_logger.error(
-                f"EXIF rating verify failed after strip for photo {photo_id}: "
-                f"read {verified_rating} from {full_path}"
-            )
-            return {'error': 'Failed to verify EXIF rating removal'}, 500
-        db_rating = None
-    else:
-        print(f"   → Writing rating {new_rating} to {os.path.basename(full_path)}")
-        if not write_exif_rating(full_path, new_rating):
-            error_logger.error(
-                f"Failed to write EXIF rating for photo {photo_id}: {full_path}"
-            )
-            return {'error': 'Failed to update EXIF rating'}, 500
-        verified_rating = extract_exif_rating(full_path)
-        if verified_rating != new_rating:
-            error_logger.error(
-                f"EXIF rating verify failed for photo {photo_id}: "
-                f"expected {new_rating}, read {verified_rating} from {full_path}"
-            )
-            return {'error': 'Failed to verify EXIF rating write'}, 500
-        db_rating = verified_rating
-
-    precomputed_hash = compute_full_hash(full_path)
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        finalize_result = finalize_mutated_media(
-            conn=conn,
-            photo_id=photo_id,
-            library_path=LIBRARY_PATH,
-            current_rel_path=rel_path,
-            date_taken=row['date_taken'],
-            old_hash=row['content_hash'],
-            build_canonical_path=build_canonical_photo_path,
-            compute_hash=compute_full_hash,
-            get_dimensions=get_image_dimensions,
-            delete_thumbnail_for_hash=delete_thumbnail_for_hash,
-            duplicate_policy='trash',
-            duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
-            precomputed_hash=precomputed_hash,
-            defer_thumbnail_cleanup=True,
-        )
-        print(
-            f"   🔎 Favorite finalize: photo_id={photo_id} "
-            f"old_hash={row['content_hash']} "
-            f"final_status={finalize_result.status} "
-            f"final_hash={finalize_result.content_hash} "
-            f"final_path={finalize_result.current_path} "
-            f"matched_id={finalize_result.duplicate.photo_id if finalize_result.duplicate else None} "
-            f"matched_path={finalize_result.duplicate.current_path if finalize_result.duplicate else None}"
-        )
-
-        if finalize_result.status == 'duplicate_removed':
-            commit_row_mutation(conn)
-            apply_pending_thumbnail_cleanup(
-                finalize_result,
-                delete_thumbnail_for_hash,
-            )
-            print(
-                f"⭐ Photo {photo_id}: favorite update made file a duplicate of "
-                f"{finalize_result.duplicate.photo_id if finalize_result.duplicate else 'unknown'}"
-            )
-            return {
-                'photo_id': photo_id,
-                'duplicate_removed': True,
-                'message': 'Photo became a duplicate after updating favorite and was moved to trash'
-            }, 200
-
         cursor.execute(
             "UPDATE photos SET rating = ? WHERE id = ?",
-            (db_rating, photo_id),
+            (target_db_rating, photo_id),
         )
         commit_row_mutation(conn)
-        apply_pending_thumbnail_cleanup(
-            finalize_result,
-            delete_thumbnail_for_hash,
-        )
     except Exception:
-        if conn is not None:
-            conn.rollback()
-        if finalize_result is not None:
-            rollback_finalize_mutated_media(finalize_result)
+        conn.rollback()
         raise
     finally:
-        if conn is not None:
-            conn.close()
-            conn = None
+        conn.close()
 
-    print(f"⭐ Photo {photo_id}: rating {current_rating} → {new_rating if new_rating != 0 else 'NULL'}")
+    print(
+        f"⭐ Photo {photo_id}: rating "
+        f"{db_rating if db_rating is not None else 'NULL'} → "
+        f"{target_db_rating if target_db_rating is not None else 'NULL'} (DB only)"
+    )
 
     return {
         'photo_id': photo_id,
-        'rating': db_rating,
-        'favorited': new_rating == 5,
+        'rating': target_db_rating,
+        'favorited': target_db_rating == 5,
         'photo': {
             'id': photo_id,
-            'path': finalize_result.current_path,
-            'content_hash': finalize_result.content_hash,
-            'width': finalize_result.width,
-            'height': finalize_result.height,
-        }
+            'path': rel_path,
+            'content_hash': row['content_hash'],
+            'width': row['width'],
+            'height': row['height'],
+        },
     }, 200
 
 

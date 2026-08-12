@@ -1,6 +1,6 @@
 # Bugs To Be Fixed
 
-Last updated: June 21, 2026
+Last updated: August 12, 2026
 
 **Prioritization lens:** Fix **single sources of truth and shared contracts** before flow polish (see `.cursor/rules/high-before-low.mdc`).
 
@@ -11,10 +11,12 @@ Last updated: June 21, 2026
 ### Library open health — migration prompts & switch failure recovery
 
 **Priority:** High (correctness + architecture)  
-**Status:** Open  
+**Status:** Shipped (2026-08-12) — `feature/compliance-on-mutation`  
 **Batch:** Backend verification sweeps  
 **Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (Phase A, slice 1)  
 **Handoff:** `chat-transcripts-and-handoffs/photos-light-library-health-handoff.txt`
+
+**Shipped:** Unified health payload (`can_migrate`, `recommended_actions`, `action`), `POST /api/library/migrate` with pre-migrate backup, startup **Update database** modal, switch failure → migrate/retry, contract tests in `test_db_health_consistency.py`.
 
 **Summary:** Users with legacy-schema databases can be stranded on a dead-end “Database needs migration” modal. The backend knows migration is needed, but the UI offers only **Open library** and **Reload** — neither runs migration. When switch auto-migrate fails, the client shows a generic error toast instead of the same recovery path as startup.
 
@@ -57,10 +59,10 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 - New/changed behavior covered by `test_db_health_consistency.py`
 - No duplicate health classification outside `db_health.py` + one payload builder
 
-**Related tracker items (same batch — mark done when shipped):**
+**Related tracker items (same batch — shipped):**
 
-- Handle migration prompts
-- Health check on switch library
+- ~~Handle migration prompts~~
+- ~~Health check on switch library~~
 
 ---
 

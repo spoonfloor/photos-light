@@ -205,7 +205,58 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertEqual(payload["status"], "needs_migration")
         self.assertEqual(payload["missing_columns"], ["rating"])
         self.assertTrue(payload["can_continue"])
+        self.assertTrue(payload["can_migrate"])
+        self.assertEqual(payload["action"], "migrate")
+        self.assertIn("migrate", payload["recommended_actions"])
         self.assertEqual(payload["library_path"], library_path)
+
+    def test_library_migrate_adds_missing_columns(self):
+        library_path = self._make_library("migrate-library")
+        db_path = canonical_db_path(library_path)
+        create_photos_only_db(db_path, include_rating=False)
+        photo_app.update_app_paths(library_path, db_path)
+
+        response = self.client.post("/api/library/migrate", json={})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "healthy")
+        self.assertTrue(payload["valid"])
+        self.assertTrue(payload["migrated"])
+        self.assertIn("backup_path", payload)
+        self.assertTrue(os.path.exists(payload["backup_path"]))
+        self.assertEqual(check_database_health(db_path).status, DBStatus.HEALTHY)
+
+    def test_library_migrate_on_healthy_library_is_noop(self):
+        library_path = self._make_library("migrate-healthy")
+        db_path = self._create_healthy_db(library_path)
+        photo_app.update_app_paths(library_path, db_path)
+
+        response = self.client.post("/api/library/migrate", json={})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "healthy")
+        self.assertFalse(payload["migrated"])
+
+    def test_switch_library_migration_failure_returns_needs_migration_payload(self):
+        library_path = self._make_library("switch-migrate-failure")
+        db_path = canonical_db_path(library_path)
+        create_photos_only_db(db_path, include_rating=False)
+
+        with patch("migrate_db.check_and_migrate_schema", return_value=False):
+            response = self.client.post(
+                "/api/library/switch",
+                json={"library_path": library_path},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertEqual(payload["status"], "needs_migration")
+        self.assertEqual(payload["action"], "migrate")
+        self.assertTrue(payload["can_migrate"])
+        self.assertIn("migrate", payload["recommended_actions"])
+        self.assertEqual(payload["missing_columns"], ["rating"])
 
     def test_library_status_resolves_stale_legacy_db_to_canonical_db(self):
         library_path = self._make_library("stale-legacy-config")

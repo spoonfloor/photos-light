@@ -5406,9 +5406,105 @@ async function loadCriticalErrorModal() {
 }
 
 /**
+ * Migrate the current (or specified) library database schema in place.
+ */
+async function startLibraryMigration({
+  libraryPath = null,
+  dbPath = null,
+  reloadAfter = true,
+} = {}) {
+  try {
+    showToast('Updating database…');
+
+    const body = {};
+    if (libraryPath) {
+      body.library_path = libraryPath;
+    }
+    if (dbPath) {
+      body.db_path = dbPath;
+    }
+
+    const response = await fetch('/api/library/migrate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      const message =
+        result.message || result.error || 'Database update failed.';
+      showToast(message);
+      return false;
+    }
+
+    showToast(
+      result.migrated ? 'Database updated.' : 'Database is already up to date.',
+    );
+    if (reloadAfter) {
+      await checkLibraryHealthAndInit();
+    }
+    return true;
+  } catch (error) {
+    console.error('❌ Library migration failed:', error);
+    showToast(`Error: ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Handle structured library health payloads from status, switch, or migrate APIs.
+ * Returns true when the caller should stop and not throw a generic error.
+ */
+async function handleLibraryHealthResponse(result, { libraryPath = null, dbPath = null } = {}) {
+  if (!result || typeof result !== 'object') {
+    return false;
+  }
+
+  const status = result.status;
+  const action = result.action;
+  const resolvedLibraryPath = libraryPath || result.library_path || null;
+  const resolvedDbPath = dbPath || result.db_path || null;
+
+  if (
+    status === 'needs_migration' ||
+    (status === 'needs_action' && action === 'migrate')
+  ) {
+    if (result.can_migrate === false) {
+      showCriticalErrorModal('db_needs_migration', result);
+      return true;
+    }
+    hideCriticalErrorModal();
+    const migrated = await startLibraryMigration({
+      libraryPath: resolvedLibraryPath,
+      dbPath: resolvedDbPath,
+      reloadAfter: false,
+    });
+    if (!migrated) {
+      showCriticalErrorModal('db_needs_migration', result);
+    }
+    return true;
+  }
+
+  if (status === 'needs_action' && action === 'rebuild') {
+    hideCriticalErrorModal();
+    await startRebuildDatabase();
+    return true;
+  }
+
+  if (status === 'needs_action' && action === 'create_new') {
+    hideCriticalErrorModal();
+    await createAndSwitchLibrary(resolvedLibraryPath);
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Show critical error modal with specific error type
  */
-function showCriticalErrorModal(type, path = '') {
+function showCriticalErrorModal(type, detail = '') {
   const overlay = document.getElementById('criticalErrorOverlay');
   const title = document.getElementById('criticalErrorTitle');
   const message = document.getElementById('criticalErrorMessage');
@@ -5418,6 +5514,9 @@ function showCriticalErrorModal(type, path = '') {
     console.error('❌ Critical error modal not loaded');
     return;
   }
+
+  const statusPayload =
+    detail && typeof detail === 'object' ? detail : { message: detail || '' };
 
   // Clear previous buttons
   actions.innerHTML = '';
@@ -5450,7 +5549,10 @@ function showCriticalErrorModal(type, path = '') {
   } else if (type === 'db_needs_migration') {
     title.textContent = 'Database needs migration';
 
-    message.innerHTML = `<p style="margin: 0 0 12px 0;">Your library database needs an update before it can be opened safely.</p><p style="margin: 0;">${path}</p>`;
+    const detailMessage =
+      statusPayload.message ||
+      'Your library database needs an update before it can be opened safely.';
+    message.innerHTML = `<p style="margin: 0 0 12px 0;">${detailMessage}</p>`;
 
     const switchBtn = document.createElement('button');
     switchBtn.className = 'btn btn-secondary';
@@ -5461,22 +5563,27 @@ function showCriticalErrorModal(type, path = '') {
       void openExistingLibrary();
     };
 
-    const reloadBtn = document.createElement('button');
-    reloadBtn.className = 'btn btn-primary';
-    reloadBtn.textContent = 'Reload';
-    reloadBtn.onclick = () => {
+    const migrateBtn = document.createElement('button');
+    migrateBtn.className = 'btn btn-primary';
+    migrateBtn.textContent = 'Update database';
+    migrateBtn.disabled = statusPayload.can_migrate === false;
+    migrateBtn.onclick = async () => {
       hideCriticalErrorModal();
-      window.location.reload();
+      await startLibraryMigration({
+        libraryPath: statusPayload.library_path || state.libraryPath,
+        dbPath: statusPayload.db_path || null,
+      });
     };
 
     actions.appendChild(switchBtn);
-    actions.appendChild(reloadBtn);
+    actions.appendChild(migrateBtn);
   } else if (type === 'library_not_found') {
     title.textContent = 'Library folder not found';
+    const folderPath = statusPayload.message || '';
 
     message.innerHTML = `
       <p style="margin: 0 0 12px 0;">Can't access your library:</p>
-      <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">${path}</p>
+      <p style="font-family: monospace; font-size: 12px; color: var(--text-secondary); margin: 0 0 12px 0;">${folderPath}</p>
       <p style="margin: 0;">Your library folder is no longer accessible. To continue, you can retry the connection or open a different library.</p>
     `;
 
@@ -5501,7 +5608,7 @@ function showCriticalErrorModal(type, path = '') {
     actions.appendChild(retryBtn);
   } else {
     title.textContent = 'Error';
-    message.innerHTML = `<p style="margin: 0;">An unexpected error occurred: ${path}</p>`;
+    message.innerHTML = `<p style="margin: 0;">An unexpected error occurred: ${statusPayload.message || ''}</p>`;
 
     const reloadBtn = document.createElement('button');
     reloadBtn.className = 'btn btn-primary';
@@ -16053,7 +16160,35 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || 'Failed to switch library');
+      const needsMigration =
+        result.status === 'needs_migration' ||
+        (result.status === 'needs_action' && result.action === 'migrate');
+
+      if (!switchOptions.migrationRetried && needsMigration && result.can_migrate !== false) {
+        const migrated = await startLibraryMigration({
+          libraryPath,
+          dbPath: dbPath || result.db_path,
+          reloadAfter: false,
+        });
+        if (migrated) {
+          return await switchToLibrary(
+            libraryPath,
+            dbPath || result.db_path,
+            { ...switchOptions, migrationRetried: true },
+          );
+        }
+        showCriticalErrorModal('db_needs_migration', result);
+        return false;
+      }
+
+      const handled = await handleLibraryHealthResponse(result, {
+        libraryPath,
+        dbPath,
+      });
+      if (handled) {
+        return false;
+      }
+      throw new Error(result.error || result.message || 'Failed to switch library');
     }
     switchedLibrary = true;
     const switchedGeneration = advanceLibraryGeneration();
@@ -16917,7 +17052,7 @@ async function checkLibraryHealthAndInit() {
 
       case 'needs_migration':
         state.hasDatabase = false;
-        showCriticalErrorModal('db_needs_migration', status.message);
+        showCriticalErrorModal('db_needs_migration', status);
         return;
 
       case 'healthy':
