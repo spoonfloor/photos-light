@@ -13,6 +13,7 @@ Last updated: June 21, 2026
 **Priority:** High (correctness + architecture)  
 **Status:** Open  
 **Batch:** Backend verification sweeps  
+**Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (Phase A, slice 1)  
 **Handoff:** `chat-transcripts-and-handoffs/photos-light-library-health-handoff.txt`
 
 **Summary:** Users with legacy-schema databases can be stranded on a dead-end “Database needs migration” modal. The backend knows migration is needed, but the UI offers only **Open library** and **Reload** — neither runs migration. When switch auto-migrate fails, the client shows a generic error toast instead of the same recovery path as startup.
@@ -68,6 +69,7 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 **Priority:** High (architecture + correctness)  
 **Status:** Open  
 **Batch:** Library kernel / metadata truth model  
+**Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (Phase A — prerequisite for compliance-on-mutation)  
 **North star:** [`tech-docs/GREENFIELD_LIBRARY_DESIGN.md`](tech-docs/GREENFIELD_LIBRARY_DESIGN.md) C3 (overlay-only stars) — ship incrementally via DB first  
 **Related:** Incremental compliance item explicitly deferred C3; this item prioritizes it.
 
@@ -83,7 +85,7 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 
 1. **Rating SOT = DB only**
    - Favorite/star API updates `photos.rating` only; remove `write_exif_rating` / strip-from-favorite from mutation path
-   - One-time migration: EXIF rating → DB backfill, then strip rating tags from library files (Clean / open reconcile)
+   - One-time migration: optional read-only EXIF rating → DB backfill; strip rating tags **lazily** when file is already in repair pipeline — **not** library-wide (see program handoff)
    - Grid, filters, trash read stars from DB; UX unchanged modulo faster toggles (no exiftool round-trip)
    - Defer full overlay.log model unless export/agent requirements force it
 
@@ -96,7 +98,7 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 **Definition of done:**
 
 - Toggling favorite does not call exiftool or `finalize_mutated_media`
-- Library files contain no Rating / RatingPercent tags after migration pass
+- Library files: no **new** rating writes; legacy EXIF tags may remain until file is otherwise repaired (lazy convergence)
 - Two copies of the same image differing only by star metadata collapse to one survivor on import/Clean
 - Contract tests: star toggle is DB-only; import/Clean treat starred/unstarred pairs as dupes
 - Document decision: DB-first rating store; greenfield overlay deferred
@@ -110,6 +112,7 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 **Priority:** High (correctness + product anatomy)  
 **Status:** Open  
 **Batch:** Library kernel / cleanliness convergence  
+**Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (Phase B, slice 6)  
 **Related:** **Incremental compliance-on-mutation**; `media_dates.py` (`read_media_date`, `write_and_verify_media_date`, `metadata_write_policy`); `library_cleanliness.py` TBD criterion #1 (usable library date — “not audited or repaired by Clean / Convert yet”); `photo_canonicalization.py` (`canonicalize_photo_file`)
 
 **Summary:** **Clean library** must write **date taken** into embedded metadata for every file whose container supports it, using the shared read/write rulebook. When no trustworthy capture date exists, embed the deterministic unknown placeholder **`1900:01:01 00:00:00`** (not NULL, not path-only inference, not silent skip).
@@ -144,6 +147,7 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 **Priority:** High (architecture + product)  
 **Status:** Open  
 **Batch:** Library kernel / cleanliness convergence  
+**Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (canonical plan — incl. stars, order, pass estimates)  
 **North star:** [`tech-docs/GREENFIELD_LIBRARY_DESIGN.md`](tech-docs/GREENFIELD_LIBRARY_DESIGN.md) (design reference — **not** a mandate to rewrite)  
 **Handoff:** [`tech-docs/CLEANLINESS_SOT_HANDOFF.md`](tech-docs/CLEANLINESS_SOT_HANDOFF.md)
 
