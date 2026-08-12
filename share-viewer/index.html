@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shared Photos</title>
+    <link rel="stylesheet" href="css/material-symbols.css" />
+    <link rel="stylesheet" href="css/share.css" />
+  </head>
+  <body>
+    <div id="appChromeMount">
+      <div class="share-app-bar">
+        <div class="share-app-bar-actions">
+          <button type="button" class="app-bar-icon-button" id="sortToggleBtn" aria-label="Sort" title="Newest first">
+            <span class="material-symbols-outlined" id="sortIcon">hourglass_arrow_down</span>
+          </button>
+          <button type="button" class="app-bar-icon-button" id="downloadBtn" aria-label="Download" title="Download">
+            <span class="material-symbols-outlined">download</span>
+          </button>
+          <button type="button" class="app-bar-icon-button inactive" id="deselectAllBtn" aria-label="Deselect all" title="Deselect all">
+            <span class="material-symbols-outlined">cancel</span>
+          </button>
+          <button type="button" class="app-bar-icon-button" id="utilitiesBtn" aria-label="More options" title="More options">
+            <span class="material-symbols-outlined">more_vert</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="filter-chip-rail" id="filterChipRail">
+        <div class="filter-chip-rail-scroll">
+          <button type="button" class="filter-chip" data-filter="starred" aria-pressed="false">starred</button>
+          <button type="button" class="filter-chip" data-filter="video" aria-pressed="false">video</button>
+          <button type="button" class="filter-chip" data-filter="selected" aria-pressed="false" id="selectedFilterChip">selected (0)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="utilities-menu" id="utilitiesMenu" style="display: none">
+      <button class="utilities-menu-item" id="clearStarsBtn" type="button">
+        <span class="utilities-menu-icon-composite" aria-hidden="true">
+          <span class="material-symbols-outlined">hide_source</span>
+          <span class="material-symbols-outlined filled">star</span>
+        </span>
+        <span>Clear stars</span>
+      </button>
+      <div class="utilities-menu-divider"></div>
+      <button class="utilities-menu-item" id="groupByDayBtn" type="button">
+        <span class="material-symbols-outlined">calendar_view_day</span>
+        <span>Group by day</span>
+      </button>
+      <button class="utilities-menu-item" id="groupByMonthBtn" type="button">
+        <span class="material-symbols-outlined">calendar_view_month</span>
+        <span>Group by month</span>
+      </button>
+    </div>
+
+    <main class="page-main">
+      <div class="page-wrapper">
+        <h1 class="share-page-title" id="sharePageTitle"></h1>
+        <div id="photoContainer"></div>
+        <div class="share-empty" id="shareEmpty" hidden>No photos match these filters.</div>
+        <div class="share-error" id="shareError" hidden></div>
+      </div>
+    </main>
+
+    <div class="lightbox-overlay" id="lightboxOverlay" style="display: none">
+      <div class="lightbox-top-bar">
+        <button class="lightbox-icon-button" id="lightboxBackBtn" aria-label="Close" type="button">
+          <span class="material-symbols-outlined">arrow_back</span>
+        </button>
+        <div class="lightbox-spacer"></div>
+        <button class="lightbox-icon-button" id="lightboxStarBtn" aria-label="Star" type="button">
+          <span class="material-symbols-outlined">star</span>
+        </button>
+        <button class="lightbox-icon-button" id="lightboxInfoBtn" aria-label="Info" type="button">
+          <span class="material-symbols-outlined">info</span>
+        </button>
+        <button class="lightbox-icon-button" id="lightboxDownloadBtn" aria-label="Download" type="button">
+          <span class="material-symbols-outlined">download</span>
+        </button>
+      </div>
+      <button class="lightbox-nav lightbox-nav-left" id="lightboxPrevBtn" aria-label="Previous" type="button">
+        <span class="material-symbols-outlined">chevron_left</span>
+      </button>
+      <div class="lightbox-stage" id="lightboxStage"></div>
+      <button class="lightbox-nav lightbox-nav-right" id="lightboxNextBtn" aria-label="Next" type="button">
+        <span class="material-symbols-outlined">chevron_right</span>
+      </button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>

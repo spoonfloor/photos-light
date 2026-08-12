@@ -143,6 +143,16 @@ from rotation_utils import (
     normalize_rotation_degrees,
     rotate_file_in_place,
 )
+from share_albums import (
+    SHARE_MAX_PHOTOS,
+    build_share_url,
+    generate_share_slug,
+    get_share_config,
+    load_env_file,
+    publish_share_album,
+    share_is_configured,
+    suggest_share_title,
+)
 from image_pixels import (
     BROWSER_CONVERT_EXTENSIONS,
     generate_preview_jpeg_buffer,
@@ -163,6 +173,7 @@ register_heif_opener()
 # Paths (resolved before Flask init so bundled static assets work)
 BASE_DIR = get_base_dir()
 STATIC_DIR = get_static_dir()
+load_env_file(BASE_DIR)
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='/static')
 
@@ -6771,6 +6782,131 @@ def bulk_favorite():
     except Exception as e:
         error_logger.error(f"Error in bulk favorite: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+def _fetch_photos_for_share(photo_ids):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in photo_ids)
+    cursor.execute(
+        f"""
+        SELECT id, current_path, date_taken, file_type, width, height, rating
+        FROM photos
+        WHERE id IN ({placeholders})
+        ORDER BY date_taken DESC, current_path ASC, id DESC
+        """,
+        photo_ids,
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    if len(rows) != len(photo_ids):
+        raise ValueError("One or more selected photos were not found")
+    return rows
+
+
+@app.route('/api/share/status', methods=['GET'])
+def share_status():
+    configured = share_is_configured()
+    _, _, viewer_base = get_share_config()
+    return jsonify({
+        'configured': configured,
+        'viewer_base_url': viewer_base or None,
+        'max_photos': SHARE_MAX_PHOTOS,
+    })
+
+
+@app.route('/api/share/prepare', methods=['POST'])
+@handle_db_corruption
+def share_prepare():
+    if not share_is_configured():
+        return jsonify({'error': 'Share is not configured'}), 503
+    if not LIBRARY_PATH or not DB_PATH:
+        return jsonify({'error': 'Library not configured'}), 503
+
+    data = request.get_json() or {}
+    photo_ids = data.get('photo_ids') or []
+    try:
+        photo_ids = [int(value) for value in photo_ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid photo_ids'}), 400
+
+    if not photo_ids:
+        return jsonify({'error': 'Select one or more photos to share'}), 400
+    if len(photo_ids) > SHARE_MAX_PHOTOS:
+        return jsonify({'error': f'Share limit is {SHARE_MAX_PHOTOS} photos'}), 400
+
+    try:
+        rows = _fetch_photos_for_share(photo_ids)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 404
+
+    slug = generate_share_slug()
+    suggested_title = suggest_share_title([row['date_taken'] for row in rows])
+    return jsonify({
+        'slug': slug,
+        'url': build_share_url(slug),
+        'photo_count': len(rows),
+        'suggested_title': suggested_title,
+    })
+
+
+@app.route('/api/share/publish', methods=['POST'])
+@handle_db_corruption
+def share_publish():
+    if not share_is_configured():
+        return jsonify({'error': 'Share is not configured'}), 503
+    if not LIBRARY_PATH or not DB_PATH:
+        return jsonify({'error': 'Library not configured'}), 503
+
+    data = request.get_json() or {}
+    slug = (data.get('slug') or '').strip()
+    title = (data.get('title') or '').strip() or None
+    use_title = bool(data.get('use_title'))
+    if use_title and title:
+        final_title = title
+    else:
+        final_title = None
+
+    photo_ids = data.get('photo_ids') or []
+    try:
+        photo_ids = [int(value) for value in photo_ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid photo_ids'}), 400
+
+    if not slug:
+        return jsonify({'error': 'Missing slug'}), 400
+    if not photo_ids:
+        return jsonify({'error': 'Select one or more photos to share'}), 400
+    if len(photo_ids) > SHARE_MAX_PHOTOS:
+        return jsonify({'error': f'Share limit is {SHARE_MAX_PHOTOS} photos'}), 400
+
+    try:
+        rows = _fetch_photos_for_share(photo_ids)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 404
+
+    @stream_with_context
+    def generate():
+        def emit(event_name, payload):
+            return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+
+        try:
+            yield emit('progress', {'completed': 0, 'total': len(rows)})
+            result = publish_share_album(
+                slug=slug,
+                title=final_title,
+                photo_rows=rows,
+                library_path=LIBRARY_PATH,
+                generate_still_thumb=generate_still_square_thumbnail,
+                generate_video_thumb=generate_video_square_thumbnail,
+                to_rgb=convert_to_rgb_properly,
+            )
+            yield emit('complete', result)
+        except Exception as exc:
+            app.logger.error(f"Share publish failed: {exc}")
+            yield emit('error', {'error': str(exc)})
+
+    return Response(generate(), mimetype='text/event-stream')
 
 
 if __name__ == '__main__':

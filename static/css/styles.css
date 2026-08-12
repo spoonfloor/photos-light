@@ -3157,3 +3157,67 @@ body.library-recovery-active .library-recovery-dock {
 .import-rejection-actions .material-symbols-outlined {
   font-size: 18px;
 }
+
+/* ========================
+   SHARE OVERLAY
+   ======================== */
+
+.share-card {
+  width: 440px;
+}
+
+.share-overlay-lead {
+  margin: 0 0 12px;
+  color: var(--text-primary);
+}
+
+.share-overlay-consent {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+}
+
+.share-url-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.share-url-text {
+  display: block;
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.share-title-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+}
+
+.share-title-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid #444;
+  border-radius: 8px;
+  color: var(--text-primary);
+  padding: 10px 12px;
+  font-size: 15px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.share-title-input:disabled {
+  opacity: 0.45;
+}
+
+.share-copy-btn {
+  flex-shrink: 0;
+}

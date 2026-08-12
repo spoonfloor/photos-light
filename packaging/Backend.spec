@@ -35,6 +35,7 @@ HIDDEN_IMPORTS = [
     "clean_library_fast_audit",
     "picker_sort",
     "image_pixels",
+    "share_albums",
     "rotation_utils",
     "media_dates",
     "quicktime_date_atoms",

@@ -10494,6 +10494,16 @@ async function loadUtilitiesMenu() {
       });
     }
 
+    const getShareLinkBtn = document.getElementById('getShareLinkBtn');
+    if (getShareLinkBtn) {
+      getShareLinkBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        if (typeof ShareFlow !== 'undefined') {
+          void ShareFlow.openFromSelection();
+        }
+      });
+    }
+
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
@@ -10650,6 +10660,10 @@ function updateUtilityMenuAvailability() {
     'downloadSelectedBtn',
     hasDatabase && hasSelectedPhotos && caps.download && !photoExportInProgress,
   );
+
+  if (typeof ShareFlow !== 'undefined') {
+    ShareFlow.updateMenuAvailability();
+  }
 
   // Switch library - ALWAYS available (never disabled)
   enableMenuItem('switchLibraryBtn', true);
