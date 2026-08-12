@@ -123,13 +123,17 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 ### Incremental compliance-on-mutation (greenfield-inspired)
 
 **Priority:** High (architecture + product)  
-**Status:** Open  
+**Status:** Done (Phases A–D — 2026-08-12) — `feature/compliance-on-mutation`  
 **Batch:** Library kernel / cleanliness convergence  
 **Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (canonical plan — incl. stars, order, pass estimates)  
 **North star:** [`tech-docs/GREENFIELD_LIBRARY_DESIGN.md`](tech-docs/GREENFIELD_LIBRARY_DESIGN.md) (design reference — **not** a mandate to rewrite)  
 **Handoff:** [`tech-docs/CLEANLINESS_SOT_HANDOFF.md`](tech-docs/CLEANLINESS_SOT_HANDOFF.md)
 
 **Summary:** Reap greenfield’s main user-facing benefit in the **current codebase**: each mutation keeps the library compliant as it goes, and opening a library quietly reconciles drift — so **Clean Library is exceptional, not routine maintenance**. This is an incremental refactor inspired by greenfield §6–7 and §9, not a scorched-earth rebuild.
+
+**Shipped (core program):** library open migrate health; DB-only stars + star-blind dedupe; rotate/trash/restore finalize; embedded dates (1900); background open reconcile; shared audit/compliance kinds + lazy EXIF rating strip; **Verify & repair** UX; Phase D contract suite + packaged `.app` rebuild.
+
+**Still separate (not this program):** Fast Inspect library; Convert resume.
 
 **User-facing outcome:**
 

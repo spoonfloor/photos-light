@@ -1,6 +1,6 @@
 # Compliance-on-Mutation Program
 
-**Status:** Phase C complete — Phase D verification remaining  
+**Status:** Core program complete (Phases A–D verification green — 2026-08-12)  
 **Last updated:** August 12, 2026  
 **Tracker:** [`bugs-to-be-fixed.md`](../bugs-to-be-fixed.md) (active queue items cross-reference this doc)  
 **North star:** [`GREENFIELD_LIBRARY_DESIGN.md`](GREENFIELD_LIBRARY_DESIGN.md) §6–9, C3, C8 — incremental, not scorched-earth  
@@ -412,6 +412,15 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - `./packaging/build.sh` before confirming packaged behavior ([`.cursor/rules/rebuild-app-for-prod-testing.mdc`](../.cursor/rules/rebuild-app-for-prod-testing.mdc))
 - Manual smoke: star toggle (no file mtime change), rotate → canonical path, date edit, library open after legacy folder, interrupted flow recovery where applicable
 
+**Phase D (2026-08-12):**
+
+- Contract suite: 183 tests green (`test_db_health_consistency`, favorite/star-blind, rotate/HEIC, trash, media dates, open reconcile, audit/compliance, normalization/finalization, grid handoff, clean API)
+- `node --check static/js/main.js`
+- Full rebuild: `./packaging/build.sh` → `dist/mac-arm64/Photos Light.app` (291M)
+- Packaged smoke: app launches; `/api/library/status` responds; bundled UI shows **Verify & repair**; migrate/checkpoint endpoints return structured no-library responses
+
+Interactive library smoke (star mtime / rotate path / date edit on a real library) remains a quick manual pass when convenient.
+
 ### Red flags (stop and go higher)
 
 - New per-flow cleanliness logic outside shared modules
@@ -446,7 +455,7 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - [x] Audit/compliance share auto-fixable metadata kinds; lazy EXIF rating strip on mutation (Phase C slice 8 — 2026-08-12)
 - [x] No Clean prompt on healthy / empty / clean-audit library; Verify & repair exceptional framing (Phase C slice 9 — 2026-08-12)
 - [x] Clean / Verify & repair documented and scoped as exceptional full-batch repair (Phase C slice 9 — 2026-08-12)
-- [ ] Contract tests cover above; packaged `.app` smoke green
+- [x] Contract tests + packaged `.app` rebuild/smoke green (Phase D — 2026-08-12)
 
 ---
 
