@@ -314,7 +314,7 @@ def abandon_clean_library_checkpoint(checkpoint_path: str) -> None:
 
 
 def _compute_photo_duplicate_key(full_path: str, fallback_hash: Optional[str] = None) -> str:
-    """Duplicate key === file content hash (pixel-level dedupe excluded from spec)."""
+    """Star-blind duplicate identity (logical rating strip; pixel-level dedupe excluded)."""
     duplicate_key = compute_duplicate_key(full_path, fallback_hash=fallback_hash)
     if not duplicate_key:
         raise CleanLibraryError(f"Failed to compute duplicate key for {full_path}")

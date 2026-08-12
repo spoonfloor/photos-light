@@ -212,23 +212,19 @@ One **agent pass** = one vertical slice, tests, dev smoke, brief handoff — not
 
 ### 3. Star-blind duplicate identity
 
-**Problems today:**
+**Status:** Shipped (Phase A slice 3 — 2026-08-12)
+
+**Problems addressed:**
 
 - `duplicate_key ===` raw `content_hash`; starred vs unstarred byte-identical photos are distinct assets
-- Starring can change hash and trigger duplicate trashing
+- Starring could change hash and trigger duplicate trashing (also fixed by slice 2 DB-only stars)
 
-**Target:**
+**Shipped:**
 
-- Compute dedupe identity on canonical content **after** logical rating strip (in-memory / at hash time — **not** requiring disk strip)
-- Import, Clean dedupe, post-mutation duplicate checks use `duplicate_key`, not raw file hash
-- Starring must not change `duplicate_key`, `content_hash`, path, or thumbnail cache key
-
-**Modules:** `normalization_contract.py` (`compute_duplicate_key`), `normalization_repair.py`, `normalization_ingest.py`, `media_finalization.py`
-
-**Definition of done:**
-
-- Import/Clean treat starred/unstarred pairs as dupes
-- Contract tests for identity computation
+- `compute_duplicate_key` hashes after logical Rating/RatingPercent strip (temp copy only — library file untouched)
+- Import photo ingest, Clean dedupe (via shared key), and `finalize_mutated_media` look up collisions by star-blind key
+- `content_hash` / path / thumb cache key remain raw storage identity; starring (DB-only) does not change them
+- Contract tests: `test_star_blind_duplicate_key.py`
 
 ---
 
@@ -369,8 +365,8 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 ## Program definition of done
 
 - [x] Legacy library at startup: migrate and open without dead-end modal (Phase A slice 1 — 2026-08-12)
-- [x] Star toggle: DB-only; no file mutation (Phase A slice 2 — 2026-08-12; star-blind duplicate_key still open)
-- [ ] Star-blind `duplicate_key` wired through import, Clean, finalize
+- [x] Star toggle: DB-only; no file mutation (Phase A slice 2 — 2026-08-12)
+- [x] Star-blind `duplicate_key` wired through import, Clean, finalize (Phase A slice 3 — 2026-08-12)
 - [ ] Every file mutation path uses shared compliance primitives; rotate canonical path fixed
 - [ ] Embedded dates on all writable repair/mutation paths (1900 unknown)
 - [ ] Background open reconcile; no Clean prompt on healthy library

@@ -13,6 +13,8 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Callable, Literal, Optional, Tuple, List
 
+from normalization_contract import compute_duplicate_key
+
 
 DuplicatePolicy = Literal["raise", "delete", "trash"]
 
@@ -97,23 +99,31 @@ def finalize_mutated_media(
 
     cursor = conn.cursor()
     duplicate = None
+    duplicate_key = compute_duplicate_key(full_path, fallback_hash=new_hash)
     if old_hash != new_hash:
-        cursor.execute(
-            "SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?",
-            (new_hash, photo_id),
-        )
-        row = cursor.fetchone()
-        if row:
-            duplicate = DuplicateMediaMatch(
-                photo_id=row["id"],
-                current_path=row["current_path"],
+        # Exact raw-hash match first; then star-blind key so a rated file collapses
+        # against an unrated twin already stored under the stripped hash.
+        hashes_to_try = [new_hash]
+        if duplicate_key and duplicate_key not in hashes_to_try:
+            hashes_to_try.append(duplicate_key)
+        for lookup_hash in hashes_to_try:
+            cursor.execute(
+                "SELECT id, current_path FROM photos WHERE content_hash = ? AND id != ?",
+                (lookup_hash, photo_id),
             )
+            row = cursor.fetchone()
+            if row:
+                duplicate = DuplicateMediaMatch(
+                    photo_id=row["id"],
+                    current_path=row["current_path"],
+                )
+                break
 
     if duplicate:
         duplicate_destination = None
         print(
             f"🔎 finalize_mutated_media duplicate: photo_id={photo_id} "
-            f"old_hash={old_hash} new_hash={new_hash} "
+            f"old_hash={old_hash} new_hash={new_hash} duplicate_key={duplicate_key} "
             f"matched_id={duplicate.photo_id} matched_path={duplicate.current_path} "
             f"policy={duplicate_policy}"
         )

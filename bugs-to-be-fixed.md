@@ -69,7 +69,7 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 ### Stars out of EXIF + star-blind duplicate identity
 
 **Priority:** High (architecture + correctness)  
-**Status:** Open  
+**Status:** Done (Phase A slices 2–3 — 2026-08-12)  
 **Batch:** Library kernel / metadata truth model  
 **Program handoff:** [`tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md`](tech-docs/COMPLIANCE_ON_MUTATION_PROGRAM.md) (Phase A — prerequisite for compliance-on-mutation)  
 **North star:** [`tech-docs/GREENFIELD_LIBRARY_DESIGN.md`](tech-docs/GREENFIELD_LIBRARY_DESIGN.md) C3 (overlay-only stars) — ship incrementally via DB first  
@@ -79,31 +79,19 @@ Switch failure repro: `chmod 444` on legacy test DB, then **Open library** → g
 
 **Problems today:**
 
-- `set_photo_favorite_rating()` writes EXIF Rating, rehashes the file, and runs `finalize_mutated_media()` — starring can rename/move files and trigger duplicate trashing
-- Duplicate key === raw `content_hash`; starred vs unst starred byte-identical photos (modulo rating tag) are treated as distinct assets
-- Dual truth: `photos.rating` in DB **and** EXIF on disk; Clean strips `rating=0` but favorite flow re-writes EXIF
+- ~~`set_photo_favorite_rating()` writes EXIF Rating, rehashes the file, and runs `finalize_mutated_media()` — starring can rename/move files and trigger duplicate trashing~~ (slice 2: DB-only)
+- ~~Duplicate key === raw `content_hash`; starred vs unstarred byte-identical photos (modulo rating tag) are treated as distinct assets~~ (slice 3: star-blind `compute_duplicate_key`)
+- Dual truth: legacy EXIF may remain on disk until lazy repair; app truth is DB `photos.rating`
 
-**Target fix (one vertical slice):**
+**Shipped:**
 
-1. **Rating SOT = DB only**
-   - Favorite/star API updates `photos.rating` only; remove `write_exif_rating` / strip-from-favorite from mutation path
-   - One-time migration: optional read-only EXIF rating → DB backfill; strip rating tags **lazily** when file is already in repair pipeline — **not** library-wide (see program handoff)
-   - Grid, filters, trash read stars from DB; UX unchanged modulo faster toggles (no exiftool round-trip)
-   - Defer full overlay.log model unless export/agent requirements force it
+1. **Rating SOT = DB only** — favorite API updates `photos.rating` only; no exiftool / finalize on toggle (`test_toggle_favorite.py`)
+2. **Star-blind `duplicate_key`** — logical rating strip in-memory for identity; wired through ingest, Clean dedupe, finalize (`test_star_blind_duplicate_key.py`)
 
-2. **Star-blind `duplicate_key`**
-   - Compute dedupe identity on canonicalized content **after** rating strip (reuse `photo_canonicalization` / compliance primitives)
-   - Import, Clean dedupe, and post-mutation duplicate checks key off `duplicate_key`, not raw file hash
-   - Winner selection unchanged (existing Clean sort / trash_loser policy); loser trashed regardless of which copy was starred
-   - Starring must not change `duplicate_key`, `content_hash`, path, or thumbnail cache key
+**Still deferred (program later slices):**
 
-**Definition of done:**
-
-- Toggling favorite does not call exiftool or `finalize_mutated_media`
-- Library files: no **new** rating writes; legacy EXIF tags may remain until file is otherwise repaired (lazy convergence)
-- Two copies of the same image differing only by star metadata collapse to one survivor on import/Clean
-- Contract tests: star toggle is DB-only; import/Clean treat starred/unstarred pairs as dupes
-- Document decision: DB-first rating store; greenfield overlay deferred
+- Lazy rating-tag strip when a file is already in the repair pipeline (Phase C)
+- Full overlay.log model / export sidecar
 
 **Out of scope:** Full overlay.log.jsonl split, export sidecar for stars, perceptual/near-duplicate detection
 

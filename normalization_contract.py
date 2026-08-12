@@ -9,13 +9,15 @@ are fully unified.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Callable, Optional
 
 from hash_cache import compute_hash_legacy
 from library_cleanliness import CANONICAL_DB_DATE_FORMAT, canonical_relative_path
-from datetime import datetime
 
 
 class NormalizationMode(str, Enum):
@@ -84,8 +86,31 @@ def compute_content_hash(
 
 
 def duplicate_key_for_content_hash(content_hash: Optional[str]) -> Optional[str]:
-    """Duplicate identity for v2 normalization: exact canonical content hash."""
+    """Wrap a hash that is already star-blind / rating-stripped."""
     return content_hash or None
+
+
+def _logical_rating_stripped_hash(
+    full_path: str,
+    *,
+    compute_hash: Callable[[str], object],
+) -> Optional[str]:
+    """
+    Hash ``full_path`` as if Rating/RatingPercent were absent.
+
+    Copies to a temp file, strips rating tags there, and hashes the copy.
+    The original file is never modified.
+    """
+    # Lazy import keeps the contract module free of file_operations at import time.
+    from file_operations import strip_exif_rating
+
+    basename = os.path.basename(full_path) or "media.bin"
+    with tempfile.TemporaryDirectory(prefix="dup_key_") as temp_dir:
+        stripped_path = os.path.join(temp_dir, basename)
+        shutil.copy2(full_path, stripped_path)
+        if not strip_exif_rating(stripped_path):
+            return None
+        return compute_content_hash(stripped_path, compute_hash=compute_hash)
 
 
 def compute_duplicate_key(
@@ -94,9 +119,39 @@ def compute_duplicate_key(
     fallback_hash: Optional[str] = None,
     compute_hash: Callable[[str], object] = compute_hash_legacy,
 ) -> Optional[str]:
-    return duplicate_key_for_content_hash(
-        fallback_hash or compute_content_hash(full_path, compute_hash=compute_hash)
-    )
+    """
+    Star-blind duplicate identity for import, Clean dedupe, and finalize.
+
+    When the file has EXIF Rating / RatingPercent tags, the key is the hash of a
+    logically rating-stripped copy (temp only — disk is not mutated). Otherwise
+    the key equals the raw content hash. ``fallback_hash`` is used only when the
+    file cannot be read, or as the raw hash on the no-rating fast path.
+    """
+    if not os.path.isfile(full_path):
+        return duplicate_key_for_content_hash(fallback_hash)
+
+    try:
+        from file_operations import extract_exif_rating
+
+        rating = extract_exif_rating(full_path)
+        if rating is None:
+            return duplicate_key_for_content_hash(
+                fallback_hash or compute_content_hash(full_path, compute_hash=compute_hash)
+            )
+
+        stripped_hash = _logical_rating_stripped_hash(full_path, compute_hash=compute_hash)
+        if stripped_hash:
+            return duplicate_key_for_content_hash(stripped_hash)
+
+        return duplicate_key_for_content_hash(
+            fallback_hash or compute_content_hash(full_path, compute_hash=compute_hash)
+        )
+    except Exception:
+        return duplicate_key_for_content_hash(
+            fallback_hash
+            if fallback_hash is not None
+            else compute_content_hash(full_path, compute_hash=compute_hash)
+        )
 
 
 def expected_canonical_rel_path_from_db_date(

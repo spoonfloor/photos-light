@@ -79,7 +79,7 @@ make_library_perfect.py             # Router (default v2, PHOTOS_CLEAN_LIBRARY_E
 
 Add Photos and Clean now share normalization identity rules instead of carrying separate forks:
 
-- Duplicate identity is hash-only via `normalization_contract.compute_duplicate_key()`.
+- Duplicate identity is star-blind via `normalization_contract.compute_duplicate_key()` (logical rating strip; original file untouched).
 - Canonical paths flow through contract/library cleanliness helpers.
 - Add Photos uses `normalization_ingest.iter_ingest_events()` over `normalization_core.py`.
 - Clean v2 uses `normalization_repair.py` for scan-time identity, duplicate winner/loser planning, canonical moves, and post-scan repair phase iteration.

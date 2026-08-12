@@ -133,7 +133,28 @@ def normalize_ingest_photo(
         staged_path = staged_photo.staged_path
         canonical_photo = staged_photo.canonical_photo
 
-        existing = duplicate_row_for_hash(conn, canonical_photo.content_hash)
+        # Dedupe on star-blind duplicate_key, not raw storage hash, so a file that
+        # differs only by EXIF Rating collapses against an unrated twin already in DB.
+        # Also check raw content_hash for exact byte matches (e.g. two rated copies).
+        duplicate_key = duplicate_key_for_file(
+            staged_path,
+            fallback_hash=canonical_photo.content_hash,
+            compute_hash=deps.compute_hash,
+        )
+        if not duplicate_key:
+            deps.cleanup_staged_file(staged_path)
+            staged_path = None
+            return NormalizationFileResult(status="error", error="Failed to compute duplicate key")
+
+        hashes_to_try = [duplicate_key]
+        if canonical_photo.content_hash and canonical_photo.content_hash not in hashes_to_try:
+            hashes_to_try.append(canonical_photo.content_hash)
+
+        existing = None
+        for lookup_hash in hashes_to_try:
+            existing = duplicate_row_for_hash(conn, lookup_hash)
+            if existing:
+                break
         if existing:
             deps.cleanup_staged_file(staged_path)
             staged_path = None
