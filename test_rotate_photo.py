@@ -134,6 +134,82 @@ class RotatePhotoRouteTest(unittest.TestCase):
         self.assertEqual(row["width"], 300)
         self.assertEqual(row["height"], 400)
 
+    def test_rotate_misfiled_photo_moves_to_canonical_path_and_cleans_folder(self):
+        old_bytes = b"misfiled-jpeg-bytes"
+        old_hash = hashlib.sha256(old_bytes).hexdigest()
+        date_taken = "2026:04:12 09:30:15"
+        old_rel_path = os.path.join("misc", "loose.jpg")
+        old_full_path = os.path.join(self.library_path, old_rel_path)
+        os.makedirs(os.path.dirname(old_full_path), exist_ok=True)
+        with open(old_full_path, "wb") as fh:
+            fh.write(old_bytes)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO photos (
+                original_filename,
+                current_path,
+                date_taken,
+                content_hash,
+                file_size,
+                file_type,
+                width,
+                height
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "loose.jpg",
+                old_rel_path,
+                date_taken,
+                old_hash,
+                len(old_bytes),
+                "photo",
+                400,
+                300,
+            ),
+        )
+        photo_id = conn.execute("SELECT id FROM photos").fetchone()[0]
+        conn.commit()
+        conn.close()
+
+        def fake_rotate_file_in_place(file_path, degrees_ccw, **kwargs):
+            with open(file_path, "ab") as fh:
+                fh.write(b"-rotated")
+            return RotationResult(True, False, "Rotated with test stub")
+
+        with patch.object(photo_app, "rotate_file_in_place", side_effect=fake_rotate_file_in_place), patch.object(
+            photo_app, "get_orientation_flag", return_value=1
+        ), patch.object(photo_app, "get_image_dimensions", return_value=(300, 400)):
+            response = self.client.post(
+                f"/api/photo/{photo_id}/rotate",
+                json={"degrees_ccw": 90, "commit_lossy": True},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["committed"])
+
+        expected_hash = hashlib.sha256(old_bytes + b"-rotated").hexdigest()
+        expected_rel_path, _ = build_canonical_photo_path(date_taken, expected_hash, ".jpg")
+
+        self.assertEqual(payload["photo"]["path"], expected_rel_path)
+        self.assertEqual(payload["photo"]["content_hash"], expected_hash)
+        self.assertFalse(os.path.exists(old_full_path))
+        self.assertTrue(os.path.exists(os.path.join(self.library_path, expected_rel_path)))
+        self.assertFalse(os.path.isdir(os.path.join(self.library_path, "misc")))
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT current_path, content_hash FROM photos WHERE id = ?",
+            (photo_id,),
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row["current_path"], expected_rel_path)
+        self.assertEqual(row["content_hash"], expected_hash)
+
 
 if __name__ == "__main__":
     unittest.main()

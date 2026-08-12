@@ -239,10 +239,16 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 → UPDATE photos → commit → invalidate_grid_read_caches()
 ```
 
-**Known gaps:**
+**Slice 4 (rotate) — shipped 2026-08-12:**
 
-- Rotate: hash/dimensions update but canonical path rename not always guaranteed
-- Per-flow logic still scattered in `app.py` vs `normalization_*`
+- `rotate_photo()` commits through `finalize_mutated_media` (hash, dimensions, canonical path)
+- HEIC→TIFF: source HEIC removed only after successful DB commit (fail-closed)
+- Abandoned folders cleaned after path rename (`cleanup_empty_date_folders`)
+- Contract tests: `test_rotate_photo.py`, `test_rotation_heic.py`
+
+**Still open (slice 5+):**
+
+- Per-flow logic still scattered in `app.py` vs `normalization_*` for trash/restore and other one-offs
 
 **Existing building blocks (reuse, do not restart):**
 
@@ -252,7 +258,7 @@ resolve path → write/transform → verify read-back → finalize_mutated_media
 - `library_cleanliness.py`, `library_metadata_compliance.py`
 - Client: `static/js/libraryMutation.js` (extend toward unified settlement)
 
-**Definition of done:**
+**Definition of done (full Phase B pipeline):**
 
 - Add, Convert, date edit, rotate, trash/restore use shared compliance primitives
 - No drift-only fixes in `app.py` one-offs
@@ -367,7 +373,8 @@ See [`LIBRARY_MUTATION_CONTRACT.md`](LIBRARY_MUTATION_CONTRACT.md) — *UI is op
 - [x] Legacy library at startup: migrate and open without dead-end modal (Phase A slice 1 — 2026-08-12)
 - [x] Star toggle: DB-only; no file mutation (Phase A slice 2 — 2026-08-12)
 - [x] Star-blind `duplicate_key` wired through import, Clean, finalize (Phase A slice 3 — 2026-08-12)
-- [ ] Every file mutation path uses shared compliance primitives; rotate canonical path fixed
+- [x] Rotate → full finalize; canonical path after hash change (Phase B slice 4 — 2026-08-12)
+- [ ] Remaining file mutators (trash/restore, app.py one-offs) on shared compliance primitives
 - [ ] Embedded dates on all writable repair/mutation paths (1900 unknown)
 - [ ] Background open reconcile; no Clean prompt on healthy library
 - [ ] One audit predicate set shared by reconcile, Inspect (when built), and Clean

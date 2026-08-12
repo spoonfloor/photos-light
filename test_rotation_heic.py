@@ -236,6 +236,14 @@ class RotateHeicRouteTest(unittest.TestCase):
         self.assertEqual(row["width"], 80)
         self.assertEqual(row["height"], 120)
         self.assertTrue(os.path.exists(os.path.join(self.library_path, row["current_path"])))
+        expected_rel, _ = build_canonical_photo_path(
+            "2026:04:12 09:30:15",
+            row["content_hash"],
+            ".tiff",
+        )
+        self.assertEqual(row["current_path"], expected_rel)
+        self.assertEqual(payload["photo"]["content_hash"], row["content_hash"])
+        self.assertEqual(len(row["content_hash"]), 64)
 
 
 if __name__ == "__main__":

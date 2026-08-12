@@ -44,15 +44,17 @@ They currently encode the same short-hash naming policy in two places. That is a
 
 ### 2. Lightbox rotation is cleanliness-incomplete
 
-`rotate_photo()` and its background reconcile path update dimensions and `content_hash`, but do **not** guarantee that `current_path` is renamed/moved to the canonical short-hash path implied by the new hash.
+**Status:** Fixed (Phase B slice 4 — 2026-08-12). `rotate_photo()` commits through `finalize_mutated_media` so hash, dimensions, and canonical path stay aligned; HEIC source removal is post-commit; abandoned folders are cleaned. See `test_rotate_photo.py` / `test_rotation_heic.py`.
 
-This means a photo can become:
+~~`rotate_photo()` and its background reconcile path update dimensions and `content_hash`, but do **not** guarantee that `current_path` is renamed/moved to the canonical short-hash path implied by the new hash.~~
 
-- hash-updated in DB
-- thumbnail-invalidated
-- still stored at a path that no longer matches canonical naming policy
+~~This means a photo can become:~~
 
-That is a real cleanliness bug, not just an architectural smell.
+~~- hash-updated in DB~~
+~~- thumbnail-invalidated~~
+~~- still stored at a path that no longer matches canonical naming policy~~
+
+~~That is a real cleanliness bug, not just an architectural smell.~~
 
 ### 3. Library DB health is classified in more than one way
 

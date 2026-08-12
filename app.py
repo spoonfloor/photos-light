@@ -2212,6 +2212,7 @@ def rotate_photo(photo_id):
         print(f"   ⏱️ File rotation took {rotate_elapsed_ms:.1f} ms")
         old_hash = row['content_hash']
         source_heic_rel_path = row['current_path'] if ext in HEIC_ROTATION_EXTENSIONS else None
+        original_rel_path = row['current_path']
         rel_path_for_finalize = row['current_path']
         if rotation_result.output_path:
             rel_path_for_finalize = os.path.relpath(
@@ -2233,6 +2234,9 @@ def rotate_photo(photo_id):
             duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
             defer_thumbnail_cleanup=True,
         )
+        # Defer HEIC source removal until after DB commit so rollback can still
+        # restore the conversion sibling if commit fails.
+        heic_to_remove = None
         if source_heic_rel_path:
             source_heic_full_path = os.path.join(LIBRARY_PATH, source_heic_rel_path)
             if os.path.exists(source_heic_full_path):
@@ -2241,16 +2245,33 @@ def rotate_photo(photo_id):
                     and os.path.abspath(source_heic_full_path)
                     != os.path.abspath(finalize_result.full_path)
                 ):
-                    os.remove(source_heic_full_path)
-                    print(
-                        f"   🗑️ Removed source HEIC after conversion: {source_heic_rel_path}"
-                    )
+                    heic_to_remove = source_heic_full_path
         try:
             commit_row_mutation(conn)
             apply_pending_thumbnail_cleanup(
                 finalize_result,
                 delete_thumbnail_for_hash,
             )
+            if heic_to_remove and os.path.exists(heic_to_remove):
+                os.remove(heic_to_remove)
+                print(
+                    f"   🗑️ Removed source HEIC after conversion: {source_heic_rel_path}"
+                )
+                cleanup_empty_date_folders(heic_to_remove)
+
+            if (
+                finalize_result.status == 'finalized'
+                and finalize_result.current_path
+            ):
+                abandoned_rels = {
+                    rel
+                    for rel in (original_rel_path, rel_path_for_finalize)
+                    if rel and rel != finalize_result.current_path
+                }
+                for abandoned_rel in abandoned_rels:
+                    cleanup_empty_date_folders(
+                        os.path.join(LIBRARY_PATH, abandoned_rel)
+                    )
         except Exception:
             conn.rollback()
             rollback_finalize_mutated_media(finalize_result)
