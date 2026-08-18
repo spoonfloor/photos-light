@@ -221,23 +221,7 @@ const TrashView = (() => {
   }
 
   function updateLightboxForMode() {
-    const caps = getViewCapabilities();
-    const rotateBtn = document.getElementById('lightboxRotateBtn');
-    const editDateBtn = document.getElementById('lightboxEditDateBtn');
-    const starBtn = document.getElementById('lightboxStarBtn');
-    const restoreBtn = document.getElementById('lightboxRestoreBtn');
-    const downloadBtn = document.getElementById('lightboxDownloadBtn');
-    const deleteBtn = document.getElementById('lightboxDeleteBtn');
-
-    if (rotateBtn) rotateBtn.hidden = !caps.rotate;
-    if (editDateBtn) editDateBtn.hidden = !caps.editDate;
-    if (starBtn) starBtn.hidden = !caps.star;
-    if (downloadBtn) downloadBtn.hidden = !caps.download;
-    if (restoreBtn) restoreBtn.hidden = !caps.restore;
-    if (deleteBtn) {
-      deleteBtn.setAttribute('aria-label', caps.deleteLightboxLabel);
-      deleteBtn.setAttribute('title', caps.deleteLightboxLabel);
-    }
+    LightboxShell.applyCapabilities();
   }
 
   async function reloadGridCatalog() {

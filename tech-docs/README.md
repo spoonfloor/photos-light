@@ -64,6 +64,11 @@ This folder contains deep-dive technical documentation, implementation notes, an
 
 - `DIALOG_CHECKLIST.md` - Dialog implementation checklist
 
+### Share (UI parity + secure access)
+
+- `SHARE_GREENFIELD_HANDOFF.md` - **Master plan:** app-as-SOT share surface, capability-token read gate, phased implementation and done definition
+- `SECURE_SHARE_HANDOFF.md` - Capability-token shares, Edge Function `share-resolve`, closed RLS, migration strategy
+
 ### Architecture & cleanup
 
 - `GREENFIELD_LIBRARY_DESIGN.md` - **Target architecture:** blue-sky rebuild design (three layers, overlay event log, stable photo_id, migration/agent legibility)

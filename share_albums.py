@@ -19,17 +19,23 @@ _SLUG_ALPHABET = string.ascii_lowercase + string.digits
 
 
 def load_env_file(base_dir: str) -> None:
-    """Load KEY=VALUE lines from repo-root .env into os.environ (no overwrite)."""
-    env_path = os.path.join(base_dir, ".env")
-    if not os.path.isfile(env_path):
-        return
-    with open(env_path, encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip())
+    """Load KEY=VALUE lines from .env into os.environ (no overwrite)."""
+    from runtime_paths import get_app_support_dir, is_frozen
+
+    candidates = [os.path.join(base_dir, ".env")]
+    if is_frozen():
+        candidates.insert(0, os.path.join(get_app_support_dir(), ".env"))
+
+    for env_path in candidates:
+        if not os.path.isfile(env_path):
+            continue
+        with open(env_path, encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
 
 
 def get_share_config() -> Tuple[str, str, str]:
@@ -42,6 +48,24 @@ def get_share_config() -> Tuple[str, str, str]:
 def share_is_configured() -> bool:
     url, service_key, viewer_base = get_share_config()
     return bool(url and service_key and viewer_base)
+
+
+def share_config_error() -> Optional[str]:
+    from runtime_paths import get_app_support_dir, is_frozen
+
+    url, service_key, viewer_base = get_share_config()
+    env_hint = (
+        f"~/Library/Application Support/Photos Light/.env"
+        if is_frozen()
+        else ".env in the photos-light folder"
+    )
+    if not url:
+        return f"Missing SUPABASE_URL in {env_hint}"
+    if not service_key:
+        return f"Missing SUPABASE_SERVICE_ROLE_KEY in {env_hint}"
+    if not viewer_base:
+        return f"Missing SHARE_VIEWER_BASE_URL in {env_hint}"
+    return None
 
 
 def generate_share_slug(length: int = 12) -> str:

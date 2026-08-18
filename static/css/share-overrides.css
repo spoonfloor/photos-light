@@ -1,0 +1,33 @@
+/**
+ * Share viewer — intentional UI deltas only.
+ * Do not redefine tokens, grid, chrome, or icon styles here.
+ * See docs/share-ui-deltas.md
+ */
+
+body.share-view {
+  --page-top-gap: 24px;
+}
+
+body.share-view.filter-chip-rail-visible {
+  --app-chrome-height: calc(
+    var(--app-bar-height) + var(--filter-chip-rail-height)
+  );
+}
+
+.share-page-title {
+  font-size: 28px;
+  font-weight: 500;
+  margin: 0 0 16px;
+  color: var(--text-primary);
+}
+
+.share-empty,
+.share-error {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.share-error {
+  color: #ff6b6b;
+}

@@ -144,7 +144,6 @@ async function consumeSseStream(response, options = {}) {
 }
 
 let gridScrollObserver = null;
-let gridInteractionsWired = false;
 
 // =====================
 // STATE MANAGEMENT
@@ -204,12 +203,65 @@ const DEFAULT_VIEW_CAPABILITIES = Object.freeze({
   deleteKind: 'soft',
   deleteAppBarLabel: 'Delete selected',
   deleteLightboxLabel: 'Delete',
+  appBarTitle: true,
+  dateJumper: true,
+  recentImportsFilter: true,
+  selectedFilterChip: true,
+  surface: 'library',
 });
 
 function getViewCapabilities() {
+  if (typeof ViewCapabilities !== 'undefined') {
+    return ViewCapabilities.get();
+  }
   return typeof TrashView !== 'undefined'
     ? TrashView.getViewCapabilities()
     : DEFAULT_VIEW_CAPABILITIES;
+}
+
+if (typeof GridSelection !== 'undefined') {
+  GridSelection.setPhotoIdNormalizer((id) => Number(id));
+}
+
+function getPhotoContainer() {
+  return document.getElementById('photoContainer');
+}
+
+function getGridInteractionCtx() {
+  return {
+    getCapabilities: () => getViewCapabilities(),
+    getSelectedCount: () => state.selectedPhotos.size,
+    isSelected: (photoId) => state.selectedPhotos.has(Number(photoId)),
+    onToggleSelection: (_photoId, { event, card }) => {
+      state.lastClickedIndex = GridSelection.toggleCard(
+        getPhotoContainer(),
+        state.selectedPhotos,
+        card,
+        event,
+        state.lastClickedIndex,
+      );
+      syncSelectionAndGridView();
+    },
+    onMonthCircleClick: (circle, event) => {
+      state.lastClickedIndex = GridSelection.handleMonthCircleClick(
+        getPhotoContainer(),
+        state.selectedPhotos,
+        circle,
+        event,
+        state.lastClickedIndex,
+      );
+      syncSelectionAndGridView();
+    },
+    onToggleStar: (photoId) => {
+      LibraryMutation.togglePhotoStar(Number(photoId));
+    },
+    onOpenLightbox: (photoId) => {
+      const libraryIndex = getPhotoLibraryIndex(Number(photoId));
+      if (libraryIndex >= 0) {
+        openLightbox(libraryIndex);
+      }
+    },
+  };
 }
 
 function confirmDeletePhotos(photoIds, onConfirm) {
@@ -1754,17 +1806,19 @@ function wireDatePicker() {
  * Deselect all photos
  */
 function deselectAllPhotos() {
-  state.selectedPhotos.clear();
-  state.lastClickedIndex = null; // Reset shift-select anchor
+  state.lastClickedIndex = null;
   const hadSelectionView = state.activeFilters.selected;
   state.activeFilters.selected = false;
-  const selectedCards = document.querySelectorAll('.photo-card.selected');
-  selectedCards.forEach((card) => {
-    card.classList.remove('selected');
-  });
+  if (typeof GridSelection !== 'undefined') {
+    GridSelection.clearSelection(getPhotoContainer(), state.selectedPhotos);
+  } else {
+    state.selectedPhotos.clear();
+    document.querySelectorAll('.photo-card.selected').forEach((card) => {
+      card.classList.remove('selected');
+    });
+  }
   updateFilterChipUI();
   updateDeleteButtonVisibility();
-  updateMonthCircleStates(); // Update month circles
   if (hadSelectionView) {
     applyPhotoFilters();
   }
@@ -6002,6 +6056,9 @@ function updateLightboxRotateButtonState(
 }
 
 function buildGridStarBadgeHTML(favorited = false) {
+  if (typeof GridTile !== 'undefined') {
+    return GridTile.buildStarBadgeHTML(getViewCapabilities(), favorited);
+  }
   const mode = getViewCapabilities().gridStarBadge;
   if (!mode) {
     return '';
@@ -6023,6 +6080,14 @@ function buildGridStarBadgeHTML(favorited = false) {
 }
 
 function applyGridStarBadgeState(photoIdOrCard, favorited) {
+  if (typeof GridTile !== 'undefined') {
+    const card =
+      typeof photoIdOrCard === 'object' && photoIdOrCard !== null
+        ? photoIdOrCard
+        : document.querySelector(`.photo-card[data-id="${photoIdOrCard}"]`);
+    GridTile.applyStarBadgeState(card, favorited, getViewCapabilities());
+    return;
+  }
   const mode = getViewCapabilities().gridStarBadge;
   if (!mode) {
     return;
@@ -6375,139 +6440,113 @@ function handleLightboxRestorePhoto(photoId) {
   void TrashView.restorePhotos([photoId]);
 }
 
+function formatLibraryLightboxInfo(photo) {
+  const date = parsePhotoDate(photo);
+  const month = photo.month;
+  const canJumpToMonth = isCalendarMonthKey(month);
+
+  let dateText = 'No date in library';
+  if (date) {
+    const dateString = date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    const timeString = date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+    dateText = `${dateString} at ${timeString}`;
+  }
+
+  const currentFilename = photo.path
+    ? photo.path.split('/').pop()
+    : photo.filename || 'Unknown';
+
+  return {
+    dateText,
+    filenameText: currentFilename,
+    dateOnClick:
+      date && canJumpToMonth
+        ? (e) => {
+            e.preventDefault();
+            state.navigateToMonth = month;
+            closeLightbox();
+          }
+        : null,
+    filenameOnClick: (e) => {
+      e.preventDefault();
+      void (async () => {
+        try {
+          const response = await fetch(`/api/photo/${photo.id}/reveal`, {
+            method: 'POST',
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            console.error('❌ Failed to reveal in Finder:', error);
+            if (response.status === 404 && error.error === 'Photo not found') {
+              await handleStalePhoto(photo.id);
+            }
+          }
+        } catch (error) {
+          console.error('❌ Error revealing in Finder:', error);
+        }
+      })();
+    },
+  };
+}
+
 function wireLightbox() {
-  const overlay = document.getElementById('lightboxOverlay');
-  const topBar = document.querySelector('.lightbox-top-bar');
-  const backBtn = document.getElementById('lightboxBackBtn');
-  const infoBtn = document.getElementById('lightboxInfoBtn');
-  const deleteBtn = document.getElementById('lightboxDeleteBtn');
-  const infoPanel = document.getElementById('lightboxInfoPanel');
-  const prevBtn = document.getElementById('lightboxPrevBtn');
-  const nextBtn = document.getElementById('lightboxNextBtn');
-
-  if (backBtn) {
-    backBtn.addEventListener('click', () =>
-      closeLightbox({ commitRotations: true }),
-    );
-  }
-
-  if (prevBtn) {
-    prevBtn.addEventListener('click', () => navigateLightbox(-1));
-  }
-
-  if (nextBtn) {
-    nextBtn.addEventListener('click', () => navigateLightbox(1));
-  }
-
-  if (infoBtn && infoPanel) {
-    infoBtn.addEventListener('click', () => {
-      const isVisible = infoPanel.style.display === 'block';
-      const overlay = document.getElementById('lightboxOverlay');
-
-      if (isVisible) {
-        infoPanel.style.display = 'none';
-        if (overlay) overlay.classList.remove('info-open');
-      } else {
-        infoPanel.style.display = 'block';
-        if (overlay) overlay.classList.add('info-open');
-      }
-    });
-  }
-
-  // Wire up close button in info panel
-  const infoCloseBtn = document.getElementById('infoCloseBtn');
-  if (infoCloseBtn && infoPanel) {
-    infoCloseBtn.addEventListener('click', () => {
-      const overlay = document.getElementById('lightboxOverlay');
-      infoPanel.style.display = 'none';
-      if (overlay) overlay.classList.remove('info-open');
-    });
-  }
-
-  const rotateBtn = document.getElementById('lightboxRotateBtn');
-  if (rotateBtn) {
-    rotateBtn.addEventListener('click', () => {
-      if (!getViewCapabilities().rotate) {
-        return;
-      }
-      handleLightboxRotate();
-    });
-  }
-
-  const starBtn = document.getElementById('lightboxStarBtn');
-  if (starBtn) {
-    starBtn.addEventListener('click', () => {
-      if (!getViewCapabilities().star) {
-        return;
-      }
+  LightboxShell.wire({
+    registerKeyboard: false,
+    isOpen: () => state.lightboxOpen,
+    getPhoto: () => state.photos[state.lightboxPhotoIndex] ?? null,
+    close: (opts) => closeLightbox(opts),
+    onBack: () => closeLightbox({ commitRotations: true }),
+    navigate: (delta) => navigateLightbox(delta),
+    onStar: () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      if (!photoId) {
-        return;
+      if (photoId) {
+        LibraryMutation.togglePhotoStar(photoId);
       }
-      LibraryMutation.togglePhotoStar(photoId);
-    });
-  }
-
-  const editDateBtn = document.getElementById('lightboxEditDateBtn');
-  if (editDateBtn) {
-    editDateBtn.addEventListener('click', () => {
-      if (!getViewCapabilities().editDate) {
-        return;
-      }
+    },
+    onDownload: () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-
-      openDateEditor(photoId);
-    });
-  }
-
-  if (deleteBtn) {
-    deleteBtn.addEventListener('click', () => {
+      if (photoId) {
+        void saveLightboxPhoto(photoId);
+      }
+    },
+    onDelete: () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
       handleLightboxDeletePhoto(photoId);
-    });
-  }
-
-  const downloadBtn = document.getElementById('lightboxDownloadBtn');
-  if (downloadBtn) {
-    downloadBtn.addEventListener('click', () => {
-      if (!getViewCapabilities().download) {
-        return;
+    },
+    onRotate: () => {
+      const photo = state.photos[state.lightboxPhotoIndex];
+      if (!getRotateDisabledReason(photo)) {
+        handleLightboxRotate();
       }
+    },
+    onEditDate: () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
-      if (!photoId) {
-        return;
-      }
-      void saveLightboxPhoto(photoId);
-    });
-  }
-
-  const restoreBtn = document.getElementById('lightboxRestoreBtn');
-  if (restoreBtn) {
-    restoreBtn.addEventListener('click', () => {
+      openDateEditor(photoId);
+    },
+    onRestore: () => {
       const photoId = state.photos[state.lightboxPhotoIndex]?.id;
       handleLightboxRestorePhoto(photoId);
-    });
-  }
+    },
+    formatInfo: formatLibraryLightboxInfo,
+    updateNavArrows: () => updateLightboxArrowStates(),
+    updateStarButton: () => {
+      const photo = state.photos[state.lightboxPhotoIndex];
+      if (photo) {
+        syncLightboxStarButton(photo);
+      }
+    },
+    shouldBlockKeyboard: () => window.PickerUtils?.getTopmostVisibleOverlay?.(),
+  });
 
-  if (typeof TrashView !== 'undefined') {
-    TrashView.updateLightboxForMode();
-  }
-
-  // Auto-hide UI only after pointer leaves the overlay (not while hovering)
-  if (overlay) {
-    overlay.addEventListener('mouseenter', () => {
-      state.lightboxUIHovered = true;
-      showLightboxUI();
-      clearLightboxUIHideTimeout();
-    });
-
-    overlay.addEventListener('mouseleave', () => {
-      state.lightboxUIHovered = false;
-      scheduleLightboxUIHide();
-    });
-  }
-
-  // Keyboard navigation
   document.addEventListener('keydown', handleLightboxKeyboard);
 }
 
@@ -6515,48 +6554,23 @@ function wireLightbox() {
  * Show lightbox UI
  */
 function showLightboxUI() {
-  const topBar = document.querySelector('.lightbox-top-bar');
-  if (topBar) {
-    topBar.classList.remove('hidden');
-  }
+  LightboxShell.showUI();
 }
 
-/**
- * Hide lightbox UI
- */
 function hideLightboxUI() {
-  const topBar = document.querySelector('.lightbox-top-bar');
-  if (topBar) {
-    topBar.classList.add('hidden');
-  }
+  LightboxShell.hideUI();
 }
 
 function clearLightboxUIHideTimeout() {
-  if (state.lightboxUITimeout) {
-    clearTimeout(state.lightboxUITimeout);
-    state.lightboxUITimeout = null;
-  }
+  LightboxShell.clearUIHideTimeout();
 }
 
 function scheduleLightboxUIHide() {
-  clearLightboxUIHideTimeout();
-  state.lightboxUITimeout = setTimeout(() => {
-    if (state.lightboxOpen && !state.lightboxUIHovered) {
-      hideLightboxUI();
-    }
-  }, 2000);
+  LightboxShell.scheduleUIHide();
 }
 
 function syncLightboxUIHoverState() {
-  const overlay = document.getElementById('lightboxOverlay');
-  if (!overlay || !state.lightboxOpen) return;
-
-  state.lightboxUIHovered = overlay.matches(':hover');
-  showLightboxUI();
-  clearLightboxUIHideTimeout();
-  if (!state.lightboxUIHovered) {
-    scheduleLightboxUIHide();
-  }
+  LightboxShell.syncUIHoverState();
 }
 
 /**
@@ -6587,59 +6601,17 @@ function handleLightboxKeyboard(e) {
 
     // Priority 3: Deselect all if on grid
     deselectAllPhotos();
-  } else if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+    return;
+  }
+
+  if (e.key === 'Enter' || e.key === 'NumpadEnter') {
     if (window.PickerUtils?.activatePrimaryActionForEnter()) {
       e.preventDefault();
     }
-  } else if (e.key === ' ' && state.lightboxOpen) {
-    if (visibleOverlay) {
-      return;
-    }
-    const lightboxVideo = document.querySelector(
-      '#lightboxContent .lightbox-video-stage video',
-    );
-    if (
-      lightboxVideo &&
-      typeof LightboxVideoControls !== 'undefined' &&
-      document.activeElement?.tagName !== 'INPUT'
-    ) {
-      e.preventDefault();
-      LightboxVideoControls.togglePlay();
-    }
-  } else if (e.key === 'ArrowLeft' && state.lightboxOpen) {
-    if (visibleOverlay) {
-      return;
-    }
-    navigateLightbox(-1);
-  } else if (e.key === 'ArrowRight' && state.lightboxOpen) {
-    if (visibleOverlay) {
-      return;
-    }
-    navigateLightbox(1);
-  } else if (
-    e.key === 'r' &&
-    state.lightboxOpen &&
-    !e.ctrlKey &&
-    !e.metaKey &&
-    !e.altKey &&
-    !e.shiftKey
-  ) {
-    if (!getViewCapabilities().rotate) {
-      return;
-    }
-    const photo = state.photos[state.lightboxPhotoIndex];
-    if (!getRotateDisabledReason(photo)) {
-      handleLightboxRotate();
-      e.preventDefault();
-    }
-  } else if (
-    state.lightboxOpen &&
-    e.key === 'ArrowUp' &&
-    (e.metaKey || e.ctrlKey)
-  ) {
-    closeLightbox();
-    e.preventDefault();
+    return;
   }
+
+  LightboxShell.handleKey(e, { includeEscape: false });
 }
 
 /**
@@ -6909,89 +6881,15 @@ async function openLightbox(photoIndex) {
     rotationDegrees: previewRotation,
   });
 
-  overlay.style.display = 'flex';
+  LightboxShell.show();
 
   if (typeof TrashView !== 'undefined') {
     TrashView.updateLightboxForMode();
   }
 
-  // Prevent body scroll while lightbox is open
-  document.body.style.overflow = 'hidden';
-
-  syncLightboxStarButton(photo);
-
-  // Update info panel with photo details
   refreshLibraryMutationControls();
   updateLightboxRotateButtonState(photo);
-
-  const infoDate = document.getElementById('infoDate');
-  const infoFilename = document.getElementById('infoFilename');
-
-  if (infoDate) {
-    const date = parsePhotoDate(photo);
-    const month = photo.month;
-    const canJumpToMonth = isCalendarMonthKey(month);
-
-    if (date) {
-      const dateString = date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
-      const timeString = date.toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
-      infoDate.textContent = `${dateString} at ${timeString}`;
-    } else {
-      infoDate.textContent = 'No date in library';
-    }
-
-    if (date && canJumpToMonth) {
-      infoDate.onclick = (e) => {
-        e.preventDefault();
-        state.navigateToMonth = month;
-        closeLightbox();
-      };
-      infoDate.style.cursor = 'pointer';
-    } else {
-      infoDate.onclick = null;
-      infoDate.style.cursor = 'default';
-    }
-  }
-
-  if (infoFilename) {
-    // Extract actual filename from current path
-    const currentFilename = photo.path
-      ? photo.path.split('/').pop()
-      : photo.filename || 'Unknown';
-    infoFilename.textContent = currentFilename;
-
-    // Wire up click to reveal in Finder
-    infoFilename.onclick = async (e) => {
-      e.preventDefault();
-      const filename = photo.path
-        ? photo.path.split('/').pop()
-        : photo.filename || photo.id;
-
-      try {
-        const response = await fetch(`/api/photo/${photo.id}/reveal`, {
-          method: 'POST',
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          console.error('❌ Failed to reveal in Finder:', error);
-          if (response.status === 404 && error.error === 'Photo not found') {
-            await handleStalePhoto(photo.id);
-          }
-        }
-      } catch (error) {
-        console.error('❌ Error revealing in Finder:', error);
-      }
-    };
-  }
+  LightboxShell.refreshChrome();
 
   // Scroll grid to current photo position (instant, behind the lightbox)
   const card = document.querySelector(`.photo-card[data-id="${photo.id}"]`);
@@ -7001,12 +6899,6 @@ async function openLightbox(photoIndex) {
 
   // Preload adjacent images for smooth navigation
   preloadAdjacentImages(photoIndex);
-
-  // Show UI; hide timer starts only after pointer leaves the overlay
-  syncLightboxUIHoverState();
-
-  // Update arrow states based on position
-  updateLightboxArrowStates();
 }
 
 /**
@@ -7069,14 +6961,8 @@ async function closeLightbox({ commitRotations = true } = {}) {
     video.currentTime = 0;
   }
 
-  // Hide info panel
-  const infoPanel = document.getElementById('lightboxInfoPanel');
-  if (infoPanel) {
-    infoPanel.style.display = 'none';
-  }
-  if (overlay) {
-    overlay.classList.remove('info-open');
-  }
+  // Hide overlay chrome
+  LightboxShell.hide();
 
   // Grid is already positioned (from openLightbox), just close
   invalidatePendingLightboxReloads();
@@ -7086,14 +6972,9 @@ async function closeLightbox({ commitRotations = true } = {}) {
   state.lightboxGlobalIndex = null;
   state.lightboxNavMode = null;
   state.lightboxNavPhotoIds = null;
-  overlay.style.display = 'none';
-
-  // Restore body scroll
-  document.body.style.overflow = '';
 
   // Clear UI timeout and hover tracking
   clearLightboxUIHideTimeout();
-  state.lightboxUIHovered = false;
 
   // Check if we need to navigate to a specific month
   if (state.navigateToMonth) {
@@ -7432,31 +7313,22 @@ async function resolveAdjacentLightboxTarget(direction) {
  * Update lightbox navigation arrow states based on current position
  */
 function updateLightboxArrowStates() {
-  const prevBtn = document.getElementById('lightboxPrevBtn');
-  const nextBtn = document.getElementById('lightboxNextBtn');
-
-  if (!prevBtn || !nextBtn) return;
-
   const currentIndex = state.lightboxPhotoIndex;
   if (currentIndex === null) {
     return;
   }
 
+  let canPrev = false;
+  let canNext = false;
+
   if (state.lightboxNavMode === 'timeline' && usesGridTimelineLightboxNav()) {
     const layout = VirtualGrid.getLayout();
     const globalIndex = getCurrentLightboxGlobalIndex();
 
-    if (globalIndex === null || globalIndex <= 0) {
-      prevBtn.classList.add('inactive');
-    } else {
-      prevBtn.classList.remove('inactive');
-    }
-
-    if (globalIndex === null || globalIndex >= layout.totalPhotos - 1) {
-      nextBtn.classList.add('inactive');
-    } else {
-      nextBtn.classList.remove('inactive');
-    }
+    canPrev = globalIndex !== null && globalIndex > 0;
+    canNext =
+      globalIndex !== null && globalIndex < layout.totalPhotos - 1;
+    LightboxShell.setNavArrows(canPrev, canNext);
     return;
   }
 
@@ -7464,45 +7336,28 @@ function updateLightboxArrowStates() {
     const currentPhotoId = state.photos[currentIndex]?.id;
     const navIndex = state.lightboxNavPhotoIds.indexOf(currentPhotoId);
 
-    if (navIndex <= 0) {
-      prevBtn.classList.add('inactive');
-    } else {
-      prevBtn.classList.remove('inactive');
-    }
-
+    canPrev = navIndex > 0;
     if (navIndex === -1 || navIndex >= state.lightboxNavPhotoIds.length - 1) {
-      if (
+      canNext =
         state.lightboxNavMode === 'library' &&
         !usesGridTimelineLightboxNav() &&
-        state.hasMore
-      ) {
-        nextBtn.classList.remove('inactive');
-      } else {
-        nextBtn.classList.add('inactive');
-      }
+        state.hasMore;
     } else {
-      nextBtn.classList.remove('inactive');
+      canNext = true;
     }
+    LightboxShell.setNavArrows(canPrev, canNext);
     return;
   }
 
   const totalPhotos = state.photos.length;
 
-  if (currentIndex <= 0) {
-    prevBtn.classList.add('inactive');
-  } else {
-    prevBtn.classList.remove('inactive');
-  }
-
+  canPrev = currentIndex > 0;
   if (currentIndex >= totalPhotos - 1) {
-    if (state.hasMore) {
-      nextBtn.classList.remove('inactive');
-    } else {
-      nextBtn.classList.add('inactive');
-    }
+    canNext = state.hasMore;
   } else {
-    nextBtn.classList.remove('inactive');
+    canNext = true;
   }
+  LightboxShell.setNavArrows(canPrev, canNext);
 }
 
 /**
@@ -8380,48 +8235,24 @@ function getCatalogFilterPredicate() {
 }
 
 function ensureSelectedFilterChip() {
-  const scroll = document.querySelector('.filter-chip-rail-scroll');
-  if (!scroll) {
+  if (typeof PhotoChrome === 'undefined') {
     return null;
   }
-
-  let chip = scroll.querySelector('.filter-chip[data-filter="selected"]');
-  if (!chip) {
-    chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'filter-chip';
-    chip.dataset.filter = 'selected';
-    chip.setAttribute('aria-pressed', 'false');
-    chip.addEventListener('click', () => togglePhotoFilter('selected'));
-    scroll.appendChild(chip);
-  }
-  return chip;
+  const scroll = document.querySelector('.filter-chip-rail-scroll');
+  return PhotoChrome.ensureSelectedFilterChip(scroll, togglePhotoFilter);
 }
 
 function updateFilterChipUI() {
-  const chips = document.querySelectorAll(
-    '.filter-chip[data-filter]:not([data-filter="selected"])',
-  );
-  chips.forEach((chip) => {
-    const filterKey = chip.dataset.filter;
-    if (filterKey === 'recentImports') {
-      chip.hidden = Boolean(state.trashViewActive);
-    }
-    const isActive = !!state.activeFilters[filterKey];
-    chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-  });
-
-  const selectedChip = ensureSelectedFilterChip();
-  if (selectedChip) {
-    const count = state.selectedPhotos.size;
-    const showChip = count > 0 && !state.trashViewActive;
-    selectedChip.hidden = !showChip;
-    selectedChip.textContent = `selected (${count})`;
-    selectedChip.setAttribute(
-      'aria-pressed',
-      state.activeFilters.selected ? 'true' : 'false',
-    );
+  if (typeof PhotoChrome === 'undefined') {
+    return;
   }
+  PhotoChrome.updateFilterChips({
+    scroll: document.querySelector('.filter-chip-rail-scroll'),
+    activeFilters: state.activeFilters,
+    selectedCount: state.selectedPhotos.size,
+    showSelectedChip: state.selectedPhotos.size > 0 && !state.trashViewActive,
+    onToggle: togglePhotoFilter,
+  });
 }
 
 function updateFilterChipRailVisibility() {
@@ -8505,16 +8336,11 @@ async function applyPhotoFiltersAsync() {
   }
 }
 
-function applySelectionStateToGrid(
-  root = document.getElementById('photoContainer'),
-) {
-  if (!root) {
+function applySelectionStateToGrid(root = getPhotoContainer()) {
+  if (!root || typeof GridSelection === 'undefined') {
     return;
   }
-  root.querySelectorAll('.photo-card').forEach((card) => {
-    const id = parseInt(card.dataset.id, 10);
-    card.classList.toggle('selected', state.selectedPhotos.has(id));
-  });
+  GridSelection.applyToDom(root, state.selectedPhotos);
 }
 
 function syncSelectionAndGridView() {
@@ -8575,19 +8401,6 @@ function resetPhotoFilters() {
 }
 
 function wireFilterChipRail() {
-  const rail = document.getElementById('filterChipRailMount');
-  if (!rail) {
-    return;
-  }
-
-  rail.querySelectorAll(
-    '.filter-chip[data-filter]:not([data-filter="selected"])',
-  ).forEach((chip) => {
-    chip.addEventListener('click', () => {
-      togglePhotoFilter(chip.dataset.filter);
-    });
-  });
-
   updateFilterChipUI();
   updateFilterChipRailVisibility();
 }
@@ -8877,262 +8690,19 @@ function renderPhotoGrid(photos, append = false) {
 }
 
 function ensureGridInteractionsWired() {
-  if (gridInteractionsWired) {
+  const container = getPhotoContainer();
+  if (!container || typeof GridInteractions === 'undefined') {
     return;
   }
-
-  const container = document.getElementById('photoContainer');
-  if (!container) {
-    return;
-  }
-
-  container.addEventListener('click', (event) => {
-    const monthCircle = event.target.closest('.month-select-circle');
-    if (monthCircle && container.contains(monthCircle)) {
-      handleMonthCircleClick(monthCircle, event);
-      return;
-    }
-
-    const starBadge = event.target.closest('.star-badge');
-    if (starBadge && container.contains(starBadge)) {
-      event.stopPropagation();
-      event.preventDefault();
-      if (getViewCapabilities().gridStarBadge !== 'interactive') {
-        return;
-      }
-      const photoId = parseInt(
-        starBadge.closest('.photo-card')?.dataset.id,
-        10,
-      );
-      if (photoId) {
-        LibraryMutation.togglePhotoStar(photoId);
-      }
-      return;
-    }
-
-    const card = event.target.closest('.photo-card');
-    if (card && container.contains(card)) {
-      handlePhotoCardClick(card, event);
-    }
-  });
-
-  gridInteractionsWired = true;
+  GridInteractions.wireContainer(container, getGridInteractionCtx());
 }
 
-function handlePhotoCardClick(card, event) {
-  const photoId = parseInt(card.dataset.id, 10);
-  const selectCircle = card.querySelector('.select-circle');
-  const clickedSelectCircle =
-    selectCircle &&
-    (event.target === selectCircle || selectCircle.contains(event.target));
-
-  if (state.selectedPhotos.size > 0) {
-    if (
-      state.selectedPhotos.has(photoId) &&
-      !event.shiftKey &&
-      !clickedSelectCircle
-    ) {
-      const libraryIndex = getPhotoLibraryIndex(photoId);
-      if (libraryIndex >= 0) {
-        openLightbox(libraryIndex);
-      }
-      return;
-    }
-
-    togglePhotoSelection(card, event);
-    return;
-  }
-
-  if (event.shiftKey) {
-    event.stopPropagation();
-    togglePhotoSelection(card, event);
-    return;
-  }
-
-  if (clickedSelectCircle) {
-    event.stopPropagation();
-    togglePhotoSelection(card, event);
-    return;
-  }
-
-  const libraryIndex = getPhotoLibraryIndex(photoId);
-  if (libraryIndex >= 0) {
-    openLightbox(libraryIndex);
-  }
-}
-
-function handleMonthCircleClick(circle, event) {
-  event.stopPropagation();
-  event.preventDefault();
-
-  const monthSection = circle.closest('.month-section');
-  if (!monthSection) {
-    return;
-  }
-
-  const month = monthSection.dataset.month;
-  const monthPhotoCards = monthSection.querySelectorAll('.photo-card');
-  if (monthPhotoCards.length === 0) {
-    return;
-  }
-
-  const firstPhotoIndex = parseInt(monthPhotoCards[0].dataset.index, 10);
-  const lastPhotoIndex = parseInt(
-    monthPhotoCards[monthPhotoCards.length - 1].dataset.index,
-    10,
-  );
-
-  if (event.shiftKey && state.lastClickedIndex !== null) {
-    const start = Math.min(state.lastClickedIndex, lastPhotoIndex);
-    const end = Math.max(state.lastClickedIndex, lastPhotoIndex);
-    const allCards = Array.from(document.querySelectorAll('.photo-card'));
-    const cardsInRange = allCards.filter((card) => {
-      const cardIndex = parseInt(card.dataset.index, 10);
-      return cardIndex >= start && cardIndex <= end;
-    });
-
-    cardsInRange.forEach((rangeCard) => {
-      const rangeId = parseInt(rangeCard.dataset.id, 10);
-      rangeCard.classList.add('selected');
-      state.selectedPhotos.add(rangeId);
-    });
-
-    state.lastClickedIndex = lastPhotoIndex;
-    syncSelectionAndGridView();
-    updateMonthCircleStates();
-    return;
-  }
-
-  toggleMonthSelection(month);
-  state.lastClickedIndex = lastPhotoIndex;
-}
-
-/**
- * Toggle photo selection (for multi-select)
- */
-function togglePhotoSelection(card, e) {
-  const id = parseInt(card.dataset.id);
-  const index = parseInt(card.dataset.index);
-
-  // SHIFT-SELECT: Select range
-  if (e.shiftKey && state.lastClickedIndex !== null) {
-    const start = Math.min(state.lastClickedIndex, index);
-    const end = Math.max(state.lastClickedIndex, index);
-
-    // Get all photo cards in the DOM
-    const allCards = Array.from(document.querySelectorAll('.photo-card'));
-
-    // Debug: show sample of indices
-    const sampleIndices = allCards
-      .slice(0, 10)
-      .map((c) => parseInt(c.dataset.index));
-
-    // Filter to cards within the range
-    const cardsInRange = allCards.filter((c) => {
-      const cardIndex = parseInt(c.dataset.index);
-      return cardIndex >= start && cardIndex <= end;
-    });
-
-    // Debug: if we found fewer than expected, show what's missing
-    if (cardsInRange.length < end - start + 1) {
-      const foundIndices = new Set(
-        cardsInRange.map((c) => parseInt(c.dataset.index)),
-      );
-      const missing = [];
-      for (let i = start; i <= end && missing.length < 10; i++) {
-        if (!foundIndices.has(i)) missing.push(i);
-      }
-      console.warn(
-        `⚠️ Missing ${end - start + 1 - cardsInRange.length} cards. First missing indices: ${missing.join(', ')}`,
-      );
-    }
-
-    // Select all cards in range
-    cardsInRange.forEach((rangeCard) => {
-      const rangeId = parseInt(rangeCard.dataset.id);
-      rangeCard.classList.add('selected');
-      state.selectedPhotos.add(rangeId);
-    });
-
-    syncSelectionAndGridView();
-    updateMonthCircleStates();
-  }
-  // NORMAL CLICK: Toggle single
-  else {
-    if (card.classList.contains('selected')) {
-      card.classList.remove('selected');
-      state.selectedPhotos.delete(id);
-    } else {
-      card.classList.add('selected');
-      state.selectedPhotos.add(id);
-    }
-
-    // Update last clicked index for next shift-select
-    state.lastClickedIndex = index;
-    syncSelectionAndGridView();
-    updateMonthCircleStates(); // Update month circles
-  }
-}
-
-/**
- * Toggle selection for all photos in a month
- */
-function toggleMonthSelection(month) {
-  const monthSection = document.querySelector(`[data-month="${month}"]`);
-  if (!monthSection) return;
-
-  const photoCards = monthSection.querySelectorAll('.photo-card');
-  const photoIds = Array.from(photoCards).map((card) =>
-    parseInt(card.dataset.id),
-  );
-
-  // Check if all photos in this month are already selected
-  const allSelected = photoIds.every((id) => state.selectedPhotos.has(id));
-
-  if (allSelected) {
-    // Deselect all photos in this month
-    photoCards.forEach((card) => {
-      card.classList.remove('selected');
-      const id = parseInt(card.dataset.id);
-      state.selectedPhotos.delete(id);
-    });
-  } else {
-    // Select all photos in this month
-    photoCards.forEach((card) => {
-      card.classList.add('selected');
-      const id = parseInt(card.dataset.id);
-      state.selectedPhotos.add(id);
-    });
-  }
-
-  syncSelectionAndGridView();
-  updateMonthCircleStates();
-}
-
-/**
- * Update visual state of month selection circles
- */
 function updateMonthCircleStates() {
-  const monthSections = document.querySelectorAll('.month-section');
-
-  monthSections.forEach((section) => {
-    const photoCards = section.querySelectorAll('.photo-card');
-    const photoIds = Array.from(photoCards).map((card) =>
-      parseInt(card.dataset.id),
-    );
-    const allSelected =
-      photoIds.length > 0 &&
-      photoIds.every((id) => state.selectedPhotos.has(id));
-
-    const circle = section.querySelector('.month-select-circle');
-    if (circle) {
-      if (allSelected) {
-        circle.classList.add('selected');
-      } else {
-        circle.classList.remove('selected');
-      }
-    }
-  });
+  const container = getPhotoContainer();
+  if (!container || typeof GridSelection === 'undefined') {
+    return;
+  }
+  GridSelection.updateMonthCircleStates(container, state.selectedPhotos);
 }
 
 // =====================
@@ -10565,13 +10135,12 @@ async function loadUtilitiesMenu() {
     }
 
     // Close menu when clicking outside
-    document.addEventListener('click', (e) => {
-      const menu = document.getElementById('utilitiesMenu');
-      const utilitiesBtn = document.getElementById('utilitiesBtn');
-      if (menu && !menu.contains(e.target) && e.target !== utilitiesBtn) {
-        hideUtilitiesMenu();
-      }
-    });
+    if (typeof PhotoChrome !== 'undefined') {
+      PhotoChrome.wireUtilitiesDismiss(
+        document.getElementById('utilitiesMenu'),
+        document.getElementById('utilitiesBtn'),
+      );
+    }
 
     utilitiesMenuLoaded = true;
 
@@ -10597,16 +10166,24 @@ async function toggleUtilitiesMenu() {
     return;
   }
 
+  if (typeof PhotoChrome !== 'undefined') {
+    PhotoChrome.toggleUtilitiesMenu(utilitiesBtn, menu, {
+      onBeforeShow: () => {
+        updateUtilityMenuAvailability();
+        void refreshLibraryStarredCount();
+      },
+    });
+    return;
+  }
+
   const isVisible = menu.style.display === 'block';
 
   if (isVisible) {
     hideUtilitiesMenu();
   } else {
-    // Update menu availability before showing
     updateUtilityMenuAvailability();
     void refreshLibraryStarredCount();
 
-    // Position menu below the button
     const btnRect = utilitiesBtn.getBoundingClientRect();
     const insetEnd = parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue(
@@ -10626,6 +10203,10 @@ async function toggleUtilitiesMenu() {
  */
 function hideUtilitiesMenu() {
   const menu = document.getElementById('utilitiesMenu');
+  if (typeof PhotoChrome !== 'undefined') {
+    PhotoChrome.hideUtilitiesMenu(menu);
+    return;
+  }
   if (menu) {
     menu.style.display = 'none';
   }

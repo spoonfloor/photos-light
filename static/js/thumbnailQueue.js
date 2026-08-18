@@ -254,6 +254,10 @@ const ThumbnailQueue = (() => {
   }
 
   function markCardLoaded(img) {
+    if (typeof GridTile !== 'undefined') {
+      GridTile.markThumbLoaded(img);
+      return;
+    }
     const photoCard = img.closest('.photo-card');
     if (!photoCard || photoCard.querySelector('.select-circle')) {
       return;

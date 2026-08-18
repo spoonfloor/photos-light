@@ -150,6 +150,7 @@ from share_albums import (
     get_share_config,
     load_env_file,
     publish_share_album,
+    share_config_error,
     share_is_configured,
     suggest_share_title,
 )
@@ -6819,7 +6820,7 @@ def share_status():
 @handle_db_corruption
 def share_prepare():
     if not share_is_configured():
-        return jsonify({'error': 'Share is not configured'}), 503
+        return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
     if not LIBRARY_PATH or not DB_PATH:
         return jsonify({'error': 'Library not configured'}), 503
 
@@ -6854,7 +6855,7 @@ def share_prepare():
 @handle_db_corruption
 def share_publish():
     if not share_is_configured():
-        return jsonify({'error': 'Share is not configured'}), 503
+        return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
     if not LIBRARY_PATH or not DB_PATH:
         return jsonify({'error': 'Library not configured'}), 503
 
