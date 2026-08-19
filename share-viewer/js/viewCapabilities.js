@@ -7,6 +7,10 @@ const ViewCapabilities = (() => {
     star: true,
     editDate: true,
     download: true,
+    downloadInAppBar: false,
+    downloadInUtilities: true,
+    shareLink: true,
+    libraryMenu: true,
     restore: false,
     import: true,
     catalogFilters: true,
@@ -18,6 +22,7 @@ const ViewCapabilities = (() => {
     dateJumper: true,
     recentImportsFilter: true,
     selectedFilterChip: true,
+    virtual: true,
     surface: 'library',
   });
 
@@ -26,6 +31,10 @@ const ViewCapabilities = (() => {
     star: true,
     editDate: false,
     download: true,
+    downloadInAppBar: true,
+    downloadInUtilities: false,
+    shareLink: false,
+    libraryMenu: false,
     restore: false,
     import: false,
     catalogFilters: true,
@@ -37,6 +46,7 @@ const ViewCapabilities = (() => {
     dateJumper: false,
     recentImportsFilter: false,
     selectedFilterChip: true,
+    virtual: false,
     surface: 'share',
   });
 

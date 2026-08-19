@@ -146,10 +146,13 @@ from rotation_utils import (
 from share_albums import (
     SHARE_MAX_PHOTOS,
     build_share_url,
+    delete_share_album,
+    generate_access_token,
     generate_share_slug,
     get_share_config,
+    list_share_albums,
     load_env_file,
-    publish_share_album,
+    iter_publish_share_album,
     share_config_error,
     share_is_configured,
     suggest_share_title,
@@ -6842,10 +6845,12 @@ def share_prepare():
         return jsonify({'error': str(exc)}), 404
 
     slug = generate_share_slug()
+    access_token = generate_access_token()
     suggested_title = suggest_share_title([row['date_taken'] for row in rows])
     return jsonify({
         'slug': slug,
-        'url': build_share_url(slug),
+        'access_token': access_token,
+        'url': build_share_url(access_token),
         'photo_count': len(rows),
         'suggested_title': suggested_title,
     })
@@ -6861,6 +6866,7 @@ def share_publish():
 
     data = request.get_json() or {}
     slug = (data.get('slug') or '').strip()
+    access_token = (data.get('access_token') or '').strip()
     title = (data.get('title') or '').strip() or None
     use_title = bool(data.get('use_title'))
     if use_title and title:
@@ -6876,6 +6882,8 @@ def share_publish():
 
     if not slug:
         return jsonify({'error': 'Missing slug'}), 400
+    if not access_token:
+        return jsonify({'error': 'Missing access_token'}), 400
     if not photo_ids:
         return jsonify({'error': 'Select one or more photos to share'}), 400
     if len(photo_ids) > SHARE_MAX_PHOTOS:
@@ -6893,21 +6901,51 @@ def share_publish():
 
         try:
             yield emit('progress', {'completed': 0, 'total': len(rows)})
-            result = publish_share_album(
+            for event_name, payload in iter_publish_share_album(
                 slug=slug,
+                access_token=access_token,
                 title=final_title,
                 photo_rows=rows,
                 library_path=LIBRARY_PATH,
                 generate_still_thumb=generate_still_square_thumbnail,
                 generate_video_thumb=generate_video_square_thumbnail,
                 to_rgb=convert_to_rgb_properly,
-            )
-            yield emit('complete', result)
+            ):
+                yield emit(event_name, payload)
         except Exception as exc:
             app.logger.error(f"Share publish failed: {exc}")
             yield emit('error', {'error': str(exc)})
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/api/share/albums', methods=['GET'])
+def share_albums_list():
+    if not share_is_configured():
+        return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
+    try:
+        albums = list_share_albums()
+    except Exception as exc:
+        app.logger.error(f"Share list failed: {exc}")
+        return jsonify({'error': str(exc)}), 502
+    return jsonify({'albums': albums})
+
+
+@app.route('/api/share/albums/<album_id>', methods=['DELETE'])
+def share_album_delete(album_id):
+    if not share_is_configured():
+        return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
+    album_key = (album_id or '').strip()
+    if not album_key:
+        return jsonify({'error': 'Missing album id'}), 400
+    try:
+        delete_share_album(album_key)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except Exception as exc:
+        app.logger.error(f"Share delete failed: {exc}")
+        return jsonify({'error': str(exc)}), 502
+    return jsonify({'ok': True})
 
 
 if __name__ == '__main__':

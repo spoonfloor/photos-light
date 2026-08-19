@@ -1240,6 +1240,9 @@ function loadAppBar() {
     if (cached && cachedVersion === STATIC_ASSET_VERSION) {
       mount.innerHTML = cached;
       wireAppBar();
+      if (typeof PhotoChrome !== 'undefined') {
+        PhotoChrome.applySurfaceChrome(getViewCapabilities());
+      }
       return Promise.resolve();
     }
   } catch (e) {
@@ -1266,6 +1269,9 @@ function loadAppBar() {
       }
 
       wireAppBar();
+      if (typeof PhotoChrome !== 'undefined') {
+        PhotoChrome.applySurfaceChrome(getViewCapabilities());
+      }
     })
     .catch((err) => {
       console.error('❌ App bar load failed:', err);
@@ -5820,73 +5826,17 @@ function getRotationStillNeeded(photoId) {
 }
 
 function createLightboxMediaFrame() {
-  const frame = document.createElement('div');
-  frame.className = 'lightbox-media-frame';
-  return frame;
+  return LightboxMedia.createFrame();
 }
 
 function applyLightboxMediaStyles(frameEl, mediaEl, photo, rotationDegrees) {
-  if (!frameEl) return;
-  const normalized = normalizeRotationDegrees(rotationDegrees);
-  const isTransposed = normalized === 90 || normalized === 270;
-  const session = getLightboxRotationSession(photo.id);
-  const persistedRotation = session
-    ? normalizeRotationDegrees(session.persistedRotation)
-    : 0;
-  const displayRotation = session
-    ? normalizeRotationDegrees(session.displayRotation)
-    : 0;
-  const stillNeeded = session ? getRotationStillNeeded(photo.id) : normalized;
-
-  // frameDims are already sized for the displayed (post-rotation) orientation
-  const frameDims = calculateMediaDimensions(photo, normalized);
-
-  frameEl.style.position = 'relative';
-  frameEl.style.flexShrink = '0';
-  frameEl.style.width = frameDims.width || '';
-  frameEl.style.height = frameDims.height || '';
-  frameEl.style.maxHeight = frameDims.maxHeight || '';
-  frameEl.style.overflow = 'hidden';
-
-  if (!mediaEl) return;
-
-  mediaEl.style.position = 'absolute';
-  mediaEl.style.top = '50%';
-  mediaEl.style.left = '50%';
-  mediaEl.style.objectFit = 'contain';
-  mediaEl.style.maxWidth = 'none';
-  mediaEl.style.maxHeight = 'none';
-
-  if (isTransposed) {
-    // The CSS transform rotates the image 90/270°, swapping its visual width and height.
-    // To fill the frame after rotation: pre-rotation width = frame height, height = frame width.
-    mediaEl.style.width = frameDims.height || '';
-    mediaEl.style.height = frameDims.width || '';
-  } else {
-    mediaEl.style.width = '100%';
-    mediaEl.style.height = '100%';
-  }
-
-  if (normalized) {
-    // Rotation state is tracked as counterclockwise degrees, but CSS positive
-    // angles render clockwise on screen. Negate here so optimistic preview
-    // matches the committed file rotation.
-    mediaEl.style.transform = `translate(-50%, -50%) rotate(${-normalized}deg)`;
-  } else {
-    mediaEl.style.transform = 'translate(-50%, -50%)';
-  }
-  mediaEl.style.transformOrigin = 'center center';
-
-  // Diagnostic: report what the browser actually rendered after layout
-  requestAnimationFrame(() => {
-    const fw = frameEl.offsetWidth,
-      fh = frameEl.offsetHeight;
-    const mw = mediaEl.offsetWidth,
-      mh = mediaEl.offsetHeight;
-    const pos = frameEl.style.position;
-    const parentClass = frameEl.parentElement?.className || '(no parent)';
-    const mediaClass = mediaEl.className || mediaEl.tagName;
-  });
+  LightboxMedia.applyMediaStyles(
+    frameEl,
+    mediaEl,
+    photo,
+    rotationDegrees,
+    getLightboxVisualDimensions,
+  );
 }
 
 function applyCurrentLightboxPreviewRotation() {
@@ -6624,120 +6574,42 @@ function handleLightboxKeyboard(e) {
  * safely swap them to derive inner-media dimensions.
  */
 function calculateMediaDimensions(photo, rotationDegrees = 0) {
-  const normalized = normalizeRotationDegrees(rotationDegrees);
-  const isTransposed = normalized === 90 || normalized === 270;
-  const baseDimensions = getLightboxVisualDimensions(photo);
-
-  // Displayed dimensions after rotation
-  const displayW = isTransposed ? baseDimensions.height : baseDimensions.width;
-  const displayH = isTransposed ? baseDimensions.width : baseDimensions.height;
-
-  if (!displayW || !displayH) {
-    return {
-      width: '100vw',
-      height: '75vw',
-      maxHeight: '100vh',
-    };
-  }
-
-  const displayAR = displayW / displayH;
-  const viewportAR = window.innerWidth / window.innerHeight;
-
-  if (displayAR > viewportAR) {
-    return {
-      width: '100vw',
-      height: `calc(100vw / ${displayAR})`,
-    };
-  } else {
-    return {
-      width: `calc(100vh * ${displayAR})`,
-      height: '100vh',
-    };
-  }
-}
-
-/**
- * Create placeholder element
- */
-function createPlaceholder(photo, dims, isDebug = false) {
-  const placeholder = document.createElement('div');
-  placeholder.className = 'lightbox-media-placeholder';
-
-  if (isDebug) {
-    placeholder.style.backgroundColor = 'rgba(255, 192, 203, 0.3)'; // Pink overlay for debug
-    placeholder.style.zIndex = '10';
-    placeholder.style.pointerEvents = 'none';
-  } else {
-    placeholder.style.backgroundColor = '#2a2a2a'; // Same as grid
-  }
-
-  placeholder.style.width = '100%';
-  placeholder.style.height = '100%';
-
-  return placeholder;
-}
-
-/**
- * Helper function to load media into lightbox content
- */
-function loadMediaIntoContent(content, photo, isVideo, options = {}) {
-  const rotationDegrees = normalizeRotationDegrees(
-    options.rotationDegrees || 0,
+  return LightboxMedia.calculateMediaDimensions(
+    photo,
+    rotationDegrees,
+    getLightboxVisualDimensions,
   );
-  const dims = calculateMediaDimensions(photo, rotationDegrees);
+}
 
-  if (isVideo) {
-    const frame = createLightboxMediaFrame();
-    const placeholder = createPlaceholder(photo, dims);
-    const stage = document.createElement('div');
-    stage.className = 'lightbox-video-stage';
+function createPlaceholder(photo, dims, isDebug = false) {
+  return LightboxMedia.createPlaceholder(isDebug);
+}
 
-    content.appendChild(frame);
-
-    const video = document.createElement('video');
-    video.className = 'lightbox-media-element';
-    video.src = getPhotoFileUrl(photo.id);
-    video.autoplay = true;
-    video.playsInline = true;
-    video.preload = 'auto';
-    applyLightboxMediaStyles(frame, placeholder, photo, rotationDegrees);
-    applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
-    video.style.backgroundColor = '#2a2a2a';
-
-    stage.appendChild(placeholder);
-    stage.appendChild(video);
-    frame.appendChild(stage);
-
-    if (typeof LightboxVideoControls !== 'undefined') {
-      LightboxVideoControls.mount(stage, video);
-    }
-
-    video.addEventListener('loadedmetadata', () => {
-      setLightboxVisualState(photo.id, video, 0);
-      applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
+function loadMediaIntoContent(content, photo, isVideo, options = {}) {
+  LightboxMedia.loadIntoContent(content, photo, {
+    isVideo,
+    rotationDegrees: normalizeRotationDegrees(options.rotationDegrees || 0),
+    getMediaUrl: () => getPhotoFileUrl(photo.id),
+    getDimensions: getLightboxVisualDimensions,
+    getAltText: (p) =>
+      p.path?.split('/').pop() || p.filename || `Photo ${p.id}`,
+    onVisualState: (p, mediaEl, persistedRotation) =>
+      setLightboxVisualState(p.id, mediaEl, persistedRotation),
+    getPreviewRotation: (p) => getLightboxPreviewRotation(p.id),
+    mountVideoControls: (stage, video) => {
       if (typeof LightboxVideoControls !== 'undefined') {
-        LightboxVideoControls.resetTransport();
+        LightboxVideoControls.mount(stage, video);
       }
-    });
-
-    video.addEventListener('loadeddata', () => {
-      if (placeholder.parentNode) {
-        placeholder.parentNode.removeChild(placeholder);
-      }
-      setLightboxVisualState(photo.id, video, 0);
-      applyLightboxMediaStyles(frame, video, photo, rotationDegrees);
-      video.style.backgroundColor = 'transparent';
-    });
-
-    video.addEventListener('error', async () => {
-      console.error(`❌ Video ${photo.id} failed to load`);
+    },
+    onVideoError: async (p) => {
+      console.error(`❌ Video ${p.id} failed to load`);
       try {
-        const response = await fetch(`/api/photo/${photo.id}/file`);
+        const response = await fetch(`/api/photo/${p.id}/file`);
         if (!response.ok) {
           if (response.status === 404) {
             const data = await response.json().catch(() => ({}));
             if (data.error === 'Photo not found') {
-              await handleStalePhoto(photo.id);
+              await handleStalePhoto(p.id);
             }
           }
           return;
@@ -6747,94 +6619,36 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
       } catch (error) {
         console.error('❌ Error checking video availability:', error);
       }
-    });
+    },
+    onImageError: async (p) => {
+      console.error(`❌ Image ${p.id} failed to load`);
 
-  } else {
-    // For images, preload in memory first
-    const img = new Image();
-    img.src = getPhotoFileUrl(photo.id);
+      try {
+        const response = await fetch(`/api/photo/${p.id}/file`);
 
-    // Check if already cached
-    if (img.complete && img.naturalWidth > 0) {
-      const frame = createLightboxMediaFrame();
-      setLightboxVisualState(photo.id, img);
-      img.className = 'lightbox-media-element';
-      applyLightboxMediaStyles(
-        frame,
-        img,
-        photo,
-        getLightboxPreviewRotation(photo.id),
-      );
-      const filename =
-        photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
-      img.alt = filename;
+        if (!response.ok) {
+          const contentType = response.headers.get('content-type');
 
-      frame.appendChild(img);
-      content.appendChild(frame);
-    } else {
-      // Not cached - show placeholder while loading
-      const frame = createLightboxMediaFrame();
-      const placeholder = createPlaceholder(photo, dims);
-      applyLightboxMediaStyles(frame, placeholder, photo, rotationDegrees);
-      frame.appendChild(placeholder);
-      content.appendChild(frame);
+          if (contentType && contentType.includes('application/json')) {
+            const data = await response.json();
 
-      img.onload = () => {
-        // Remove placeholder
-        if (placeholder.parentNode) {
-          placeholder.parentNode.removeChild(placeholder);
-        }
-
-        // Add loaded image
-        setLightboxVisualState(photo.id, img);
-        img.className = 'lightbox-media-element';
-        applyLightboxMediaStyles(
-          frame,
-          img,
-          photo,
-          getLightboxPreviewRotation(photo.id),
-        );
-        const filename =
-          photo.path?.split('/').pop() || photo.filename || `Photo ${photo.id}`;
-        img.alt = filename;
-
-        frame.appendChild(img);
-      };
-
-      img.onerror = async () => {
-        console.error(`❌ Image ${photo.id} failed to load`);
-
-        // Check if failure was due to database corruption or stale grid entry
-        try {
-          const response = await fetch(`/api/photo/${photo.id}/file`);
-
-          if (!response.ok) {
-            const contentType = response.headers.get('content-type');
-
-            if (contentType && contentType.includes('application/json')) {
-              const data = await response.json();
-
-              if (checkForDatabaseCorruption(data)) {
-                return; // Corruption dialog shown, stop here
-              }
-
-              if (response.status === 404 && data.error === 'Photo not found') {
-                await handleStalePhoto(photo.id);
-                return;
-              }
+            if (checkForDatabaseCorruption(data)) {
+              return;
             }
-          } else {
-            showToast('Preview unavailable for this format', null);
-          }
-        } catch (e) {
-          console.error('🔍 Error checking for corruption:', e);
-          // Ignore fetch errors, keep placeholder
-        }
 
-        // Keep placeholder, show error state
-      };
-    }
-  }
+            if (response.status === 404 && data.error === 'Photo not found') {
+              await handleStalePhoto(p.id);
+              return;
+            }
+          }
+        } else {
+          showToast('Preview unavailable for this format', null);
+        }
+      } catch (e) {
+        console.error('🔍 Error checking for corruption:', e);
+      }
+    },
+  });
 }
 
 /**
@@ -7667,12 +7481,17 @@ async function loadAndRenderPhotosVirtual(options = {}) {
     signal,
   } = options;
 
-  VirtualGrid.destroy();
+  if (typeof PhotoGrid !== 'undefined') {
+    PhotoGrid.destroyVirtual();
+  } else {
+    VirtualGrid.destroy();
+  }
   resetPhotoWindowState();
   state.lastClickedIndex = null;
 
   try {
-    const ok = await VirtualGrid.init(
+    const init = typeof PhotoGrid !== 'undefined' ? PhotoGrid.initVirtual : VirtualGrid.init.bind(VirtualGrid);
+    const ok = await init(
       buildVirtualGridInitHooks(generation, { sortOrder, signal }),
     );
 
@@ -10074,6 +9893,16 @@ async function loadUtilitiesMenu() {
       });
     }
 
+    const manageShareLinksBtn = document.getElementById('manageShareLinksBtn');
+    if (manageShareLinksBtn) {
+      manageShareLinksBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        if (typeof ShareFlow !== 'undefined') {
+          void ShareFlow.openManageLinks();
+        }
+      });
+    }
+
     if (switchLibraryBtn) {
       switchLibraryBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
@@ -10143,6 +9972,14 @@ async function loadUtilitiesMenu() {
     }
 
     utilitiesMenuLoaded = true;
+
+    if (typeof ShareFlow !== 'undefined' && ShareFlow.preloadManageOverlay) {
+      ShareFlow.preloadManageOverlay();
+    }
+
+    if (typeof PhotoChrome !== 'undefined') {
+      PhotoChrome.applySurfaceChrome(getViewCapabilities());
+    }
 
     // Update menu item availability
     updateUtilityMenuAvailability();

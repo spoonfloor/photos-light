@@ -1,22 +1,13 @@
 /**
- * Non-virtual month-grouped grid renderer (share viewer).
+ * Non-virtual month-grouped grid renderer (share viewer + library fallback).
  */
 const SimplePhotoGrid = (() => {
   function monthKey(date) {
-    if (!date) {
-      return 'undated';
-    }
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    return MonthGrid.monthKeyFromDate(date);
   }
 
   function monthHeaderLabel(date) {
-    if (!date) {
-      return 'Undated';
-    }
-    if (typeof GridLayout !== 'undefined' && GridLayout.monthLabel) {
-      return GridLayout.monthLabel(monthKey(date));
-    }
-    return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    return MonthGrid.monthLabel(monthKey(date));
   }
 
   function render(container, photos, ctx) {
@@ -28,51 +19,44 @@ const SimplePhotoGrid = (() => {
     const caps = ctx.getCapabilities?.() ?? ViewCapabilities.get();
 
     if (!photos.length) {
+      if (ctx.interactionCtx && typeof GridInteractions !== 'undefined') {
+        GridInteractions.wireContainer(container, ctx.interactionCtx);
+      }
       ctx.onAfterRender?.(photos);
       return;
     }
 
     let currentKey = null;
     let gridEl = null;
-    let sectionEl = null;
 
     photos.forEach((photo, index) => {
       const date = ctx.parseDate?.(photo.date_taken) ?? null;
       const key = monthKey(date);
       if (key !== currentKey) {
         currentKey = key;
-        sectionEl = document.createElement('div');
-        sectionEl.className = 'month-section';
-        sectionEl.dataset.month = key;
-
-        const headerBand = document.createElement('div');
-        headerBand.className = 'month-header-band';
-        headerBand.innerHTML =
-          `<div class="month-header">` +
-          `<span class="month-label">${monthHeaderLabel(date)}</span>` +
-          `<div class="month-select-circle"></div>` +
-          `</div>`;
-        sectionEl.appendChild(headerBand);
-
-        gridEl = document.createElement('div');
-        gridEl.className = 'photo-grid';
-        sectionEl.appendChild(gridEl);
-        container.appendChild(sectionEl);
+        const section = MonthGrid.createMonthSection(key);
+        gridEl = section.gridEl;
+        container.appendChild(section.sectionEl);
       }
 
+      const thumbSrc = ctx.deferThumbSrc
+        ? null
+        : (ctx.thumbUrl?.(photo) ?? null);
       const card = GridTile.createCard({
         caps,
         photoId: photo.id,
         favorited: ctx.isStarred?.(photo) ?? false,
         isVideo: photo.file_type === 'video',
         selected: ctx.isSelected?.(photo.id) ?? false,
-        thumbSrc: ctx.thumbUrl?.(photo) ?? null,
+        thumbSrc,
         thumbAlt: photo.original_filename || 'Photo',
         index,
       });
 
-      const img = card.querySelector('.photo-thumb');
-      GridTile.attachThumbLoadHandler(img);
+      const thumb = card.querySelector('.photo-thumb');
+      if (thumbSrc) {
+        GridTile.attachThumbLoadHandler(thumb);
+      }
       gridEl.appendChild(card);
     });
 
@@ -80,12 +64,36 @@ const SimplePhotoGrid = (() => {
       GridSelection.applyToDom(container, ctx.getSelectedIds());
     }
 
+    if (ctx.interactionCtx && typeof GridInteractions !== 'undefined') {
+      GridInteractions.wireContainer(container, ctx.interactionCtx);
+    }
+
     ctx.onAfterRender?.(photos);
+  }
+
+  function hydrateThumbs(container, photos, ctx) {
+    if (!container || typeof ctx.thumbUrl !== 'function') {
+      return;
+    }
+
+    const photoById = new Map(photos.map((photo) => [String(photo.id), photo]));
+    container.querySelectorAll('.photo-thumb').forEach((img) => {
+      if (img.getAttribute('src')) {
+        return;
+      }
+      const photo = photoById.get(String(img.dataset.photoId));
+      if (!photo) {
+        return;
+      }
+      GridTile.attachThumbLoadHandler(img);
+      img.src = ctx.thumbUrl(photo);
+    });
   }
 
   return {
     monthKey,
     monthHeaderLabel,
     render,
+    hydrateThumbs,
   };
 })();

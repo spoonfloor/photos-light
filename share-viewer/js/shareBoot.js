@@ -7,9 +7,11 @@
 
   const config = window.SHARE_VIEWER_CONFIG;
   const caps = ViewCapabilities.SHARE;
+  const SHARE_NOT_FOUND_MESSAGE =
+    'This link is no longer valid and the requested photos are unavailable.';
 
   const state = {
-    slug: null,
+    token: null,
     album: null,
     photos: [],
     sortOrder: 'newest',
@@ -38,7 +40,7 @@
   };
 
   function storageKey(suffix) {
-    return `photos-light-share:${state.slug}:${suffix}`;
+    return `photos-light-share:${state.token}:${suffix}`;
   }
 
   function loadLocalState() {
@@ -72,29 +74,60 @@
     localStorage.setItem(storageKey('sort'), state.sortOrder);
   }
 
-  function parseSlug() {
-    return new URLSearchParams(window.location.search).get('s');
+  function parseShareToken() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('t') || params.get('s');
   }
 
-  async function supabaseFetch(path) {
-    const response = await fetch(`${config.supabaseUrl}${path}`, {
+  function shareResolveUrl() {
+    if (config.shareResolveUrl) {
+      return config.shareResolveUrl;
+    }
+    return `${config.supabaseUrl}/functions/v1/share-resolve`;
+  }
+
+  async function fetchShareResolve(searchParams) {
+    const params = new URLSearchParams(searchParams);
+    params.set('token', state.token);
+    const response = await fetch(`${shareResolveUrl()}?${params.toString()}`, {
       headers: {
         apikey: config.supabaseKey,
         Authorization: `Bearer ${config.supabaseKey}`,
       },
     });
     if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error(SHARE_NOT_FOUND_MESSAGE);
+      }
       throw new Error(`Could not load share (${response.status})`);
     }
     return response.json();
   }
 
-  function publicUrl(storagePath) {
-    const encoded = storagePath
-      .split('/')
-      .map((part) => encodeURIComponent(part))
-      .join('/');
-    return `${config.supabaseUrl}/storage/v1/object/public/${config.storageBucket}/${encoded}`;
+  async function resolveShareMeta() {
+    return fetchShareResolve({
+      phase: 'meta',
+      sort: state.sortOrder,
+    });
+  }
+
+  async function resolveShareFull() {
+    return fetchShareResolve({});
+  }
+
+  function applyShareTitle(title) {
+    const resolved = title || 'Shared Photos';
+    document.title = resolved;
+    els.sharePageTitle.textContent = resolved;
+    els.sharePageTitle.classList.remove('share-layout-placeholder');
+  }
+
+  function mediaUrl(photo, kind) {
+    const url = kind === 'thumb' ? photo.thumb_url : photo.original_url;
+    if (!url) {
+      throw new Error('Share media URL is missing.');
+    }
+    return url;
   }
 
   function parseDate(value) {
@@ -156,52 +189,52 @@
     return photos;
   }
 
-  const gridCtx = {
-    getCapabilities: () => caps,
-    getSelectedIds: () => state.selected,
-    parseDate,
-    isStarred: (photo) => isStarred(photo),
-    isSelected: (photoId) => state.selected.has(String(photoId)),
-    thumbUrl: (photo) => publicUrl(photo.thumb_path),
-    onAfterRender: () => {
-      GridInteractions.wireContainer(els.photoContainer, interactionCtx);
-      updateChrome();
+  const surface = PhotoSurface.init({
+    caps,
+    container: els.photoContainer,
+    emptyEl: els.shareEmpty,
+    getPhotos: filteredPhotos,
+    adapters: {
+      getSelectedIds: () => state.selected,
+      getSelectedCount: () => state.selected.size,
+      isSelected: (photoId) => state.selected.has(String(photoId)),
+      parseDate,
+      isStarred: (photo) => isStarred(photo),
+      thumbUrl: (photo) => mediaUrl(photo, 'thumb'),
     },
-  };
+    interactionHandlers: {
+      onToggleSelection: (_photoId, { event, card }) => {
+        state.lastClickedIndex = GridSelection.toggleCard(
+          els.photoContainer,
+          state.selected,
+          card,
+          event,
+          state.lastClickedIndex,
+        );
+        syncSelectionView();
+      },
+      onMonthCircleClick: (circle, event) => {
+        state.lastClickedIndex = GridSelection.handleMonthCircleClick(
+          els.photoContainer,
+          state.selected,
+          circle,
+          event,
+          state.lastClickedIndex,
+        );
+        syncSelectionView();
+      },
+      onToggleStar: (photoId) => toggleStar(photoId),
+      onOpenLightbox: (photoId) => openLightbox(photoId),
+    },
+    onAfterRender: updateChrome,
+  });
 
-  const interactionCtx = {
-    getCapabilities: () => caps,
-    getSelectedCount: () => state.selected.size,
-    isSelected: (photoId) => state.selected.has(String(photoId)),
-    onToggleSelection: (_photoId, { event, card }) => {
-      state.lastClickedIndex = GridSelection.toggleCard(
-        els.photoContainer,
-        state.selected,
-        card,
-        event,
-        state.lastClickedIndex,
-      );
-      syncSelectionView();
-    },
-    onMonthCircleClick: (circle, event) => {
-      state.lastClickedIndex = GridSelection.handleMonthCircleClick(
-        els.photoContainer,
-        state.selected,
-        circle,
-        event,
-        state.lastClickedIndex,
-      );
-      syncSelectionView();
-    },
-    onToggleStar: (photoId) => toggleStar(photoId),
-    onOpenLightbox: (photoId) => openLightbox(photoId),
-  };
-
-  function rebuildPhotoGrid() {
+  function rebuildPhotoGrid({ deferThumbSrc = false } = {}) {
     state.lastClickedIndex = null;
-    const photos = filteredPhotos();
-    els.shareEmpty.hidden = photos.length > 0;
-    SimplePhotoGrid.render(els.photoContainer, photos, gridCtx);
+    surface.renderGrid({ deferThumbSrc });
+    if (deferThumbSrc) {
+      surface.hydrateThumbs();
+    }
   }
 
   function syncSelectionView() {
@@ -335,18 +368,13 @@
       return;
     }
     els.lightboxContent.innerHTML = '';
-    if (photo.file_type === 'video') {
-      const video = document.createElement('video');
-      video.controls = true;
-      video.autoplay = true;
-      video.src = publicUrl(photo.original_path);
-      els.lightboxContent.appendChild(video);
-    } else {
-      const img = document.createElement('img');
-      img.src = publicUrl(photo.original_path);
-      img.alt = photo.original_filename || 'Shared photo';
-      els.lightboxContent.appendChild(img);
-    }
+    els.lightboxContent.style.backgroundColor = 'transparent';
+    LightboxMedia.loadIntoContent(els.lightboxContent, photo, {
+      isVideo: LightboxMedia.isVideoPhoto(photo),
+      getMediaUrl: () => mediaUrl(photo, 'original'),
+      getAltText: (p) => p.original_filename || 'Shared photo',
+      nativeVideoControls: true,
+    });
   }
 
   function closeLightbox() {
@@ -433,16 +461,16 @@
     if (photos.length >= (config.zipThreshold || 6)) {
       const zip = new JSZip();
       for (const photo of photos) {
-        const response = await fetch(publicUrl(photo.original_path));
+        const response = await fetch(mediaUrl(photo, 'original'));
         const blob = await response.blob();
         zip.file(photo.original_filename || `${photo.id}.bin`, blob);
       }
       const archive = await zip.generateAsync({ type: 'blob' });
-      triggerDownload(archive, `${state.album.title || state.slug}.zip`);
+      triggerDownload(archive, `${state.album.title || state.token}.zip`);
       return;
     }
     for (const photo of photos) {
-      const response = await fetch(publicUrl(photo.original_path));
+      const response = await fetch(mediaUrl(photo, 'original'));
       const blob = await response.blob();
       triggerDownload(blob, photo.original_filename || `${photo.id}.bin`);
     }
@@ -507,37 +535,74 @@
     });
   }
 
-  async function boot() {
-    state.slug = parseSlug();
-    if (!state.slug) {
+  function showShareFailure(message, { notFound = false } = {}) {
+    document.body.classList.toggle('share-view--not-found', notFound);
+
+    const chromeMount = document.getElementById('appChromeMount');
+    if (chromeMount) {
+      chromeMount.hidden = notFound;
+    }
+
+    if (els.photoContainer) {
+      els.photoContainer.innerHTML = '';
+    }
+
+    if (els.sharePageTitle) {
+      els.sharePageTitle.hidden = notFound;
+      if (!notFound) {
+        els.sharePageTitle.textContent = 'Shared Photos';
+        els.sharePageTitle.classList.add('share-layout-placeholder');
+      }
+    }
+
+    if (els.shareEmpty) {
+      els.shareEmpty.hidden = true;
+    }
+
+    if (els.shareError) {
       els.shareError.hidden = false;
-      els.shareError.textContent = 'Missing share link.';
+      els.shareError.textContent = message;
+    }
+  }
+
+  async function boot() {
+    state.token = parseShareToken();
+    if (!state.token) {
+      showShareFailure('Missing share link.', { notFound: true });
       return;
     }
 
     loadLocalState();
+    PhotoSurface.mountChrome(caps);
     wireLightbox();
     wireEvents();
 
-    try {
-      const albums = await supabaseFetch(
-        `/rest/v1/albums?slug=eq.${encodeURIComponent(state.slug)}&select=*`,
-      );
-      if (!albums.length) {
-        throw new Error('Share not found.');
-      }
-      state.album = albums[0];
-      state.photos = await supabaseFetch(
-        `/rest/v1/album_photos?album_id=eq.${encodeURIComponent(state.album.id)}&select=*&order=position.asc`,
-      );
+    ShareSkeletonGrid.renderInstantBoot(els.sharePageTitle, els.photoContainer);
 
-      const title = state.album.title || 'Shared Photos';
-      document.title = title;
-      els.sharePageTitle.textContent = title;
-      rebuildPhotoGrid();
+    try {
+      const metaPromise = resolveShareMeta();
+      const fullPromise = resolveShareFull();
+
+      const meta = await metaPromise;
+      state.album = meta.album;
+      ShareSkeletonGrid.applyMeta(
+        els.sharePageTitle,
+        els.photoContainer,
+        meta,
+        els.shareEmpty,
+      );
+      document.title = els.sharePageTitle.textContent || 'Shared Photos';
+
+      const payload = await fullPromise;
+      state.album = payload.album;
+      state.photos = payload.photos || [];
+      applyShareTitle(state.album?.title);
+      surface.renderGrid({ deferThumbSrc: true });
+      surface.hydrateThumbs();
     } catch (error) {
-      els.shareError.hidden = false;
-      els.shareError.textContent = error.message || 'Could not load share.';
+      const message = error.message || 'Could not load share.';
+      const notFound = message === SHARE_NOT_FOUND_MESSAGE;
+      showShareFailure(message, { notFound });
     }
   }
 

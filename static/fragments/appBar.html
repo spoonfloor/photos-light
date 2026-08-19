@@ -2,21 +2,10 @@
 <div class="app-bar-wrapper no-select">
   <div class="app-bar-elements-layer">
     <div class="title-and-back">
-      <!-- LEFT: camera icon -->
-      <!-- <button class="app-bar-icon-button" id="appBarMenuBtn" aria-label="Menu">
-        <img
-          src="assets/camera.svg"
-          alt=""
-          class="app-bar-icon camera-icon"
-          style="width: 24px; height: 24px"
-        />
-      </button> -->
-
       <span class="title title-photos" id="appBarTitle">Photos Light</span>
     </div>
 
-    <!-- CENTER: Date picker (hidden until photos are loaded) -->
-    <div class="date-picker" style="visibility: hidden">
+    <div class="date-picker" data-cap="dateJumper" style="visibility: hidden" aria-hidden="true">
       <span class="date-picker-label">Month</span>
       <select id="monthPicker" class="date-picker-select">
         <option value="1">January</option>
@@ -40,13 +29,12 @@
     </div>
 
     <div class="actions">
-      <!-- RIGHT: Sort toggle, Add photo, Deselect all, Edit Date, Delete, and More buttons -->
       <button
+        type="button"
         class="app-bar-icon-button"
         id="sortToggleBtn"
         aria-label="Sort"
         title="Newest first"
-        style="opacity: 0.3; pointer-events: none"
       >
         <span class="material-symbols-outlined app-bar-icon" id="sortIcon"
           >hourglass_arrow_down</span
@@ -54,57 +42,74 @@
       </button>
 
       <button
+        type="button"
+        class="app-bar-icon-button"
+        id="downloadBtn"
+        aria-label="Download"
+        title="Download"
+        data-cap="downloadInAppBar"
+        hidden
+      >
+        <span class="material-symbols-outlined app-bar-icon">download</span>
+      </button>
+
+      <button
+        type="button"
         class="app-bar-icon-button"
         id="addPhotoBtn"
         aria-label="Add Photo"
         title="Add photo"
+        data-cap="import"
       >
         <span class="material-symbols-outlined app-bar-icon">add_a_photo</span>
       </button>
 
       <button
+        type="button"
         class="app-bar-icon-button inactive"
         id="deselectAllBtn"
-        aria-label="Deselect All"
+        aria-label="Deselect all"
         title="Deselect all"
       >
         <span class="material-symbols-outlined app-bar-icon">cancel</span>
       </button>
 
       <button
+        type="button"
         class="app-bar-icon-button"
         id="editDateBtn"
         aria-label="Edit Date"
         title="Change date"
-        style="opacity: 0.3; pointer-events: none"
+        data-cap="editDate"
       >
-        <span class="material-symbols-outlined app-bar-icon"
-          >edit_calendar</span
-        >
+        <span class="material-symbols-outlined app-bar-icon">edit_calendar</span>
       </button>
 
       <button
+        type="button"
         class="app-bar-icon-button"
         id="restoreBtn"
         aria-label="Restore selected"
         title="Restore selected"
+        data-cap="restore"
         hidden
-        style="opacity: 0.3; pointer-events: none"
       >
         <span class="material-symbols-outlined app-bar-icon">undo</span>
       </button>
 
       <button
+        type="button"
         class="app-bar-icon-button"
         id="deleteBtn"
         aria-label="Delete"
         title="Delete selected"
-        style="opacity: 0.3; pointer-events: none"
+        data-cap="deleteKind"
       >
         <span class="material-symbols-outlined app-bar-icon">delete</span>
       </button>
 
       <button
+        type="button"
         class="app-bar-icon-button"
         id="utilitiesBtn"
         aria-label="More options"

@@ -17,19 +17,19 @@
       <p class="share-overlay-consent">
         Anyone with this link can view and download the photos.
       </p>
-      <div class="share-url-row">
-        <code class="share-url-text" id="shareOverlayUrl"></code>
-      </div>
-      <label class="share-title-toggle">
-        <input type="checkbox" id="shareOverlayTitleToggle" />
-        <span>Add a title</span>
-      </label>
+      <button
+        type="button"
+        class="share-title-link"
+        id="shareOverlayTitleToggle"
+        aria-pressed="false"
+      >
+        Add a title
+      </button>
       <input
         type="text"
         class="share-title-input"
         id="shareOverlayTitleInput"
-        placeholder="Feb 26 Photos"
-        disabled
+        hidden
       />
     </div>
 
@@ -45,19 +45,26 @@
 
     <div class="import-progress-section" id="shareOverlayProgress" hidden>
       <p class="share-overlay-lead" id="shareOverlayProgressText">Uploading…</p>
+      <p class="share-overlay-remaining" id="shareOverlayProgressRemaining"></p>
     </div>
 
-    <div class="import-actions" id="shareOverlayPreflightActions">
-      <button class="btn btn-secondary" id="shareOverlayCancelBtn" type="button">
+    <div class="import-actions" id="shareOverlayActions">
+      <button
+        class="btn btn-secondary"
+        id="shareOverlayCancelBtn"
+        type="button"
+      >
         Cancel
       </button>
       <button class="btn btn-primary" id="shareOverlayShareBtn" type="button">
         Share
       </button>
-    </div>
-
-    <div class="import-actions" id="shareOverlayCompleteActions" hidden>
-      <button class="btn btn-primary" id="shareOverlayDoneBtn" type="button">
+      <button
+        class="btn btn-primary"
+        id="shareOverlayDoneBtn"
+        type="button"
+        hidden
+      >
         Done
       </button>
     </div>

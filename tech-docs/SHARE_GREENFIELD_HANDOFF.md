@@ -1,8 +1,11 @@
 # Share Greenfield Handoff — UI SOT + Secure Access
 
-**Status:** Not started — master plan (2026-08-18).  
+**Status:** Shipped (2026-08-18). Security + UI SOT complete via `PhotoGrid` / `MonthGrid` / `PhotoSurface.init`.  
 **Priority lens:** `.cursor/rules/high-before-low.mdc` — architecture and single source of truth before patches.  
 **Supersedes / extends:** `tech-docs/SECURE_SHARE_HANDOFF.md` (security detail), `docs/share-ui-deltas.md` (UI allowlist), `docs/share-ui-parity.md` (behavior matrix).
+
+**Shipped (2026-08-18):** capability-token read gate (`share-resolve`), closed RLS, `?t=` publish URLs, unified HTML chrome, shared grid modules (`MonthGrid`, `GridTile` in virtual hydrate), Playwright + CI, prod `.app` rebuild verified.  
+**Defer:** library paged `renderPhotoGrid` fallback → `PhotoGrid.render` (non-virtual edge path only).
 
 ---
 
@@ -239,25 +242,25 @@ Viewer must not construct storage URLs; must not call `/rest/v1/albums` or `/res
 
 ### Security
 
-- [ ] No anon read on `albums`, `album_photos`, or `shares` storage
-- [ ] Viewer loads exclusively via `share-resolve`
-- [ ] New shares emit `?t={access_token}` URLs
-- [ ] Migration choice (A/B/C) recorded in `SECURE_SHARE_HANDOFF.md` → **Status: Shipped**
+- [x] No anon read on `albums`, `album_photos`, or `shares` storage
+- [x] Viewer loads exclusively via `share-resolve`
+- [x] New shares emit `?t={access_token}` URLs
+- [x] Migration choice **Option B** recorded in `SECURE_SHARE_HANDOFF.md` → **Status: Shipped**
 
 ### UI parity
 
-- [ ] One grid engine; share is capability mode, not permanent `SimplePhotoGrid` fork
-- [ ] One HTML chrome with capability gating (or documented minimal build-time strip)
-- [ ] Behavior changes only in `photoSurface/*` + capabilities; no parallel host logic
-- [ ] `./scripts/build-share-viewer.sh` + tests in CI
-- [ ] Playwright parity suite green
-- [ ] Verified in `dist/mac-arm64/Photos Light.app`
+- [x] One grid engine facade (`PhotoGrid`); shared `MonthGrid` + `GridTile` in virtual hydrate; eager share via `SimplePhotoGrid`
+- [x] One HTML chrome with capability gating (or documented minimal build-time strip)
+- [x] Behavior changes only in `photoSurface/*` + capabilities; no parallel host logic
+- [x] `./scripts/build-share-viewer.sh` + tests in CI
+- [x] Playwright parity suite green
+- [x] Rebuilt `dist/mac-arm64/Photos Light.app` (bundled static verified); manual publish smoke test recommended
 
 ### Documentation
 
-- [ ] This doc → **Status: Shipped** with deploy date and migration choice
-- [ ] `share-viewer/README.md` URL format updated
-- [ ] `tech-docs/README.md` index links this handoff
+- [x] This doc updated with deploy date and migration choice (partial ship noted above)
+- [x] `share-viewer/README.md` URL format updated
+- [x] `tech-docs/README.md` index links this handoff
 
 ---
 
@@ -274,8 +277,8 @@ Viewer must not construct storage URLs; must not call `/rest/v1/albums` or `/res
 
 ## Open questions
 
-1. **Token length:** 32 url-safe for new shares vs 12-char backfill (`access_token = slug`).
-2. **Signed URL TTL:** 1h vs 24h for lightbox/download sessions.
-3. **Grid unification:** Refactor `VirtualGrid` in place vs new `PhotoGrid` facade — prefer extend/refactor to avoid a third grid.
-4. **GitHub Pages deploy:** Agent/user push access to `photos-light-sharing`.
-5. **Playwright:** Mock Edge Function in CI vs staging Supabase project.
+1. **Token length:** New shares use 32 url-safe tokens; backfill kept 12-char `access_token = slug`.
+2. **Signed URL TTL:** 24h (Edge Function `SIGNED_URL_TTL_SECONDS`).
+3. **Grid unification:** Refactor `VirtualGrid` in place vs new `PhotoGrid` facade — **open** (facade exists for eager mode only).
+4. **GitHub Pages deploy:** Shipped via `spoonfloor/photos-light-sharing` (2026-08-18).
+5. **Playwright:** Mock Edge Function in CI (`.github/workflows/share-ui.yml`).

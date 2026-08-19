@@ -1,0 +1,45 @@
+name: Share UI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  unit-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run share unit tests
+        run: |
+          python3 -m unittest test_grid_selection test_share_viewer_build test_share_albums test_share_publish_contract test_share_resolve_contract
+
+      - name: Verify share viewer build
+        run: bash scripts/build-share-viewer.sh
+
+  playwright:
+    runs-on: ubuntu-latest
+    needs: unit-and-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install Playwright
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: Run share viewer e2e tests
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

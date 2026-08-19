@@ -1,6 +1,6 @@
 # Secure Share Links — Agent Handoff
 
-**Status:** Not started — design agreed in chat (2026-08-18).  
+**Status:** Shipped (2026-08-18). Migration **Option B** (`access_token = slug` backfill; viewer accepts `?t=` then `?s=`; app emits `?t=` for new shares).  
 **Priority lens:** `.cursor/rules/high-before-low.mdc` — fix the **access model** first; do not patch RLS or hide list calls in JS.  
 **User intent:** Implement capability-token shares so recipients cannot enumerate or read other albums.  
 **Master plan:** `tech-docs/SHARE_GREENFIELD_HANDOFF.md` — UI SOT + secure access (implementation order, done definition).
@@ -294,9 +294,9 @@ Edge Function needs `SUPABASE_SERVICE_ROLE_KEY` as a **secret** (Supabase dashbo
 
 ## Done definition
 
-- [ ] No anon read on `albums`, `album_photos`, or `shares` storage
-- [ ] Viewer loads exclusively via `share-resolve`
-- [ ] New shares emit `?t={access_token}` URLs
-- [ ] Publish flow unchanged UX (preflight / inflight / complete)
-- [ ] Tests green; prod `.app` rebuild verified
-- [ ] This doc updated with **Status: Shipped** and migration choice (A/B/C) recorded
+- [x] No anon read on `albums`, `album_photos`, or `shares` storage
+- [x] Viewer loads exclusively via `share-resolve`
+- [x] New shares emit `?t={access_token}` URLs
+- [x] Publish flow unchanged UX (preflight / inflight / complete)
+- [x] Tests green; prod `.app` rebuilt (`./packaging/build.sh`, bundled static verified 2026-08-18)
+- [x] This doc updated with **Status: Shipped** and migration choice **Option B** recorded

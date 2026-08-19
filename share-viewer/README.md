@@ -10,7 +10,11 @@ GitHub Pages.
 
 ## URL format
 
-`https://spoonfloor.github.io/photos-light-sharing/?s={slug}`
+`https://spoonfloor.github.io/photos-light-sharing/?t={access_token}`
+
+Legacy `?s=` links still resolve during the transition window (token backfilled from slug).
+
+Data loads via Supabase Edge Function `share-resolve` (signed storage URLs). The viewer does not call PostgREST or public storage paths.
 
 ## Build (required before deploy)
 
@@ -39,4 +43,4 @@ cd share-viewer
 python3 -m http.server 8080
 ```
 
-Open `http://localhost:8080/?s=your-slug`.
+Open `http://localhost:8080/?t=your-token` (or `?s=` for legacy shares).

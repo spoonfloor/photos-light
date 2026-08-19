@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import string
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -72,10 +74,19 @@ def generate_share_slug(length: int = 12) -> str:
     return "".join(secrets.choice(_SLUG_ALPHABET) for _ in range(length))
 
 
-def build_share_url(slug: str, viewer_base: Optional[str] = None) -> str:
+def generate_access_token(length: int = 32) -> str:
+    """URL-safe capability token for share links (?t=)."""
+    token = secrets.token_urlsafe(24)
+    if len(token) >= length:
+        return token[:length]
+    extra = "".join(secrets.choice(_SLUG_ALPHABET) for _ in range(length - len(token)))
+    return token + extra
+
+
+def build_share_url(access_token: str, viewer_base: Optional[str] = None) -> str:
     _, _, base = get_share_config()
     root = (viewer_base or base).rstrip("/")
-    return f"{root}/?s={slug}"
+    return f"{root}/?t={access_token}"
 
 
 def parse_photo_date(date_str: Optional[str]) -> Optional[datetime]:
@@ -150,10 +161,16 @@ def _supabase_request(
         raise RuntimeError(f"Supabase {method} {path} failed ({exc.code}): {detail}") from exc
 
 
-def insert_album(slug: str, title: Optional[str], photo_count: int) -> Dict[str, Any]:
+def insert_album(
+    slug: str,
+    access_token: str,
+    title: Optional[str],
+    photo_count: int,
+) -> Dict[str, Any]:
     payload = json.dumps(
         {
             "slug": slug,
+            "access_token": access_token,
             "title": title or None,
             "photo_count": photo_count,
         }
@@ -179,6 +196,221 @@ def insert_album_photos(rows: List[Dict[str, Any]]) -> None:
         body=payload,
         extra_headers={"Prefer": "return=minimal"},
     )
+
+
+def _parse_postgres_timestamptz(text: str) -> Optional[datetime]:
+    """Parse Postgres timestamptz strings with variable fractional-second precision."""
+    normalized = text.strip().replace("Z", "+00:00")
+    match = re.match(
+        r"^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.(\d+))?([+-]\d{2}(?::?\d{2})?)?$",
+        normalized,
+    )
+    if not match:
+        return None
+
+    date_part, time_part, fractional, tz_part = match.groups()
+    iso_base = f"{date_part}T{time_part}"
+    if fractional is not None:
+        micros = (fractional + "000000")[:6]
+        iso_base = f"{iso_base}.{micros}"
+    if tz_part:
+        if len(tz_part) == 3:
+            tz_part = f"{tz_part}:00"
+        iso_base = f"{iso_base}{tz_part}"
+
+    try:
+        return datetime.fromisoformat(iso_base)
+    except ValueError:
+        return None
+
+
+def format_album_created_date(created_at: str) -> str:
+    """Format album created_at for manage-links labels (e.g. Aug 18 2026)."""
+    text = (created_at or "").strip()
+    if not text:
+        return ""
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        parsed = _parse_postgres_timestamptz(text)
+        if parsed is None:
+            return text[:10]
+    return parsed.strftime("%b %d %Y")
+
+
+def format_album_label(title: Optional[str], created_at: str) -> str:
+    date_label = format_album_created_date(created_at)
+    cleaned_title = (title or "").strip()
+    if cleaned_title:
+        return f"{cleaned_title} ({date_label})" if date_label else cleaned_title
+    return date_label or "Shared link"
+
+
+def list_share_albums() -> List[Dict[str, Any]]:
+    rows = _supabase_request(
+        "GET",
+        "/rest/v1/albums?select=id,title,created_at,access_token&order=created_at.desc",
+    )
+    if not rows:
+        return []
+
+    albums: List[Dict[str, Any]] = []
+    for row in rows:
+        access_token = row.get("access_token") or ""
+        created_at = row.get("created_at") or ""
+        title = row.get("title")
+        albums.append(
+            {
+                "id": row["id"],
+                "title": title,
+                "created_at": created_at,
+                "url": build_share_url(access_token) if access_token else "",
+                "label": format_album_label(title, created_at),
+            }
+        )
+    return albums
+
+
+def _normalize_storage_path(prefix: str, name: str) -> str:
+    if name.startswith(prefix):
+        return name
+    return f"{prefix.rstrip('/')}/{name.lstrip('/')}"
+
+
+def _is_storage_folder(entry: Dict[str, Any]) -> bool:
+    if not entry:
+        return False
+    if entry.get("id"):
+        return False
+    if entry.get("metadata") is not None:
+        return False
+    return bool((entry.get("name") or "").strip())
+
+
+def _list_all_storage_files(prefix: str) -> List[str]:
+    """Recursively list file object paths under a storage prefix."""
+    normalized_prefix = prefix if prefix.endswith("/") else f"{prefix}/"
+    paths: List[str] = []
+    seen_paths = set()
+    seen_prefixes = set()
+    stack = [normalized_prefix]
+
+    while stack:
+        current_prefix = stack.pop()
+        offset = 0
+        while True:
+            payload = json.dumps(
+                {"prefix": current_prefix, "limit": 1000, "offset": offset}
+            ).encode("utf-8")
+            batch = _supabase_request(
+                "POST",
+                f"/storage/v1/object/list/{SHARE_BUCKET}",
+                body=payload,
+            ) or []
+            if not batch:
+                break
+
+            for item in batch:
+                name = (item or {}).get("name")
+                if not name:
+                    continue
+                full_path = _normalize_storage_path(current_prefix, name)
+                if _is_storage_folder(item):
+                    folder_prefix = (
+                        full_path if full_path.endswith("/") else f"{full_path}/"
+                    )
+                    if folder_prefix not in seen_prefixes:
+                        seen_prefixes.add(folder_prefix)
+                        stack.append(folder_prefix)
+                    continue
+                if full_path not in seen_paths:
+                    seen_paths.add(full_path)
+                    paths.append(full_path)
+
+            if len(batch) < 1000:
+                break
+            offset += 1000
+
+    return paths
+
+
+def _delete_storage_paths(paths: List[str], *, retries: int = 3) -> None:
+    if not paths:
+        return
+    unique_paths = list(dict.fromkeys(paths))
+    chunk_size = 1000
+    for start in range(0, len(unique_paths), chunk_size):
+        chunk = unique_paths[start : start + chunk_size]
+        payload = json.dumps({"prefixes": chunk}).encode("utf-8")
+        last_error: Optional[RuntimeError] = None
+        for attempt in range(retries):
+            try:
+                _supabase_request(
+                    "DELETE",
+                    f"/storage/v1/object/{SHARE_BUCKET}",
+                    body=payload,
+                )
+                last_error = None
+                break
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt + 1 >= retries:
+                    raise
+                time.sleep(0.25 * (attempt + 1))
+        if last_error is not None:
+            raise last_error
+
+
+def delete_share_album(album_id: str) -> None:
+    """Hard-delete one share: catalog row first (link 404), then storage cleanup."""
+    album_key = urllib.parse.quote(str(album_id or "").strip(), safe="")
+    if not album_key:
+        raise ValueError("Missing album id")
+
+    album_rows = _supabase_request(
+        "GET",
+        f"/rest/v1/albums?id=eq.{album_key}&select=id,access_token",
+    )
+    if not album_rows:
+        raise ValueError("Share not found")
+
+    access_token = album_rows[0].get("access_token") or ""
+    if not access_token:
+        raise ValueError("Share missing access token")
+
+    photo_rows = _supabase_request(
+        "GET",
+        f"/rest/v1/album_photos?album_id=eq.{album_key}&select=thumb_path,original_path",
+    ) or []
+
+    storage_paths: List[str] = []
+    seen = set()
+
+    def add_path(path: Optional[str]) -> None:
+        if path and path not in seen:
+            seen.add(path)
+            storage_paths.append(path)
+
+    for row in photo_rows:
+        add_path(row.get("thumb_path"))
+        add_path(row.get("original_path"))
+
+    prefix = f"{access_token}/"
+    if not storage_paths:
+        for path in _list_all_storage_files(prefix):
+            add_path(path)
+
+    _supabase_request("DELETE", f"/rest/v1/albums?id=eq.{album_key}")
+
+    if not storage_paths:
+        return
+
+    try:
+        _delete_storage_paths(storage_paths)
+    except RuntimeError:
+        # Catalog is already gone — link is dead; storage cleanup is best-effort.
+        return
 
 
 def upload_storage_object(storage_path: str, data: bytes, content_type: str) -> None:
@@ -212,26 +444,27 @@ def guess_content_type(file_path: str, file_type: str) -> str:
     return mapping.get(ext, "application/octet-stream")
 
 
-def publish_share_album(
+def iter_publish_share_album(
     *,
     slug: str,
+    access_token: str,
     title: Optional[str],
     photo_rows: List[Dict[str, Any]],
     library_path: str,
     generate_still_thumb,
     generate_video_thumb,
     to_rgb,
-    on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
-) -> Dict[str, Any]:
+):
     """
     Upload originals + thumbs to Supabase and insert album catalog rows.
 
+    Yields (event_name, payload) tuples for SSE streaming.
     photo_rows: sqlite rows with id, current_path, date_taken, file_type, width, height, rating
     """
     if len(photo_rows) > SHARE_MAX_PHOTOS:
         raise ValueError(f"Share limit is {SHARE_MAX_PHOTOS} photos")
 
-    album = insert_album(slug, title, len(photo_rows))
+    album = insert_album(slug, access_token, title, len(photo_rows))
     album_id = album["id"]
     catalog_rows: List[Dict[str, Any]] = []
 
@@ -248,7 +481,7 @@ def publish_share_album(
         file_type = row["file_type"] if row["file_type"] == "video" else "photo"
         ext = os.path.splitext(relative_path)[1].lower() or ".jpg"
         original_name = os.path.basename(relative_path)
-        storage_base = f"{slug}/{index:04d}_{photo_id}"
+        storage_base = f"{access_token}/{index:04d}_{photo_id}"
         original_path = f"{storage_base}/original{ext}"
         thumb_path = f"{storage_base}/thumb.jpg"
 
@@ -298,25 +531,58 @@ def publish_share_album(
             }
         )
 
-        if on_progress:
-            on_progress(
-                {
-                    "type": "progress",
-                    "completed": index + 1,
-                    "total": len(photo_rows),
-                    "photo_id": photo_id,
-                }
-            )
+        yield (
+            "progress",
+            {
+                "completed": index + 1,
+                "total": len(photo_rows),
+                "photo_id": photo_id,
+            },
+        )
 
     insert_album_photos(catalog_rows)
-    share_url = build_share_url(slug)
-    result = {
-        "slug": slug,
-        "url": share_url,
-        "title": title,
-        "photo_count": len(photo_rows),
-        "album_id": album_id,
-    }
-    if on_progress:
-        on_progress({"type": "complete", **result})
+    share_url = build_share_url(access_token)
+    yield (
+        "complete",
+        {
+            "slug": slug,
+            "access_token": access_token,
+            "url": share_url,
+            "title": title,
+            "photo_count": len(photo_rows),
+            "album_id": album_id,
+        },
+    )
+
+
+def publish_share_album(
+    *,
+    slug: str,
+    access_token: str,
+    title: Optional[str],
+    photo_rows: List[Dict[str, Any]],
+    library_path: str,
+    generate_still_thumb,
+    generate_video_thumb,
+    to_rgb,
+    on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    """Blocking publish wrapper — use iter_publish_share_album for SSE."""
+    result: Optional[Dict[str, Any]] = None
+    for event_name, payload in iter_publish_share_album(
+        slug=slug,
+        access_token=access_token,
+        title=title,
+        photo_rows=photo_rows,
+        library_path=library_path,
+        generate_still_thumb=generate_still_thumb,
+        generate_video_thumb=generate_video_thumb,
+        to_rgb=to_rgb,
+    ):
+        if on_progress:
+            on_progress({"type": event_name, **payload})
+        if event_name == "complete":
+            result = payload
+    if result is None:
+        raise RuntimeError("Share publish did not complete")
     return result

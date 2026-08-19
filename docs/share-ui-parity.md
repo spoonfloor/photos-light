@@ -13,5 +13,7 @@ Share must match app behavior unless listed in [share-ui-deltas.md](./share-ui-d
 | Selected chip when count > 0 | `PhotoChrome.updateFilterChips` | both |
 | Utilities menu position | `PhotoChrome.toggleUtilitiesMenu` | both |
 | Grid click routing | `GridInteractions.wireContainer` | both |
+| Lightbox placeholder + preload | `LightboxMedia.loadIntoContent` | both |
+| Instant grid structure on load | `ShareSkeletonGrid.renderInstantBoot` + meta reveal | share |
 
-CI: `test_share_viewer_build.py` + `test_grid_selection.py`
+CI: `test_share_viewer_build.py` + `test_grid_selection.py` + `npm run test:e2e` (Playwright, mocked `share-resolve`)

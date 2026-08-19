@@ -66,8 +66,8 @@ This folder contains deep-dive technical documentation, implementation notes, an
 
 ### Share (UI parity + secure access)
 
-- `SHARE_GREENFIELD_HANDOFF.md` - **Master plan:** app-as-SOT share surface, capability-token read gate, phased implementation and done definition
-- `SECURE_SHARE_HANDOFF.md` - Capability-token shares, Edge Function `share-resolve`, closed RLS, migration strategy
+- `SHARE_GREENFIELD_HANDOFF.md` - **Shipped (2026-08-18):** app-as-SOT share surface, secure access, unified `PhotoGrid`/`MonthGrid`
+- `SECURE_SHARE_HANDOFF.md` - **Shipped (2026-08-18):** capability-token shares, Edge Function `share-resolve`, closed RLS, migration Option B
 
 ### Architecture & cleanup
 

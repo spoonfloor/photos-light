@@ -6,6 +6,12 @@
 
 body.share-view {
   --page-top-gap: 24px;
+  /* PL0: opaque equivalent of n% grid gray over page bg */
+  --share-pre-meta-bg: color-mix(
+    in srgb,
+    var(--placeholder-bg) 30%,
+    var(--body-bg)
+  );
 }
 
 body.share-view.filter-chip-rail-visible {
@@ -30,4 +36,46 @@ body.share-view.filter-chip-rail-visible {
 
 .share-error {
   color: #ff6b6b;
+}
+
+body.share-view.share-view--not-found {
+  --app-chrome-height: 0px;
+}
+
+body.share-view.share-view--not-found .page-main {
+  min-height: calc(100vh - var(--page-top-gap));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body.share-view.share-view--not-found .page-wrapper {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+body.share-view.share-view--not-found .share-error {
+  padding: 0;
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.share-layout-placeholder {
+  color: transparent !important;
+  background: var(--share-pre-meta-bg);
+}
+
+.share-page-title.share-layout-placeholder {
+  width: fit-content;
+}
+
+.share-skeleton-section.share-pl0 .share-skeleton-card {
+  background: var(--share-pre-meta-bg);
+}
+
+.share-skeleton-section .month-select-circle {
+  visibility: hidden;
 }

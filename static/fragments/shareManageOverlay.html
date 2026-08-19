@@ -1,0 +1,31 @@
+<div class="import-overlay" id="shareManageOverlay" style="display: none">
+  <div class="import-card share-card share-manage-card">
+    <div class="import-header">
+      <span class="import-title" id="shareManageTitle">Manage links</span>
+      <button
+        class="import-close-btn"
+        id="shareManageCloseBtn"
+        aria-label="Close"
+        type="button"
+      >
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <div class="share-manage-body" id="shareManageBody">
+      <p class="share-manage-status" id="shareManageLoading">
+        Loading shared media links…
+      </p>
+      <p class="share-manage-status" id="shareManageEmpty" hidden>
+        No shared links yet.
+      </p>
+      <ul class="share-manage-list" id="shareManageList"></ul>
+    </div>
+
+    <div class="import-actions">
+      <button class="btn btn-primary" id="shareManageDoneBtn" type="button">
+        Done
+      </button>
+    </div>
+  </div>
+</div>

@@ -436,6 +436,9 @@ const VirtualGrid = (() => {
   }
 
   function buildMonthHeaderBand(monthKey) {
+    if (typeof MonthGrid !== 'undefined') {
+      return MonthGrid.buildMonthHeaderBand(monthKey);
+    }
     const band = document.createElement('div');
     band.className = 'month-header-band';
     const header = document.createElement('div');
@@ -472,28 +475,43 @@ const VirtualGrid = (() => {
   function buildHydratedGrid(section, photos, filterPhoto) {
     const grid = document.createElement('div');
     grid.className = 'photo-grid';
+    const caps =
+      typeof ViewCapabilities !== 'undefined' ? ViewCapabilities.get() : null;
 
     const visiblePhotos = filterPhoto ? photos.filter(filterPhoto) : photos;
     visiblePhotos.forEach((photo, localIndex) => {
       const globalIndex = section.globalStart + localIndex;
-      const card = document.createElement('div');
-      card.className = 'photo-card';
-      card.dataset.id = String(photo.id);
-      card.dataset.index = String(globalIndex);
-
-      const videoBadgeHTML =
-        photo.file_type === 'video'
-          ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
-          : '';
-
-      card.innerHTML = `
+      const card =
+        typeof GridTile !== 'undefined'
+          ? GridTile.createCard({
+              caps,
+              photoId: photo.id,
+              favorited: photo.rating === 5,
+              isVideo: photo.file_type === 'video',
+              selected: false,
+              thumbSrc: null,
+              thumbAlt: '',
+              index: globalIndex,
+            })
+          : (() => {
+              const fallback = document.createElement('div');
+              fallback.className = 'photo-card';
+              fallback.dataset.id = String(photo.id);
+              fallback.dataset.index = String(globalIndex);
+              const videoBadgeHTML =
+                photo.file_type === 'video'
+                  ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
+                  : '';
+              fallback.innerHTML = `
         <img data-photo-id="${photo.id}" alt="" class="photo-thumb">
         ${typeof buildGridStarBadgeHTML === 'function' ? buildGridStarBadgeHTML(photo.rating === 5) : ''}
         ${videoBadgeHTML}
       `;
-      if (typeof applyGridStarBadgeState === 'function') {
-        applyGridStarBadgeState(card, photo.rating === 5);
-      }
+              if (typeof applyGridStarBadgeState === 'function') {
+                applyGridStarBadgeState(fallback, photo.rating === 5);
+              }
+              return fallback;
+            })();
       grid.appendChild(card);
     });
     return grid;

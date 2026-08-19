@@ -18,6 +18,14 @@ build/
 
 # Electron
 electron/node_modules/
+node_modules/
+
+# Playwright
+test-results/
+playwright-report/
+
+# Supabase CLI local state
+supabase/.temp/
 
 # IDE
 .vscode/

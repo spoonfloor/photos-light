@@ -31,6 +31,10 @@ FORBIDDEN_SHARE_BOOT_PATTERNS = [
     re.compile(r"buildGridStarBadgeHTML"),
     re.compile(r"window\.alert"),
     re.compile(r"handleLightboxKeyboard"),
+    re.compile(r"/rest/v1/albums"),
+    re.compile(r"/rest/v1/album_photos"),
+    re.compile(r"function publicUrl\s*\("),
+    re.compile(r"/storage/v1/object/public/"),
 ]
 
 LIGHTBOX_SHELL = ROOT / "static" / "js" / "photoSurface" / "lightboxShell.js"
@@ -61,6 +65,11 @@ class ShareViewerBuildTest(unittest.TestCase):
         self.assertIn("js/shareBoot.js", index)
         self.assertIn("js/photoSurface/gridSelection.js", index)
         self.assertIn("js/photoSurface/gridTile.js", index)
+        self.assertIn("js/photoSurface/monthGrid.js", index)
+        self.assertIn("js/photoSurface/init.js", index)
+        self.assertIn("js/photoSurface/shareSkeletonGrid.js", index)
+        self.assertIn("js/photoSurface/lightboxMedia.js", index)
+        self.assertNotIn("shareLoadOverlay", index)
         self.assertIn("js/photoSurface/lightboxShell.js", index)
         self.assertIn('id="lightboxInfoPanel"', index)
 
@@ -89,10 +98,23 @@ class ShareViewerBuildTest(unittest.TestCase):
                 pattern.search(text),
                 f"shareBoot.js must not reimplement {pattern.pattern}",
             )
-        self.assertIn("SimplePhotoGrid.render", text)
-        self.assertIn("GridInteractions.wireContainer", text)
+        self.assertIn("PhotoSurface.init", text)
+        self.assertIn("PhotoSurface.mountChrome", text)
+        init_js = ROOT / "static" / "js" / "photoSurface" / "init.js"
+        self.assertTrue(init_js.is_file())
+        self.assertIn("renderGrid", init_js.read_text(encoding="utf-8"))
+        self.assertNotIn("shareAppBar.html", BUILD_SCRIPT.read_text(encoding="utf-8"))
+        simple_grid = ROOT / "static" / "js" / "photoSurface" / "simpleGrid.js"
+        self.assertIn("GridInteractions.wireContainer", simple_grid.read_text(encoding="utf-8"))
         self.assertIn("PhotoChrome.toggleUtilitiesMenu", text)
         self.assertIn("LightboxShell.wire", text)
+        self.assertIn("LightboxMedia.loadIntoContent", text)
+        self.assertIn("resolveShareMeta", text)
+        self.assertIn("ShareSkeletonGrid.renderInstantBoot", text)
+        self.assertIn("ShareSkeletonGrid.applyMeta", text)
+        self.assertIn("phase: 'meta'", text)
+        self.assertIn("deferThumbSrc", text)
+        self.assertIn("shareResolveUrl", text)
 
     def test_styles_css_is_copied_from_static(self):
         static_css = (ROOT / "static" / "css" / "styles.css").read_text(encoding="utf-8")

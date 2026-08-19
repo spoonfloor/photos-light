@@ -93,6 +93,25 @@ const PhotoChrome = (() => {
     }
   }
 
+  function capEnabled(caps, capName) {
+    const value = caps?.[capName];
+    if (capName === 'deleteKind') {
+      return value != null && value !== false;
+    }
+    return !!value;
+  }
+
+  function applySurfaceChrome(caps = ViewCapabilities.get()) {
+    document.querySelectorAll('[data-cap]').forEach((el) => {
+      const capName = el.dataset.cap;
+      const enabled = capEnabled(caps, capName);
+      el.hidden = !enabled;
+      if (capName === 'dateJumper') {
+        el.setAttribute('aria-hidden', enabled ? 'false' : 'true');
+      }
+    });
+  }
+
   function wireUtilitiesDismiss(menu, utilitiesBtn) {
     document.addEventListener('click', (event) => {
       if (
@@ -111,6 +130,7 @@ const PhotoChrome = (() => {
     toggleUtilitiesMenu,
     ensureSelectedFilterChip,
     updateFilterChips,
+    applySurfaceChrome,
     wireUtilitiesDismiss,
   };
 })();
