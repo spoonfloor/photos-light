@@ -341,6 +341,32 @@
     </div>
   </div>
 </div>
+<!-- Surface load overlay — scrim at t=0, card after delay (share resolve, catalog boot). -->
+<div
+  class="import-overlay import-overlay--scrim-only"
+  id="surfaceLoadOverlay"
+  style="display: none"
+  aria-hidden="true"
+>
+  <div class="import-card">
+    <div class="import-header">
+      <span class="import-title" id="surfaceLoadTitle">Loading photos</span>
+    </div>
+
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <span id="surfaceLoadStatusLabel">Loading your media.</span>
+        <span class="import-spinner" aria-hidden="true"></span>
+      </div>
+    </div>
+
+    <div class="import-actions" id="surfaceLoadActions" style="display: none">
+      <button class="btn btn-secondary" id="surfaceLoadCancelBtn" type="button">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="js/config.js"></script>
     <script src="js/viewCapabilities.js"></script>
@@ -350,11 +376,14 @@
     <script src="js/photoSurface/chrome.js"></script>
     <script src="js/photoSurface/monthGrid.js"></script>
     <script src="js/photoSurface/simpleGrid.js"></script>
+    <script src="js/photoSurface/surfaceSkeletonGrid.js"></script>
     <script src="js/photoSurface/shareSkeletonGrid.js"></script>
     <script src="js/photoSurface/photoGrid.js"></script>
     <script src="js/photoSurface/init.js"></script>
     <script src="js/photoSurface/lightboxMedia.js"></script>
     <script src="js/photoSurface/lightboxShell.js"></script>
+    <script src="js/photoSurface/surfaceLoadOverlay.js"></script>
+    <script src="js/photoSurface/surfaceLoadChrome.js"></script>
     <script src="js/shareBoot.js?v=3"></script>
   </body>
 </html>

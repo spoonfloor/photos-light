@@ -1,0 +1,26 @@
+<!-- Surface load overlay — scrim at t=0, card after delay (share resolve, catalog boot). -->
+<div
+  class="import-overlay import-overlay--scrim-only"
+  id="surfaceLoadOverlay"
+  style="display: none"
+  aria-hidden="true"
+>
+  <div class="import-card">
+    <div class="import-header">
+      <span class="import-title" id="surfaceLoadTitle">Loading photos</span>
+    </div>
+
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <span id="surfaceLoadStatusLabel">Loading your media.</span>
+        <span class="import-spinner" aria-hidden="true"></span>
+      </div>
+    </div>
+
+    <div class="import-actions" id="surfaceLoadActions" style="display: none">
+      <button class="btn btn-secondary" id="surfaceLoadCancelBtn" type="button">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>

@@ -74,6 +74,8 @@ HTML_MAIN
 
 read_fragment lightbox.html >> "$OUT/index.html"
 
+read_fragment surfaceLoadOverlay.html >> "$OUT/index.html"
+
 cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="js/config.js"></script>
@@ -84,11 +86,14 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="js/photoSurface/chrome.js"></script>
     <script src="js/photoSurface/monthGrid.js"></script>
     <script src="js/photoSurface/simpleGrid.js"></script>
+    <script src="js/photoSurface/surfaceSkeletonGrid.js"></script>
     <script src="js/photoSurface/shareSkeletonGrid.js"></script>
     <script src="js/photoSurface/photoGrid.js"></script>
     <script src="js/photoSurface/init.js"></script>
     <script src="js/photoSurface/lightboxMedia.js"></script>
     <script src="js/photoSurface/lightboxShell.js"></script>
+    <script src="js/photoSurface/surfaceLoadOverlay.js"></script>
+    <script src="js/photoSurface/surfaceLoadChrome.js"></script>
     <script src="js/shareBoot.js?v=3"></script>
   </body>
 </html>

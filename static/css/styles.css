@@ -662,6 +662,75 @@ body.trash-view-active #lightboxDownloadBtn {
   background: var(--placeholder-bg);
 }
 
+/* Surface load shell — metadata reserve boxes (title, month header, date picker). */
+.surface-layout-placeholder {
+  color: transparent !important;
+  background: var(--placeholder-bg);
+}
+
+.date-picker.surface-date-picker-loading .date-picker-select.surface-layout-placeholder {
+  pointer-events: none;
+  border-color: transparent;
+}
+
+/* Surface load phases — SS2 locked shell, SS3 dimmed date jumper + chip rail. */
+body.surface-load-active {
+  overflow: hidden;
+}
+
+body.surface-load-active .page-main {
+  overflow: hidden;
+}
+
+body.surface-load-active #photoContainer {
+  pointer-events: none;
+}
+
+body.surface-load-phase-loading .date-picker {
+  visibility: hidden !important;
+}
+
+body.surface-load-phase-meta .date-picker {
+  visibility: visible !important;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+body.surface-load-phase-meta .date-picker-select {
+  pointer-events: none;
+}
+
+body.surface-load-active .filter-chip-rail {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+/* App bar interactivity — CSS beats legacy inline styles from enablePhotoRelatedActions. */
+body.surface-chrome-cold-start .app-bar-icon-button#sortToggleBtn,
+body.surface-chrome-cold-start .app-bar-icon-button#downloadBtn,
+body.surface-chrome-cold-start .app-bar-icon-button#deselectAllBtn,
+body.surface-chrome-cold-start .app-bar-icon-button#editDateBtn,
+body.surface-chrome-cold-start .app-bar-icon-button#deleteBtn,
+body.surface-chrome-cold-start .app-bar-icon-button#restoreBtn {
+  opacity: 0.3 !important;
+  pointer-events: none !important;
+}
+
+body.surface-chrome-cold-start .app-bar-icon-button#addPhotoBtn,
+body.surface-chrome-cold-start .app-bar-icon-button#utilitiesBtn {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+body.surface-load-active .app-bar-icon-button {
+  opacity: 0.3 !important;
+  pointer-events: none !important;
+}
+
+.surface-skeleton-section .month-select-circle {
+  visibility: hidden;
+}
+
 .grid-root .month-header-band {
   height: var(--grid-header-band-px, 56px);
   box-sizing: border-box;
@@ -1722,6 +1791,12 @@ body.trash-view-active #lightboxDownloadBtn {
 .import-overlay.import-overlay--inert {
   pointer-events: none;
   background: transparent;
+}
+
+/* Scrim-only phase: dim surface at t=0; card reveals after CARD_DELAY_MS. */
+.import-overlay.import-overlay--scrim-only .import-card {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .import-card {

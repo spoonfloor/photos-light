@@ -24,9 +24,9 @@ const PhotoGrid = (() => {
     return typeof VirtualGrid !== 'undefined' && VirtualGrid.isActive();
   }
 
-  function destroyVirtual() {
+  function destroyVirtual(options = {}) {
     if (typeof VirtualGrid !== 'undefined') {
-      VirtualGrid.destroy();
+      VirtualGrid.destroy(options);
     }
   }
 

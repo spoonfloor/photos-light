@@ -1421,8 +1421,12 @@ function applyDatePickerFromYears(years, anchorMonth = null) {
   refreshDatePickerMonthAvailability();
 
   const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
+  if (
+    datePickerContainer &&
+    (typeof SurfaceLoadChrome === 'undefined' || !SurfaceLoadChrome.isActive())
+  ) {
     datePickerContainer.style.visibility = 'visible';
+    datePickerContainer.removeAttribute('aria-hidden');
   }
   enablePhotoRelatedActions();
   return true;
@@ -1476,6 +1480,10 @@ async function populateDatePicker(options = {}) {
  * Enable actions that require photos to be present
  */
 function enablePhotoRelatedActions() {
+  if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+    return;
+  }
+
   // Enable sort button
   const sortBtn = document.getElementById('sortToggleBtn');
   if (sortBtn) {
@@ -5072,6 +5080,10 @@ async function syncGridAfterHistogramChange(scrollTargetMonth = null) {
 }
 
 function updateRecentImportsFilterUi() {
+  if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+    return;
+  }
+
   const sortToggleBtn = document.getElementById('sortToggleBtn');
   const datePickerContainer = document.querySelector('.date-picker');
   const recentImportsActive = isRecentImportsFilterActive();
@@ -7387,15 +7399,18 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
       state.photoTotalCount = preview.total;
       state.hasDatabase = true;
       state.hasMore = false;
-      applyDatePickerFromYears(preview.years, preview.anchorMonth);
-      enableAppBarButtons();
+      applySurfaceLoadPhaseA(preview);
+      if (typeof SurfaceLoadChrome !== 'undefined') {
+        SurfaceLoadChrome.enterMeta();
+      }
     },
     onProvisionalReady: () => {
       updateUtilityMenuAvailability();
-      updateFilterChipRailVisibility();
-      if (state.libraryTransitionActive) {
-        hideLibraryTransitionOverlay();
+      if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+        SurfaceLoadChrome.enterMeta();
+        return;
       }
+      updateFilterChipRailVisibility();
     },
     onLayoutApplied: (appliedLayout) => {
       if (appliedLayout?.provisional) {
@@ -7429,6 +7444,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     onReady: (index) => {
       updateUtilityMenuAvailability();
       void refreshLibraryStarredCount();
+      finishSurfaceLoadIfActive();
       if (reconcileCatalogEmptyAfterGridLoad(index)) {
         return;
       }
@@ -7481,10 +7497,13 @@ async function loadAndRenderPhotosVirtual(options = {}) {
     signal,
   } = options;
 
+  const preserveInflightShell =
+    typeof VirtualGrid !== 'undefined' && VirtualGrid.hasInflightShell?.();
+
   if (typeof PhotoGrid !== 'undefined') {
-    PhotoGrid.destroyVirtual();
+    PhotoGrid.destroyVirtual({ preserveInflightShell });
   } else {
-    VirtualGrid.destroy();
+    VirtualGrid.destroy({ preserveInflightShell });
   }
   resetPhotoWindowState();
   state.lastClickedIndex = null;
@@ -8075,6 +8094,11 @@ function updateFilterChipUI() {
 }
 
 function updateFilterChipRailVisibility() {
+  if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+    SurfaceLoadChrome.syncChipRailLayout(true);
+    return;
+  }
+
   const rail = document.getElementById('filterChipRailMount');
   const shouldShow =
     state.hasDatabase &&
@@ -8237,6 +8261,15 @@ function renderFirstRunEmptyState() {
 
   setPagedGridContainerMode(container, false);
 
+  const datePickerContainer = document.querySelector('.date-picker');
+  if (datePickerContainer) {
+    datePickerContainer.style.visibility = 'hidden';
+    datePickerContainer.setAttribute('aria-hidden', 'true');
+  }
+  if (typeof SurfaceSkeletonGrid !== 'undefined') {
+    SurfaceSkeletonGrid.clearDatePickerPlaceholder();
+  }
+
   container.innerHTML = `
     <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
       <div style="text-align: center;">
@@ -8255,6 +8288,44 @@ function renderFirstRunEmptyState() {
       </div>
     </div>
   `;
+
+  if (typeof SurfaceLoadChrome !== 'undefined') {
+    SurfaceLoadChrome.syncColdStart();
+  }
+}
+
+/** Load-in-progress shell — VirtualGrid frame-0 comfort + month label reserve (not cold start). */
+function paintSurfaceShell() {
+  const container = document.getElementById('photoContainer');
+  if (!container) {
+    return false;
+  }
+
+  setPagedGridContainerMode(container, false);
+  if (
+    typeof VirtualGrid !== 'undefined' &&
+    typeof VirtualGrid.prepareInflightShell === 'function'
+  ) {
+    return VirtualGrid.prepareInflightShell();
+  }
+
+  if (typeof SurfaceSkeletonGrid !== 'undefined') {
+    SurfaceSkeletonGrid.renderInstantShell(container);
+    return true;
+  }
+  return false;
+}
+
+/** SS2 entry — sync grid shell + load chrome before any await in overlay flows. */
+function beginLibraryLoadTransition() {
+  paintSurfaceShell();
+  if (typeof SurfaceLoadChrome !== 'undefined' && !SurfaceLoadChrome.isActive()) {
+    SurfaceLoadChrome.beginLoading();
+  }
+}
+
+function applySurfaceLoadPhaseA(preview) {
+  applyDatePickerFromYears(preview.years, preview.anchorMonth);
 }
 
 function getLibraryDisplayName(libraryPath = state.libraryPath) {
@@ -10060,6 +10131,10 @@ function hideUtilitiesMenu() {
  * - Close library: requires database
  */
 function updateUtilityMenuAvailability() {
+  if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+    return;
+  }
+
   const hasDatabase = state.hasDatabase;
   const hasPhotos = state.photos && state.photos.length > 0;
   const caps = getViewCapabilities();
@@ -13953,6 +14028,24 @@ async function executeTerraformFlow(options = {}) {
   }
 }
 
+async function loadSurfaceLoadOverlay() {
+  if (document.getElementById('surfaceLoadOverlay')) {
+    return;
+  }
+
+  try {
+    const response = await fetch('/fragments/surfaceLoadOverlay.html');
+    if (!response.ok) {
+      throw new Error(
+        `Failed to load surface load overlay (${response.status})`,
+      );
+    }
+    document.body.insertAdjacentHTML('beforeend', await response.text());
+  } catch (error) {
+    console.error('❌ Surface load overlay load failed:', error);
+  }
+}
+
 async function loadLibraryTransitionOverlay() {
   if (document.getElementById('libraryTransitionOverlay')) {
     return;
@@ -13967,10 +14060,6 @@ async function loadLibraryTransitionOverlay() {
     }
     const html = await response.text();
     document.body.insertAdjacentHTML('beforeend', html);
-    const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', handleLibraryTransitionCancelClick);
-    }
   } catch (error) {
     console.error('❌ Failed to load library transition overlay:', error);
   }
@@ -13996,19 +14085,6 @@ function cancelPendingPhotoContainerMount() {
 /** @type {(() => void) | null} */
 let libraryTransitionCancelHandler = null;
 
-function handleLibraryTransitionCancelClick() {
-  const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
-  if (cancelBtn?.disabled) {
-    return;
-  }
-  if (cancelBtn) {
-    cancelBtn.disabled = true;
-  }
-  if (typeof libraryTransitionCancelHandler === 'function') {
-    libraryTransitionCancelHandler();
-  }
-}
-
 function resetLibraryTransitionCancelUi() {
   libraryTransitionCancelHandler = null;
   const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
@@ -14032,9 +14108,37 @@ async function showLibraryTransitionOverlay(options = {}) {
     return;
   }
 
+  beginLibraryLoadTransition();
+
+  const showCancelButton = !!options.showCancelButton;
+  libraryTransitionCancelHandler =
+    showCancelButton && typeof options.onCancel === 'function'
+      ? options.onCancel
+      : null;
+
+  if (typeof SurfaceLoadOverlay !== 'undefined') {
+    SurfaceLoadOverlay.begin({
+      overlayId: 'libraryTransitionOverlay',
+      titleElId: 'libraryTransitionTitle',
+      statusElId: 'libraryTransitionStatusLabel',
+      pathElId: 'libraryTransitionPath',
+      actionsElId: 'libraryTransitionActions',
+      cancelBtnId: 'libraryTransitionCancelBtn',
+      title: options.title || 'Opening library',
+      message: options.message || 'Loading your media.',
+      libraryPath: options.libraryPath || null,
+      showCancel: showCancelButton,
+      onCancel: libraryTransitionCancelHandler,
+    });
+    state.libraryTransitionActive = true;
+    return;
+  }
+
   const titleEl = document.getElementById('libraryTransitionTitle');
   const statusEl = document.getElementById('libraryTransitionStatusLabel');
   const pathEl = document.getElementById('libraryTransitionPath');
+  const actionsEl = document.getElementById('libraryTransitionActions');
+  const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
 
   if (titleEl) {
     titleEl.textContent = options.title || 'Opening library';
@@ -14052,14 +14156,6 @@ async function showLibraryTransitionOverlay(options = {}) {
       pathEl.style.display = 'none';
     }
   }
-
-  const actionsEl = document.getElementById('libraryTransitionActions');
-  const cancelBtn = document.getElementById('libraryTransitionCancelBtn');
-  const showCancelButton = !!options.showCancelButton;
-  libraryTransitionCancelHandler =
-    showCancelButton && typeof options.onCancel === 'function'
-      ? options.onCancel
-      : null;
   if (actionsEl) {
     actionsEl.style.display = showCancelButton ? '' : 'none';
   }
@@ -14074,11 +14170,24 @@ async function showLibraryTransitionOverlay(options = {}) {
 function hideLibraryTransitionOverlay() {
   flushPendingPhotoContainerMount();
   resetLibraryTransitionCancelUi();
-  const overlay = document.getElementById('libraryTransitionOverlay');
-  if (overlay) {
-    overlay.style.display = 'none';
+  if (typeof SurfaceLoadOverlay !== 'undefined') {
+    SurfaceLoadOverlay.end({ overlayId: 'libraryTransitionOverlay' });
+  } else {
+    const overlay = document.getElementById('libraryTransitionOverlay');
+    if (overlay) {
+      overlay.style.display = 'none';
+    }
   }
   state.libraryTransitionActive = false;
+}
+
+function finishSurfaceLoadIfActive() {
+  if (state.libraryTransitionActive) {
+    hideLibraryTransitionOverlay();
+  }
+  if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+    SurfaceLoadChrome.complete();
+  }
 }
 
 function normalizeLibraryPathForCompare(path) {
@@ -14139,7 +14248,8 @@ async function clearLibraryConfigOnServer() {
  * Close the current library (server + client) before Open / Convert / Create
  * picker flows. Cancel leaves the first-run empty shell — no restore.
  */
-async function beginLibrarySwapFlow() {
+async function beginLibrarySwapFlow(options = {}) {
+  const { skipFirstRunShell = false } = options;
   const current = await fetchCurrentLibraryInfo();
   const hasServerLibrary = Boolean(current?.library_path);
   const hasClientLibrary = Boolean(
@@ -14158,7 +14268,7 @@ async function beginLibrarySwapFlow() {
     if (hasServerLibrary) {
       await clearLibraryConfigOnServer();
     }
-    await releaseLibrarySession({ toFirstRun: true });
+    await releaseLibrarySession({ toFirstRun: true, skipFirstRunShell });
     return true;
   } catch (error) {
     console.error('❌ Failed to begin library swap:', error);
@@ -14172,7 +14282,7 @@ async function beginLibrarySwapFlow() {
  * library (or before server reset). Keeps server config until switch/reset runs.
  */
 async function releaseLibrarySession(options = {}) {
-  const { skipFlowSettle = false, toFirstRun = false } = options;
+  const { skipFlowSettle = false, toFirstRun = false, skipFirstRunShell = false } = options;
 
   if (state.lightboxOpen) {
     await closeLightbox({ commitRotations: false });
@@ -14191,9 +14301,12 @@ async function releaseLibrarySession(options = {}) {
     if (datePickerContainer) {
       datePickerContainer.style.visibility = 'hidden';
     }
-    renderFirstRunEmptyState();
-    updateFilterChipRailVisibility();
-    enableAppBarButtons();
+    if (!skipFirstRunShell) {
+      renderFirstRunEmptyState();
+      updateFilterChipRailVisibility();
+    } else if (typeof SurfaceLoadChrome !== 'undefined') {
+      SurfaceLoadChrome.syncColdStart();
+    }
   }
 }
 
@@ -14246,8 +14359,16 @@ function renderSafeLibraryFallback() {
  * Sync app bar interactivity after library load state changes
  */
 function enableAppBarButtons() {
+  if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+    return;
+  }
+
+  if (typeof SurfaceLoadChrome !== 'undefined') {
+    SurfaceLoadChrome.clearLegacyAppBarInlineStyles();
+  }
+
   const hasPhotos = state.photos && state.photos.length > 0;
-  const canUseDatePicker =
+  const canUseTimeline =
     state.hasDatabase && (state.photoTotalCount > 0 || hasPhotos);
 
   // Re-enable add photo button (not available in trash view)
@@ -14259,18 +14380,24 @@ function enableAppBarButtons() {
 
   const sortToggleBtn = document.getElementById('sortToggleBtn');
   if (sortToggleBtn) {
-    if (isRecentImportsFilterActive()) {
-      sortToggleBtn.style.opacity = '0.3';
-      sortToggleBtn.style.pointerEvents = 'none';
-    } else {
-      sortToggleBtn.style.opacity = hasPhotos ? '1' : '0.3';
-      sortToggleBtn.style.pointerEvents = hasPhotos ? 'auto' : 'none';
-    }
+    const sortEnabled = canUseTimeline && !isRecentImportsFilterActive();
+    sortToggleBtn.style.opacity = sortEnabled ? '1' : '0.3';
+    sortToggleBtn.style.pointerEvents = sortEnabled ? 'auto' : 'none';
+    sortToggleBtn.classList.toggle('inactive', !sortEnabled);
   }
   updateRecentImportsFilterUi();
 
+  const downloadBtn = document.getElementById('downloadBtn');
+  if (downloadBtn && !downloadBtn.hidden) {
+    const downloadEnabled = canUseTimeline && state.selectedPhotos.size > 0;
+    downloadBtn.classList.toggle('inactive', !downloadEnabled);
+    downloadBtn.style.opacity = downloadEnabled ? '1' : '0.3';
+    downloadBtn.style.pointerEvents = downloadEnabled ? 'auto' : 'none';
+  }
+
   updateDeleteButtonVisibility();
 
+  const canUseDatePicker = canUseTimeline;
   const monthPicker = document.getElementById('monthPicker');
   const yearPicker = document.getElementById('yearPicker');
   if (monthPicker) {
@@ -14280,6 +14407,13 @@ function enableAppBarButtons() {
   if (yearPicker) {
     yearPicker.disabled = !canUseDatePicker;
     yearPicker.style.opacity = canUseDatePicker ? '1' : '0.3';
+  }
+
+  const utilitiesBtn = document.getElementById('utilitiesBtn');
+  if (utilitiesBtn) {
+    utilitiesBtn.classList.remove('inactive');
+    utilitiesBtn.style.opacity = '1';
+    utilitiesBtn.style.pointerEvents = 'auto';
   }
 
   updateUtilityMenuAvailability();
@@ -14891,10 +15025,11 @@ async function convertToLibrary() {
  * Product entry point for More menu, first-run, error recovery, etc.
  */
 async function openExistingLibrary() {
+  let opened = false;
   try {
     closeSwitchLibraryOverlay();
 
-    if (!(await beginLibrarySwapFlow())) {
+    if (!(await beginLibrarySwapFlow({ skipFirstRunShell: true }))) {
       return false;
     }
 
@@ -14905,7 +15040,13 @@ async function openExistingLibrary() {
     });
 
     if (!selectedPath) {
+      renderFirstRunEmptyState();
       return false;
+    }
+
+    beginLibraryLoadTransition();
+    if (typeof SurfaceLoadOverlay !== 'undefined') {
+      await SurfaceLoadOverlay.flushDomPaint();
     }
 
     const openAbort = new AbortController();
@@ -14926,33 +15067,41 @@ async function openExistingLibrary() {
     });
 
     try {
-      const opened = await switchToLibrary(selectedPath, null, {
+      opened = await switchToLibrary(selectedPath, null, {
         skipTransitionOverlay: true,
         skipRelease: true,
         signal: openAbort.signal,
         suppressFailureToast: true,
       });
-      if (opened) {
-        hideLibraryTransitionOverlay();
-        return true;
-      }
-      return false;
+      return opened;
     } catch (error) {
       if (error.name === 'AbortError') {
+        renderFirstRunEmptyState();
         return false;
       }
       console.error('❌ Failed to open library:', error);
       showToast(`Error: ${error.message}`);
+      renderFirstRunEmptyState();
       return false;
     } finally {
-      if (state.libraryTransitionActive) {
-        hideLibraryTransitionOverlay();
+      if (!opened) {
+        if (state.libraryTransitionActive) {
+          hideLibraryTransitionOverlay();
+        }
+        if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
+          SurfaceLoadChrome.complete();
+        }
+        renderFirstRunEmptyState();
       }
     }
   } catch (error) {
     console.error('❌ Failed to open library:', error);
     showToast(`Error: ${error.message}`);
     hideLibraryTransitionOverlay();
+    if (typeof SurfaceLoadChrome !== 'undefined') {
+      SurfaceLoadChrome.complete();
+    }
+    renderFirstRunEmptyState();
     return false;
   }
 }
@@ -15741,7 +15890,11 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
     }
     return false;
   } finally {
-    if (!skipTransitionOverlay && (!deferTransitionHide || !success)) {
+    if (
+      !skipTransitionOverlay &&
+      (!deferTransitionHide || !success) &&
+      !state.libraryTransitionActive
+    ) {
       hideLibraryTransitionOverlay();
     }
   }
@@ -16509,7 +16662,6 @@ async function checkLibraryHealthAndInit() {
       case 'healthy':
         state.hasDatabase = true;
         state.libraryPath = status.library_path || null;
-        // Load photos (date picker will be populated automatically)
         await loadAndRenderPhotos();
         return;
 

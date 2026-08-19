@@ -6,12 +6,6 @@
 
 body.share-view {
   --page-top-gap: 24px;
-  /* PL0: opaque equivalent of n% grid gray over page bg */
-  --share-pre-meta-bg: color-mix(
-    in srgb,
-    var(--placeholder-bg) 30%,
-    var(--body-bg)
-  );
 }
 
 body.share-view.filter-chip-rail-visible {
@@ -63,19 +57,6 @@ body.share-view.share-view--not-found .share-error {
   color: var(--text-primary);
 }
 
-.share-layout-placeholder {
-  color: transparent !important;
-  background: var(--share-pre-meta-bg);
-}
-
-.share-page-title.share-layout-placeholder {
+.share-page-title.surface-layout-placeholder {
   width: fit-content;
-}
-
-.share-skeleton-section.share-pl0 .share-skeleton-card {
-  background: var(--share-pre-meta-bg);
-}
-
-.share-skeleton-section .month-select-circle {
-  visibility: hidden;
 }

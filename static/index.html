@@ -99,6 +99,42 @@
     <!-- Toast Mount Point -->
     <div id="toastMount"></div>
 
+    <!-- Library transition overlay (inlined — scrim must appear at t=0, no fetch delay) -->
+    <div
+      class="import-overlay import-overlay--scrim-only"
+      id="libraryTransitionOverlay"
+      style="display: none"
+      aria-hidden="true"
+    >
+      <div class="import-card">
+        <div class="import-header">
+          <span class="import-title" id="libraryTransitionTitle">Opening library</span>
+        </div>
+
+        <div class="import-progress-section">
+          <div class="import-status-text">
+            <span id="libraryTransitionStatusLabel">Loading your media.</span>
+            <span class="import-spinner" aria-hidden="true"></span>
+          </div>
+          <div
+            class="library-transition-path"
+            id="libraryTransitionPath"
+            style="display: none"
+          ></div>
+        </div>
+
+        <div class="import-actions" id="libraryTransitionActions" style="display: none">
+          <button
+            class="btn btn-secondary"
+            id="libraryTransitionCancelBtn"
+            type="button"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- JavaScript -->
     <script src="js/pickerUtils.js?v=4"></script>
     <script src="js/pickerFilesystem.js?v=1"></script>
@@ -113,6 +149,7 @@
     <script src="js/photoSurface/gridInteractions.js?v=1"></script>
     <script src="js/photoSurface/chrome.js?v=1"></script>
     <script src="js/photoSurface/simpleGrid.js?v=1"></script>
+    <script src="js/photoSurface/surfaceSkeletonGrid.js?v=1"></script>
     <script src="js/photoSurface/photoGrid.js?v=1"></script>
     <script src="js/gridScrollAnchor.js?v=12"></script>
     <script src="js/thumbnailQueue.js?v=5"></script>
@@ -122,6 +159,8 @@
     <script src="js/trashView.js?v=10"></script>
     <script src="js/photoSurface/lightboxMedia.js?v=1"></script>
     <script src="js/photoSurface/lightboxShell.js?v=1"></script>
+    <script src="js/photoSurface/surfaceLoadOverlay.js?v=1"></script>
+    <script src="js/photoSurface/surfaceLoadChrome.js?v=1"></script>
     <script src="js/lightboxVideoControls.js?v=1"></script>
     <script src="js/flowController.js?v=6"></script>
     <script src="js/shareFlow.js?v=1"></script>

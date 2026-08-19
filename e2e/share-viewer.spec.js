@@ -103,12 +103,12 @@ test.describe('share viewer parity', () => {
     });
 
     await page.goto('/?t=e2e-test-token');
-    await expect(page.locator('.share-skeleton-card')).not.toHaveCount(0);
-    await expect(page.locator('#sharePageTitle')).toHaveClass(/share-layout-placeholder/);
-    await expect(page.locator('.month-label')).toHaveClass(/share-layout-placeholder/);
+    await expect(page.locator('.surface-skeleton-card')).not.toHaveCount(0);
+    await expect(page.locator('#sharePageTitle')).toHaveClass(/surface-layout-placeholder/);
+    await expect(page.locator('.month-label')).toHaveClass(/surface-layout-placeholder/);
     expect(metaReleased).toBe(false);
 
-    await expect(page.locator('#sharePageTitle')).not.toHaveClass(/share-layout-placeholder/, {
+    await expect(page.locator('#sharePageTitle')).not.toHaveClass(/surface-layout-placeholder/, {
       timeout: 5000,
     });
     await expect(page.locator('.month-label')).toHaveText('February 2026');

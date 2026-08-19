@@ -86,7 +86,7 @@
     return `${config.supabaseUrl}/functions/v1/share-resolve`;
   }
 
-  async function fetchShareResolve(searchParams) {
+  async function fetchShareResolve(searchParams, { signal } = {}) {
     const params = new URLSearchParams(searchParams);
     params.set('token', state.token);
     const response = await fetch(`${shareResolveUrl()}?${params.toString()}`, {
@@ -94,6 +94,7 @@
         apikey: config.supabaseKey,
         Authorization: `Bearer ${config.supabaseKey}`,
       },
+      signal,
     });
     if (!response.ok) {
       if (response.status === 404) {
@@ -104,22 +105,25 @@
     return response.json();
   }
 
-  async function resolveShareMeta() {
-    return fetchShareResolve({
-      phase: 'meta',
-      sort: state.sortOrder,
-    });
+  async function resolveShareMeta(options = {}) {
+    return fetchShareResolve(
+      {
+        phase: 'meta',
+        sort: state.sortOrder,
+      },
+      options,
+    );
   }
 
-  async function resolveShareFull() {
-    return fetchShareResolve({});
+  async function resolveShareFull(options = {}) {
+    return fetchShareResolve({}, options);
   }
 
   function applyShareTitle(title) {
     const resolved = title || 'Shared Photos';
     document.title = resolved;
     els.sharePageTitle.textContent = resolved;
-    els.sharePageTitle.classList.remove('share-layout-placeholder');
+    els.sharePageTitle.classList.remove('surface-layout-placeholder');
   }
 
   function mediaUrl(photo, kind) {
@@ -536,6 +540,10 @@
   }
 
   function showShareFailure(message, { notFound = false } = {}) {
+    if (typeof SurfaceLoadChrome !== 'undefined') {
+      SurfaceLoadChrome.complete();
+    }
+    SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay' });
     document.body.classList.toggle('share-view--not-found', notFound);
 
     const chromeMount = document.getElementById('appChromeMount');
@@ -551,7 +559,7 @@
       els.sharePageTitle.hidden = notFound;
       if (!notFound) {
         els.sharePageTitle.textContent = 'Shared Photos';
-        els.sharePageTitle.classList.add('share-layout-placeholder');
+        els.sharePageTitle.classList.add('surface-layout-placeholder');
       }
     }
 
@@ -578,10 +586,27 @@
     wireEvents();
 
     ShareSkeletonGrid.renderInstantBoot(els.sharePageTitle, els.photoContainer);
+    if (typeof SurfaceLoadChrome !== 'undefined') {
+      SurfaceLoadChrome.beginLoading({ overlayId: 'surfaceLoadOverlay' });
+    }
+    await SurfaceLoadOverlay.flushDomPaint();
+
+    const loadAbort = new AbortController();
+    SurfaceLoadOverlay.begin({
+      overlayId: 'surfaceLoadOverlay',
+      title: 'Loading photos',
+      message: 'Loading shared media.',
+      showCancel: true,
+      onCancel: () => {
+        loadAbort.abort();
+        SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay' });
+        showShareFailure('Loading cancelled.');
+      },
+    });
 
     try {
-      const metaPromise = resolveShareMeta();
-      const fullPromise = resolveShareFull();
+      const metaPromise = resolveShareMeta({ signal: loadAbort.signal });
+      const fullPromise = resolveShareFull({ signal: loadAbort.signal });
 
       const meta = await metaPromise;
       state.album = meta.album;
@@ -591,6 +616,9 @@
         meta,
         els.shareEmpty,
       );
+      if (typeof SurfaceLoadChrome !== 'undefined') {
+        SurfaceLoadChrome.enterMeta();
+      }
       document.title = els.sharePageTitle.textContent || 'Shared Photos';
 
       const payload = await fullPromise;
@@ -600,9 +628,17 @@
       surface.renderGrid({ deferThumbSrc: true });
       surface.hydrateThumbs();
     } catch (error) {
+      if (error.name === 'AbortError') {
+        return;
+      }
       const message = error.message || 'Could not load share.';
       const notFound = message === SHARE_NOT_FOUND_MESSAGE;
       showShareFailure(message, { notFound });
+    } finally {
+      if (typeof SurfaceLoadChrome !== 'undefined') {
+        SurfaceLoadChrome.complete();
+      }
+      SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay' });
     }
   }
 
