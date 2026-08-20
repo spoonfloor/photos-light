@@ -45,12 +45,21 @@ class SharePublishContractTest(unittest.TestCase):
     def test_app_prepare_includes_access_token(self):
         with open("app.py", encoding="utf-8") as handle:
             text = handle.read()
+        session_block = text.split("def _share_prepare_session_fields(", 1)[1].split(
+            "def share_publish():", 1
+        )[0]
+        self.assertIn("generate_access_token()", session_block)
+        self.assertIn("'access_token': access_token", session_block)
         prepare_block = text.split("def share_prepare():", 1)[1].split("def share_publish():", 1)[0]
         self.assertIn("partition_share_photos_by_size", prepare_block)
         self.assertIn('"status": "oversized"', prepare_block)
         self.assertIn("'status': 'ready'", prepare_block)
-        self.assertIn("generate_access_token()", prepare_block)
-        self.assertIn("'access_token': access_token", prepare_block)
+        self.assertIn("_share_prepare_session_fields", prepare_block)
+        oversized_block = prepare_block.split("if oversized:", 1)[1].split(
+            "return jsonify(payload)", 1
+        )[0]
+        self.assertIn("if shareable_ids:", oversized_block)
+        self.assertIn("_share_prepare_session_fields(shareable_rows)", oversized_block)
 
     def test_share_flow_passes_access_token_on_publish(self):
         with open("static/js/shareFlow.js", encoding="utf-8") as handle:
@@ -195,7 +204,14 @@ class SharePublishContractTest(unittest.TestCase):
         self.assertIn("showOversizeState", text)
         self.assertIn("shareOverlaySkipBtn", text)
         self.assertIn("handleShareSkipOversized", text)
+        self.assertIn("applyShareableSessionFromPrepare", text)
         self.assertIn("skip them to continue", text)
+        skip_block = text.split("async function handleShareSkipOversized()", 1)[1].split(
+            "async function handleShareConfirm()", 1
+        )[0]
+        self.assertNotIn("showCheckingState", skip_block)
+        self.assertNotIn("runSharePrepare", skip_block)
+        self.assertIn("handleShareConfirm", skip_block)
         self.assertIn("formatSharePublishFailure", text)
         self.assertIn("throwSharePublishError", text)
         self.assertIn("prepareInProgress", text)

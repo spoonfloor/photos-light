@@ -6932,6 +6932,18 @@ def share_publish_outcome():
     return jsonify(outcome)
 
 
+def _share_prepare_session_fields(rows):
+    slug = generate_share_slug()
+    access_token = generate_access_token()
+    return {
+        'slug': slug,
+        'access_token': access_token,
+        'url': build_share_url(access_token),
+        'photo_count': len(rows),
+        'suggested_title': suggest_share_title([row['date_taken'] for row in rows]),
+    }
+
+
 @app.route('/api/share/prepare', methods=['POST'])
 @handle_db_corruption
 def share_prepare():
@@ -6969,42 +6981,36 @@ def share_prepare():
         rows,
         max_bytes,
     )
-    if oversized:
-        from share_albums import _share_log
+    from share_albums import _share_log
 
+    if oversized:
         _share_log(
             f"prepare oversized count={len(oversized)} "
             f"shareable={len(shareable_ids)} max_mb={max_mb}"
         )
-        return jsonify(
-            {
-                "status": "oversized",
-                "oversized_all": len(shareable_ids) == 0,
-                "oversized_count": len(oversized),
-                "shareable_count": len(shareable_ids),
-                "shareable_photo_ids": shareable_ids,
-                "max_size_bytes": max_bytes,
-                "max_size_mb": max_mb,
-                "oversized_photos": oversized[:SHARE_OVERSIZED_DETAILS_LIMIT],
-                "photo_count": len(rows),
-            }
-        )
-
-    slug = generate_share_slug()
-    access_token = generate_access_token()
-    suggested_title = suggest_share_title([row['date_taken'] for row in rows])
-    from share_albums import _share_log
+        payload = {
+            "status": "oversized",
+            "oversized_all": len(shareable_ids) == 0,
+            "oversized_count": len(oversized),
+            "shareable_count": len(shareable_ids),
+            "shareable_photo_ids": shareable_ids,
+            "max_size_bytes": max_bytes,
+            "max_size_mb": max_mb,
+            "oversized_photos": oversized[:SHARE_OVERSIZED_DETAILS_LIMIT],
+            "photo_count": len(rows),
+        }
+        if shareable_ids:
+            by_id = {int(row['id']): row for row in rows}
+            shareable_rows = [by_id[photo_id] for photo_id in shareable_ids]
+            payload.update(_share_prepare_session_fields(shareable_rows))
+        return jsonify(payload)
 
     _share_log(f"prepare ready photos={len(rows)} max_mb={max_mb}")
     return jsonify({
         'status': 'ready',
-        'slug': slug,
-        'access_token': access_token,
-        'url': build_share_url(access_token),
-        'photo_count': len(rows),
-        'suggested_title': suggested_title,
         'max_size_bytes': max_bytes,
         'max_size_mb': max_mb,
+        **_share_prepare_session_fields(rows),
     })
 
 

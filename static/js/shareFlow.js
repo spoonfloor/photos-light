@@ -1099,10 +1099,26 @@ const ShareFlow = (() => {
     }
   }
 
+  function applyShareableSessionFromPrepare(prepared) {
+    const shareableIds = prepared?.shareable_photo_ids || [];
+    if (
+      !prepared ||
+      prepared.oversized_all ||
+      !prepared.access_token ||
+      !shareableIds.length
+    ) {
+      session = null;
+      return false;
+    }
+    applyPreparedSession(prepared, shareableIds);
+    return true;
+  }
+
   async function resolvePreparedOutcome(prepared, photoIds, checkingStartedAtMs) {
     await waitForMinCheckingDuration(checkingStartedAtMs);
     if (prepared.status === 'oversized') {
       pendingOversizeData = prepared;
+      applyShareableSessionFromPrepare(prepared);
       showOversizeState(prepared);
       return null;
     }
@@ -1159,43 +1175,16 @@ const ShareFlow = (() => {
   }
 
   async function handleShareSkipOversized() {
-    const shareableIds = pendingOversizeData?.shareable_photo_ids;
-    if (!shareableIds?.length || prepareInProgress || publishInProgress) {
+    if (prepareInProgress || publishInProgress) {
+      return;
+    }
+    if (!applyShareableSessionFromPrepare(pendingOversizeData)) {
+      showToast('Share failed', 'error');
       return;
     }
 
-    prepareInProgress = true;
-    if (typeof updateUtilityMenuAvailability === 'function') {
-      updateUtilityMenuAvailability();
-    }
-
-    try {
-      showCheckingState();
-      const checkingStartedAtMs = Date.now();
-      const prepared = await runSharePrepare(shareableIds);
-      const ready = await resolvePreparedOutcome(
-        prepared,
-        shareableIds,
-        checkingStartedAtMs,
-      );
-      if (!ready) {
-        return;
-      }
-
-      prepareInProgress = false;
-      if (typeof updateUtilityMenuAvailability === 'function') {
-        updateUtilityMenuAvailability();
-      }
-      await handleShareConfirm();
-    } catch (error) {
-      console.error('Share prepare failed:', error);
-      showToast(error.message || 'Share failed', 'error');
-    } finally {
-      prepareInProgress = false;
-      if (typeof updateUtilityMenuAvailability === 'function') {
-        updateUtilityMenuAvailability();
-      }
-    }
+    pendingOversizeData = null;
+    await handleShareConfirm();
   }
 
   async function handleShareConfirm() {
