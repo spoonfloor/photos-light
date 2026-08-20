@@ -36,6 +36,7 @@ HIDDEN_IMPORTS = [
     "picker_sort",
     "image_pixels",
     "share_albums",
+    "share_delivery",
     "rotation_utils",
     "media_dates",
     "quicktime_date_atoms",

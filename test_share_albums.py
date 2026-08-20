@@ -6,6 +6,7 @@ import unittest.mock
 
 from share_albums import (
     SharePublishError,
+    _classify_share_failure,
     bytes_to_display_mb,
     build_share_url,
     format_album_label,
@@ -15,9 +16,11 @@ from share_albums import (
     get_share_storage_max_bytes,
     partition_share_photos_by_size,
     suggest_share_title,
+    upload_storage_object,
     validate_photos_for_share,
     SHARE_DEFAULT_STORAGE_MAX_BYTES,
 )
+from share_delivery import plan_share_delivery
 
 
 class ShareAlbumsTest(unittest.TestCase):
@@ -159,6 +162,47 @@ class ShareAlbumsTest(unittest.TestCase):
             format_album_created_date("2026-08-18T23:48:42.95229+00:00"),
             "Aug 18 2026",
         )
+
+    def test_classify_share_failure_entity_too_large(self):
+        failure = _classify_share_failure(
+            RuntimeError(
+                'Supabase POST /storage/v1/object/share-media/foo failed (400): '
+                '{"statusCode":"413","error":"EntityTooLarge"}'
+            ),
+            photo_index=3,
+            photo_id=38,
+            step="upload_original",
+        )
+        self.assertEqual(failure.code, "share_file_too_large")
+        self.assertEqual(failure.photo_id, 38)
+
+    def test_upload_storage_object_rejects_oversized_payload(self):
+        with unittest.mock.patch(
+            "share_albums.get_share_storage_max_bytes",
+            return_value=100,
+        ):
+            with self.assertRaises(SharePublishError) as ctx:
+                upload_storage_object("token/0001_1/original.jpg", b"x" * 200, "image/jpeg")
+            self.assertEqual(ctx.exception.code, "share_file_too_large")
+
+    def test_plan_share_delivery_marks_heic_for_jpeg(self):
+        plan = plan_share_delivery("2026/sample.heic", "photo")
+        self.assertEqual(plan.action, "still_jpeg")
+        self.assertEqual(plan.delivered_filename, "sample.jpg")
+
+    def test_plan_share_delivery_keeps_jpg_native(self):
+        plan = plan_share_delivery("2026/sample.jpg", "photo")
+        self.assertEqual(plan.action, "still_native")
+        self.assertEqual(plan.delivered_filename, "sample.jpg")
+
+    def test_classify_share_failure_invalid_mime_type(self):
+        failure = _classify_share_failure(
+            RuntimeError(
+                'Supabase POST failed (400): {"code":"InvalidMimeType","message":"mime type application/octet-stream is not supported"}'
+            ),
+            step="upload_original",
+        )
+        self.assertEqual(failure.code, "share_unsupported_format")
 
 
 if __name__ == "__main__":

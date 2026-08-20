@@ -16,10 +16,12 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from image_pixels import (
-    BROWSER_CONVERT_EXTENSIONS,
-    needs_browser_video_proxy,
     still_image_to_jpeg_buffer,
     video_to_browser_mp4_buffer,
+)
+from share_delivery import (
+    estimate_share_upload_size_bytes,
+    plan_share_delivery,
 )
 
 SHARE_BUCKET = "shares"
@@ -89,6 +91,16 @@ def _classify_share_failure(
         code = "share_file_missing"
     elif "timed out" in lowered or "timeout" in lowered:
         code = "share_upload_timeout"
+    elif (
+        "entity too large" in lowered
+        or "payload too large" in lowered
+        or "file size limit" in lowered
+        or "file too large" in lowered
+        or "413" in message
+    ):
+        code = "share_file_too_large"
+    elif "invalid_mime_type" in lowered or "invalidmimetype" in lowered:
+        code = "share_unsupported_format"
     elif "supabase" in lowered and "storage" in lowered:
         code = "share_storage_error"
     elif "supabase" in lowered:
@@ -205,6 +217,14 @@ def get_share_storage_max_bytes() -> int:
     return min(limits)
 
 
+def _row_file_type(row: Any) -> str:
+    try:
+        value = row["file_type"]
+    except (KeyError, IndexError, TypeError):
+        value = None
+    return "video" if value == "video" else "photo"
+
+
 def partition_share_photos_by_size(
     library_path: str,
     photo_rows: List[Any],
@@ -218,11 +238,18 @@ def partition_share_photos_by_size(
     for row in photo_rows:
         photo_id = int(row["id"])
         relative_path = row["current_path"]
+        file_type = _row_file_type(row)
         full_path = os.path.join(library_path, relative_path)
-        try:
-            size_bytes = os.path.getsize(full_path)
-        except OSError:
-            size_bytes = max_bytes + 1
+        size_bytes = estimate_share_upload_size_bytes(
+            library_path,
+            relative_path,
+            file_type,
+        )
+        if size_bytes <= 0:
+            try:
+                size_bytes = os.path.getsize(full_path)
+            except OSError:
+                size_bytes = max_bytes + 1
         if size_bytes > max_bytes:
             filename = os.path.basename(relative_path) or relative_path
             oversized.append(
@@ -836,6 +863,18 @@ def get_share_publish_outcome(
 
 
 def upload_storage_object(storage_path: str, data: bytes, content_type: str) -> None:
+    max_bytes = get_share_storage_max_bytes()
+    if len(data) > max_bytes:
+        raise SharePublishError(
+            "share_file_too_large",
+            (
+                f"Upload exceeds share size limit "
+                f"({bytes_to_display_mb(len(data))} MB; "
+                f"limit {bytes_to_display_mb(max_bytes)} MB)"
+            ),
+            step="upload",
+            detail=storage_path,
+        )
     encoded_path = "/".join(urllib.parse.quote(part, safe="") for part in storage_path.split("/"))
     last_error: Optional[RuntimeError] = None
     for attempt in range(SHARE_STORAGE_UPLOAD_RETRIES):
@@ -861,26 +900,6 @@ def upload_storage_object(storage_path: str, data: bytes, content_type: str) -> 
             time.sleep(delay)
     if last_error is not None:
         raise last_error
-
-
-def guess_content_type(file_path: str, file_type: str) -> str:
-    ext = os.path.splitext(file_path)[1].lower()
-    if file_type == "video":
-        if ext in {".mov", ".qt"}:
-            return "video/quicktime"
-        if ext == ".webm":
-            return "video/webm"
-        return "video/mp4"
-    mapping = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".heic": "image/heic",
-        ".heif": "image/heif",
-    }
-    return mapping.get(ext, "application/octet-stream")
 
 
 def iter_publish_share_album(
@@ -959,49 +978,40 @@ def iter_publish_share_album(
 
             relative_path = row["current_path"]
             full_path = os.path.join(library_path, relative_path)
-            file_type = row["file_type"] if row["file_type"] == "video" else "photo"
-            ext = os.path.splitext(relative_path)[1].lower() or ".jpg"
-            original_name = os.path.basename(relative_path)
+            file_type = _row_file_type(row)
+            delivery = plan_share_delivery(
+                relative_path,
+                file_type,
+                full_path=full_path,
+            )
             storage_base = f"{access_token}/{index:04d}_{photo_id}"
-            original_path = f"{storage_base}/original{ext}"
+            original_path = f"{storage_base}/{delivery.storage_name}"
             thumb_path = f"{storage_base}/thumb.jpg"
             display_path = None
 
-            current_step = "read_original"
-            _share_log(
-                f"{index + 1}/{total} photo_id={photo_id} step={current_step} "
-                f"path={relative_path}"
-            )
-            with open(full_path, "rb") as handle:
-                original_bytes = handle.read()
-
-            current_step = "upload_original"
-            _share_log(f"{index + 1}/{total} photo_id={photo_id} step={current_step}")
-            upload_storage_object(
-                original_path,
-                original_bytes,
-                guess_content_type(relative_path, file_type),
-            )
-
-            if file_type == "photo" and ext in BROWSER_CONVERT_EXTENSIONS:
-                display_path = f"{storage_base}/display.jpg"
-                current_step = "display_jpeg"
-                _share_log(f"{index + 1}/{total} photo_id={photo_id} step={current_step}")
-                display_buffer = still_image_to_jpeg_buffer(
+            if delivery.action == "still_jpeg":
+                current_step = "convert_jpeg"
+                _share_log(
+                    f"{index + 1}/{total} photo_id={photo_id} step={current_step} "
+                    f"path={relative_path} deliver={delivery.delivered_filename}"
+                )
+                jpeg_buffer = still_image_to_jpeg_buffer(
                     full_path,
                     quality=95,
                     to_rgb=to_rgb,
                 )
-                current_step = "upload_display"
+                current_step = "upload_original"
                 upload_storage_object(
-                    display_path,
-                    display_buffer.getvalue(),
-                    "image/jpeg",
+                    original_path,
+                    jpeg_buffer.getvalue(),
+                    delivery.content_type,
                 )
-            elif file_type == "video" and needs_browser_video_proxy(full_path):
-                display_path = f"{storage_base}/display.mp4"
+            elif delivery.action == "video_transcode":
                 current_step = "video_transcode"
-                _share_log(f"{index + 1}/{total} photo_id={photo_id} step={current_step}")
+                _share_log(
+                    f"{index + 1}/{total} photo_id={photo_id} step={current_step} "
+                    f"path={relative_path} deliver={delivery.delivered_filename}"
+                )
                 yield (
                     "heartbeat",
                     {
@@ -1013,13 +1023,26 @@ def iter_publish_share_album(
                         "message": f"Preparing video {index + 1} of {total}…",
                     },
                 )
-                display_buffer = video_to_browser_mp4_buffer(full_path)
-                current_step = "upload_display"
-                _share_log(f"{index + 1}/{total} photo_id={photo_id} step={current_step}")
+                mp4_buffer = video_to_browser_mp4_buffer(full_path)
+                current_step = "upload_original"
                 upload_storage_object(
-                    display_path,
-                    display_buffer.getvalue(),
-                    "video/mp4",
+                    original_path,
+                    mp4_buffer.getvalue(),
+                    delivery.content_type,
+                )
+            else:
+                current_step = "read_original"
+                _share_log(
+                    f"{index + 1}/{total} photo_id={photo_id} step={current_step} "
+                    f"path={relative_path} deliver={delivery.delivered_filename}"
+                )
+                with open(full_path, "rb") as handle:
+                    original_bytes = handle.read()
+                current_step = "upload_original"
+                upload_storage_object(
+                    original_path,
+                    original_bytes,
+                    delivery.content_type,
                 )
 
             current_step = "thumb"
@@ -1059,7 +1082,7 @@ def iter_publish_share_album(
                 "thumb_path": thumb_path,
                 "original_path": original_path,
                 "display_path": display_path,
-                "original_filename": original_name,
+                "original_filename": delivery.delivered_filename,
             }
             current_step = "catalog_insert"
             insert_album_photos([catalog_row])

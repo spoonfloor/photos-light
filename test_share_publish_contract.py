@@ -18,17 +18,18 @@ class SharePublishContractTest(unittest.TestCase):
         self.assertIn("access_token", source)
         self.assertIn('"access_token"', source.split('"complete"', 1)[1])
 
-    def test_publish_uploads_display_jpeg_for_browser_convert_stills(self):
+    def test_publish_converts_non_native_stills_via_delivery_plan(self):
         source = inspect.getsource(share_albums.iter_publish_share_album)
-        self.assertIn("display_path", source)
+        self.assertIn("plan_share_delivery", source)
         self.assertIn("still_image_to_jpeg_buffer", source)
-        self.assertIn("BROWSER_CONVERT_EXTENSIONS", source)
+        self.assertIn("delivery.delivered_filename", source)
+        self.assertIn('delivery.action == "still_jpeg"', source)
 
-    def test_publish_uploads_browser_video_display_mp4(self):
+    def test_publish_transcodes_video_via_delivery_plan(self):
         source = inspect.getsource(share_albums.iter_publish_share_album)
-        self.assertIn("needs_browser_video_proxy", source)
+        self.assertIn('delivery.action == "video_transcode"', source)
         self.assertIn("video_to_browser_mp4_buffer", source)
-        self.assertIn("display.mp4", source)
+        self.assertIn("delivery.storage_name", source)
 
     def test_publish_storage_prefix_uses_access_token(self):
         source = inspect.getsource(share_albums.iter_publish_share_album)
@@ -195,7 +196,8 @@ class SharePublishContractTest(unittest.TestCase):
         self.assertIn("shareOverlaySkipBtn", text)
         self.assertIn("handleShareSkipOversized", text)
         self.assertIn("skip them to continue", text)
-        self.assertIn("SHARE_CHECKING_MIN_MS", text)
+        self.assertIn("formatSharePublishFailure", text)
+        self.assertIn("throwSharePublishError", text)
         self.assertIn("prepareInProgress", text)
         self.assertIn("runShareCancelCleanup", text)
         self.assertIn("dismissShareOverlay", text)

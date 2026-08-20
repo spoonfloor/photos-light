@@ -605,7 +605,7 @@ const ShareFlow = (() => {
     updateProgressDisplay(completed, total);
   }
 
-  function showFailedState({ orphanHint = false } = {}) {
+  function showFailedState({ orphanHint = false, error = null } = {}) {
     stopProgressEtaTicker();
     setOverlayTitle('Sharing error');
     hideAllBodySections();
@@ -613,13 +613,13 @@ const ShareFlow = (() => {
     showFailedActions();
     const messageEl = getOverlayEl('shareOverlayFailedMessage');
     if (messageEl) {
-      messageEl.textContent = orphanHint
-        ? SHARE_FAILURE_MESSAGE_ORPHAN
-        : SHARE_FAILURE_MESSAGE_GENERIC;
+      messageEl.textContent =
+        shareFailureUserMessage(error) ||
+        (orphanHint ? SHARE_FAILURE_MESSAGE_ORPHAN : SHARE_FAILURE_MESSAGE_GENERIC);
     }
   }
 
-  function logSharePublishFailure(error, data = null) {
+  function formatSharePublishFailure(error, data = null) {
     const payload = data || {
       code: error?.code,
       photo_index: error?.photoIndex,
@@ -627,7 +627,18 @@ const ShareFlow = (() => {
       step: error?.step,
       detail: error?.detail || error?.message,
     };
-    console.error('Share publish failed:', payload);
+    const parts = [
+      payload.code ? `code=${payload.code}` : null,
+      payload.step ? `step=${payload.step}` : null,
+      payload.photo_index != null ? `photo_index=${payload.photo_index}` : null,
+      payload.photo_id != null ? `photo_id=${payload.photo_id}` : null,
+      payload.detail ? `detail=${payload.detail}` : null,
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(' ') : 'unknown';
+  }
+
+  function logSharePublishFailure(error, data = null) {
+    console.error(`[share] publish failed: ${formatSharePublishFailure(error, data)}`);
   }
 
   function createSharePublishError(data) {
@@ -637,7 +648,28 @@ const ShareFlow = (() => {
     err.photoId = data.photo_id ?? null;
     err.step = data.step || null;
     err.detail = data.detail || data.error || null;
+    err.shareFailureLogged = false;
     return err;
+  }
+
+  function throwSharePublishError(data) {
+    const err = createSharePublishError(data);
+    err.shareFailureLogged = true;
+    logSharePublishFailure(err, data);
+    return err;
+  }
+
+  function shareFailureUserMessage(error) {
+    if (!error) {
+      return null;
+    }
+    if (error.code === 'share_file_too_large') {
+      return error.detail || error.message;
+    }
+    if (error.code === 'share_file_missing') {
+      return error.detail || error.message;
+    }
+    return null;
   }
 
   async function fetchPublishOutcome(activeSession) {
@@ -737,8 +769,10 @@ const ShareFlow = (() => {
       console.error('Share failure outcome check failed:', verifyError);
     }
 
-    logSharePublishFailure(error);
-    return { kind: 'failed', orphanHint };
+    if (!error?.shareFailureLogged) {
+      logSharePublishFailure(error);
+    }
+    return { kind: 'failed', orphanHint, error };
   }
 
   async function copyShareUrl(url) {
@@ -1016,7 +1050,7 @@ const ShareFlow = (() => {
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || 'Share failed');
+      throw throwSharePublishError(data);
     }
     return consumeSseStream(response, {
       isAborted: () => Boolean(signal?.aborted) || publishUserCancelled,
@@ -1050,9 +1084,7 @@ const ShareFlow = (() => {
           return { done: true, result: data };
         }
         if (event === 'error') {
-          const err = createSharePublishError(data);
-          logSharePublishFailure(err, data);
-          throw err;
+          throw throwSharePublishError(data);
         }
         return null;
       },
@@ -1219,7 +1251,7 @@ const ShareFlow = (() => {
         );
         return;
       }
-      showFailedState({ orphanHint: resolved.orphanHint });
+      showFailedState({ orphanHint: resolved.orphanHint, error: resolved.error });
     } catch (error) {
       if (isShareAbortError(error)) {
         return;
@@ -1229,7 +1261,7 @@ const ShareFlow = (() => {
         showCompleteState(resolved.result);
         return;
       }
-      showFailedState({ orphanHint: resolved.orphanHint });
+      showFailedState({ orphanHint: resolved.orphanHint, error: resolved.error });
     } finally {
       publishAbortController = null;
       if (!publishUserCancelled) {

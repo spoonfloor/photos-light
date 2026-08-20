@@ -35,17 +35,28 @@ Share and library zip downloads use `static/js/photoSurface/downloadExport.js`:
 
 ## Media tiers (published package contract)
 
-Each share is a **fixed snapshot** at publish time. Three URL tiers:
+Each share is a **fixed snapshot** at publish time. Recipients only receive
+**browser-viewable** assets; filenames match the delivered bytes.
 
 | Tier | Field | Use |
 |------|--------|-----|
 | Thumb | `thumb_url` | Grid tiles only (~400px JPEG) |
-| Display | `display_url` | Lightbox / in-browser preview (full-res JPEG or browser-safe MP4) |
-| Original | `original_url` | Download only (HEIC, MOV, etc.) |
+| Original | `original_url` | Lightbox, in-browser preview, and download |
 
-Publish creates display assets when the original is not browser-safe (HEIC/TIFF/RAW
-→ `display.jpg`; proxy-needed video → `display.mp4`). Browser-native stills and
-direct-play videos use `original_url` as display.
+**Delivery rules (at publish):**
+
+- Browser-native stills (JPG, PNG, GIF, WebP) → uploaded as-is
+- HEIC, RAW, TIFF, and other non-native stills → one high-quality JPEG; catalog
+  name ends in `.jpg`
+- Browser-playable video → uploaded as-is (MP4, WebM, etc.)
+- Other video → transcoded to MP4; catalog name ends in `.mp4`
+
+`original_filename` in the share catalog is the **delivery filename**, not the
+library source name. `display_path` is unused for new publishes (legacy albums
+may still have a separate display asset).
+
+Policy source of truth: `share_delivery.py` (`plan_share_delivery`).
+Viewer native-still allowlist must stay aligned with `SHARE_BROWSER_NATIVE_STILL_EXTENSIONS`.
 
 The viewer never falls back to thumbs in lightbox. Failures show a toast.
 
