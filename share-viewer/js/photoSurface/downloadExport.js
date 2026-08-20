@@ -6,6 +6,8 @@ const DownloadExport = (() => {
   const ZIP_THRESHOLD = 2;
   const OVERLAY_ID = 'downloadPrepOverlay';
   const FRAGMENT_PATH = 'fragments/downloadPrepOverlay.html';
+  const ARCHIVE_BASE_MAX_LENGTH = 200;
+  const FORBIDDEN_FILENAME_CHARS = /[\x00-\x1f\\/:*?"<>|]/g;
 
   /** @type {AbortController|null} */
   let activeAbort = null;
@@ -131,11 +133,52 @@ const DownloadExport = (() => {
     }
   }
 
-  function triggerBrowserDownload(blob, filename) {
+  /**
+   * Cross-platform filename base: strip forbidden/control chars, leading dots, excess space.
+   * Preserves Unicode letters and punctuation that filesystems allow (e.g. apostrophes).
+   */
+  function sanitizeFilenameBase(name, maxLength = ARCHIVE_BASE_MAX_LENGTH) {
+    if (name == null) {
+      return '';
+    }
+    const limit =
+      Number.isFinite(maxLength) && maxLength > 0 ? maxLength : ARCHIVE_BASE_MAX_LENGTH;
+    return String(name)
+      .replace(FORBIDDEN_FILENAME_CHARS, '')
+      .replace(/^\.+/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, limit);
+  }
+
+  function resolveFilenameBase(preferred, fallback, maxLength = ARCHIVE_BASE_MAX_LENGTH) {
+    return (
+      sanitizeFilenameBase(preferred, maxLength) ||
+      sanitizeFilenameBase(fallback, maxLength) ||
+      'download'
+    );
+  }
+
+  /** Safe outer zip name from a human label (share title, library folder name, etc.). */
+  function buildArchiveFilename(base, fallback = 'download') {
+    return `${resolveFilenameBase(base, fallback)}.zip`;
+  }
+
+  /** Safe name for a single file or zip entry (basename only, no path segments). */
+  function sanitizeZipEntryName(name, fallback = 'download') {
+    if (name == null || name === '') {
+      return fallback;
+    }
+    const basename = String(name).split(/[/\\]/).pop() || '';
+    const sanitized = sanitizeFilenameBase(basename, 255);
+    return sanitized || fallback;
+  }
+
+  function triggerBrowserDownload(blob, filename, fallback = 'download') {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = filename;
+    anchor.download = sanitizeZipEntryName(filename, fallback);
     anchor.click();
     URL.revokeObjectURL(url);
   }
@@ -162,14 +205,17 @@ const DownloadExport = (() => {
     }
 
     const zip = new JSZip();
+    let entryIndex = 0;
     for (const item of items) {
       if (signal?.aborted) {
         throw new DOMException('Download cancelled', 'AbortError');
       }
       const fetched = await fetchBlob(item, signal);
       const blob = fetched instanceof Blob ? fetched : fetched.blob;
-      const entryName =
+      entryIndex += 1;
+      const rawEntryName =
         (fetched instanceof Blob ? null : fetched.filename) || getEntryName(item);
+      const entryName = sanitizeZipEntryName(rawEntryName, `file_${entryIndex}.bin`);
       zip.file(entryName, blob);
     }
 
@@ -224,7 +270,14 @@ const DownloadExport = (() => {
         return;
       }
 
-      await deliverArchive(archive, archiveName, controller.signal);
+      await deliverArchive(
+        archive,
+        buildArchiveFilename(
+          String(archiveName || '').replace(/\.zip$/i, ''),
+          'download',
+        ),
+        controller.signal,
+      );
     } finally {
       if (activeAbort === controller) {
         activeAbort = null;
@@ -240,6 +293,9 @@ const DownloadExport = (() => {
     countMediaTypes,
     formatZipStatus,
     filenameFromContentDisposition,
+    sanitizeFilenameBase,
+    buildArchiveFilename,
+    sanitizeZipEntryName,
     ensureOverlay,
     showPrepModal,
     hidePrepModal,

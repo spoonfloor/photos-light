@@ -357,7 +357,7 @@ const ShareFlow = (() => {
     };
   }
 
-  function captureSessionCredentials(activeSession = session) {
+  function resetPublishState() {
     publishInProgress = false;
     publishAbortController = null;
     stopProgressEtaTicker();
@@ -374,7 +374,6 @@ const ShareFlow = (() => {
     publishUserCancelled = true;
     const credentials = captureSessionCredentials();
     publishAbortController?.abort();
-    publishAbortController = null;
     resetPublishState();
     return credentials;
   }
@@ -499,6 +498,8 @@ const ShareFlow = (() => {
     err.detail = data.detail || data.error || null;
     return err;
   }
+
+  async function fetchPublishOutcome(activeSession) {
     const params = new URLSearchParams();
     if (activeSession?.accessToken) {
       params.set('access_token', activeSession.accessToken);

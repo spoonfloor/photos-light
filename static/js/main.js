@@ -6230,15 +6230,17 @@ async function fetchLibraryPhotoBlob(photoId, signal) {
 
 function libraryPhotoEntryName(photo) {
   if (photo.path) {
-    return photo.path.split('/').pop();
+    return DownloadExport.sanitizeZipEntryName(photo.path.split('/').pop(), `photo_${photo.id}`);
   }
-  return photo.filename || `photo_${photo.id}`;
+  return DownloadExport.sanitizeZipEntryName(
+    photo.filename || `photo_${photo.id}`,
+    `photo_${photo.id}`,
+  );
 }
 
 function libraryZipArchiveName() {
   const fromPath = state.libraryPath?.split('/').filter(Boolean).pop();
-  const base = fromPath || 'Photos';
-  return `${base}.zip`;
+  return DownloadExport.buildArchiveFilename(fromPath || 'Photos', 'Photos');
 }
 
 async function exportArchiveToFolder(blob, destFolder, filename) {
@@ -12518,10 +12520,7 @@ function prefetchPhotoPickerFragment() {
 }
 
 function sanitizeLibraryFolderName(name) {
-  return name
-    .replace(/[\/\\:*?"<>|]/g, '')
-    .replace(/^\.+/, '')
-    .trim();
+  return DownloadExport.sanitizeFilenameBase(name, 255);
 }
 
 function buildFullLibraryPath(parentPath, rawName) {
@@ -12994,18 +12993,9 @@ async function showNameLibraryDialog(options = {}) {
       }
     }, 100);
 
-    // Sanitize folder name
-    function sanitizeFolderName(name) {
-      // Remove invalid characters: / \ : * ? " < > | and leading dots
-      return name
-        .replace(/[\/\\:*?"<>|]/g, '')
-        .replace(/^\.+/, '')
-        .trim();
-    }
-
     // Validate name
     async function computeNameValidation(name) {
-      const sanitized = sanitizeFolderName(name);
+      const sanitized = sanitizeLibraryFolderName(name);
 
       if (!sanitized) {
         return {
@@ -15652,12 +15642,7 @@ if (typeof window !== 'undefined') {
  * True if a folder with the same sanitized name already exists under parentPath.
  */
 async function libraryFolderNameExistsAtParent(parentPath, rawName) {
-  const sanitizeFolderName = (name) =>
-    name
-      .replace(/[\/\\:*?"<>|]/g, '')
-      .replace(/^\.+/, '')
-      .trim();
-  const sanitized = sanitizeFolderName(rawName);
+  const sanitized = sanitizeLibraryFolderName(rawName);
   if (!sanitized) return false;
   try {
     const { folders } = await PickerFilesystem.listDirectory(parentPath);

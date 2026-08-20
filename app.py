@@ -6,6 +6,7 @@ Photo Viewer - Flask Server with Database API
 from flask import Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
 from collections import defaultdict
 import base64
+import re
 import sqlite3
 from urllib.parse import quote, unquote
 import traceback
@@ -2694,6 +2695,22 @@ def _resolve_library_photo_original_path(photo_id):
     return source_path, None
 
 
+def _sanitize_export_filename(filename, default='download'):
+    """Strip path segments and cross-platform-forbidden characters from export names."""
+    raw = filename or ''
+    segment = re.split(r'[/\\]+', raw)[-1] if raw else ''
+    cleaned = re.sub(r'[\x00-\x1f:*?"<>|]', '', segment)
+    base = re.sub(r'^\.+', '', cleaned)
+    base = re.sub(r'\s+', ' ', base).strip()
+    if not base:
+        return default
+    if len(base) > 255:
+        stem, ext = os.path.splitext(base)
+        keep = max(1, 255 - len(ext))
+        base = f'{stem[:keep]}{ext}'
+    return base
+
+
 def _unique_destination_path(destination, filename):
     dest_path = os.path.join(destination, filename)
     base, ext = os.path.splitext(filename)
@@ -2739,7 +2756,7 @@ def export_file():
         if not os.path.isdir(destination):
             return jsonify({'error': 'Destination folder does not exist'}), 400
 
-        filename = os.path.basename(upload.filename or '') or 'download.zip'
+        filename = _sanitize_export_filename(upload.filename or '', 'download.zip')
         dest_path = _unique_destination_path(destination, filename)
         upload.save(dest_path)
 
