@@ -6,6 +6,10 @@ const LightboxMedia = (() => {
   let resizeListenerBound = false;
   /** @type {{ isOpen: () => boolean, getPhoto: () => object|null, getContent: () => HTMLElement|null, getLoadOptions: () => object } | null} */
   let resizeUpgradeCtx = null;
+  /** @type {ResizeObserver | null} */
+  let contentResizeObserver = null;
+  /** @type {HTMLElement | null} */
+  let observedContent = null;
 
   function normalizeRotationDegrees(degrees) {
     return ((degrees % 360) + 360) % 360;
@@ -18,34 +22,48 @@ const LightboxMedia = (() => {
     };
   }
 
+  function availableViewport() {
+    const content =
+      (typeof resizeUpgradeCtx?.getContent === 'function'
+        ? resizeUpgradeCtx.getContent()
+        : null) || document.getElementById('lightboxContent');
+    const width = content?.clientWidth || 0;
+    const height = content?.clientHeight || 0;
+    return {
+      width: Math.max(1, Math.floor(width > 0 ? width : window.innerWidth)),
+      height: Math.max(1, Math.floor(height > 0 ? height : window.innerHeight)),
+    };
+  }
+
   function calculateMediaDimensions(photo, rotationDegrees = 0, getDimensions = defaultDimensions) {
     const normalized = normalizeRotationDegrees(rotationDegrees);
     const isTransposed = normalized === 90 || normalized === 270;
     const base = getDimensions(photo) || {};
     const displayW = isTransposed ? base.height : base.width;
     const displayH = isTransposed ? base.width : base.height;
+    const viewport = availableViewport();
 
     if (!displayW || !displayH) {
       return {
-        width: '100vw',
-        height: '75vw',
-        maxHeight: '100vh',
+        width: `${viewport.width}px`,
+        height: `${Math.round(viewport.width * 0.75)}px`,
+        maxHeight: `${viewport.height}px`,
       };
     }
 
     const displayAR = displayW / displayH;
-    const viewportAR = window.innerWidth / window.innerHeight;
+    const viewportAR = viewport.width / viewport.height;
 
     if (displayAR > viewportAR) {
       return {
-        width: '100vw',
-        height: `calc(100vw / ${displayAR})`,
+        width: `${viewport.width}px`,
+        height: `${viewport.width / displayAR}px`,
       };
     }
 
     return {
-      width: `calc(100vh * ${displayAR})`,
-      height: '100vh',
+      width: `${viewport.height * displayAR}px`,
+      height: `${viewport.height}px`,
     };
   }
 
@@ -322,6 +340,71 @@ const LightboxMedia = (() => {
     }
   }
 
+  function restyleMountedFrame(content, photo, options) {
+    const frame = content.querySelector('.lightbox-media-frame');
+    if (!frame) {
+      return;
+    }
+    const resolved = resolveLoadOptions(photo, options);
+    const rotation = resolved.previewRotation();
+    const mediaEl = frame.querySelector('.lightbox-media-element');
+    const placeholder = frame.querySelector('.lightbox-media-placeholder');
+    applyMediaStyles(
+      frame,
+      mediaEl || placeholder,
+      photo,
+      rotation,
+      resolved.getDimensions,
+    );
+    if (mediaEl && placeholder) {
+      applyMediaStyles(frame, placeholder, photo, rotation, resolved.getDimensions);
+    }
+  }
+
+  function relayoutCurrent() {
+    if (!resizeUpgradeCtx?.isOpen?.()) {
+      return;
+    }
+    const photo = resizeUpgradeCtx.getPhoto?.();
+    const content = resizeUpgradeCtx.getContent?.();
+    const options = resizeUpgradeCtx.getLoadOptions?.();
+    if (!photo || !content || !options) {
+      return;
+    }
+    restyleMountedFrame(content, photo, options);
+  }
+
+  let relayoutRaf = null;
+  function scheduleRelayout() {
+    if (relayoutRaf != null) {
+      return;
+    }
+    relayoutRaf = requestAnimationFrame(() => {
+      relayoutRaf = null;
+      relayoutCurrent();
+    });
+  }
+
+  function observeContentBox() {
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    if (!contentResizeObserver) {
+      contentResizeObserver = new ResizeObserver(() => {
+        scheduleRelayout();
+      });
+    }
+    const content = resizeUpgradeCtx?.getContent?.();
+    if (!content || observedContent === content) {
+      return;
+    }
+    if (observedContent) {
+      contentResizeObserver.unobserve(observedContent);
+    }
+    observedContent = content;
+    contentResizeObserver.observe(content);
+  }
+
   function bindResizeUpgradeListener() {
     if (resizeListenerBound) {
       return;
@@ -332,6 +415,7 @@ const LightboxMedia = (() => {
       if (!resizeUpgradeCtx?.isOpen?.()) {
         return;
       }
+      scheduleRelayout();
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         maybeUpgradeViewport();
@@ -342,6 +426,7 @@ const LightboxMedia = (() => {
   function wireResizeUpgrade(ctx) {
     resizeUpgradeCtx = ctx;
     bindResizeUpgradeListener();
+    observeContentBox();
   }
 
   function maybeUpgradeViewport() {
@@ -487,5 +572,6 @@ const LightboxMedia = (() => {
     prepareContentSwap,
     wireResizeUpgrade,
     maybeUpgradeViewport,
+    relayoutCurrent,
   };
 })();

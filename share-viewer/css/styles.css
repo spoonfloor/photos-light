@@ -1111,30 +1111,13 @@ body.surface-load-active .app-bar-icon-button {
 
 .lightbox-content {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   overflow: hidden;
-}
-
-/* When info panel is open, reduce content height */
-.lightbox-overlay.info-open .lightbox-content {
-  flex: 0 0 calc(100vh - 100px);
-}
-
-/* Force images/videos to respect reduced height when info panel is open */
-.lightbox-overlay.info-open .lightbox-content img:not(.lightbox-media-element),
-.lightbox-overlay.info-open
-  .lightbox-content
-  video:not(.lightbox-media-element) {
-  max-height: calc(100vh - 100px) !important;
-  height: auto !important;
-}
-
-/* Frame-managed media ignores the info-panel constraint — JS resizes the frame instead */
-.lightbox-overlay.info-open .lightbox-media-frame .lightbox-media-element {
-  max-height: none !important;
 }
 
 .lightbox-content img,
@@ -1308,15 +1291,14 @@ body.surface-load-active .app-bar-icon-button {
   cursor: pointer;
 }
 
-/* Lightbox info panel */
+/* Lightbox info panel — in-flow so it shortens the photo box */
 .lightbox-info-panel {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  position: relative;
+  flex: 0 0 auto;
+  width: 100%;
   background: rgba(0, 0, 0, 0.95);
   padding: 20px 28px;
-  z-index: 15001;
+  z-index: 1;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5);
 }
 

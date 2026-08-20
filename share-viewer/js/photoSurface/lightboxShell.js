@@ -89,6 +89,7 @@ const LightboxShell = (() => {
       els.infoPanel.style.display = 'none';
     }
     els.overlay?.classList.remove('info-open');
+    LightboxMedia.relayoutCurrent?.();
   }
 
   function toggleInfoPanel() {
@@ -101,6 +102,7 @@ const LightboxShell = (() => {
     } else {
       els.infoPanel.style.display = 'block';
       els.overlay?.classList.add('info-open');
+      LightboxMedia.relayoutCurrent?.();
     }
   }
 

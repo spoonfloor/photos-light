@@ -146,6 +146,20 @@ class ShareViewerBuildTest(unittest.TestCase):
         self.assertNotIn('id="manageShareLinksBtn"', index)
         self.assertIn('id="toast"', index)
 
+    def test_lightbox_fits_media_to_content_box(self):
+        media = (ROOT / "static" / "js" / "photoSurface" / "lightboxMedia.js").read_text(
+            encoding="utf-8"
+        )
+        css = (ROOT / "static" / "css" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("function availableViewport", media)
+        self.assertIn("relayoutCurrent", media)
+        self.assertNotIn("calc(100vh - 100px)", css)
+        info_at = css.find(".lightbox-info-panel")
+        self.assertGreater(info_at, 0)
+        snippet = css[info_at : info_at + 160]
+        self.assertIn("position: relative", snippet)
+        self.assertNotIn("position: fixed", snippet)
+
     def test_styles_css_is_copied_from_static(self):
         static_css = (ROOT / "static" / "css" / "styles.css").read_text(encoding="utf-8")
         share_css = (SHARE / "css" / "styles.css").read_text(encoding="utf-8")

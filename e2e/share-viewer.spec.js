@@ -288,6 +288,55 @@ test.describe('share viewer parity', () => {
     });
   });
 
+  test('lightbox info panel scales photo into remaining space', async ({ page }) => {
+    const payload = structuredClone(MOCK_SHARE);
+    payload.photos[0] = { ...payload.photos[0], width: 800, height: 2000 };
+    await mockShareResolve(page, payload);
+    await page.goto('/?t=e2e-test-token');
+    await expect(page.locator('#surfaceLoadOverlay')).toBeHidden();
+    await page.locator('.photo-card[data-id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]').click();
+    await expect(page.locator('#lightboxContent .lightbox-media-frame')).toBeVisible({
+      timeout: 5000,
+    });
+
+    const before = await page.locator('#lightboxContent .lightbox-media-frame').evaluate((frame) => {
+      const content = document.getElementById('lightboxContent');
+      const frameBox = frame.getBoundingClientRect();
+      const contentBox = content.getBoundingClientRect();
+      return {
+        frameHeight: frameBox.height,
+        contentHeight: contentBox.height,
+        frameTop: frameBox.top,
+        contentTop: contentBox.top,
+      };
+    });
+
+    await page.locator('#lightboxInfoBtn').click();
+    await expect(page.locator('#lightboxInfoPanel')).toBeVisible();
+
+    const after = await page.locator('#lightboxContent .lightbox-media-frame').evaluate((frame) => {
+      const content = document.getElementById('lightboxContent');
+      const frameBox = frame.getBoundingClientRect();
+      const contentBox = content.getBoundingClientRect();
+      return {
+        frameHeight: frameBox.height,
+        frameWidth: frameBox.width,
+        contentHeight: contentBox.height,
+        contentWidth: contentBox.width,
+        frameTop: frameBox.top,
+        frameBottom: frameBox.bottom,
+        contentTop: contentBox.top,
+        contentBottom: contentBox.bottom,
+      };
+    });
+
+    expect(after.contentHeight).toBeLessThan(before.contentHeight);
+    expect(after.frameHeight).toBeLessThan(before.frameHeight);
+    expect(after.frameTop).toBeGreaterThanOrEqual(after.contentTop - 1);
+    expect(after.frameBottom).toBeLessThanOrEqual(after.contentBottom + 1);
+    expect(after.frameWidth).toBeLessThanOrEqual(after.contentWidth + 1);
+  });
+
   test('lightbox uses original_url when display_url omitted for browser-native still', async ({
     page,
   }) => {
