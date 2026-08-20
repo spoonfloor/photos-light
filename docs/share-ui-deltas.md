@@ -22,7 +22,7 @@ Only the items below may differ; everything else must come from shared source.
 - Utilities menu: **Clear stars** + **Copy link** only
 - Stars persisted in viewer `localStorage` (not library DB)
 - Data loaded from Supabase edge function `share-resolve` (`shareBoot.js`)
-- Download archive names derive from the album title via shared `DownloadExport.buildArchiveFilename()` (forbidden path chars stripped; falls back to link token)
+- Download archive names: album title, else `shared-photos-{publish-date}`, else `shared-photos` (via `DownloadExport.buildShareArchiveFilename()`; never the URL token)
 
 ## Download naming (shared with app)
 
@@ -30,7 +30,7 @@ Share and library zip downloads use `static/js/photoSurface/downloadExport.js`:
 
 - Strip `\ / : * ? " < > |` and control characters from archive and entry names
 - Preserve Unicode and apostrophes in titles (no slugification)
-- Fall back to link token (share) or `Photos` (library) when the label sanitizes to empty
+- Share fallbacks: publish date label, then `shared-photos`; library falls back to `Photos`
 - Zip entry names are basenames only (no `../` path segments)
 
 ## Media tiers (published package contract)

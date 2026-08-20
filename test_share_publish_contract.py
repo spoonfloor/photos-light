@@ -45,6 +45,9 @@ class SharePublishContractTest(unittest.TestCase):
         with open("app.py", encoding="utf-8") as handle:
             text = handle.read()
         prepare_block = text.split("def share_prepare():", 1)[1].split("def share_publish():", 1)[0]
+        self.assertIn("partition_share_photos_by_size", prepare_block)
+        self.assertIn('"status": "oversized"', prepare_block)
+        self.assertIn("'status': 'ready'", prepare_block)
         self.assertIn("generate_access_token()", prepare_block)
         self.assertIn("'access_token': access_token", prepare_block)
 
@@ -187,7 +190,13 @@ class SharePublishContractTest(unittest.TestCase):
         self.assertIn("pendingShareCancelCleanups", text)
         self.assertIn("shareManageTitle", text)
         self.assertIn("Manage links (${manageAlbums.length})", text)
-        self.assertIn("preloadManageOverlay", text)
+        self.assertIn("showCheckingState", text)
+        self.assertIn("showOversizeState", text)
+        self.assertIn("shareOverlaySkipBtn", text)
+        self.assertIn("handleShareSkipOversized", text)
+        self.assertIn("skip them to continue", text)
+        self.assertIn("SHARE_CHECKING_MIN_MS", text)
+        self.assertIn("prepareInProgress", text)
         self.assertIn("runShareCancelCleanup", text)
         self.assertIn("dismissShareOverlay", text)
         close_block = text.split("function closeOverlay()", 1)[1].split("function showPreflightState", 1)[0]

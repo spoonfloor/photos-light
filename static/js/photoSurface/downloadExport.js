@@ -164,6 +164,45 @@ const DownloadExport = (() => {
     return `${resolveFilenameBase(base, fallback)}.zip`;
   }
 
+  function formatSharePublishArchiveBase(createdAt) {
+    if (!createdAt) {
+      return '';
+    }
+    const date = new Date(createdAt);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    const parts = new Intl.DateTimeFormat('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: 'UTC',
+    }).formatToParts(date);
+    const month = parts.find((part) => part.type === 'month')?.value;
+    const day = parts.find((part) => part.type === 'day')?.value;
+    const year = parts.find((part) => part.type === 'year')?.value;
+    if (!month || !day || !year) {
+      return '';
+    }
+    return sanitizeFilenameBase(`shared-photos-${month}-${day}-${year}`);
+  }
+
+  /**
+   * Share zip name: album title, else publish date (shared-photos-Aug-20-2026), else shared-photos.
+   * Never uses the URL access token.
+   */
+  function buildShareArchiveFilename(title, createdAt) {
+    const fromTitle = sanitizeFilenameBase(title);
+    if (fromTitle) {
+      return `${fromTitle}.zip`;
+    }
+    const dated = formatSharePublishArchiveBase(createdAt);
+    if (dated) {
+      return `${dated}.zip`;
+    }
+    return 'shared-photos.zip';
+  }
+
   /** Safe name for a single file or zip entry (basename only, no path segments). */
   function sanitizeZipEntryName(name, fallback = 'download') {
     if (name == null || name === '') {
@@ -295,6 +334,7 @@ const DownloadExport = (() => {
     filenameFromContentDisposition,
     sanitizeFilenameBase,
     buildArchiveFilename,
+    buildShareArchiveFilename,
     sanitizeZipEntryName,
     ensureOverlay,
     showPrepModal,

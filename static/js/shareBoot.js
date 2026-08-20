@@ -670,9 +670,9 @@
       if (DownloadExport.shouldZip(photos.length, config.zipThreshold)) {
         await DownloadExport.downloadAsZip({
           items: photos,
-          archiveName: DownloadExport.buildArchiveFilename(
-            state.album.title,
-            state.token || 'Shared Photos',
+          archiveName: DownloadExport.buildShareArchiveFilename(
+            state.album?.title,
+            state.album?.created_at,
           ),
           fetchBlob: async (photo, signal) => {
             const response = await fetch(mediaUrl(photo, 'original'), { signal });

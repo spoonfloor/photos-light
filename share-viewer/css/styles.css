@@ -3330,6 +3330,7 @@ body.library-recovery-active .library-recovery-dock {
 #shareOverlayActions[hidden],
 #shareOverlayCancelBtn[hidden],
 #shareOverlayShareBtn[hidden],
+#shareOverlayContinueBtn[hidden],
 #shareOverlayDoneBtn[hidden] {
   display: none !important;
 }

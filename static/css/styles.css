@@ -3327,9 +3327,12 @@ body.library-recovery-active .library-recovery-dock {
   display: none;
 }
 
+#shareOverlayConsent[hidden],
+#shareOverlayTitleToggle[hidden],
 #shareOverlayActions[hidden],
 #shareOverlayCancelBtn[hidden],
 #shareOverlayShareBtn[hidden],
+#shareOverlaySkipBtn[hidden],
 #shareOverlayDoneBtn[hidden] {
   display: none !important;
 }

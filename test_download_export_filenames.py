@@ -23,6 +23,8 @@ eval(code);
 console.log(JSON.stringify({{
   trip: DownloadExport.buildArchiveFilename('Trip: NYC / 2026', 'fallback-token'),
   emptyTitle: DownloadExport.buildArchiveFilename('::: ', 'fallback-token'),
+  shareEmptyTitle: DownloadExport.buildShareArchiveFilename(':::', '2026-08-20T15:30:00Z'),
+  shareNoDate: DownloadExport.buildShareArchiveFilename(':::', null),
   emoji: DownloadExport.buildArchiveFilename("Mom's 80th! 🎉", 'fallback'),
   longTitle: DownloadExport.buildArchiveFilename('a'.repeat(300), 'short'),
   entryPath: DownloadExport.sanitizeZipEntryName('../../etc/passwd'),
@@ -47,13 +49,17 @@ class DownloadExportFilenameTest(unittest.TestCase):
         self.assertIn("function sanitizeZipEntryName(name", text)
         self.assertIn("sanitizeZipEntryName(rawEntryName", text)
 
-    def test_share_boot_uses_build_archive_filename(self):
+        self.assertIn("function buildShareArchiveFilename(title", text)
+
+    def test_share_boot_uses_share_archive_filename_without_token(self):
         text = SHARE_BOOT.read_text(encoding="utf-8")
         download_block = text.split("async function downloadPhotos", 1)[1].split(
             "function resolveDownloadTargets",
             1,
         )[0]
-        self.assertIn("DownloadExport.buildArchiveFilename", download_block)
+        self.assertIn("DownloadExport.buildShareArchiveFilename", download_block)
+        self.assertIn("state.album?.created_at", download_block)
+        self.assertNotIn("state.token", download_block)
         self.assertNotIn("`${state.album.title || state.token}.zip`", download_block)
 
     def test_main_js_delegates_folder_sanitize_to_download_export(self):
@@ -71,6 +77,8 @@ class DownloadExportFilenameTest(unittest.TestCase):
         cases = _run_download_export_js()
         self.assertEqual(cases["trip"], "Trip NYC 2026.zip")
         self.assertEqual(cases["emptyTitle"], "fallback-token.zip")
+        self.assertEqual(cases["shareEmptyTitle"], "shared-photos-Aug-20-2026.zip")
+        self.assertEqual(cases["shareNoDate"], "shared-photos.zip")
         self.assertEqual(cases["emoji"], "Mom's 80th! 🎉.zip")
         self.assertEqual(len(cases["longTitle"].removesuffix(".zip")), 200)
         self.assertEqual(cases["entryPath"], "passwd")

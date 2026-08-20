@@ -27,6 +27,9 @@ SHARE_MAX_PHOTOS = 1000
 SHARE_API_TIMEOUT_SEC = 120
 SHARE_STORAGE_TIMEOUT_SEC = 600
 SHARE_STORAGE_UPLOAD_RETRIES = 3
+# Conservative global cap when SHARE_STORAGE_MAX_BYTES is unset (Supabase Free tier).
+SHARE_DEFAULT_STORAGE_MAX_BYTES = 50 * 1024 * 1024
+SHARE_OVERSIZED_DETAILS_LIMIT = 50
 _SLUG_ALPHABET = string.ascii_lowercase + string.digits
 
 
@@ -123,8 +126,9 @@ def validate_photos_for_share(
 ) -> None:
     """Raise SharePublishError when selected files are missing on disk."""
     for index, row in enumerate(photo_rows):
-        relative_path = row.get("current_path")
-        photo_id = row.get("id")
+        # sqlite3.Row (library fetch) has no .get(); bracket access works for Row + dict.
+        relative_path = row["current_path"]
+        photo_id = row["id"]
         if not relative_path:
             raise SharePublishError(
                 "share_file_missing",
@@ -143,6 +147,96 @@ def validate_photos_for_share(
                 step="validate",
                 detail=relative_path,
             )
+
+
+def bytes_to_display_mb(size_bytes: int) -> float:
+    """Human MB for share copy (1 MiB = 1024² bytes)."""
+    return round(size_bytes / (1024 * 1024), 1)
+
+
+def _env_share_storage_max_bytes() -> Optional[int]:
+    raw = os.environ.get("SHARE_STORAGE_MAX_BYTES", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    raw_mb = os.environ.get("SHARE_STORAGE_MAX_MB", "").strip()
+    if raw_mb:
+        try:
+            return int(float(raw_mb) * 1024 * 1024)
+        except ValueError:
+            pass
+    return None
+
+
+def fetch_share_bucket_file_size_limit() -> Optional[int]:
+    """Return bucket file_size_limit bytes, or None if unavailable."""
+    try:
+        data = _supabase_request("GET", f"/storage/v1/bucket/{SHARE_BUCKET}")
+    except Exception as exc:
+        _share_log(f"prepare bucket limit lookup failed detail={exc}")
+        return None
+    if not isinstance(data, dict):
+        return None
+    limit = data.get("file_size_limit")
+    if limit is None:
+        return None
+    try:
+        return int(limit)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_share_storage_max_bytes() -> int:
+    """
+    Effective per-object upload cap: min(env global, bucket limit, default global).
+    Env SHARE_STORAGE_MAX_BYTES (or SHARE_STORAGE_MAX_MB) mirrors dashboard global limit.
+    """
+    limits: List[int] = []
+    env_limit = _env_share_storage_max_bytes()
+    if env_limit is not None and env_limit > 0:
+        limits.append(env_limit)
+    else:
+        limits.append(SHARE_DEFAULT_STORAGE_MAX_BYTES)
+    bucket_limit = fetch_share_bucket_file_size_limit()
+    if bucket_limit is not None and bucket_limit > 0:
+        limits.append(bucket_limit)
+    return min(limits)
+
+
+def partition_share_photos_by_size(
+    library_path: str,
+    photo_rows: List[Any],
+    max_bytes: int,
+) -> Tuple[List[Dict[str, Any]], List[int]]:
+    """
+    Split selection into oversized entries and shareable photo ids (preserves input order).
+    """
+    oversized: List[Dict[str, Any]] = []
+    shareable_ids: List[int] = []
+    for row in photo_rows:
+        photo_id = int(row["id"])
+        relative_path = row["current_path"]
+        full_path = os.path.join(library_path, relative_path)
+        try:
+            size_bytes = os.path.getsize(full_path)
+        except OSError:
+            size_bytes = max_bytes + 1
+        if size_bytes > max_bytes:
+            filename = os.path.basename(relative_path) or relative_path
+            oversized.append(
+                {
+                    "photo_id": photo_id,
+                    "filename": filename,
+                    "size_bytes": size_bytes,
+                    "size_mb": bytes_to_display_mb(size_bytes),
+                }
+            )
+        else:
+            shareable_ids.append(photo_id)
+    oversized.sort(key=lambda item: item["size_bytes"], reverse=True)
+    return oversized, shareable_ids
 
 
 def load_env_file(base_dir: str) -> None:

@@ -4,6 +4,7 @@
 const ShareFlow = (() => {
   const SHARE_CANCEL_CLEANUP_MAX_ATTEMPTS = 5;
   const SHARE_CANCEL_CLEANUP_BASE_DELAY_MS = 250;
+  const SHARE_CHECKING_MIN_MS = 300;
   const SHARE_FAILURE_MESSAGE_GENERIC =
     'Something went wrong while sharing. Please try again.';
   const SHARE_FAILURE_MESSAGE_ORPHAN =
@@ -25,6 +26,9 @@ const ShareFlow = (() => {
   let publishUserCancelled = false;
   /** @type {Set<string>} */
   const pendingShareCancelCleanups = new Set();
+  /** @type {object|null} */
+  let pendingOversizeData = null;
+  let prepareInProgress = false;
 
   function isPublishInProgress() {
     return publishInProgress;
@@ -101,6 +105,37 @@ const ShareFlow = (() => {
     setActionsVisible(true);
     setButtonVisible('shareOverlayCancelBtn', true);
     setButtonVisible('shareOverlayShareBtn', true);
+    setButtonVisible('shareOverlaySkipBtn', false);
+    setButtonVisible('shareOverlayRetryBtn', false);
+    setButtonVisible('shareOverlayDoneBtn', false);
+    setShareButtonDisabled(false);
+  }
+
+  function showCheckingActions() {
+    setActionsVisible(true);
+    setButtonVisible('shareOverlayCancelBtn', true);
+    setButtonVisible('shareOverlayShareBtn', true);
+    setButtonVisible('shareOverlaySkipBtn', false);
+    setButtonVisible('shareOverlayRetryBtn', false);
+    setButtonVisible('shareOverlayDoneBtn', false);
+    setShareButtonDisabled(true);
+  }
+
+  function showOversizePartialActions() {
+    setActionsVisible(true);
+    setButtonVisible('shareOverlayCancelBtn', true);
+    setButtonVisible('shareOverlayShareBtn', false);
+    setButtonVisible('shareOverlaySkipBtn', true);
+    setButtonVisible('shareOverlayRetryBtn', false);
+    setButtonVisible('shareOverlayDoneBtn', false);
+    setShareButtonDisabled(false);
+  }
+
+  function showOversizeAllActions() {
+    setActionsVisible(true);
+    setButtonVisible('shareOverlayCancelBtn', true);
+    setButtonVisible('shareOverlayShareBtn', false);
+    setButtonVisible('shareOverlaySkipBtn', false);
     setButtonVisible('shareOverlayRetryBtn', false);
     setButtonVisible('shareOverlayDoneBtn', false);
     setShareButtonDisabled(false);
@@ -110,6 +145,7 @@ const ShareFlow = (() => {
     setActionsVisible(true);
     setButtonVisible('shareOverlayCancelBtn', true);
     setButtonVisible('shareOverlayShareBtn', true);
+    setButtonVisible('shareOverlaySkipBtn', false);
     setButtonVisible('shareOverlayRetryBtn', false);
     setButtonVisible('shareOverlayDoneBtn', false);
     setShareButtonDisabled(true);
@@ -119,6 +155,7 @@ const ShareFlow = (() => {
     setActionsVisible(true);
     setButtonVisible('shareOverlayCancelBtn', false);
     setButtonVisible('shareOverlayShareBtn', false);
+    setButtonVisible('shareOverlaySkipBtn', false);
     setButtonVisible('shareOverlayRetryBtn', false);
     setButtonVisible('shareOverlayDoneBtn', true);
     setShareButtonDisabled(false);
@@ -128,13 +165,29 @@ const ShareFlow = (() => {
     setActionsVisible(true);
     setButtonVisible('shareOverlayCancelBtn', true);
     setButtonVisible('shareOverlayShareBtn', false);
+    setButtonVisible('shareOverlaySkipBtn', false);
     setButtonVisible('shareOverlayRetryBtn', true);
     setButtonVisible('shareOverlayDoneBtn', false);
     setShareButtonDisabled(false);
   }
 
+  function setCheckingVisible(visible) {
+    getOverlayEl('shareOverlayChecking').hidden = !visible;
+  }
+
   function setPreflightVisible(visible) {
     getOverlayEl('shareOverlayPreflight').hidden = !visible;
+  }
+
+  function setOversizeVisible(visible) {
+    getOverlayEl('shareOverlayOversize').hidden = !visible;
+  }
+
+  function setShareDetailsSectionVisible(visible) {
+    const section = getOverlayEl('shareOverlayDetailsSection');
+    if (section) {
+      section.style.display = visible ? 'block' : 'none';
+    }
   }
 
   function setCompleteVisible(visible) {
@@ -395,7 +448,10 @@ const ShareFlow = (() => {
       overlay.style.display = 'none';
     }
     session = null;
+    pendingOversizeData = null;
+    prepareInProgress = false;
     publishUserCancelled = false;
+    resetShareDetailsPanel();
     if (typeof updateUtilityMenuAvailability === 'function') {
       updateUtilityMenuAvailability();
     }
@@ -419,23 +475,112 @@ const ShareFlow = (() => {
     }
   }
 
-  function showPreflightState() {
-    stopProgressEtaTicker();
-    setOverlayTitle('Share photos');
-    setPreflightVisible(true);
+  function hideAllBodySections() {
+    setCheckingVisible(false);
+    setPreflightVisible(false);
+    setOversizeVisible(false);
+    setShareDetailsSectionVisible(false);
     setCompleteVisible(false);
     setProgressVisible(false);
     setFailedVisible(false);
+  }
+
+  function showPreflightState() {
+    stopProgressEtaTicker();
+    setOverlayTitle('Share photos');
+    hideAllBodySections();
+    setPreflightVisible(true);
     showPreflightActions();
+  }
+
+  function showCheckingState() {
+    stopProgressEtaTicker();
+    setOverlayTitle('Share photos');
+    hideAllBodySections();
+    setCheckingVisible(true);
+    showCheckingActions();
+  }
+
+  function resetShareDetailsPanel() {
+    if (typeof resetFlowDetailsPanel === 'function') {
+      resetFlowDetailsPanel('shareOversize');
+    }
+  }
+
+  function populateShareOversizeDetails(oversizedPhotos = []) {
+    const list = getOverlayEl('shareOverlayDetailsList');
+    if (!list) {
+      return;
+    }
+    list.innerHTML = '';
+    for (const item of oversizedPhotos) {
+      const row = document.createElement('div');
+      row.className = 'import-detail-item';
+      const name = item.filename || `Photo ${item.photo_id}`;
+      const sizeMb = item.size_mb != null ? item.size_mb : '?';
+      row.innerHTML = `
+        <span class="material-symbols-outlined import-detail-icon error">warning</span>
+        <div class="import-detail-text">
+          <div>${name}</div>
+          <div class="import-detail-message">${sizeMb} MB</div>
+        </div>
+      `;
+      list.appendChild(row);
+    }
+  }
+
+  function showOversizeState(data) {
+    stopProgressEtaTicker();
+    setOverlayTitle('Share photos');
+    hideAllBodySections();
+    setOversizeVisible(true);
+
+    const maxMb = data.max_size_mb ?? '?';
+    const count = data.oversized_count ?? data.oversized_photos?.length ?? 0;
+    const lead = getOverlayEl('shareOverlayOversizeLead');
+    if (lead) {
+      if (data.oversized_all) {
+        lead.textContent = `All selected photos are too large. Select photos smaller than ${maxMb} MB and try again.`;
+      } else {
+        lead.textContent = `${count} photo${count === 1 ? '' : 's'} are too large. Select photos smaller than ${maxMb} MB, or skip them to continue.`;
+      }
+    }
+
+    resetShareDetailsPanel();
+    populateShareOversizeDetails(data.oversized_photos || []);
+    setShareDetailsSectionVisible((data.oversized_photos || []).length > 0);
+
+    if (data.oversized_all) {
+      showOversizeAllActions();
+    } else {
+      showOversizePartialActions();
+    }
+  }
+
+  function applyPreparedSession(prepared, photoIds) {
+    session = {
+      slug: prepared.slug,
+      accessToken: prepared.access_token,
+      url: prepared.url,
+      photoIds,
+      suggestedTitle: prepared.suggested_title || 'Shared Photos',
+      photoCount: prepared.photo_count || photoIds.length,
+    };
+
+    getOverlayEl('shareOverlayLead').textContent =
+      `Share ${session.photoCount} selected photo${session.photoCount === 1 ? '' : 's'}?`;
+
+    const titleInput = getOverlayEl('shareOverlayTitleInput');
+    titleInput.value = '';
+    titleInput.placeholder = session.suggestedTitle;
+    setTitleInputVisible(false);
   }
 
   function showCompleteState(result) {
     stopProgressEtaTicker();
     setOverlayTitle('Share photos');
-    setPreflightVisible(false);
+    hideAllBodySections();
     setCompleteVisible(true);
-    setProgressVisible(false);
-    setFailedVisible(false);
     showCompleteActions();
 
     const count = result.photo_count || session?.photoIds?.length || 0;
@@ -454,10 +599,8 @@ const ShareFlow = (() => {
 
   function showProgressState(completed, total) {
     setOverlayTitle('Share photos');
-    setPreflightVisible(false);
-    setCompleteVisible(false);
+    hideAllBodySections();
     setProgressVisible(true);
-    setFailedVisible(false);
     showProgressActions();
     updateProgressDisplay(completed, total);
   }
@@ -465,9 +608,7 @@ const ShareFlow = (() => {
   function showFailedState({ orphanHint = false } = {}) {
     stopProgressEtaTicker();
     setOverlayTitle('Sharing error');
-    setPreflightVisible(false);
-    setCompleteVisible(false);
-    setProgressVisible(false);
+    hideAllBodySections();
     setFailedVisible(true);
     showFailedActions();
     const messageEl = getOverlayEl('shareOverlayFailedMessage');
@@ -918,40 +1059,110 @@ const ShareFlow = (() => {
     });
   }
 
+  async function waitForMinCheckingDuration(checkingStartedAtMs) {
+    const elapsed = Date.now() - checkingStartedAtMs;
+    const remaining = SHARE_CHECKING_MIN_MS - elapsed;
+    if (remaining > 0) {
+      await delayMs(remaining);
+    }
+  }
+
+  async function resolvePreparedOutcome(prepared, photoIds, checkingStartedAtMs) {
+    await waitForMinCheckingDuration(checkingStartedAtMs);
+    if (prepared.status === 'oversized') {
+      pendingOversizeData = prepared;
+      showOversizeState(prepared);
+      return null;
+    }
+    pendingOversizeData = null;
+    applyPreparedSession(prepared, photoIds);
+    return prepared;
+  }
+
+  async function runSharePrepare(photoIds) {
+    return prepareShare(photoIds);
+  }
+
   async function openFromSelection() {
-    if (!getViewCapabilities().download) {
+    if (!getViewCapabilities().shareLink) {
       return;
     }
     const photoIds = Array.from(state.selectedPhotos);
-    if (publishInProgress || photoIds.length === 0) {
+    if (publishInProgress || prepareInProgress || photoIds.length === 0) {
       return;
+    }
+
+    prepareInProgress = true;
+    if (typeof updateUtilityMenuAvailability === 'function') {
+      updateUtilityMenuAvailability();
     }
 
     try {
       await ensureOverlayLoaded();
-      const prepared = await prepareShare(photoIds);
-      session = {
-        slug: prepared.slug,
-        accessToken: prepared.access_token,
-        url: prepared.url,
+      getOverlayEl('shareOverlay').style.display = 'flex';
+      showCheckingState();
+
+      const checkingStartedAtMs = Date.now();
+      const prepared = await runSharePrepare(photoIds);
+      const ready = await resolvePreparedOutcome(
+        prepared,
         photoIds,
-        suggestedTitle: prepared.suggested_title || 'Shared Photos',
-        photoCount: prepared.photo_count || photoIds.length,
-      };
-
-      getOverlayEl('shareOverlayLead').textContent =
-        `Share ${session.photoCount} selected photo${session.photoCount === 1 ? '' : 's'}?`;
-
-      const titleInput = getOverlayEl('shareOverlayTitleInput');
-      titleInput.value = '';
-      titleInput.placeholder = session.suggestedTitle;
-      setTitleInputVisible(false);
+        checkingStartedAtMs,
+      );
+      if (!ready) {
+        return;
+      }
 
       showPreflightState();
-      getOverlayEl('shareOverlay').style.display = 'flex';
+    } catch (error) {
+      console.error('Share prepare failed:', error);
+      dismissShareOverlay();
+      showToast(error.message || 'Share failed', 'error');
+    } finally {
+      prepareInProgress = false;
+      if (typeof updateUtilityMenuAvailability === 'function') {
+        updateUtilityMenuAvailability();
+      }
+    }
+  }
+
+  async function handleShareSkipOversized() {
+    const shareableIds = pendingOversizeData?.shareable_photo_ids;
+    if (!shareableIds?.length || prepareInProgress || publishInProgress) {
+      return;
+    }
+
+    prepareInProgress = true;
+    if (typeof updateUtilityMenuAvailability === 'function') {
+      updateUtilityMenuAvailability();
+    }
+
+    try {
+      showCheckingState();
+      const checkingStartedAtMs = Date.now();
+      const prepared = await runSharePrepare(shareableIds);
+      const ready = await resolvePreparedOutcome(
+        prepared,
+        shareableIds,
+        checkingStartedAtMs,
+      );
+      if (!ready) {
+        return;
+      }
+
+      prepareInProgress = false;
+      if (typeof updateUtilityMenuAvailability === 'function') {
+        updateUtilityMenuAvailability();
+      }
+      await handleShareConfirm();
     } catch (error) {
       console.error('Share prepare failed:', error);
       showToast(error.message || 'Share failed', 'error');
+    } finally {
+      prepareInProgress = false;
+      if (typeof updateUtilityMenuAvailability === 'function') {
+        updateUtilityMenuAvailability();
+      }
     }
   }
 
@@ -1038,6 +1249,9 @@ const ShareFlow = (() => {
     getOverlayEl('shareOverlayShareBtn')?.addEventListener('click', () => {
       void handleShareConfirm();
     });
+    getOverlayEl('shareOverlaySkipBtn')?.addEventListener('click', () => {
+      void handleShareSkipOversized();
+    });
     getOverlayEl('shareOverlayRetryBtn')?.addEventListener('click', () => {
       void handleShareConfirm();
     });
@@ -1056,6 +1270,10 @@ const ShareFlow = (() => {
         input.focus();
       }
     });
+
+    if (typeof wireFlowDetailsToggle === 'function') {
+      wireFlowDetailsToggle('shareOversize');
+    }
   }
 
   function setShareMenuItemEnabled(btn, enabled) {
@@ -1082,7 +1300,8 @@ const ShareFlow = (() => {
       hasSelectedPhotos &&
       caps.shareLink &&
       !photoExportInProgress &&
-      !publishInProgress;
+      !publishInProgress &&
+      !prepareInProgress;
     setShareMenuItemEnabled(
       document.getElementById('getShareLinkBtn'),
       getLinkEnabled,

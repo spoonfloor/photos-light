@@ -41,7 +41,8 @@ class ShareMediaContractTest(unittest.TestCase):
         self.assertNotIn("mediaUrl(photo, 'display')", download_block)
         self.assertIn("DownloadExport.shouldZip", download_block)
         self.assertIn("DownloadExport.downloadAsZip", download_block)
-        self.assertIn("DownloadExport.buildArchiveFilename", download_block)
+        self.assertIn("DownloadExport.buildShareArchiveFilename", download_block)
+        self.assertNotIn("state.token || 'Shared Photos'", download_block)
         self.assertIn("Download failed", download_block)
 
     def test_download_export_zip_threshold_is_shared(self):

@@ -148,19 +148,23 @@ from share_albums import (
     SHARE_MAX_PHOTOS,
     SharePublishError,
     build_share_url,
+    bytes_to_display_mb,
     cleanup_share_album,
     delete_share_album,
     get_share_publish_outcome,
+    get_share_storage_max_bytes,
     generate_access_token,
     generate_share_slug,
     get_share_config,
     list_share_albums,
     load_env_file,
     iter_publish_share_album,
+    partition_share_photos_by_size,
     share_config_error,
     share_is_configured,
     suggest_share_title,
     validate_photos_for_share,
+    SHARE_OVERSIZED_DETAILS_LIMIT,
 )
 from image_pixels import (
     BROWSER_CONVERT_EXTENSIONS,
@@ -6958,15 +6962,49 @@ def share_prepare():
     except SharePublishError as exc:
         return jsonify(exc.to_payload()), 400
 
+    max_bytes = get_share_storage_max_bytes()
+    max_mb = bytes_to_display_mb(max_bytes)
+    oversized, shareable_ids = partition_share_photos_by_size(
+        LIBRARY_PATH,
+        rows,
+        max_bytes,
+    )
+    if oversized:
+        from share_albums import _share_log
+
+        _share_log(
+            f"prepare oversized count={len(oversized)} "
+            f"shareable={len(shareable_ids)} max_mb={max_mb}"
+        )
+        return jsonify(
+            {
+                "status": "oversized",
+                "oversized_all": len(shareable_ids) == 0,
+                "oversized_count": len(oversized),
+                "shareable_count": len(shareable_ids),
+                "shareable_photo_ids": shareable_ids,
+                "max_size_bytes": max_bytes,
+                "max_size_mb": max_mb,
+                "oversized_photos": oversized[:SHARE_OVERSIZED_DETAILS_LIMIT],
+                "photo_count": len(rows),
+            }
+        )
+
     slug = generate_share_slug()
     access_token = generate_access_token()
     suggested_title = suggest_share_title([row['date_taken'] for row in rows])
+    from share_albums import _share_log
+
+    _share_log(f"prepare ready photos={len(rows)} max_mb={max_mb}")
     return jsonify({
+        'status': 'ready',
         'slug': slug,
         'access_token': access_token,
         'url': build_share_url(access_token),
         'photo_count': len(rows),
         'suggested_title': suggested_title,
+        'max_size_bytes': max_bytes,
+        'max_size_mb': max_mb,
     })
 
 
@@ -7012,6 +7050,27 @@ def share_publish():
         validate_photos_for_share(LIBRARY_PATH, rows)
     except SharePublishError as exc:
         payload = exc.to_payload()
+        app.logger.error(f"Share publish validation failed: {payload}")
+        return jsonify(payload), 400
+
+    max_bytes = get_share_storage_max_bytes()
+    oversized, _shareable = partition_share_photos_by_size(
+        LIBRARY_PATH,
+        rows,
+        max_bytes,
+    )
+    if oversized:
+        first = oversized[0]
+        payload = SharePublishError(
+            "share_file_too_large",
+            (
+                f"Photo file too large for share: {first['filename']} "
+                f"({first['size_mb']} MB; limit {bytes_to_display_mb(max_bytes)} MB)"
+            ),
+            photo_id=first["photo_id"],
+            step="validate",
+            detail=first["filename"],
+        ).to_payload()
         app.logger.error(f"Share publish validation failed: {payload}")
         return jsonify(payload), 400
 

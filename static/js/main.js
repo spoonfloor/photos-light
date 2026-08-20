@@ -482,6 +482,13 @@ const FLOW_ACTIVITY_LOG_REGISTRY = {
     maxLines: CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES,
     activityModeLabel: true,
   },
+  shareOversize: {
+    toggleId: 'shareOverlayDetailsToggle',
+    logFeedId: null,
+    detailsListId: 'shareOverlayDetailsList',
+    maxLines: CLEAN_LIBRARY_ACTIVITY_FEED_MAX_LINES,
+    activityModeLabel: false,
+  },
 };
 
 const flowActivityLogFeeds = {};

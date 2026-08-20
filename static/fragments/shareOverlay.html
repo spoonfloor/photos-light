@@ -12,9 +12,15 @@
       </button>
     </div>
 
-    <div class="import-progress-section" id="shareOverlayPreflight">
+    <div class="import-progress-section" id="shareOverlayChecking" hidden>
+      <p class="share-overlay-lead" id="shareOverlayCheckingLead">
+        Checking selected photos for sharing…
+      </p>
+    </div>
+
+    <div class="import-progress-section" id="shareOverlayPreflight" hidden>
       <p class="share-overlay-lead" id="shareOverlayLead"></p>
-      <p class="share-overlay-consent">
+      <p class="share-overlay-consent" id="shareOverlayConsent">
         Anyone with this link can view and download the photos.
       </p>
       <button
@@ -31,6 +37,30 @@
         id="shareOverlayTitleInput"
         hidden
       />
+    </div>
+
+    <div class="import-progress-section" id="shareOverlayOversize" hidden>
+      <p class="share-overlay-lead" id="shareOverlayOversizeLead"></p>
+    </div>
+
+    <div
+      class="import-details-section"
+      id="shareOverlayDetailsSection"
+      style="display: none"
+    >
+      <button
+        class="import-details-toggle"
+        id="shareOverlayDetailsToggle"
+        type="button"
+      >
+        <span class="material-symbols-outlined">expand_more</span>
+        <span>Show details</span>
+      </button>
+      <div
+        class="import-details-list"
+        id="shareOverlayDetailsList"
+        style="display: none"
+      ></div>
     </div>
 
     <div class="import-progress-section" id="shareOverlayComplete" hidden>
@@ -62,6 +92,14 @@
       </button>
       <button class="btn btn-primary" id="shareOverlayShareBtn" type="button">
         Share
+      </button>
+      <button
+        class="btn btn-primary"
+        id="shareOverlaySkipBtn"
+        type="button"
+        hidden
+      >
+        Skip
       </button>
       <button
         class="btn btn-primary"
