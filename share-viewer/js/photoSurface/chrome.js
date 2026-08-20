@@ -54,11 +54,32 @@ const PhotoChrome = (() => {
     return chip;
   }
 
+  function applyFilterChipAvailability(chip, availability) {
+    if (availability === undefined) {
+      chip.disabled = false;
+      chip.classList.remove('inactive');
+      chip.setAttribute('aria-disabled', 'false');
+      chip.removeAttribute('aria-busy');
+      return;
+    }
+
+    const enabled = availability === true;
+    chip.disabled = !enabled;
+    chip.classList.toggle('inactive', !enabled);
+    chip.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+    if (availability === null) {
+      chip.setAttribute('aria-busy', 'true');
+    } else {
+      chip.removeAttribute('aria-busy');
+    }
+  }
+
   function updateFilterChips({
     scroll,
     activeFilters,
     selectedCount = 0,
     showSelectedChip = true,
+    filterAvailability = null,
     onToggle,
   }) {
     if (!scroll) {
@@ -73,10 +94,16 @@ const PhotoChrome = (() => {
       if (filterKey === 'recentImports') {
         chip.hidden = !ViewCapabilities.get().recentImportsFilter;
       }
+      applyFilterChipAvailability(chip, filterAvailability?.[filterKey]);
       const isActive = !!activeFilters?.[filterKey];
       chip.setAttribute('aria-pressed', isActive ? 'true' : 'false');
       if (!chip.dataset.filterChipWired) {
-        chip.addEventListener('click', () => onToggle?.(filterKey));
+        chip.addEventListener('click', () => {
+          if (chip.disabled) {
+            return;
+          }
+          onToggle?.(filterKey);
+        });
         chip.dataset.filterChipWired = 'true';
       }
     });

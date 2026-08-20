@@ -18,6 +18,18 @@ class SharePublishContractTest(unittest.TestCase):
         self.assertIn("access_token", source)
         self.assertIn('"access_token"', source.split('"complete"', 1)[1])
 
+    def test_publish_uploads_display_jpeg_for_browser_convert_stills(self):
+        source = inspect.getsource(share_albums.iter_publish_share_album)
+        self.assertIn("display_path", source)
+        self.assertIn("still_image_to_jpeg_buffer", source)
+        self.assertIn("BROWSER_CONVERT_EXTENSIONS", source)
+
+    def test_publish_uploads_browser_video_display_mp4(self):
+        source = inspect.getsource(share_albums.iter_publish_share_album)
+        self.assertIn("needs_browser_video_proxy", source)
+        self.assertIn("video_to_browser_mp4_buffer", source)
+        self.assertIn("display.mp4", source)
+
     def test_publish_storage_prefix_uses_access_token(self):
         source = inspect.getsource(share_albums.iter_publish_share_album)
         self.assertIn('f"{access_token}/', source)
@@ -40,7 +52,7 @@ class SharePublishContractTest(unittest.TestCase):
         with open("static/js/shareFlow.js", encoding="utf-8") as handle:
             text = handle.read()
         self.assertIn("accessToken: prepared.access_token", text)
-        self.assertIn("access_token: session.accessToken", text)
+        self.assertIn("access_token: activeSession.accessToken", text)
 
     def test_share_overlay_uses_single_action_footer(self):
         with open("static/fragments/shareOverlay.html", encoding="utf-8") as handle:
@@ -56,8 +68,42 @@ class SharePublishContractTest(unittest.TestCase):
         self.assertIn("showPreflightActions", text)
         self.assertIn("showProgressActions", text)
         self.assertIn("showCompleteActions", text)
+        self.assertIn("showFailedActions", text)
         self.assertIn("setShareButtonDisabled(true)", text)
         self.assertIn("shareOverlayDoneBtn", text)
+        self.assertIn("shareOverlayRetryBtn", text)
+
+    def test_share_overlay_has_failed_state(self):
+        with open("static/fragments/shareOverlay.html", encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn('id="shareOverlayFailed"', text)
+        self.assertIn('id="shareOverlayFailedMessage"', text)
+        self.assertIn('id="shareOverlayRetryBtn"', text)
+
+    def test_share_flow_verifies_outcome_before_failure_ui(self):
+        with open("static/js/shareFlow.js", encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("/api/share/publish-outcome", text)
+        self.assertIn("fetchPublishOutcome", text)
+        self.assertIn("heartbeat", text.split("async function publishShare", 1)[1])
+        self.assertIn("logSharePublishFailure", text)
+        self.assertIn("createSharePublishError", text)
+        self.assertIn("showFailedState", text)
+        self.assertIn("SHARE_FAILURE_MESSAGE_GENERIC", text)
+        self.assertIn("SHARE_FAILURE_MESSAGE_ORPHAN", text)
+        self.assertIn("Sharing error", text)
+        self.assertIn("delete it first, then try again", text)
+        confirm_block = text.split("async function handleShareConfirm()", 1)[1].split(
+            "function wireOverlayControls", 1
+        )[0]
+        self.assertNotIn("showPreflightState()", confirm_block)
+        self.assertNotIn("cleanupShareSession", confirm_block)
+
+    def test_publish_outcome_lives_in_share_albums_module(self):
+        source = inspect.getsource(share_albums.get_share_publish_outcome)
+        self.assertIn('"complete"', source)
+        self.assertIn('"partial"', source)
+        self.assertIn('"none"', source)
 
     def test_share_overlay_uses_title_link_toggle(self):
         with open("static/fragments/shareOverlay.html", encoding="utf-8") as handle:
@@ -80,36 +126,74 @@ class SharePublishContractTest(unittest.TestCase):
         self.assertIn("format_album_label", source)
 
         delete_source = inspect.getsource(share_albums.delete_share_album)
-        self.assertIn("_delete_storage_paths", delete_source)
+        self.assertIn("cleanup_share_album", delete_source)
+        cleanup_source = inspect.getsource(share_albums.cleanup_share_album)
+        self.assertIn("_delete_album_catalog_and_storage", cleanup_source)
+        delete_impl_source = inspect.getsource(share_albums._delete_album_catalog_and_storage)
+        collect_source = inspect.getsource(share_albums._collect_album_storage_paths)
+        self.assertIn("_delete_storage_paths", delete_impl_source)
         self.assertIn("_list_all_storage_files", inspect.getsource(share_albums))
         self.assertIn('"prefixes"', inspect.getsource(share_albums._delete_storage_paths))
-        self.assertIn('"/rest/v1/albums?id=eq.', delete_source)
-        self.assertIn("_delete_storage_paths", delete_source.split('"/rest/v1/albums?id=eq.', 1)[1])
-        self.assertNotIn("_list_storage_paths", delete_source)
-        self.assertIn("thumb_path", delete_source)
-        self.assertNotIn("revoked_at", delete_source)
+        self.assertIn('"/rest/v1/albums?id=eq.', delete_impl_source)
+        self.assertIn("_delete_storage_paths", delete_impl_source.split('"/rest/v1/albums?id=eq.', 1)[1])
+        self.assertNotIn("_list_storage_paths", cleanup_source)
+        self.assertIn("display_path", collect_source)
+        self.assertNotIn("revoked_at", cleanup_source)
+
+    def test_publish_keeps_partial_album_on_failure_for_resume(self):
+        source = inspect.getsource(share_albums.iter_publish_share_album)
+        failure_tail = source.split("_log_share_failure", 1)[1]
+        self.assertNotIn("cleanup_share_album", failure_tail.split("def publish_share_album", 1)[0])
+        self.assertIn("insert_album_photos([catalog_row])", source)
+        self.assertIn("_get_completed_share_positions", source)
+        self.assertIn("heartbeat", source)
+
+    def test_share_publish_has_terminal_logging_and_retries(self):
+        text = inspect.getsource(share_albums)
+        self.assertIn('print(f"[share] {message}", flush=True)', text)
+        self.assertIn("SHARE_STORAGE_UPLOAD_RETRIES", text)
+        self.assertIn("SHARE_STORAGE_TIMEOUT_SEC", text)
+        self.assertIn("class SharePublishError", text)
+        self.assertIn("validate_photos_for_share", text)
 
     def test_app_exposes_share_album_routes(self):
         with open("app.py", encoding="utf-8") as handle:
             text = handle.read()
         self.assertIn("def share_albums_list():", text)
         self.assertIn("def share_album_delete(album_id):", text)
+        self.assertIn("def share_cancel():", text)
+        self.assertIn("def share_publish_outcome():", text)
+        self.assertIn("validate_photos_for_share", text)
         self.assertIn("list_share_albums()", text)
         self.assertIn("delete_share_album(album_key)", text)
+        self.assertIn("cleanup_share_album(", text)
 
     def test_share_flow_exposes_manage_links_entry(self):
         with open("static/js/shareFlow.js", encoding="utf-8") as handle:
             text = handle.read()
         self.assertIn("openManageLinks", text)
         self.assertIn("/api/share/albums", text)
+        self.assertIn("/api/share/cancel", text)
         self.assertIn("shareManageOverlay.html", text)
         self.assertIn("manageShareLinksBtn", text)
         manage_block = text.split("const manageEnabled =", 1)[1].split(";", 1)[0]
         self.assertNotIn("hasDatabase", manage_block)
+        self.assertNotIn("publishInProgress", manage_block)
+        self.assertIn("publishAbortController", text)
+        self.assertIn("cancelSharePublishWithRetry", text)
+        self.assertIn("SHARE_CANCEL_CLEANUP_MAX_ATTEMPTS", text)
+        self.assertIn("shareCancelCleanupFailureMessage", text)
+        self.assertIn("Open Manage links and delete it manually", text)
+        self.assertIn("pendingShareCancelCleanups", text)
         self.assertIn("shareManageTitle", text)
         self.assertIn("Manage links (${manageAlbums.length})", text)
         self.assertIn("preloadManageOverlay", text)
-        self.assertIn("background: true", text)
+        self.assertIn("runShareCancelCleanup", text)
+        self.assertIn("dismissShareOverlay", text)
+        close_block = text.split("function closeOverlay()", 1)[1].split("function showPreflightState", 1)[0]
+        self.assertIn("dismissShareOverlay();", close_block)
+        self.assertNotIn("await cancelSharePublish", close_block)
+        self.assertNotIn("await cleanupShareSession", close_block)
 
     def test_utilities_menu_has_manage_links_below_get_link(self):
         with open("static/fragments/utilitiesMenu.html", encoding="utf-8") as handle:

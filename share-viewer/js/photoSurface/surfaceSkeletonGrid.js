@@ -4,6 +4,7 @@
  */
 const SurfaceSkeletonGrid = (() => {
   const MONTH_LABEL_PLACEHOLDER = 'Month & Year';
+  const DAY_LABEL_PLACEHOLDER = 'Month Day, Year';
   const GRID_MIN_CELL_PX = 200;
   const GRID_GAP_PX = 4;
   const MONTH_HEADER_RESERVE_PX = 56;
@@ -34,7 +35,20 @@ const SurfaceSkeletonGrid = (() => {
     return cols * rows;
   }
 
-  function render(container, { monthKey = 'undated', cellCount = 0, reserveMonthLabel = false } = {}) {
+  function labelPlaceholder(granularity = 'month') {
+    return granularity === 'day' ? DAY_LABEL_PLACEHOLDER : MONTH_LABEL_PLACEHOLDER;
+  }
+
+  function currentDayKey() {
+    return MonthGrid.dayKeyFromDate(new Date());
+  }
+
+  function render(container, {
+    monthKey = 'undated',
+    cellCount = 0,
+    reserveMonthLabel = false,
+    granularity = 'month',
+  } = {}) {
     if (!container) {
       return;
     }
@@ -51,14 +65,15 @@ const SurfaceSkeletonGrid = (() => {
 
     const section = MonthGrid.createMonthSection(monthKey, {
       extraSectionClasses: ['surface-skeleton-section'],
+      granularity,
     });
     const monthLabel = section.sectionEl.querySelector('.month-label');
     if (monthLabel) {
       if (reserveMonthLabel) {
-        monthLabel.textContent = MONTH_LABEL_PLACEHOLDER;
+        monthLabel.textContent = labelPlaceholder(granularity);
         monthLabel.classList.add('surface-layout-placeholder');
       } else {
-        monthLabel.textContent = MonthGrid.monthLabel(monthKey);
+        monthLabel.textContent = MonthGrid.clusterLabel(monthKey, granularity);
         monthLabel.classList.remove('surface-layout-placeholder');
       }
     }
@@ -74,28 +89,35 @@ const SurfaceSkeletonGrid = (() => {
     container.appendChild(section.sectionEl);
   }
 
-  function renderInstantShell(container) {
+  function renderInstantShell(container, { granularity = 'month' } = {}) {
+    const clusterKey = granularity === 'day' ? currentDayKey() : currentMonthKey();
     render(container, {
-      monthKey: currentMonthKey(),
+      monthKey: clusterKey,
       cellCount: estimateViewportCellCount(container),
       reserveMonthLabel: true,
+      granularity,
     });
   }
 
-  function applyMeta(container, { monthKey = currentMonthKey(), photoCount = 0 } = {}) {
+  function applyMeta(container, {
+    monthKey = currentMonthKey(),
+    photoCount = 0,
+    granularity = 'month',
+  } = {}) {
     const section = container?.querySelector('.surface-skeleton-section');
     const monthLabel = section?.querySelector('.month-label');
     if (monthLabel) {
-      monthLabel.textContent = MonthGrid.monthLabel(monthKey || currentMonthKey());
+      monthLabel.textContent = MonthGrid.clusterLabel(monthKey, granularity);
       monthLabel.classList.remove('surface-layout-placeholder');
       return;
     }
 
     const count = photoCount > 0 ? photoCount : estimateViewportCellCount(container);
     render(container, {
-      monthKey: monthKey || currentMonthKey(),
+      monthKey: monthKey || (granularity === 'day' ? currentDayKey() : currentMonthKey()),
       cellCount: count,
       reserveMonthLabel: false,
+      granularity,
     });
   }
 
@@ -145,7 +167,10 @@ const SurfaceSkeletonGrid = (() => {
 
   return {
     MONTH_LABEL_PLACEHOLDER,
+    DAY_LABEL_PLACEHOLDER,
     currentMonthKey,
+    currentDayKey,
+    labelPlaceholder,
     estimateViewportCellCount,
     renderInstantShell,
     applyMeta,

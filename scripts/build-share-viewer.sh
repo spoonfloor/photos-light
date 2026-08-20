@@ -42,24 +42,24 @@ cat > "$OUT/index.html" <<'HTML_HEAD'
     <link rel="stylesheet" href="css/styles.css?v=1" />
     <link rel="stylesheet" href="css/share-overrides.css?v=12" />
   </head>
-  <body class="share-view filter-chip-rail-visible">
+  <body class="share-view surface-load-active surface-load-phase-loading filter-chip-rail-visible">
     <div id="appChromeMount">
       <div id="appBarMount">
 HTML_HEAD
 
-read_fragment appBar.html >> "$OUT/index.html"
+read_fragment appBarShare.html >> "$OUT/index.html"
 
 cat >> "$OUT/index.html" <<'HTML_MID'
       </div>
 HTML_MID
 
-read_fragment filterChipRail.html >> "$OUT/index.html"
+read_fragment filterChipRailShare.html >> "$OUT/index.html"
 
 cat >> "$OUT/index.html" <<'HTML_MID2'
     </div>
 HTML_MID2
 
-read_fragment utilitiesMenu.html >> "$OUT/index.html"
+read_fragment utilitiesMenuShare.html >> "$OUT/index.html"
 
 cat >> "$OUT/index.html" <<'HTML_MAIN'
     <main class="page-main">
@@ -74,7 +74,11 @@ HTML_MAIN
 
 read_fragment lightbox.html >> "$OUT/index.html"
 
-read_fragment surfaceLoadOverlay.html >> "$OUT/index.html"
+read_fragment surfaceLoadOverlayShareBoot.html >> "$OUT/index.html"
+
+read_fragment toast.html >> "$OUT/index.html"
+
+read_fragment downloadPrepOverlay.html >> "$OUT/index.html"
 
 cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
@@ -84,17 +88,22 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="js/photoSurface/gridSelection.js"></script>
     <script src="js/photoSurface/gridInteractions.js"></script>
     <script src="js/photoSurface/chrome.js"></script>
+    <script src="js/photoSurface/filterChipLifecycle.js"></script>
     <script src="js/photoSurface/monthGrid.js"></script>
     <script src="js/photoSurface/simpleGrid.js"></script>
     <script src="js/photoSurface/surfaceSkeletonGrid.js"></script>
     <script src="js/photoSurface/shareSkeletonGrid.js"></script>
     <script src="js/photoSurface/photoGrid.js"></script>
     <script src="js/photoSurface/init.js"></script>
+    <script src="js/photoSurface/lightboxMediaCache.js"></script>
     <script src="js/photoSurface/lightboxMedia.js"></script>
     <script src="js/photoSurface/lightboxShell.js"></script>
     <script src="js/photoSurface/surfaceLoadOverlay.js"></script>
     <script src="js/photoSurface/surfaceLoadChrome.js"></script>
-    <script src="js/shareBoot.js?v=3"></script>
+    <script src="js/photoSurface/datePickerChrome.js"></script>
+    <script src="js/photoSurface/shareDatePicker.js"></script>
+    <script src="js/photoSurface/downloadExport.js"></script>
+    <script src="js/shareBoot.js?v=8"></script>
   </body>
 </html>
 HTML_TAIL

@@ -50,8 +50,41 @@ function monthKeyFromDateTaken(dateTaken: string | null): string {
   return `${year}-${month}`;
 }
 
+function dayKeyFromDateTaken(dateTaken: string | null): string {
+  if (!dateTaken) {
+    return "undated";
+  }
+  const date = new Date(dateTaken);
+  if (Number.isNaN(date.getTime())) {
+    return "undated";
+  }
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function parseSortOrder(value: string | null): "newest" | "oldest" {
-  return value === "oldest" ? "oldest" : "newest";
+  return value === "newest" ? "newest" : "oldest";
+}
+
+const BROWSER_NATIVE_STILL_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".gif",
+  ".webp",
+]);
+
+function stillExtension(filename: string | null): string {
+  if (!filename) {
+    return "";
+  }
+  const dot = filename.lastIndexOf(".");
+  if (dot < 0) {
+    return "";
+  }
+  return filename.slice(dot).toLowerCase();
 }
 
 async function loadAlbumByToken(supabase: ReturnType<typeof createClient>, token: string) {
@@ -136,6 +169,7 @@ Deno.serve(async (req: Request) => {
       },
       first_cluster: {
         month_key: monthKeyFromDateTaken(dateTaken),
+        day_key: dayKeyFromDateTaken(dateTaken),
         date_taken: dateTaken,
       },
       sort,
@@ -145,7 +179,7 @@ Deno.serve(async (req: Request) => {
   const { data: photoRows, error: photosError } = await supabase
     .from("album_photos")
     .select(
-      "id, position, date_taken, file_type, width, height, rating, original_filename, thumb_path, original_path",
+      "id, position, date_taken, file_type, width, height, rating, original_filename, thumb_path, original_path, display_path",
     )
     .eq("album_id", album.id)
     .order("position", { ascending: true });
@@ -156,17 +190,44 @@ Deno.serve(async (req: Request) => {
 
   const photos = [];
   for (const photo of photoRows ?? []) {
-    const [thumbResult, originalResult] = await Promise.all([
+    const displayStoragePath = photo.display_path;
+    const signTargets = [
       supabase.storage
         .from(SHARE_BUCKET)
         .createSignedUrl(photo.thumb_path, SIGNED_URL_TTL_SECONDS),
       supabase.storage
         .from(SHARE_BUCKET)
         .createSignedUrl(photo.original_path, SIGNED_URL_TTL_SECONDS),
-    ]);
+    ];
+    if (displayStoragePath) {
+      signTargets.push(
+        supabase.storage
+          .from(SHARE_BUCKET)
+          .createSignedUrl(displayStoragePath, SIGNED_URL_TTL_SECONDS),
+      );
+    }
+
+    const signResults = await Promise.all(signTargets);
+    const thumbResult = signResults[0];
+    const originalResult = signResults[1];
+    const displayResult = displayStoragePath ? signResults[2] : null;
 
     if (thumbResult.error || originalResult.error) {
       return jsonResponse({ error: "Could not load share assets" }, 500);
+    }
+    if (displayResult?.error) {
+      return jsonResponse({ error: "Could not load share assets" }, 500);
+    }
+
+    let displayUrl: string | null = null;
+    if (displayResult?.data?.signedUrl) {
+      displayUrl = displayResult.data.signedUrl;
+    } else if (photo.file_type === "video") {
+      displayUrl = originalResult.data.signedUrl;
+    } else if (
+      BROWSER_NATIVE_STILL_EXTENSIONS.has(stillExtension(photo.original_filename))
+    ) {
+      displayUrl = originalResult.data.signedUrl;
     }
 
     photos.push({
@@ -180,6 +241,7 @@ Deno.serve(async (req: Request) => {
       original_filename: photo.original_filename,
       thumb_url: thumbResult.data.signedUrl,
       original_url: originalResult.data.signedUrl,
+      display_url: displayUrl,
     });
   }
 

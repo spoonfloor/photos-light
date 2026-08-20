@@ -2,6 +2,13 @@
  * Non-virtual month-grouped grid renderer (share viewer + library fallback).
  */
 const SimplePhotoGrid = (() => {
+  function clusterKey(date, granularity) {
+    if (granularity === 'day') {
+      return MonthGrid.dayKeyFromDate(date);
+    }
+    return MonthGrid.monthKeyFromDate(date);
+  }
+
   function monthKey(date) {
     return MonthGrid.monthKeyFromDate(date);
   }
@@ -17,6 +24,7 @@ const SimplePhotoGrid = (() => {
 
     container.innerHTML = '';
     const caps = ctx.getCapabilities?.() ?? ViewCapabilities.get();
+    const clusterGranularity = caps.dayClusters ? 'day' : 'month';
 
     if (!photos.length) {
       if (ctx.interactionCtx && typeof GridInteractions !== 'undefined') {
@@ -31,10 +39,10 @@ const SimplePhotoGrid = (() => {
 
     photos.forEach((photo, index) => {
       const date = ctx.parseDate?.(photo.date_taken) ?? null;
-      const key = monthKey(date);
+      const key = clusterKey(date, clusterGranularity);
       if (key !== currentKey) {
         currentKey = key;
-        const section = MonthGrid.createMonthSection(key);
+        const section = MonthGrid.createMonthSection(key, { granularity: clusterGranularity });
         gridEl = section.gridEl;
         container.appendChild(section.sectionEl);
       }

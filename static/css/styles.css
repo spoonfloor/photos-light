@@ -265,6 +265,7 @@ body.trash-view-active.filter-chip-rail-visible {
 #lightboxRotateBtn[hidden],
 #lightboxStarBtn[hidden],
 #lightboxDownloadBtn[hidden],
+#lightboxDeleteBtn[hidden],
 #lightboxRestoreBtn[hidden],
 #viewTrashBtn[hidden],
 #emptyTrashBtn[hidden],
@@ -379,6 +380,13 @@ body.trash-view-active #lightboxDownloadBtn {
   color: #666;
 }
 
+.date-picker-select.date-picker-select--static {
+  pointer-events: none;
+  cursor: default;
+  padding-right: 10px;
+  background-image: none;
+}
+
 .app-bar-wrapper .title {
   font-size: var(--app-bar-title-size);
   font-weight: 300;
@@ -456,6 +464,23 @@ body.trash-view-active #lightboxDownloadBtn {
 .filter-chip[aria-pressed='true']:hover {
   background: var(--filter-chip-bg-active-hover);
   color: var(--filter-chip-text-active-hover);
+}
+
+.filter-chip.inactive,
+.filter-chip:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  cursor: default;
+}
+
+.filter-chip.inactive:hover,
+.filter-chip.inactive[aria-pressed='true'],
+.filter-chip.inactive[aria-pressed='true']:hover,
+.filter-chip:disabled:hover,
+.filter-chip:disabled[aria-pressed='true'],
+.filter-chip:disabled[aria-pressed='true']:hover {
+  background: var(--filter-chip-bg);
+  color: var(--filter-chip-text);
 }
 
 .grid-root.grid-catalog-empty .grid-content-layer,
@@ -690,13 +715,12 @@ body.surface-load-phase-loading .date-picker {
   visibility: hidden !important;
 }
 
-body.surface-load-phase-meta .date-picker {
-  visibility: visible !important;
+body.surface-load-phase-meta .date-picker.date-jumper-active {
   opacity: 0.35;
   pointer-events: none;
 }
 
-body.surface-load-phase-meta .date-picker-select {
+body.surface-load-phase-meta .date-picker.date-jumper-active .date-picker-select {
   pointer-events: none;
 }
 
@@ -2061,6 +2085,13 @@ body.surface-load-active .app-bar-icon-button {
 
 .import-status-text p:last-child {
   margin-bottom: 0;
+}
+
+.download-prep-note {
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 /* Add margin only when stats are visible */

@@ -145,8 +145,11 @@ from rotation_utils import (
 )
 from share_albums import (
     SHARE_MAX_PHOTOS,
+    SharePublishError,
     build_share_url,
+    cleanup_share_album,
     delete_share_album,
+    get_share_publish_outcome,
     generate_access_token,
     generate_share_slug,
     get_share_config,
@@ -156,6 +159,7 @@ from share_albums import (
     share_config_error,
     share_is_configured,
     suggest_share_title,
+    validate_photos_for_share,
 )
 from image_pixels import (
     BROWSER_CONVERT_EXTENSIONS,
@@ -2649,23 +2653,11 @@ def export_photo():
         if not os.path.isdir(destination):
             return jsonify({'error': 'Destination folder does not exist'}), 400
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT current_path FROM photos WHERE id = ?",
-            (photo_id,),
-        )
-        row = cursor.fetchone()
-        conn.close()
+        source_path, error_response = _resolve_library_photo_original_path(photo_id)
+        if error_response is not None:
+            return error_response
 
-        if not row or not row['current_path']:
-            return jsonify({'error': 'Photo not found'}), 404
-
-        source_path = os.path.join(LIBRARY_PATH, row['current_path'])
-        if not os.path.exists(source_path):
-            return jsonify({'error': 'File not found on disk'}), 404
-
-        filename = os.path.basename(row['current_path'])
+        filename = os.path.basename(source_path)
         dest_path = os.path.join(destination, filename)
         base, ext = os.path.splitext(filename)
         counter = 1
@@ -2678,6 +2670,82 @@ def export_photo():
         return jsonify({'success': True, 'path': dest_path})
     except Exception as e:
         app.logger.error(f"Export photo error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+def _resolve_library_photo_original_path(photo_id):
+    """Return absolute on-disk path for a library photo original, or (None, error_response)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT current_path FROM photos WHERE id = ?",
+        (photo_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row or not row['current_path']:
+        return None, (jsonify({'error': 'Photo not found'}), 404)
+
+    source_path = os.path.join(LIBRARY_PATH, row['current_path'])
+    if not os.path.exists(source_path):
+        return None, (jsonify({'error': 'File not found on disk'}), 404)
+
+    return source_path, None
+
+
+def _unique_destination_path(destination, filename):
+    dest_path = os.path.join(destination, filename)
+    base, ext = os.path.splitext(filename)
+    counter = 1
+    while os.path.exists(dest_path):
+        dest_path = os.path.join(destination, f"{base}_{counter}{ext}")
+        counter += 1
+    return dest_path
+
+
+@app.route('/api/photo/<int:photo_id>/original')
+@handle_db_corruption
+def get_photo_original(photo_id):
+    """Serve a library photo's original file bytes (for zip assembly)."""
+    try:
+        if not LIBRARY_PATH:
+            return jsonify({'error': 'Library not configured'}), 503
+
+        source_path, error_response = _resolve_library_photo_original_path(photo_id)
+        if error_response is not None:
+            return error_response
+
+        filename = os.path.basename(source_path)
+        return send_file(source_path, as_attachment=False, download_name=filename)
+    except Exception as e:
+        app.logger.error(f"Serve photo original error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/photo/export-file', methods=['POST'])
+@handle_db_corruption
+def export_file():
+    """Write an uploaded file (e.g. client-built zip) into a user-chosen folder."""
+    try:
+        if not LIBRARY_PATH:
+            return jsonify({'error': 'Library not configured'}), 503
+
+        destination = request.form.get('destination')
+        upload = request.files.get('file')
+        if not destination or upload is None:
+            return jsonify({'error': 'Missing destination or file'}), 400
+
+        if not os.path.isdir(destination):
+            return jsonify({'error': 'Destination folder does not exist'}), 400
+
+        filename = os.path.basename(upload.filename or '') or 'download.zip'
+        dest_path = _unique_destination_path(destination, filename)
+        upload.save(dest_path)
+
+        return jsonify({'success': True, 'path': dest_path})
+    except Exception as e:
+        app.logger.error(f"Export file error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/photo/update_date', methods=['POST'])
@@ -6819,6 +6887,30 @@ def share_status():
     })
 
 
+@app.route('/api/share/publish-outcome', methods=['GET'])
+def share_publish_outcome():
+    if not share_is_configured():
+        return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
+
+    access_token = (request.args.get('access_token') or '').strip()
+    slug = (request.args.get('slug') or '').strip()
+    album_id = (request.args.get('album_id') or '').strip()
+    if not access_token and not slug and not album_id:
+        return jsonify({'error': 'Missing share identity'}), 400
+
+    try:
+        outcome = get_share_publish_outcome(
+            access_token=access_token or None,
+            slug=slug or None,
+            album_id=album_id or None,
+        )
+    except Exception as exc:
+        app.logger.error(f"Share publish outcome failed: {exc}")
+        return jsonify({'error': str(exc)}), 502
+
+    return jsonify(outcome)
+
+
 @app.route('/api/share/prepare', methods=['POST'])
 @handle_db_corruption
 def share_prepare():
@@ -6843,6 +6935,11 @@ def share_prepare():
         rows = _fetch_photos_for_share(photo_ids)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 404
+
+    try:
+        validate_photos_for_share(LIBRARY_PATH, rows)
+    except SharePublishError as exc:
+        return jsonify(exc.to_payload()), 400
 
     slug = generate_share_slug()
     access_token = generate_access_token()
@@ -6894,11 +6991,19 @@ def share_publish():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 404
 
+    try:
+        validate_photos_for_share(LIBRARY_PATH, rows)
+    except SharePublishError as exc:
+        payload = exc.to_payload()
+        app.logger.error(f"Share publish validation failed: {payload}")
+        return jsonify(payload), 400
+
     @stream_with_context
     def generate():
         def emit(event_name, payload):
             return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
 
+        completed = False
         try:
             yield emit('progress', {'completed': 0, 'total': len(rows)})
             for event_name, payload in iter_publish_share_album(
@@ -6911,12 +7016,53 @@ def share_publish():
                 generate_video_thumb=generate_video_square_thumbnail,
                 to_rgb=convert_to_rgb_properly,
             ):
+                if event_name == 'complete':
+                    completed = True
                 yield emit(event_name, payload)
+        except GeneratorExit:
+            if not completed:
+                try:
+                    cleanup_share_album(access_token=access_token, slug=slug)
+                except Exception as cleanup_exc:
+                    app.logger.error(f"Share publish cleanup after disconnect failed: {cleanup_exc}")
+            raise
+        except SharePublishError as exc:
+            app.logger.error(f"Share publish failed: {exc.to_payload()}")
+            yield emit('error', exc.to_payload())
         except Exception as exc:
             app.logger.error(f"Share publish failed: {exc}")
-            yield emit('error', {'error': str(exc)})
+            yield emit('error', {'error': str(exc), 'code': 'share_unknown', 'detail': str(exc)})
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/api/share/cancel', methods=['POST'])
+@handle_db_corruption
+def share_cancel():
+    if not share_is_configured():
+        return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
+
+    data = request.get_json() or {}
+    access_token = (data.get('access_token') or '').strip()
+    slug = (data.get('slug') or '').strip()
+    album_id = (data.get('album_id') or '').strip()
+
+    if not access_token and not slug and not album_id:
+        return jsonify({'error': 'Missing share identity'}), 400
+
+    try:
+        removed = cleanup_share_album(
+            album_id=album_id or None,
+            access_token=access_token or None,
+            slug=slug or None,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        app.logger.error(f"Share cancel failed: {exc}")
+        return jsonify({'error': str(exc)}), 502
+
+    return jsonify({'ok': True, 'removed': removed})
 
 
 @app.route('/api/share/albums', methods=['GET'])

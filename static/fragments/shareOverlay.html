@@ -48,6 +48,10 @@
       <p class="share-overlay-remaining" id="shareOverlayProgressRemaining"></p>
     </div>
 
+    <div class="import-progress-section" id="shareOverlayFailed" hidden>
+      <p class="share-overlay-lead" id="shareOverlayFailedMessage"></p>
+    </div>
+
     <div class="import-actions" id="shareOverlayActions">
       <button
         class="btn btn-secondary"
@@ -58,6 +62,14 @@
       </button>
       <button class="btn btn-primary" id="shareOverlayShareBtn" type="button">
         Share
+      </button>
+      <button
+        class="btn btn-primary"
+        id="shareOverlayRetryBtn"
+        type="button"
+        hidden
+      >
+        Retry
       </button>
       <button
         class="btn btn-primary"

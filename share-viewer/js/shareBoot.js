@@ -14,14 +14,17 @@
     token: null,
     album: null,
     photos: [],
-    sortOrder: 'newest',
+    sortOrder: 'oldest',
     filters: { starred: false, video: false, selected: false },
     selected: new Set(),
     starred: new Set(),
     unstarredPublished: new Set(),
     lightboxPhotoId: null,
     lastClickedIndex: null,
+    filterCatalogReady: false,
   };
+
+  const TOAST_DURATION_MS = 3000;
 
   const els = {
     photoContainer: document.getElementById('photoContainer'),
@@ -35,6 +38,7 @@
     utilitiesBtn: document.getElementById('utilitiesBtn'),
     utilitiesMenu: document.getElementById('utilitiesMenu'),
     clearStarsBtn: document.getElementById('clearStarsBtn'),
+    copyShareLinkBtn: document.getElementById('copyShareLinkBtn'),
     filterChipScroll: document.querySelector('.filter-chip-rail-scroll'),
     lightboxContent: document.getElementById('lightboxContent'),
   };
@@ -56,7 +60,7 @@
           String,
         ),
       );
-      state.sortOrder = localStorage.getItem(storageKey('sort')) || 'newest';
+      state.sortOrder = localStorage.getItem(storageKey('sort')) || 'oldest';
     } catch {
       state.starred = new Set();
       state.selected = new Set();
@@ -126,12 +130,66 @@
     els.sharePageTitle.classList.remove('surface-layout-placeholder');
   }
 
-  function mediaUrl(photo, kind) {
-    const url = kind === 'thumb' ? photo.thumb_url : photo.original_url;
-    if (!url) {
-      throw new Error('Share media URL is missing.');
+  const BROWSER_NATIVE_STILL_EXTENSIONS = new Set([
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.webp',
+  ]);
+
+  function stillExtension(filename) {
+    if (!filename) {
+      return '';
     }
-    return url;
+    const dot = filename.lastIndexOf('.');
+    if (dot < 0) {
+      return '';
+    }
+    return filename.slice(dot).toLowerCase();
+  }
+
+  /**
+   * Lightbox/video display tier — mirrors share-resolve display_url rules.
+   * Grid uses thumb_url; download uses original_url.
+   */
+  function shareDisplayUrl(photo) {
+    if (!photo) {
+      return null;
+    }
+    if (photo.display_url) {
+      return photo.display_url;
+    }
+    if (!photo.original_url) {
+      return null;
+    }
+    if (LightboxMedia.isVideoPhoto(photo)) {
+      return photo.original_url;
+    }
+    if (BROWSER_NATIVE_STILL_EXTENSIONS.has(stillExtension(photo.original_filename))) {
+      return photo.original_url;
+    }
+    return null;
+  }
+
+  function mediaUrl(photo, kind) {
+    if (kind === 'thumb') {
+      if (!photo.thumb_url) {
+        throw new Error('Share thumb URL is missing.');
+      }
+      return photo.thumb_url;
+    }
+    if (kind === 'display') {
+      const url = shareDisplayUrl(photo);
+      if (!url) {
+        throw new Error('Share display URL is missing.');
+      }
+      return url;
+    }
+    if (!photo.original_url) {
+      throw new Error('Share original URL is missing.');
+    }
+    return photo.original_url;
   }
 
   function parseDate(value) {
@@ -166,6 +224,20 @@
       }
     }
     return ids;
+  }
+
+  function getFilterChipAvailability() {
+    if (!state.filterCatalogReady) {
+      return { starred: null, video: null };
+    }
+    const starredCount = starredEffectiveSet().size;
+    const videoCount = state.photos.filter(
+      (photo) => photo.file_type === 'video',
+    ).length;
+    return {
+      starred: starredCount > 0,
+      video: videoCount > 0,
+    };
   }
 
   function comparePhotos(a, b) {
@@ -230,7 +302,11 @@
       onToggleStar: (photoId) => toggleStar(photoId),
       onOpenLightbox: (photoId) => openLightbox(photoId),
     },
-    onAfterRender: updateChrome,
+    onAfterRender: () => {
+      ShareDatePicker.refreshCatalog(filteredPhotos(), parseDate);
+      ShareDatePicker.afterGridRender();
+      updateChrome();
+    },
   });
 
   function rebuildPhotoGrid({ deferThumbSrc = false } = {}) {
@@ -295,13 +371,25 @@
       state.sortOrder === 'newest' ? 'hourglass_arrow_down' : 'hourglass_arrow_up';
     els.sortToggleBtn.title = state.sortOrder === 'newest' ? 'Newest first' : 'Oldest first';
 
+    const filterAvailability = getFilterChipAvailability();
+    const filtersCleared = FilterChipLifecycle.applyAutoClear(
+      state.filters,
+      filterAvailability,
+    );
+
     PhotoChrome.updateFilterChips({
       scroll: els.filterChipScroll,
       activeFilters: state.filters,
       selectedCount,
       showSelectedChip: caps.selectedFilterChip,
+      filterAvailability,
       onToggle: (filterKey) => {
-        if (filterKey === 'selected' && state.selected.size === 0) {
+        if (
+          !FilterChipLifecycle.canToggleFilter(filterKey, {
+            availability: getFilterChipAvailability(),
+            selectedCount: state.selected.size,
+          })
+        ) {
           return;
         }
         state.filters[filterKey] = !state.filters[filterKey];
@@ -309,6 +397,11 @@
         rebuildPhotoGrid();
       },
     });
+
+    if (filtersCleared) {
+      rebuildPhotoGrid();
+      return;
+    }
 
     const starredCount = starredEffectiveSet().size;
     if (els.clearStarsBtn) {
@@ -365,31 +458,136 @@
     };
   }
 
+  function showToast(message, duration = TOAST_DURATION_MS) {
+    const toast = document.getElementById('toast');
+    const messageEl = document.getElementById('toastMessage');
+    const undoBtn = document.getElementById('toastUndoBtn');
+    const closeBtn = document.getElementById('toastCloseBtn');
+    if (!toast || !messageEl) {
+      return;
+    }
+
+    messageEl.textContent = message;
+
+    if (undoBtn) {
+      undoBtn.style.display = 'none';
+    }
+
+    if (closeBtn && !closeBtn.dataset.shareToastWired) {
+      closeBtn.dataset.shareToastWired = 'true';
+      closeBtn.addEventListener('click', hideToast);
+    }
+
+    toast.style.display = 'flex';
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(hideToast, duration);
+  }
+
+  function hideToast() {
+    const toast = document.getElementById('toast');
+    if (toast) {
+      toast.style.display = 'none';
+    }
+  }
+
+  function sharePageUrl() {
+    return window.location.href;
+  }
+
+  async function copyShareLink() {
+    const url = sharePageUrl();
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = url;
+        input.setAttribute('readonly', '');
+        input.style.position = 'fixed';
+        input.style.left = '-9999px';
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+      }
+      showToast('Link copied to clipboard');
+    } catch {
+      showToast('Could not copy link');
+    }
+  }
+
+  function buildShareLightboxLoadOptions(photo) {
+    return {
+      isVideo: LightboxMedia.isVideoPhoto(photo),
+      getMediaUrl: () => mediaUrl(photo, 'display'),
+      getAltText: (p) => p.original_filename || 'Shared photo',
+      nativeVideoControls: true,
+      onImageError: () => {
+        showToast('Preview unavailable for this photo');
+      },
+      onVideoError: () => {
+        showToast('Preview unavailable for this video');
+      },
+    };
+  }
+
+  function preloadAdjacentShareLightboxImages() {
+    const photos = filteredPhotos();
+    const index = photos.findIndex(
+      (photo) => String(photo.id) === String(state.lightboxPhotoId),
+    );
+    if (index < 0) {
+      return;
+    }
+    LightboxMediaCache.prefetchAdjacent(photos, index, (entry) => {
+      try {
+        return mediaUrl(entry, 'display');
+      } catch {
+        return null;
+      }
+    });
+  }
+
   function renderLightboxMedia() {
     const photo = photoById(state.lightboxPhotoId);
     if (!photo) {
-      closeLightbox();
-      return;
+      return false;
     }
+    if (!shareDisplayUrl(photo)) {
+      showToast(
+        LightboxMedia.isVideoPhoto(photo)
+          ? 'Preview unavailable for this video'
+          : 'Preview unavailable for this photo',
+      );
+      els.lightboxContent.innerHTML = '';
+      return false;
+    }
+    LightboxMedia.prepareContentSwap(els.lightboxContent);
     els.lightboxContent.innerHTML = '';
     els.lightboxContent.style.backgroundColor = 'transparent';
-    LightboxMedia.loadIntoContent(els.lightboxContent, photo, {
-      isVideo: LightboxMedia.isVideoPhoto(photo),
-      getMediaUrl: () => mediaUrl(photo, 'original'),
-      getAltText: (p) => p.original_filename || 'Shared photo',
-      nativeVideoControls: true,
-    });
+    LightboxMedia.loadIntoContent(
+      els.lightboxContent,
+      photo,
+      buildShareLightboxLoadOptions(photo),
+    );
+    preloadAdjacentShareLightboxImages();
+    return true;
   }
 
   function closeLightbox() {
     state.lightboxPhotoId = null;
+    LightboxMedia.prepareContentSwap(els.lightboxContent);
     els.lightboxContent.innerHTML = '';
+    LightboxMediaCache.clear();
     LightboxShell.hide();
   }
 
   function openLightbox(photoId) {
     state.lightboxPhotoId = photoId;
-    renderLightboxMedia();
+    if (!renderLightboxMedia()) {
+      state.lightboxPhotoId = null;
+      return;
+    }
     LightboxShell.show();
     LightboxShell.refreshChrome();
   }
@@ -407,7 +605,10 @@
       return;
     }
     state.lightboxPhotoId = next.id;
-    renderLightboxMedia();
+    if (!renderLightboxMedia()) {
+      closeLightbox();
+      return;
+    }
     LightboxShell.refreshChrome();
   }
 
@@ -432,6 +633,7 @@
     if (els.clearStarsBtn) {
       els.clearStarsBtn.disabled = starredEffectiveSet().size === 0;
     }
+    updateChrome();
     if (state.lightboxPhotoId != null && String(state.lightboxPhotoId) === id) {
       updateLightboxStarButton();
     }
@@ -442,7 +644,9 @@
     state.unstarredPublished = new Set(
       state.photos.filter((photo) => photo.rating === 5).map((photo) => String(photo.id)),
     );
-    if (state.filters.starred) {
+    const hadStarredFilter = state.filters.starred;
+    state.filters.starred = false;
+    if (hadStarredFilter || state.filters.selected) {
       rebuildPhotoGrid();
       return;
     }
@@ -462,31 +666,45 @@
     if (!photos.length) {
       return;
     }
-    if (photos.length >= (config.zipThreshold || 6)) {
-      const zip = new JSZip();
+    try {
+      if (DownloadExport.shouldZip(photos.length, config.zipThreshold)) {
+        await DownloadExport.downloadAsZip({
+          items: photos,
+          archiveName: `${state.album.title || state.token}.zip`,
+          fetchBlob: async (photo, signal) => {
+            const response = await fetch(mediaUrl(photo, 'original'), { signal });
+            if (!response.ok) {
+              throw new Error(`Download failed (${response.status})`);
+            }
+            return response.blob();
+          },
+          getEntryName: (photo) => photo.original_filename || `${photo.id}.bin`,
+          isVideo: LightboxMedia.isVideoPhoto,
+          deliverArchive: (archive, name) => {
+            DownloadExport.triggerBrowserDownload(archive, name);
+            DownloadExport.hidePrepModal();
+          },
+        });
+        return;
+      }
       for (const photo of photos) {
         const response = await fetch(mediaUrl(photo, 'original'));
+        if (!response.ok) {
+          throw new Error(`Download failed (${response.status})`);
+        }
         const blob = await response.blob();
-        zip.file(photo.original_filename || `${photo.id}.bin`, blob);
+        DownloadExport.triggerBrowserDownload(
+          blob,
+          photo.original_filename || `${photo.id}.bin`,
+        );
       }
-      const archive = await zip.generateAsync({ type: 'blob' });
-      triggerDownload(archive, `${state.album.title || state.token}.zip`);
-      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return;
+      }
+      DownloadExport.hidePrepModal();
+      showToast('Download failed');
     }
-    for (const photo of photos) {
-      const response = await fetch(mediaUrl(photo, 'original'));
-      const blob = await response.blob();
-      triggerDownload(blob, photo.original_filename || `${photo.id}.bin`);
-    }
-  }
-
-  function triggerDownload(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(url);
   }
 
   function resolveDownloadTargets() {
@@ -514,11 +732,22 @@
       updateNavArrows: updateLightboxNavArrows,
       updateStarButton: updateLightboxStarButton,
     });
+
+    LightboxMedia.wireResizeUpgrade({
+      isOpen: () => state.lightboxPhotoId != null,
+      getPhoto: () => photoById(state.lightboxPhotoId),
+      getContent: () => els.lightboxContent,
+      getLoadOptions: () => {
+        const photo = photoById(state.lightboxPhotoId);
+        return photo ? buildShareLightboxLoadOptions(photo) : null;
+      },
+    });
   }
 
   function wireEvents() {
     els.sortToggleBtn.addEventListener('click', () => {
       state.sortOrder = state.sortOrder === 'newest' ? 'oldest' : 'newest';
+      ShareDatePicker.setSortOrder(state.sortOrder);
       rebuildPhotoGrid();
     });
 
@@ -537,13 +766,20 @@
       PhotoChrome.hideUtilitiesMenu(els.utilitiesMenu);
       clearStars();
     });
+
+    if (els.copyShareLinkBtn) {
+      els.copyShareLinkBtn.addEventListener('click', () => {
+        PhotoChrome.hideUtilitiesMenu(els.utilitiesMenu);
+        void copyShareLink();
+      });
+    }
   }
 
   function showShareFailure(message, { notFound = false } = {}) {
     if (typeof SurfaceLoadChrome !== 'undefined') {
       SurfaceLoadChrome.complete();
     }
-    SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay' });
+    SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay', immediate: true });
     document.body.classList.toggle('share-view--not-found', notFound);
 
     const chromeMount = document.getElementById('appChromeMount');
@@ -573,6 +809,15 @@
     }
   }
 
+  function finishShareSurfaceLoad() {
+    if (typeof SurfaceLoadChrome !== 'undefined') {
+      SurfaceLoadChrome.complete();
+    }
+    SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay' });
+    DatePickerChrome.onSurfaceLoadComplete();
+    ShareDatePicker.refreshCatalog(filteredPhotos(), parseDate);
+  }
+
   async function boot() {
     state.token = parseShareToken();
     if (!state.token) {
@@ -582,28 +827,36 @@
 
     loadLocalState();
     PhotoSurface.mountChrome(caps);
+    ShareDatePicker.wire({ sortOrderGetter: () => state.sortOrder });
     wireLightbox();
     wireEvents();
 
     ShareSkeletonGrid.renderInstantBoot(els.sharePageTitle, els.photoContainer);
     if (typeof SurfaceLoadChrome !== 'undefined') {
-      SurfaceLoadChrome.beginLoading({ overlayId: 'surfaceLoadOverlay' });
+      SurfaceLoadChrome.adoptLoading({ overlayId: 'surfaceLoadOverlay' });
     }
+    updateChrome();
     await SurfaceLoadOverlay.flushDomPaint();
 
     const loadAbort = new AbortController();
+    const scrimStartedAt =
+      typeof window.__surfaceLoadScrimAt === 'number'
+        ? window.__surfaceLoadScrimAt
+        : performance.now();
     SurfaceLoadOverlay.begin({
       overlayId: 'surfaceLoadOverlay',
-      title: 'Loading photos',
-      message: 'Loading shared media.',
+      title: 'Loading share page',
+      message: 'Retrieving shared photos and videos.',
       showCancel: true,
+      adoptScrim: true,
+      scrimStartedAt,
       onCancel: () => {
         loadAbort.abort();
-        SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay' });
         showShareFailure('Loading cancelled.');
       },
     });
 
+    let loadSucceeded = false;
     try {
       const metaPromise = resolveShareMeta({ signal: loadAbort.signal });
       const fullPromise = resolveShareFull({ signal: loadAbort.signal });
@@ -619,14 +872,23 @@
       if (typeof SurfaceLoadChrome !== 'undefined') {
         SurfaceLoadChrome.enterMeta();
       }
+      updateChrome();
       document.title = els.sharePageTitle.textContent || 'Shared Photos';
 
       const payload = await fullPromise;
       state.album = payload.album;
       state.photos = payload.photos || [];
+      state.filterCatalogReady = true;
       applyShareTitle(state.album?.title);
+      ShareDatePicker.applyFromPhotos(
+        state.photos,
+        parseDate,
+        state.sortOrder,
+        meta.first_cluster?.month_key,
+      );
       surface.renderGrid({ deferThumbSrc: true });
       surface.hydrateThumbs();
+      loadSucceeded = true;
     } catch (error) {
       if (error.name === 'AbortError') {
         return;
@@ -635,10 +897,9 @@
       const notFound = message === SHARE_NOT_FOUND_MESSAGE;
       showShareFailure(message, { notFound });
     } finally {
-      if (typeof SurfaceLoadChrome !== 'undefined') {
-        SurfaceLoadChrome.complete();
+      if (loadSucceeded) {
+        finishShareSurfaceLoad();
       }
-      SurfaceLoadOverlay.end({ overlayId: 'surfaceLoadOverlay' });
     }
   }
 

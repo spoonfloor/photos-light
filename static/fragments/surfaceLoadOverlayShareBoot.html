@@ -1,0 +1,37 @@
+<!-- Surface load overlay — scrim visible at t=0 (share hard reload SS2). -->
+<div
+  class="import-overlay import-overlay--scrim-only"
+  id="surfaceLoadOverlay"
+  style="display: flex"
+  aria-hidden="false"
+  data-surface-load-scrim-at=""
+>
+  <div class="import-card">
+    <div class="import-header">
+      <span class="import-title" id="surfaceLoadTitle">Loading share page</span>
+    </div>
+
+    <div class="import-progress-section">
+      <div class="import-status-text">
+        <span id="surfaceLoadStatusLabel">Retrieving shared photos and videos.</span>
+        <span class="import-spinner" aria-hidden="true"></span>
+      </div>
+    </div>
+
+    <div class="import-actions" id="surfaceLoadActions" style="display: none">
+      <button class="btn btn-secondary" id="surfaceLoadCancelBtn" type="button">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+<script>
+  (function () {
+    var overlay = document.getElementById('surfaceLoadOverlay');
+    var startedAt = performance.now();
+    window.__surfaceLoadScrimAt = startedAt;
+    if (overlay) {
+      overlay.dataset.surfaceLoadScrimAt = String(startedAt);
+    }
+  })();
+</script>

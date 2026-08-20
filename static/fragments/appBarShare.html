@@ -1,11 +1,17 @@
-<!-- App Bar Shell -->
+<!-- App Bar Shell — share viewer (app-only controls hidden at HTML layer). -->
 <div class="app-bar-wrapper no-select">
   <div class="app-bar-elements-layer">
     <div class="title-and-back">
       <span class="title title-photos" id="appBarTitle">Photos Light</span>
     </div>
 
-    <div class="date-picker" data-cap="dateJumper" style="visibility: hidden" aria-hidden="true">
+    <div
+      class="date-picker"
+      data-cap="dateJumper"
+      hidden
+      style="visibility: hidden"
+      aria-hidden="true"
+    >
       <span class="date-picker-label">Month</span>
       <select id="monthPicker" class="date-picker-select">
         <option value="1">January</option>
@@ -34,11 +40,22 @@
         class="app-bar-icon-button"
         id="sortToggleBtn"
         aria-label="Sort"
-        title="Newest first"
+        title="Oldest first"
       >
         <span class="material-symbols-outlined app-bar-icon" id="sortIcon"
-          >hourglass_arrow_down</span
+          >hourglass_arrow_up</span
         >
+      </button>
+
+      <button
+        type="button"
+        class="app-bar-icon-button"
+        id="downloadBtn"
+        aria-label="Download"
+        title="Download"
+        data-cap="downloadInAppBar"
+      >
+        <span class="material-symbols-outlined app-bar-icon">download</span>
       </button>
 
       <button
@@ -48,19 +65,9 @@
         aria-label="Add Photo"
         title="Add photo"
         data-cap="import"
+        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">add_a_photo</span>
-      </button>
-
-      <button
-        type="button"
-        class="app-bar-icon-button inactive"
-        id="downloadBtn"
-        aria-label="Download"
-        title="Download"
-        data-cap="downloadInAppBar"
-      >
-        <span class="material-symbols-outlined app-bar-icon">download</span>
       </button>
 
       <button
@@ -80,6 +87,7 @@
         aria-label="Edit Date"
         title="Change date"
         data-cap="editDate"
+        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">edit_calendar</span>
       </button>
@@ -94,17 +102,6 @@
         hidden
       >
         <span class="material-symbols-outlined app-bar-icon">undo</span>
-      </button>
-
-      <button
-        type="button"
-        class="app-bar-icon-button"
-        id="deleteBtn"
-        aria-label="Delete"
-        title="Delete selected"
-        data-cap="deleteKind"
-      >
-        <span class="material-symbols-outlined app-bar-icon">delete</span>
       </button>
 
       <button

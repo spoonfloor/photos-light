@@ -15,6 +15,10 @@ const SurfaceLoadChrome = (() => {
     return phase;
   }
 
+  function isActiveFromDom() {
+    return document.body.classList.contains('surface-load-active');
+  }
+
   function applyBodyPhaseClasses(nextPhase) {
     document.body.classList.toggle('surface-load-active', nextPhase !== 'idle');
     document.body.classList.toggle(
@@ -25,8 +29,12 @@ const SurfaceLoadChrome = (() => {
   }
 
   function syncChipRailLayout(show) {
-    const rail = document.getElementById('filterChipRailMount');
+    const railMount = document.getElementById('filterChipRailMount');
+    const rail = document.getElementById('filterChipRail');
     if (show) {
+      if (railMount) {
+        railMount.removeAttribute('hidden');
+      }
       if (rail) {
         rail.removeAttribute('hidden');
       }
@@ -44,6 +52,14 @@ const SurfaceLoadChrome = (() => {
     overlay.style.display = 'flex';
     overlay.removeAttribute('aria-hidden');
     return true;
+  }
+
+  function isScrimVisible(overlayId) {
+    const overlay = document.getElementById(overlayId);
+    if (!overlay) {
+      return false;
+    }
+    return overlay.style.display !== 'none' && !overlay.hasAttribute('hidden');
   }
 
   function hideDatePicker(hide) {
@@ -75,12 +91,33 @@ const SurfaceLoadChrome = (() => {
     applyBodyPhaseClasses('loading');
     syncChipRailLayout(true);
     hideDatePicker(true);
-    if (
-      !showScrimImmediate(overlayId || 'libraryTransitionOverlay') &&
-      overlayId !== 'libraryTransitionOverlay'
-    ) {
-      showScrimImmediate('surfaceLoadOverlay');
+    const resolvedOverlayId = overlayId || 'libraryTransitionOverlay';
+    if (!isScrimVisible(resolvedOverlayId)) {
+      if (
+        !showScrimImmediate(resolvedOverlayId) &&
+        resolvedOverlayId !== 'libraryTransitionOverlay'
+      ) {
+        showScrimImmediate('surfaceLoadOverlay');
+      }
     }
+  }
+
+  /**
+   * Adopt HTML-first SS2 (share hard reload) — sync module state without re-showing scrim.
+   */
+  function adoptLoading({ overlayId = 'surfaceLoadOverlay' } = {}) {
+    if (!isActiveFromDom() && !isScrimVisible(overlayId)) {
+      beginLoading({ overlayId });
+      return;
+    }
+    document.body.classList.remove('surface-chrome-cold-start');
+    active = true;
+    phase = document.body.classList.contains('surface-load-phase-meta')
+      ? 'meta'
+      : 'loading';
+    applyBodyPhaseClasses(phase);
+    syncChipRailLayout(true);
+    hideDatePicker(phase === 'loading');
   }
 
   /** SS3 — metadata ready, still loading photos. */
@@ -91,7 +128,6 @@ const SurfaceLoadChrome = (() => {
     phase = 'meta';
     applyBodyPhaseClasses('meta');
     syncChipRailLayout(true);
-    hideDatePicker(false);
   }
 
   /** SS4 — load complete; caller runs enableAppBarButtons() next. */
@@ -119,7 +155,9 @@ const SurfaceLoadChrome = (() => {
   return {
     isActive,
     getPhase,
+    isActiveFromDom,
     beginLoading,
+    adoptLoading,
     enterMeta,
     complete,
     syncColdStart,

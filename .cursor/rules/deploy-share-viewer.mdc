@@ -1,0 +1,30 @@
+# Deploy share viewer after share UI changes
+
+When you change anything that affects the GitHub Pages share viewer or share media contract, **deploy the full release unit** before finishing.
+
+## GitHub Pages (viewer)
+
+1. `./scripts/build-share-viewer.sh` (also run by deploy script)
+2. `./scripts/deploy-share-viewer.sh` — pushes built `share-viewer/` to `spoonfloor/photos-light-sharing` (`main` → GitHub Pages)
+
+## Supabase (when media contract or resolve changed)
+
+3. Apply pending migrations under `supabase/migrations/` (e.g. `display_path`)
+4. Deploy edge function: `supabase functions deploy share-resolve` (or MCP equivalent)
+
+## App publish path (when publish pipeline changed)
+
+5. Rebuild packaged app: `./packaging/build.sh` from repo root
+6. Republish test shares from the rebuilt `.app` — legacy links are not auto-backfilled
+
+## Post-deploy smoke
+
+7. Open a real share link: grid loads → lightbox full-res → download original filename
+
+**Triggers:** edits under `static/js/shareBoot.js`, `static/js/photoSurface/*`, `static/fragments/*Share*`, `share_albums.py`, `supabase/functions/share-resolve/*`, `static/css/styles.css`, `scripts/build-share-viewer.sh`, or regenerated `share-viewer/`.
+
+**Do not** hand-edit `share-viewer/` except via rebuild. **Do not** skip deploy when verifying share load behavior — local build alone is not live.
+
+**Default:** When the user asks for a share UI fix or change, run **build + deploy** end-to-end unless they explicitly say local-only. Do not stop after `build-share-viewer.sh`.
+
+Live URL: `https://spoonfloor.github.io/photos-light-sharing/?t={token}`

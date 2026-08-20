@@ -11,6 +11,8 @@ const SurfaceLoadOverlay = (() => {
   let activeOverlayId = null;
   /** @type {(() => void) | null} */
   let cancelHandler = null;
+  /** @type {boolean} */
+  let cardRevealed = false;
 
   function clearCardTimer() {
     if (cardTimer !== null) {
@@ -23,15 +25,32 @@ const SurfaceLoadOverlay = (() => {
     return overlayId ? document.getElementById(overlayId) : null;
   }
 
+  function readScrimStartedAt(overlay) {
+    const fromWindow = window.__surfaceLoadScrimAt;
+    if (typeof fromWindow === 'number' && Number.isFinite(fromWindow)) {
+      return fromWindow;
+    }
+    const fromDataset = overlay?.dataset?.surfaceLoadScrimAt;
+    if (fromDataset) {
+      const parsed = Number(fromDataset);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return performance.now();
+  }
+
   function setScrimOnly(overlay, scrimOnly) {
     if (!overlay) {
       return;
     }
     overlay.classList.toggle('import-overlay--scrim-only', scrimOnly);
+    if (!scrimOnly) {
+      cardRevealed = true;
+    }
   }
 
   function applyCardContent({
-    overlayId,
     titleElId,
     statusElId,
     pathElId,
@@ -43,7 +62,7 @@ const SurfaceLoadOverlay = (() => {
     showCancel,
     onCancel,
   }) {
-    const titleEl = document.getElementById(titleElId);
+    const titleEl = titleElId ? document.getElementById(titleElId) : null;
     const statusEl = document.getElementById(statusElId);
     const pathEl = pathElId ? document.getElementById(pathElId) : null;
     const actionsEl = actionsElId ? document.getElementById(actionsElId) : null;
@@ -99,6 +118,23 @@ const SurfaceLoadOverlay = (() => {
     cancelBtn.addEventListener('click', handleCancelClick);
   }
 
+  function scheduleCardReveal(overlayId, session, scrimStartedAt) {
+    clearCardTimer();
+    const elapsed = Math.max(0, performance.now() - scrimStartedAt);
+    const delayMs = Math.max(0, CARD_DELAY_MS - elapsed);
+
+    cardTimer = window.setTimeout(() => {
+      if (session !== activeSession) {
+        return;
+      }
+      const current = getOverlay(overlayId);
+      if (!current || current.style.display === 'none') {
+        return;
+      }
+      setScrimOnly(current, false);
+    }, delayMs);
+  }
+
   /**
    * Show scrim immediately; reveal card after CARD_DELAY_MS if still active.
    */
@@ -114,10 +150,13 @@ const SurfaceLoadOverlay = (() => {
     libraryPath = null,
     showCancel = false,
     onCancel = null,
+    adoptScrim = false,
+    scrimStartedAt = null,
   } = {}) {
     clearCardTimer();
     const session = ++activeSession;
     activeOverlayId = overlayId;
+    cardRevealed = false;
 
     const overlay = getOverlay(overlayId);
     if (!overlay) {
@@ -127,7 +166,6 @@ const SurfaceLoadOverlay = (() => {
     wireCancelButton(cancelBtnId);
 
     applyCardContent({
-      overlayId,
       titleElId,
       statusElId,
       pathElId,
@@ -140,44 +178,63 @@ const SurfaceLoadOverlay = (() => {
       onCancel,
     });
 
-    setScrimOnly(overlay, true);
-    overlay.style.display = 'flex';
-    overlay.removeAttribute('aria-hidden');
+    const startedAt =
+      typeof scrimStartedAt === 'number' && Number.isFinite(scrimStartedAt)
+        ? scrimStartedAt
+        : readScrimStartedAt(overlay);
 
-    cardTimer = window.setTimeout(() => {
-      if (session !== activeSession) {
-        return;
+    if (!adoptScrim || overlay.style.display === 'none') {
+      setScrimOnly(overlay, true);
+      overlay.style.display = 'flex';
+      overlay.removeAttribute('aria-hidden');
+      if (!overlay.dataset.surfaceLoadScrimAt) {
+        overlay.dataset.surfaceLoadScrimAt = String(startedAt);
       }
-      const current = getOverlay(overlayId);
-      if (!current || current.style.display === 'none') {
-        return;
-      }
-      setScrimOnly(current, false);
-    }, CARD_DELAY_MS);
+      window.__surfaceLoadScrimAt = startedAt;
+    } else if (overlay.classList.contains('import-overlay--scrim-only')) {
+      scheduleCardReveal(overlayId, session, startedAt);
+      return true;
+    }
 
+    scheduleCardReveal(overlayId, session, startedAt);
     return true;
   }
 
-  function end({ overlayId = null } = {}) {
+  function end({ overlayId = null, minCardVisibleMs = 0, immediate = false } = {}) {
+    const id = overlayId || activeOverlayId;
+    const overlay = id ? getOverlay(id) : null;
+    const startedAt = overlay ? readScrimStartedAt(overlay) : performance.now();
+    const elapsed = performance.now() - startedAt;
+    const cardMinElapsed = cardRevealed ? CARD_DELAY_MS + minCardVisibleMs : CARD_DELAY_MS;
+
+    if (!immediate && elapsed < cardMinElapsed) {
+      const waitMs = cardMinElapsed - elapsed;
+      window.setTimeout(() => {
+        end({ overlayId: id, minCardVisibleMs: 0, immediate: true });
+      }, waitMs);
+      return;
+    }
+
     clearCardTimer();
     activeSession += 1;
     cancelHandler = null;
+    cardRevealed = false;
 
-    const id = overlayId || activeOverlayId;
     if (!id) {
       return;
     }
 
-    const overlay = getOverlay(id);
     if (overlay) {
       overlay.style.display = 'none';
       setScrimOnly(overlay, true);
       overlay.setAttribute('aria-hidden', 'true');
+      delete overlay.dataset.surfaceLoadScrimAt;
     }
 
     if (activeOverlayId === id) {
       activeOverlayId = null;
     }
+    delete window.__surfaceLoadScrimAt;
   }
 
   function flushDomPaint() {

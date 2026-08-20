@@ -177,6 +177,7 @@ const state = {
   photosNextCursor: null, // Keyset cursor for the next scroll page
   photoTotalCount: 0, // Total rows in DB (windowed load)
   libraryStarredCount: null, // Starred rows in DB (null until first refresh)
+  libraryVideoCount: null, // Video rows in DB (null until first refresh)
   loadingMore: false, // Scroll-triggered page in flight
   navigateToMonth: null, // Month to navigate to after closing lightbox (e.g., '2025-12')
   hasDatabase: false, // Track whether database exists and is healthy
@@ -1310,6 +1311,19 @@ function wireAppBar() {
     });
   }
 
+  const downloadBtn = document.getElementById('downloadBtn');
+  if (downloadBtn) {
+    downloadBtn.addEventListener('click', () => {
+      if (
+        !getViewCapabilities().download ||
+        state.selectedPhotos.size === 0
+      ) {
+        return;
+      }
+      void saveSelectedPhotos();
+    });
+  }
+
   if (deleteBtn) {
     deleteBtn.addEventListener('click', () => {
       const count = state.selectedPhotos.size;
@@ -1388,48 +1402,15 @@ function wireAppBar() {
 }
 
 /**
- * Sync date picker from known years + optional anchor month (limit=1 truth).
- * Must run before overlay dismiss / comfort grid reveal at Phase A.
+ * Sync date picker from month catalog. Visibility waits until multi-month is confirmed.
  */
 function applyDatePickerFromYears(years, anchorMonth = null) {
-  if (!Array.isArray(years) || years.length === 0) {
-    return false;
-  }
-
-  const yearPicker = document.getElementById('yearPicker');
-  if (!yearPicker) {
-    return false;
-  }
-
-  const orderedYears =
-    state.currentSortOrder === 'newest' ? [...years].reverse() : years;
-
-  yearPicker.innerHTML = '';
-  orderedYears.forEach((year) => {
-    const option = document.createElement('option');
-    option.value = String(year);
-    option.textContent = String(year);
-    yearPicker.appendChild(option);
-  });
-
   if (anchorMonth && isCalendarMonthKey(anchorMonth)) {
-    setDatePickerMonthValue(anchorMonth);
-  } else {
-    yearPicker.value = String(orderedYears[0]);
+    datePickerLastSyncedMonth = anchorMonth;
   }
-
   refreshDatePickerMonthAvailability();
-
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (
-    datePickerContainer &&
-    (typeof SurfaceLoadChrome === 'undefined' || !SurfaceLoadChrome.isActive())
-  ) {
-    datePickerContainer.style.visibility = 'visible';
-    datePickerContainer.removeAttribute('aria-hidden');
-  }
   enablePhotoRelatedActions();
-  return true;
+  return DatePickerChrome.isVisible();
 }
 
 /**
@@ -1523,7 +1504,7 @@ function getDatePickerAvailableMonths() {
 
   const fromDom = new Set();
   document.querySelectorAll('.month-section[data-month]').forEach((section) => {
-    const monthKey = section.dataset.month;
+    const monthKey = DatePickerChrome.monthKeyFromClusterKey(section.dataset.month);
     if (isCalendarMonthKey(monthKey)) {
       fromDom.add(monthKey);
     }
@@ -1532,29 +1513,7 @@ function getDatePickerAvailableMonths() {
 }
 
 function applyDatePickerMonthDisabledState(year, availableMonths) {
-  const monthPicker = document.getElementById('monthPicker');
-  if (!monthPicker) {
-    return;
-  }
-
-  if (!availableMonths?.length) {
-    for (const option of monthPicker.options) {
-      option.disabled = false;
-    }
-    return;
-  }
-
-  const activeMonthsInYear = new Set(
-    availableMonths
-      .filter((monthKey) => monthKey.slice(0, 4) === String(year))
-      .map((monthKey) => parseInt(monthKey.slice(5, 7), 10)),
-  );
-  const hasAnyInYear = activeMonthsInYear.size > 0;
-
-  for (const option of monthPicker.options) {
-    const monthNum = parseInt(option.value, 10);
-    option.disabled = hasAnyInYear && !activeMonthsInYear.has(monthNum);
-  }
+  DatePickerChrome.applyMonthDisabledState(year, availableMonths);
 }
 
 /**
@@ -1562,48 +1521,17 @@ function applyDatePickerMonthDisabledState(year, availableMonths) {
  * current month+year is no longer a valid destination (e.g. after filter).
  */
 function refreshDatePickerMonthAvailability() {
-  const monthPicker = document.getElementById('monthPicker');
-  const yearPicker = document.getElementById('yearPicker');
-  if (!monthPicker || !yearPicker || monthPicker.disabled) {
-    return;
-  }
-
   const availableMonths = getDatePickerAvailableMonths();
-  const year = yearPicker.value;
-  applyDatePickerMonthDisabledState(year, availableMonths);
-
-  if (!availableMonths.length || datePickerUpdatingFromScroll) {
-    return;
-  }
-
-  const monthNum = parseInt(monthPicker.value, 10);
-  const currentKey = `${year}-${String(monthNum).padStart(2, '0')}`;
-  const selectedOption = monthPicker.options[monthPicker.selectedIndex];
-  if (availableMonths.includes(currentKey) && !selectedOption?.disabled) {
-    return;
-  }
-
-  const resolved = GridLayout.nearestMonthInIndex(
-    currentKey,
-    availableMonths,
-    state.currentSortOrder || 'newest',
-  );
-  if (!resolved || resolved === currentKey) {
-    return;
-  }
-
-  const [resolvedYear, resolvedMonthNum] = [
-    resolved.slice(0, 4),
-    parseInt(resolved.slice(5, 7), 10),
-  ];
-  datePickerUpdatingFromScroll = true;
-  yearPicker.value = resolvedYear;
-  monthPicker.value = String(resolvedMonthNum);
-  applyDatePickerMonthDisabledState(resolvedYear, availableMonths);
-  datePickerLastSyncedMonth = resolved;
-  requestAnimationFrame(() => {
-    datePickerUpdatingFromScroll = false;
+  const reveal =
+    typeof SurfaceLoadChrome === 'undefined' || !SurfaceLoadChrome.isActive();
+  const result = DatePickerChrome.syncCatalog(availableMonths, {
+    sortOrder: state.currentSortOrder || 'newest',
+    anchorMonth: datePickerLastSyncedMonth,
+    reveal,
   });
+  if (result.resolvedMonth) {
+    datePickerLastSyncedMonth = result.resolvedMonth;
+  }
 }
 
 /** After year change: pick the best month in that year, then refresh disabled states. */
@@ -1625,7 +1553,7 @@ function coSelectDatePickerForYearChange() {
   }
 
   const resolved =
-    GridLayout.nearestMonthInIndex(
+    DatePickerChrome.nearestMonthInIndex(
       preferred,
       availableMonths,
       state.currentSortOrder || 'newest',
@@ -1726,7 +1654,7 @@ function monthFromPagedDom(appBarOffset = DATE_PICKER_APP_BAR_OFFSET) {
 function syncDatePickerFromScroll() {
   const monthPicker = document.getElementById('monthPicker');
   const yearPicker = document.getElementById('yearPicker');
-  if (!monthPicker || !yearPicker || monthPicker.disabled) {
+  if (!monthPicker || !yearPicker || monthPicker.disabled || !DatePickerChrome.isVisible()) {
     return;
   }
 
@@ -1801,7 +1729,7 @@ function wireDatePicker() {
 
   monthPicker.addEventListener('change', handleDatePickerJumpRequest);
   yearPicker.addEventListener('change', () => {
-    if (datePickerUpdatingFromScroll) {
+    if (datePickerUpdatingFromScroll || DatePickerChrome.isYearStatic()) {
       return;
     }
     const targetMonth = coSelectDatePickerForYearChange();
@@ -1866,6 +1794,19 @@ function updateDeleteButtonVisibility() {
     } else {
       editDateBtn.style.opacity = '0.3';
       editDateBtn.style.pointerEvents = 'none';
+    }
+  }
+
+  const downloadBtn = document.getElementById('downloadBtn');
+  if (downloadBtn && !downloadBtn.hidden && getViewCapabilities().downloadInAppBar) {
+    if (state.selectedPhotos.size > 0) {
+      downloadBtn.classList.remove('inactive');
+      downloadBtn.style.opacity = '1';
+      downloadBtn.style.pointerEvents = 'auto';
+    } else {
+      downloadBtn.classList.add('inactive');
+      downloadBtn.style.opacity = '0.3';
+      downloadBtn.style.pointerEvents = 'none';
     }
   }
 
@@ -5951,6 +5892,7 @@ function reloadOpenLightboxMedia(photoId) {
           currentPhoto,
           getLightboxPreviewRotation(photoId),
         );
+        LightboxMediaCache.put(photoId, nextImg.src, nextImg);
         currentFrame.replaceChild(nextImg, currentImg);
       };
       nextImg.onerror = () => {
@@ -5967,6 +5909,7 @@ function reloadOpenLightboxMedia(photoId) {
   if (typeof LightboxVideoControls !== 'undefined') {
     LightboxVideoControls.unmount();
   }
+  LightboxMedia.prepareContentSwap(content);
   content.innerHTML = '';
   content.style.backgroundColor = 'transparent';
   loadMediaIntoContent(content, photo, isVideo, {
@@ -6139,6 +6082,7 @@ function applyCommittedPhotoUpdate(updatedPhoto, options = {}) {
   }
 
   state.lightboxMediaVersions[updatedPhoto.id] = Date.now();
+  LightboxMediaCache.invalidatePhoto(updatedPhoto.id);
   if (options.deferThumbnailRefresh) {
     scheduleGridPhotoThumbnailRefresh(updatedPhoto.id);
   } else {
@@ -6267,6 +6211,75 @@ async function exportPhotoToFolder(photoId, destFolder) {
   return result;
 }
 
+async function fetchLibraryPhotoBlob(photoId, signal) {
+  const response = await fetch(`/api/photo/${photoId}/original`, { signal });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    if (response.status === 404 && result.error === 'Photo not found') {
+      await handleStalePhoto(photoId);
+    }
+    throw new Error(result.error || `Download failed (${response.status})`);
+  }
+  const blob = await response.blob();
+  const filename =
+    DownloadExport.filenameFromContentDisposition(
+      response.headers.get('Content-Disposition'),
+    ) || `photo_${photoId}`;
+  return { blob, filename };
+}
+
+function libraryPhotoEntryName(photo) {
+  if (photo.path) {
+    return photo.path.split('/').pop();
+  }
+  return photo.filename || `photo_${photo.id}`;
+}
+
+function libraryZipArchiveName() {
+  const fromPath = state.libraryPath?.split('/').filter(Boolean).pop();
+  const base = fromPath || 'Photos';
+  return `${base}.zip`;
+}
+
+async function exportArchiveToFolder(blob, destFolder, filename) {
+  const formData = new FormData();
+  formData.append('destination', destFolder);
+  formData.append('file', blob, filename);
+
+  const response = await fetch('/api/photo/export-file', {
+    method: 'POST',
+    body: formData,
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || 'Save failed');
+  }
+  return result;
+}
+
+async function saveSelectedPhotosAsZip(selectedIds, destFolder) {
+  const archiveName = libraryZipArchiveName();
+  const items = selectedIds.map((id) => ({
+    id,
+    photo: state.photos.find((entry) => entry.id === id) ?? null,
+  }));
+
+  await DownloadExport.downloadAsZip({
+    items,
+    archiveName,
+    fetchBlob: (item) => fetchLibraryPhotoBlob(item.id),
+    getEntryName: (item) =>
+      item.photo ? libraryPhotoEntryName(item.photo) : `photo_${item.id}`,
+    isVideo: (item) =>
+      item.photo ? DownloadExport.isVideoPhoto(item.photo) : false,
+    deliverArchive: async (archive, name) => {
+      const result = await exportArchiveToFolder(archive, destFolder, name);
+      DownloadExport.hidePrepModal();
+      showToast(`Saved to ${result.path || destFolder}`, null, 4000);
+    },
+  });
+}
+
 async function saveLightboxPhoto(photoId) {
   if (!getViewCapabilities().download) {
     return;
@@ -6324,14 +6337,35 @@ async function saveSelectedPhotos() {
   updateUtilityMenuAvailability();
 
   try {
+    const useZip = DownloadExport.shouldZip(selectedIds.length);
+
     const destFolder = await getSaveDestination({
-      title: selectedIds.length === 1 ? 'Save selected item' : 'Save selected items',
-      subtitle:
-        selectedIds.length === 1
+      title: useZip
+        ? 'Save as zip'
+        : selectedIds.length === 1
+          ? 'Save selected item'
+          : 'Save selected items',
+      subtitle: useZip
+        ? 'Choose where to save the zip file'
+        : selectedIds.length === 1
           ? 'Choose where to save this file'
           : 'Choose where to save these files',
     });
     if (!destFolder) {
+      return;
+    }
+
+    if (useZip) {
+      try {
+        await saveSelectedPhotosAsZip(selectedIds, destFolder);
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          return;
+        }
+        console.error('Save zip failed:', error);
+        DownloadExport.hidePrepModal();
+        showToast(`Save failed: ${error.message}`, 'error');
+      }
       return;
     }
 
@@ -6509,6 +6543,24 @@ function wireLightbox() {
     shouldBlockKeyboard: () => window.PickerUtils?.getTopmostVisibleOverlay?.(),
   });
 
+  LightboxMedia.wireResizeUpgrade({
+    isOpen: () => state.lightboxOpen,
+    getPhoto: () => state.photos[state.lightboxPhotoIndex] ?? null,
+    getContent: () => document.getElementById('lightboxContent'),
+    getLoadOptions: () => {
+      const photo = state.photos[state.lightboxPhotoIndex];
+      if (!photo) {
+        return null;
+      }
+      const isVideo =
+        photo.file_type === 'video' ||
+        (photo.path && photo.path.match(/\.(mov|mp4|m4v|avi|mpg|mpeg)$/i));
+      return buildLightboxLoadOptions(photo, isVideo, {
+        rotationDegrees: getLightboxPreviewRotation(photo.id),
+      });
+    },
+  });
+
   document.addEventListener('keydown', handleLightboxKeyboard);
 }
 
@@ -6597,8 +6649,8 @@ function createPlaceholder(photo, dims, isDebug = false) {
   return LightboxMedia.createPlaceholder(isDebug);
 }
 
-function loadMediaIntoContent(content, photo, isVideo, options = {}) {
-  LightboxMedia.loadIntoContent(content, photo, {
+function buildLightboxLoadOptions(photo, isVideo, options = {}) {
+  return {
     isVideo,
     rotationDegrees: normalizeRotationDegrees(options.rotationDegrees || 0),
     getMediaUrl: () => getPhotoFileUrl(photo.id),
@@ -6660,7 +6712,41 @@ function loadMediaIntoContent(content, photo, isVideo, options = {}) {
         console.error('🔍 Error checking for corruption:', e);
       }
     },
-  });
+  };
+}
+
+function loadMediaIntoContent(content, photo, isVideo, options = {}) {
+  LightboxMedia.loadIntoContent(
+    content,
+    photo,
+    buildLightboxLoadOptions(photo, isVideo, options),
+  );
+}
+
+function getLightboxNavPhotoList() {
+  const photoById = new Map(state.photos.map((entry) => [entry.id, entry]));
+  return getLightboxNavPhotoIds()
+    .map((id) => photoById.get(id))
+    .filter(Boolean);
+}
+
+function getLightboxNavPhotoIndex() {
+  const photo = state.photos[state.lightboxPhotoIndex];
+  if (!photo) {
+    return -1;
+  }
+  return getLightboxNavPhotoIds().indexOf(photo.id);
+}
+
+function preloadAdjacentLightboxImages() {
+  const photos = getLightboxNavPhotoList();
+  const index = getLightboxNavPhotoIndex();
+  if (index < 0) {
+    return;
+  }
+  LightboxMediaCache.prefetchAdjacent(photos, index, (entry) =>
+    getPhotoFileUrl(entry.id),
+  );
 }
 
 /**
@@ -6694,6 +6780,7 @@ async function openLightbox(photoIndex) {
   if (typeof LightboxVideoControls !== 'undefined') {
     LightboxVideoControls.unmount();
   }
+  LightboxMedia.prepareContentSwap(content);
   content.innerHTML = '';
   content.style.backgroundColor = 'transparent';
 
@@ -6724,31 +6811,7 @@ async function openLightbox(photoIndex) {
   }
 
   // Preload adjacent images for smooth navigation
-  preloadAdjacentImages(photoIndex);
-}
-
-/**
- * Preload adjacent images for smooth navigation
- */
-function preloadAdjacentImages(currentIndex) {
-  const preloadPhoto = (libraryIndex) => {
-    if (
-      libraryIndex === null ||
-      libraryIndex < 0 ||
-      libraryIndex >= state.photos.length
-    ) {
-      return;
-    }
-    const img = new Image();
-    img.src = getPhotoFileUrl(state.photos[libraryIndex]?.id);
-  };
-
-  void (async () => {
-    const prev = await resolveAdjacentLightboxTarget(-1);
-    const next = await resolveAdjacentLightboxTarget(1);
-    preloadPhoto(prev?.libraryIndex ?? null);
-    preloadPhoto(next?.libraryIndex ?? null);
-  })();
+  preloadAdjacentLightboxImages();
 }
 
 /**
@@ -6789,6 +6852,13 @@ async function closeLightbox({ commitRotations = true } = {}) {
 
   // Hide overlay chrome
   LightboxShell.hide();
+
+  const content = document.getElementById('lightboxContent');
+  if (content) {
+    LightboxMedia.prepareContentSwap(content);
+    content.innerHTML = '';
+  }
+  LightboxMediaCache.clear();
 
   // Grid is already positioned (from openLightbox), just close
   invalidatePendingLightboxReloads();
@@ -7295,6 +7365,7 @@ function resetPhotoWindowState() {
   state.photosNextCursor = null;
   state.photoTotalCount = 0;
   state.libraryStarredCount = null;
+  state.libraryVideoCount = null;
   state.hasMore = false;
   state.loadingMore = false;
 }
@@ -7305,7 +7376,23 @@ function setLibraryStarredCount(count) {
     return;
   }
   state.libraryStarredCount = normalized;
+  if (normalized === 0 && state.activeFilters.starred) {
+    state.activeFilters.starred = false;
+  }
+  updateFilterChipUI();
   updateUtilityMenuAvailability();
+}
+
+function setLibraryVideoCount(count) {
+  const normalized = Math.max(0, Number(count) || 0);
+  if (state.libraryVideoCount === normalized) {
+    return;
+  }
+  state.libraryVideoCount = normalized;
+  if (normalized === 0 && state.activeFilters.video) {
+    state.activeFilters.video = false;
+  }
+  updateFilterChipUI();
 }
 
 function adjustLibraryStarredCount(delta) {
@@ -7342,6 +7429,46 @@ async function refreshLibraryStarredCount() {
   } catch (error) {
     console.error('❌ Failed to refresh starred count:', error);
   }
+}
+
+async function refreshLibraryVideoCount() {
+  if (!state.hasDatabase) {
+    setLibraryVideoCount(0);
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/file-counts');
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    setLibraryVideoCount(Number(payload.video_count) || 0);
+  } catch (error) {
+    console.error('❌ Failed to refresh video count:', error);
+  }
+}
+
+function getFilterChipAvailability() {
+  if (!getViewCapabilities().catalogFilters) {
+    return {};
+  }
+
+  const loading =
+    typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive();
+  if (loading) {
+    return { starred: null, video: null };
+  }
+
+  const starredCount = state.libraryStarredCount;
+  const videoCount = state.libraryVideoCount;
+  return {
+    starred:
+      !getViewCapabilities().star || starredCount === null
+        ? null
+        : starredCount > 0,
+    video: videoCount === null ? null : videoCount > 0,
+  };
 }
 
 function isRecentImportsFilterActive() {
@@ -7444,6 +7571,7 @@ function buildVirtualGridInitHooks(generation, { sortOrder, signal } = {}) {
     onReady: (index) => {
       updateUtilityMenuAvailability();
       void refreshLibraryStarredCount();
+      void refreshLibraryVideoCount();
       finishSurfaceLoadIfActive();
       if (reconcileCatalogEmptyAfterGridLoad(index)) {
         return;
@@ -8084,13 +8212,22 @@ function updateFilterChipUI() {
   if (typeof PhotoChrome === 'undefined') {
     return;
   }
+  const filterAvailability = getFilterChipAvailability();
+  const filtersCleared = FilterChipLifecycle.applyAutoClear(
+    state.activeFilters,
+    filterAvailability,
+  );
   PhotoChrome.updateFilterChips({
     scroll: document.querySelector('.filter-chip-rail-scroll'),
     activeFilters: state.activeFilters,
     selectedCount: state.selectedPhotos.size,
     showSelectedChip: state.selectedPhotos.size > 0 && !state.trashViewActive,
+    filterAvailability,
     onToggle: togglePhotoFilter,
   });
+  if (filtersCleared) {
+    void applyPhotoFiltersAsync();
+  }
 }
 
 function updateFilterChipRailVisibility() {
@@ -8220,6 +8357,15 @@ function togglePhotoFilter(filterKey) {
     return;
   }
 
+  if (
+    !FilterChipLifecycle.canToggleFilter(filterKey, {
+      availability: getFilterChipAvailability(),
+      selectedCount: state.selectedPhotos.size,
+    })
+  ) {
+    return;
+  }
+
   state.activeFilters[filterKey] = !state.activeFilters[filterKey];
   state.lastClickedIndex = null;
   applyPhotoFilters();
@@ -8321,6 +8467,7 @@ function beginLibraryLoadTransition() {
   paintSurfaceShell();
   if (typeof SurfaceLoadChrome !== 'undefined' && !SurfaceLoadChrome.isActive()) {
     SurfaceLoadChrome.beginLoading();
+    updateFilterChipUI();
   }
 }
 
@@ -9891,6 +10038,7 @@ async function runClearAllStars(starredPhotos) {
         await syncGridAfterHistogramChange();
         updateFilterChipUI();
         void refreshLibraryStarredCount();
+        void refreshLibraryVideoCount();
 
         const successCount = result.success_count ?? 0;
         const errorCount = result.error_count ?? failedIds.length;
@@ -10055,6 +10203,7 @@ async function loadUtilitiesMenu() {
     // Update menu item availability
     updateUtilityMenuAvailability();
     void refreshLibraryStarredCount();
+    void refreshLibraryVideoCount();
   } catch (error) {
     console.error('❌ Failed to load utilities menu:', error);
   }
@@ -10079,6 +10228,7 @@ async function toggleUtilitiesMenu() {
       onBeforeShow: () => {
         updateUtilityMenuAvailability();
         void refreshLibraryStarredCount();
+        void refreshLibraryVideoCount();
       },
     });
     return;
@@ -10091,6 +10241,7 @@ async function toggleUtilitiesMenu() {
   } else {
     updateUtilityMenuAvailability();
     void refreshLibraryStarredCount();
+    void refreshLibraryVideoCount();
 
     const btnRect = utilitiesBtn.getBoundingClientRect();
     const insetEnd = parseFloat(
@@ -14188,6 +14339,9 @@ function finishSurfaceLoadIfActive() {
   if (typeof SurfaceLoadChrome !== 'undefined' && SurfaceLoadChrome.isActive()) {
     SurfaceLoadChrome.complete();
   }
+  updateFilterChipUI();
+  DatePickerChrome.onSurfaceLoadComplete();
+  refreshDatePickerMonthAvailability();
 }
 
 function normalizeLibraryPathForCompare(path) {
@@ -14387,17 +14541,9 @@ function enableAppBarButtons() {
   }
   updateRecentImportsFilterUi();
 
-  const downloadBtn = document.getElementById('downloadBtn');
-  if (downloadBtn && !downloadBtn.hidden) {
-    const downloadEnabled = canUseTimeline && state.selectedPhotos.size > 0;
-    downloadBtn.classList.toggle('inactive', !downloadEnabled);
-    downloadBtn.style.opacity = downloadEnabled ? '1' : '0.3';
-    downloadBtn.style.pointerEvents = downloadEnabled ? 'auto' : 'none';
-  }
-
   updateDeleteButtonVisibility();
 
-  const canUseDatePicker = canUseTimeline;
+  const canUseDatePicker = canUseTimeline && DatePickerChrome.isVisible();
   const monthPicker = document.getElementById('monthPicker');
   const yearPicker = document.getElementById('yearPicker');
   if (monthPicker) {

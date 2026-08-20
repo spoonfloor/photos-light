@@ -9,17 +9,23 @@
     <link rel="stylesheet" href="css/styles.css?v=1" />
     <link rel="stylesheet" href="css/share-overrides.css?v=12" />
   </head>
-  <body class="share-view filter-chip-rail-visible">
+  <body class="share-view surface-load-active surface-load-phase-loading filter-chip-rail-visible">
     <div id="appChromeMount">
       <div id="appBarMount">
-<!-- App Bar Shell -->
+<!-- App Bar Shell — share viewer (app-only controls hidden at HTML layer). -->
 <div class="app-bar-wrapper no-select">
   <div class="app-bar-elements-layer">
     <div class="title-and-back">
       <span class="title title-photos" id="appBarTitle">Photos Light</span>
     </div>
 
-    <div class="date-picker" data-cap="dateJumper" style="visibility: hidden" aria-hidden="true">
+    <div
+      class="date-picker"
+      data-cap="dateJumper"
+      hidden
+      style="visibility: hidden"
+      aria-hidden="true"
+    >
       <span class="date-picker-label">Month</span>
       <select id="monthPicker" class="date-picker-select">
         <option value="1">January</option>
@@ -48,10 +54,10 @@
         class="app-bar-icon-button"
         id="sortToggleBtn"
         aria-label="Sort"
-        title="Newest first"
+        title="Oldest first"
       >
         <span class="material-symbols-outlined app-bar-icon" id="sortIcon"
-          >hourglass_arrow_down</span
+          >hourglass_arrow_up</span
         >
       </button>
 
@@ -62,7 +68,6 @@
         aria-label="Download"
         title="Download"
         data-cap="downloadInAppBar"
-        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">download</span>
       </button>
@@ -74,6 +79,7 @@
         aria-label="Add Photo"
         title="Add photo"
         data-cap="import"
+        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">add_a_photo</span>
       </button>
@@ -95,6 +101,7 @@
         aria-label="Edit Date"
         title="Change date"
         data-cap="editDate"
+        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">edit_calendar</span>
       </button>
@@ -109,17 +116,6 @@
         hidden
       >
         <span class="material-symbols-outlined app-bar-icon">undo</span>
-      </button>
-
-      <button
-        type="button"
-        class="app-bar-icon-button"
-        id="deleteBtn"
-        aria-label="Delete"
-        title="Delete selected"
-        data-cap="deleteKind"
-      >
-        <span class="material-symbols-outlined app-bar-icon">delete</span>
       </button>
 
       <button
@@ -140,15 +136,6 @@
     <button
       type="button"
       class="filter-chip"
-      data-filter="recentImports"
-      aria-pressed="false"
-      data-cap="recentImportsFilter"
-    >
-      recent imports
-    </button>
-    <button
-      type="button"
-      class="filter-chip"
       data-filter="starred"
       aria-pressed="false"
     >
@@ -165,7 +152,7 @@
   </div>
 </div>
     </div>
-<!-- Utilities Dropdown Menu — Rebuild thumbnails removed from UI Apr 2026 (capability kept: API + JS below). -->
+<!-- Utilities menu — share viewer (Copy link only; no library share flow). -->
 <div class="utilities-menu" id="utilitiesMenu" style="display: none">
   <button class="utilities-menu-item" id="clearStarsBtn" type="button" data-cap="star">
     <span class="utilities-menu-icon-composite" aria-hidden="true">
@@ -177,66 +164,12 @@
 
   <button
     class="utilities-menu-item"
-    id="downloadSelectedBtn"
+    id="copyShareLinkBtn"
     type="button"
-    data-cap="downloadInUtilities"
+    data-cap="copyShareLink"
   >
-    <span class="material-symbols-outlined">download</span>
-    <span>Download</span>
-  </button>
-
-  <button class="utilities-menu-item" id="getShareLinkBtn" type="button" data-cap="shareLink">
     <span class="material-symbols-outlined">link</span>
-    <span>Get link</span>
-  </button>
-
-  <button
-    class="utilities-menu-item"
-    id="manageShareLinksBtn"
-    type="button"
-    data-cap="shareLink"
-  >
-    <span class="material-symbols-outlined">list</span>
-    <span>Manage links</span>
-  </button>
-
-  <div class="utilities-menu-divider" data-cap="libraryMenu"></div>
-
-  <button class="utilities-menu-item" id="switchLibraryBtn" type="button" data-cap="libraryMenu">
-    <span class="material-symbols-outlined">folder_open</span>
-    <span>Open library</span>
-  </button>
-
-  <button class="utilities-menu-item" id="convertToLibraryBtn" type="button" data-cap="libraryMenu">
-    <span class="material-symbols-outlined">bookmark_manager</span>
-    <span>Convert to library</span>
-  </button>
-
-  <button class="utilities-menu-item" id="closeLibraryBtn" type="button" data-cap="libraryMenu">
-    <span class="material-symbols-outlined">logout</span>
-    <span>Close library</span>
-  </button>
-
-  <button class="utilities-menu-item" id="cleanOrganizeBtn" type="button" data-cap="libraryMenu">
-    <span class="material-symbols-outlined">auto_fix_high</span>
-    <span>Verify &amp; repair</span>
-  </button>
-
-  <div class="utilities-menu-divider" id="trashMenuDivider" hidden data-cap="libraryMenu"></div>
-
-  <button class="utilities-menu-item" id="viewTrashBtn" type="button" data-cap="libraryMenu">
-    <span class="material-symbols-outlined">delete</span>
-    <span>Open trash</span>
-  </button>
-
-  <button class="utilities-menu-item" id="restoreAllTrashBtn" type="button" hidden data-cap="libraryMenu">
-    <span class="material-symbols-outlined">undo</span>
-    <span>Restore all</span>
-  </button>
-
-  <button class="utilities-menu-item" id="emptyTrashBtn" type="button" hidden data-cap="libraryMenu">
-    <span class="material-symbols-outlined">delete_forever</span>
-    <span>Empty trash</span>
+    <span>Copy link</span>
   </button>
 </div>
     <main class="page-main">
@@ -341,21 +274,22 @@
     </div>
   </div>
 </div>
-<!-- Surface load overlay — scrim at t=0, card after delay (share resolve, catalog boot). -->
+<!-- Surface load overlay — scrim visible at t=0 (share hard reload SS2). -->
 <div
   class="import-overlay import-overlay--scrim-only"
   id="surfaceLoadOverlay"
-  style="display: none"
-  aria-hidden="true"
+  style="display: flex"
+  aria-hidden="false"
+  data-surface-load-scrim-at=""
 >
   <div class="import-card">
     <div class="import-header">
-      <span class="import-title" id="surfaceLoadTitle">Loading photos</span>
+      <span class="import-title" id="surfaceLoadTitle">Loading share page</span>
     </div>
 
     <div class="import-progress-section">
       <div class="import-status-text">
-        <span id="surfaceLoadStatusLabel">Loading your media.</span>
+        <span id="surfaceLoadStatusLabel">Retrieving shared photos and videos.</span>
         <span class="import-spinner" aria-hidden="true"></span>
       </div>
     </div>
@@ -367,6 +301,50 @@
     </div>
   </div>
 </div>
+<script>
+  (function () {
+    var overlay = document.getElementById('surfaceLoadOverlay');
+    var startedAt = performance.now();
+    window.__surfaceLoadScrimAt = startedAt;
+    if (overlay) {
+      overlay.dataset.surfaceLoadScrimAt = String(startedAt);
+    }
+  })();
+</script>
+<!-- Toast Notification -->
+<div class="toast" id="toast" style="display: none;">
+  <span class="toast-message" id="toastMessage"></span>
+  <button class="toast-button" id="toastUndoBtn">Undo</button>
+  <button class="toast-close-btn" id="toastCloseBtn">
+    <span class="material-symbols-outlined">close</span>
+  </button>
+</div>
+<!-- Download prep progress (zip exports only) -->
+<div class="import-overlay" id="downloadPrepOverlay" style="display: none">
+  <div class="import-card">
+    <div class="import-header">
+      <span class="import-title" id="downloadPrepTitle">Preparing download</span>
+    </div>
+
+    <div class="import-progress-section">
+      <div class="import-status-text" id="downloadPrepStatusText">
+        Zipping<span class="import-spinner" aria-hidden="true"></span>
+      </div>
+      <p class="download-prep-note" id="downloadPrepNote">
+        Your download will continue even if you close this window.
+      </p>
+    </div>
+
+    <div class="import-actions">
+      <button type="button" class="btn btn-secondary" id="downloadPrepCancelBtn">
+        Cancel
+      </button>
+      <button type="button" class="btn btn-primary" id="downloadPrepCloseBtn">
+        Close
+      </button>
+    </div>
+  </div>
+</div>
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="js/config.js"></script>
     <script src="js/viewCapabilities.js"></script>
@@ -374,16 +352,21 @@
     <script src="js/photoSurface/gridSelection.js"></script>
     <script src="js/photoSurface/gridInteractions.js"></script>
     <script src="js/photoSurface/chrome.js"></script>
+    <script src="js/photoSurface/filterChipLifecycle.js"></script>
     <script src="js/photoSurface/monthGrid.js"></script>
     <script src="js/photoSurface/simpleGrid.js"></script>
     <script src="js/photoSurface/surfaceSkeletonGrid.js"></script>
     <script src="js/photoSurface/shareSkeletonGrid.js"></script>
     <script src="js/photoSurface/photoGrid.js"></script>
     <script src="js/photoSurface/init.js"></script>
+    <script src="js/photoSurface/lightboxMediaCache.js"></script>
     <script src="js/photoSurface/lightboxMedia.js"></script>
     <script src="js/photoSurface/lightboxShell.js"></script>
     <script src="js/photoSurface/surfaceLoadOverlay.js"></script>
     <script src="js/photoSurface/surfaceLoadChrome.js"></script>
-    <script src="js/shareBoot.js?v=3"></script>
+    <script src="js/photoSurface/datePickerChrome.js"></script>
+    <script src="js/photoSurface/shareDatePicker.js"></script>
+    <script src="js/photoSurface/downloadExport.js"></script>
+    <script src="js/shareBoot.js?v=8"></script>
   </body>
 </html>

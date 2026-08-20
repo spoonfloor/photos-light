@@ -2,6 +2,13 @@
  * Share-by-link flow — Get link modal + Supabase publish.
  */
 const ShareFlow = (() => {
+  const SHARE_CANCEL_CLEANUP_MAX_ATTEMPTS = 5;
+  const SHARE_CANCEL_CLEANUP_BASE_DELAY_MS = 250;
+  const SHARE_FAILURE_MESSAGE_GENERIC =
+    'Something went wrong while sharing. Please try again.';
+  const SHARE_FAILURE_MESSAGE_ORPHAN =
+    "Sharing couldn't be completed. If the link appears in Manage links, delete it first, then try again.";
+
   let overlayLoaded = false;
   let manageOverlayLoaded = false;
   let publishInProgress = false;
@@ -13,6 +20,11 @@ const ShareFlow = (() => {
   let progressCompleted = 0;
   let remainingLabelState = null;
   let progressEtaTimer = null;
+  /** @type {AbortController|null} */
+  let publishAbortController = null;
+  let publishUserCancelled = false;
+  /** @type {Set<string>} */
+  const pendingShareCancelCleanups = new Set();
 
   function isPublishInProgress() {
     return publishInProgress;
@@ -89,6 +101,7 @@ const ShareFlow = (() => {
     setActionsVisible(true);
     setButtonVisible('shareOverlayCancelBtn', true);
     setButtonVisible('shareOverlayShareBtn', true);
+    setButtonVisible('shareOverlayRetryBtn', false);
     setButtonVisible('shareOverlayDoneBtn', false);
     setShareButtonDisabled(false);
   }
@@ -97,6 +110,7 @@ const ShareFlow = (() => {
     setActionsVisible(true);
     setButtonVisible('shareOverlayCancelBtn', true);
     setButtonVisible('shareOverlayShareBtn', true);
+    setButtonVisible('shareOverlayRetryBtn', false);
     setButtonVisible('shareOverlayDoneBtn', false);
     setShareButtonDisabled(true);
   }
@@ -105,7 +119,17 @@ const ShareFlow = (() => {
     setActionsVisible(true);
     setButtonVisible('shareOverlayCancelBtn', false);
     setButtonVisible('shareOverlayShareBtn', false);
+    setButtonVisible('shareOverlayRetryBtn', false);
     setButtonVisible('shareOverlayDoneBtn', true);
+    setShareButtonDisabled(false);
+  }
+
+  function showFailedActions() {
+    setActionsVisible(true);
+    setButtonVisible('shareOverlayCancelBtn', true);
+    setButtonVisible('shareOverlayShareBtn', false);
+    setButtonVisible('shareOverlayRetryBtn', true);
+    setButtonVisible('shareOverlayDoneBtn', false);
     setShareButtonDisabled(false);
   }
 
@@ -119,6 +143,17 @@ const ShareFlow = (() => {
 
   function setProgressVisible(visible) {
     getOverlayEl('shareOverlayProgress').hidden = !visible;
+  }
+
+  function setFailedVisible(visible) {
+    getOverlayEl('shareOverlayFailed').hidden = !visible;
+  }
+
+  function setOverlayTitle(text) {
+    const titleEl = getOverlayEl('shareOverlay')?.querySelector('.import-title');
+    if (titleEl) {
+      titleEl.textContent = text;
+    }
   }
 
   function isTitleFieldVisible() {
@@ -216,31 +251,192 @@ const ShareFlow = (() => {
     }, 1000);
   }
 
-  function closeOverlay() {
+  function isShareCompleteVisible() {
+    const complete = getOverlayEl('shareOverlayComplete');
+    return Boolean(complete && !complete.hidden);
+  }
+
+  function isShareAbortError(error) {
+    return (
+      publishUserCancelled ||
+      error?.name === 'AbortError' ||
+      error?.message?.includes('aborted')
+    );
+  }
+
+  function shareCancelCleanupKey(credentials) {
+    if (!credentials) {
+      return '';
+    }
+    return (
+      credentials.accessToken ||
+      credentials.slug ||
+      credentials.albumId ||
+      ''
+    );
+  }
+
+  function shareCancelCleanupFailureMessage() {
+    return "Couldn't fully remove this share from the cloud. Open Manage links and delete it manually.";
+  }
+
+  function delayMs(ms) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  async function cancelSharePublish(credentials) {
+    if (!credentials?.accessToken && !credentials?.slug && !credentials?.albumId) {
+      return;
+    }
+    const { response, data } = await apiFetchJson('/api/share/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        access_token: credentials.accessToken || null,
+        slug: credentials.slug || null,
+        album_id: credentials.albumId || null,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not cancel share');
+    }
+  }
+
+  async function cancelSharePublishWithRetry(
+    credentials,
+    {
+      maxAttempts = SHARE_CANCEL_CLEANUP_MAX_ATTEMPTS,
+      logLabel = 'Share cancel cleanup',
+    } = {},
+  ) {
+    const key = shareCancelCleanupKey(credentials);
+    if (!key) {
+      return;
+    }
+    if (pendingShareCancelCleanups.has(key)) {
+      return;
+    }
+
+    pendingShareCancelCleanups.add(key);
+    let lastError = null;
+    try {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          await cancelSharePublish(credentials);
+          return;
+        } catch (error) {
+          lastError = error;
+          console.error(
+            `${logLabel} attempt ${attempt}/${maxAttempts} failed:`,
+            error,
+          );
+          if (attempt < maxAttempts) {
+            await delayMs(
+              SHARE_CANCEL_CLEANUP_BASE_DELAY_MS * 2 ** (attempt - 1),
+            );
+          }
+        }
+      }
+      console.error(`${logLabel} exhausted retries:`, lastError);
+      showToast(shareCancelCleanupFailureMessage(), 'error');
+    } finally {
+      pendingShareCancelCleanups.delete(key);
+    }
+  }
+
+  function captureSessionCredentials(activeSession = session) {
+    if (!activeSession) {
+      return null;
+    }
+    return {
+      accessToken: activeSession.accessToken,
+      slug: activeSession.slug,
+      albumId: activeSession.albumId || null,
+    };
+  }
+
+  function captureSessionCredentials(activeSession = session) {
+    publishInProgress = false;
+    publishAbortController = null;
+    stopProgressEtaTicker();
+    if (typeof updateUtilityMenuAvailability === 'function') {
+      updateUtilityMenuAvailability();
+    }
+  }
+
+  function beginInflightCancel() {
+    if (!publishInProgress && !publishAbortController) {
+      return null;
+    }
+
+    publishUserCancelled = true;
+    const credentials = captureSessionCredentials();
+    publishAbortController?.abort();
+    publishAbortController = null;
+    resetPublishState();
+    return credentials;
+  }
+
+  function runShareCancelCleanup(
+    credentials,
+    { logLabel = 'Share cancel cleanup' } = {},
+  ) {
+    if (!credentials) {
+      return;
+    }
+    void cancelSharePublishWithRetry(credentials, { logLabel });
+  }
+
+  function dismissShareOverlay() {
     stopProgressEtaTicker();
     const overlay = getOverlayEl('shareOverlay');
     if (overlay) {
       overlay.style.display = 'none';
     }
     session = null;
+    publishUserCancelled = false;
     if (typeof updateUtilityMenuAvailability === 'function') {
       updateUtilityMenuAvailability();
     }
   }
 
+  function closeOverlay() {
+    const wasInflight = publishInProgress || publishAbortController;
+    const shareSucceeded = isShareCompleteVisible();
+    const dismissCredentials = wasInflight
+      ? beginInflightCancel()
+      : shareSucceeded
+        ? null
+        : captureSessionCredentials();
+
+    dismissShareOverlay();
+
+    if (dismissCredentials) {
+      runShareCancelCleanup(dismissCredentials, {
+        logLabel: wasInflight ? 'Share cancel cleanup' : 'Share dismiss cleanup',
+      });
+    }
+  }
+
   function showPreflightState() {
     stopProgressEtaTicker();
+    setOverlayTitle('Share photos');
     setPreflightVisible(true);
     setCompleteVisible(false);
     setProgressVisible(false);
+    setFailedVisible(false);
     showPreflightActions();
   }
 
   function showCompleteState(result) {
     stopProgressEtaTicker();
+    setOverlayTitle('Share photos');
     setPreflightVisible(false);
     setCompleteVisible(true);
     setProgressVisible(false);
+    setFailedVisible(false);
     showCompleteActions();
 
     const count = result.photo_count || session?.photoIds?.length || 0;
@@ -258,11 +454,149 @@ const ShareFlow = (() => {
   }
 
   function showProgressState(completed, total) {
+    setOverlayTitle('Share photos');
     setPreflightVisible(false);
     setCompleteVisible(false);
     setProgressVisible(true);
+    setFailedVisible(false);
     showProgressActions();
     updateProgressDisplay(completed, total);
+  }
+
+  function showFailedState({ orphanHint = false } = {}) {
+    stopProgressEtaTicker();
+    setOverlayTitle('Sharing error');
+    setPreflightVisible(false);
+    setCompleteVisible(false);
+    setProgressVisible(false);
+    setFailedVisible(true);
+    showFailedActions();
+    const messageEl = getOverlayEl('shareOverlayFailedMessage');
+    if (messageEl) {
+      messageEl.textContent = orphanHint
+        ? SHARE_FAILURE_MESSAGE_ORPHAN
+        : SHARE_FAILURE_MESSAGE_GENERIC;
+    }
+  }
+
+  function logSharePublishFailure(error, data = null) {
+    const payload = data || {
+      code: error?.code,
+      photo_index: error?.photoIndex,
+      photo_id: error?.photoId,
+      step: error?.step,
+      detail: error?.detail || error?.message,
+    };
+    console.error('Share publish failed:', payload);
+  }
+
+  function createSharePublishError(data) {
+    const err = new Error(data.error || 'Share failed');
+    err.code = data.code || 'share_unknown';
+    err.photoIndex = data.photo_index ?? null;
+    err.photoId = data.photo_id ?? null;
+    err.step = data.step || null;
+    err.detail = data.detail || data.error || null;
+    return err;
+  }
+    const params = new URLSearchParams();
+    if (activeSession?.accessToken) {
+      params.set('access_token', activeSession.accessToken);
+    }
+    if (activeSession?.slug) {
+      params.set('slug', activeSession.slug);
+    }
+    if (activeSession?.albumId) {
+      params.set('album_id', activeSession.albumId);
+    }
+    const { response, data } = await apiFetchJson(
+      `/api/share/publish-outcome?${params.toString()}`,
+    );
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not verify share status');
+    }
+    return data;
+  }
+
+  function buildCompleteResultFromOutcome(
+    outcome,
+    activeSession,
+    { useTitle, title },
+  ) {
+    return {
+      url: outcome?.url || activeSession?.url,
+      photo_count: outcome?.photo_count || activeSession?.photoCount,
+      title: useTitle ? title : outcome?.title || null,
+      album_id: outcome?.album_id || null,
+    };
+  }
+
+  async function resolveVerifiedPublishResult(
+    activeSession,
+    streamResult,
+    { useTitle, title },
+  ) {
+    if (streamResult) {
+      return { kind: 'complete', result: streamResult };
+    }
+
+    let outcome = null;
+    try {
+      outcome = await fetchPublishOutcome(activeSession);
+    } catch (error) {
+      console.error('Share publish outcome check failed:', error);
+      return { kind: 'failed', orphanHint: progressCompleted > 0 };
+    }
+
+    if (outcome?.status === 'complete') {
+      if (activeSession && outcome.album_id) {
+        activeSession.albumId = outcome.album_id;
+      }
+      return {
+        kind: 'complete',
+        result: buildCompleteResultFromOutcome(outcome, activeSession, {
+          useTitle,
+          title,
+        }),
+      };
+    }
+
+    return {
+      kind: 'failed',
+      orphanHint: outcome?.status === 'partial',
+    };
+  }
+
+  async function resolvePublishFailure(activeSession, error) {
+    const titleInput = getOverlayEl('shareOverlayTitleInput');
+    const useTitle = isTitleFieldVisible();
+    const typedTitle = (titleInput?.value || '').trim();
+    const title = useTitle
+      ? typedTitle || activeSession?.suggestedTitle || null
+      : null;
+
+    let orphanHint = progressCompleted > 0;
+    try {
+      const outcome = await fetchPublishOutcome(activeSession);
+      if (outcome?.status === 'complete') {
+        if (activeSession && outcome.album_id) {
+          activeSession.albumId = outcome.album_id;
+        }
+        return {
+          kind: 'complete',
+          result: buildCompleteResultFromOutcome(outcome, activeSession, {
+            useTitle,
+            title,
+          }),
+        };
+      }
+      orphanHint = outcome?.status === 'partial';
+    } catch (verifyError) {
+      console.error('Share failure outcome check failed:', verifyError);
+    }
+
+    logSharePublishFailure(error);
+    return { kind: 'failed', orphanHint };
   }
 
   async function copyShareUrl(url) {
@@ -457,7 +791,7 @@ const ShareFlow = (() => {
     if (typeof showDialog === 'function') {
       confirmed = await showDialog(
         'Delete link?',
-        `Delete ${label}? This will remove the share link and delete the shared media from the cloud. Your photo libraries won't be affected. This action cannot be undone.`,
+        `Delete ${label}? This will remove the share link and delete the shared media from the cloud. Your photo library won't be affected. This action cannot be undone.`,
         [
           { text: 'Cancel', value: false },
           { text: 'Delete', value: true, primary: true },
@@ -491,7 +825,7 @@ const ShareFlow = (() => {
   }
 
   async function openManageLinks() {
-    if (!getViewCapabilities().shareLink || publishInProgress) {
+    if (!getViewCapabilities().shareLink) {
       return;
     }
 
@@ -531,18 +865,23 @@ const ShareFlow = (() => {
     return data;
   }
 
-  async function publishShare(payload) {
+  async function publishShare(payload, { signal } = {}) {
     const response = await fetch('/api/share/publish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.error || 'Share failed');
     }
     return consumeSseStream(response, {
+      isAborted: () => Boolean(signal?.aborted) || publishUserCancelled,
       onMessage: async ({ event, dataText }) => {
+        if (publishUserCancelled) {
+          throw new DOMException('The operation was aborted.', 'AbortError');
+        }
         const data = JSON.parse(dataText || '{}');
         if (event === 'progress') {
           showProgressState(
@@ -551,11 +890,27 @@ const ShareFlow = (() => {
           );
           return null;
         }
+        if (event === 'heartbeat') {
+          showProgressState(
+            data.completed ?? progressCompleted,
+            data.total || session?.photoCount || 0,
+          );
+          const text = getOverlayEl('shareOverlayProgressText');
+          if (text && data.message) {
+            text.textContent = data.message;
+          }
+          return null;
+        }
         if (event === 'complete') {
+          if (session) {
+            session.albumId = data.album_id || null;
+          }
           return { done: true, result: data };
         }
         if (event === 'error') {
-          throw new Error(data.error || 'Share failed');
+          const err = createSharePublishError(data);
+          logSharePublishFailure(err, data);
+          throw err;
         }
         return null;
       },
@@ -604,45 +959,73 @@ const ShareFlow = (() => {
       return;
     }
     publishInProgress = true;
+    publishUserCancelled = false;
+    publishAbortController = new AbortController();
     if (typeof updateUtilityMenuAvailability === 'function') {
       updateUtilityMenuAvailability();
     }
 
+    const activeSession = session;
     const titleInput = getOverlayEl('shareOverlayTitleInput');
     const useTitle = isTitleFieldVisible();
     const typedTitle = (titleInput?.value || '').trim();
     const title = useTitle
-      ? typedTitle || session?.suggestedTitle || null
+      ? typedTitle || activeSession?.suggestedTitle || null
       : null;
 
     resetProgressTiming();
-    showProgressState(0, session.photoCount);
-    startProgressEtaTicker(session.photoCount);
+    showProgressState(0, activeSession.photoCount);
+    startProgressEtaTicker(activeSession.photoCount);
 
     try {
-      const streamResult = await publishShare({
-        slug: session.slug,
-        access_token: session.accessToken,
-        photo_ids: session.photoIds,
-        use_title: useTitle,
-        title: useTitle ? title : null,
-      });
-      showCompleteState(
-        streamResult || {
-          url: session.url,
-          photo_count: session.photoCount,
+      const streamResult = await publishShare(
+        {
+          slug: activeSession.slug,
+          access_token: activeSession.accessToken,
+          photo_ids: activeSession.photoIds,
+          use_title: useTitle,
           title: useTitle ? title : null,
         },
+        { signal: publishAbortController.signal },
       );
+      if (publishUserCancelled) {
+        return;
+      }
+
+      const resolved = await resolveVerifiedPublishResult(
+        activeSession,
+        streamResult,
+        { useTitle, title },
+      );
+      if (resolved.kind === 'complete') {
+        showCompleteState(
+          resolved.result || {
+            url: activeSession.url,
+            photo_count: activeSession.photoCount,
+            title: useTitle ? title : null,
+          },
+        );
+        return;
+      }
+      showFailedState({ orphanHint: resolved.orphanHint });
     } catch (error) {
-      console.error('Share publish failed:', error);
-      showToast(error.message || 'Share failed', 'error');
-      showPreflightState();
+      if (isShareAbortError(error)) {
+        return;
+      }
+      const resolved = await resolvePublishFailure(activeSession, error);
+      if (resolved.kind === 'complete') {
+        showCompleteState(resolved.result);
+        return;
+      }
+      showFailedState({ orphanHint: resolved.orphanHint });
     } finally {
-      publishInProgress = false;
-      stopProgressEtaTicker();
-      if (typeof updateUtilityMenuAvailability === 'function') {
-        updateUtilityMenuAvailability();
+      publishAbortController = null;
+      if (!publishUserCancelled) {
+        publishInProgress = false;
+        stopProgressEtaTicker();
+        if (typeof updateUtilityMenuAvailability === 'function') {
+          updateUtilityMenuAvailability();
+        }
       }
     }
   }
@@ -652,6 +1035,9 @@ const ShareFlow = (() => {
     getOverlayEl('shareOverlayCancelBtn')?.addEventListener('click', closeOverlay);
     getOverlayEl('shareOverlayDoneBtn')?.addEventListener('click', closeOverlay);
     getOverlayEl('shareOverlayShareBtn')?.addEventListener('click', () => {
+      void handleShareConfirm();
+    });
+    getOverlayEl('shareOverlayRetryBtn')?.addEventListener('click', () => {
       void handleShareConfirm();
     });
     getOverlayEl('shareOverlayCopyBtn')?.addEventListener('click', () => {
@@ -701,10 +1087,7 @@ const ShareFlow = (() => {
       getLinkEnabled,
     );
 
-    const manageEnabled =
-      caps.shareLink &&
-      !photoExportInProgress &&
-      !publishInProgress;
+    const manageEnabled = caps.shareLink && !photoExportInProgress;
     setShareMenuItemEnabled(
       document.getElementById('manageShareLinksBtn'),
       manageEnabled,

@@ -1,10 +1,11 @@
 /**
- * Share viewer skeleton — title reserve + shared SurfaceSkeletonGrid shell.
+ * Share viewer skeleton — title reserve + shared SurfaceSkeletonGrid shell (day clusters).
  */
 const ShareSkeletonGrid = (() => {
   const PLACEHOLDER_TITLE = 'Shared Photos';
+  const CLUSTER_GRANULARITY = 'day';
 
-  function monthKeyFromDateTaken(dateTaken) {
+  function dayKeyFromDateTaken(dateTaken) {
     if (!dateTaken) {
       return 'undated';
     }
@@ -12,7 +13,7 @@ const ShareSkeletonGrid = (() => {
     if (Number.isNaN(date.getTime())) {
       return 'undated';
     }
-    return MonthGrid.monthKeyFromDate(date);
+    return MonthGrid.dayKeyFromDate(date);
   }
 
   function renderInstantBoot(titleEl, container) {
@@ -20,7 +21,7 @@ const ShareSkeletonGrid = (() => {
       titleEl.textContent = PLACEHOLDER_TITLE;
       titleEl.classList.add('surface-layout-placeholder');
     }
-    SurfaceSkeletonGrid.renderInstantShell(container);
+    SurfaceSkeletonGrid.renderInstantShell(container, { granularity: CLUSTER_GRANULARITY });
   }
 
   function applyMeta(titleEl, container, meta, emptyEl = null) {
@@ -35,12 +36,19 @@ const ShareSkeletonGrid = (() => {
       emptyEl.hidden = photoCount > 0;
     }
 
-    const monthKey = meta?.first_cluster?.month_key ?? SurfaceSkeletonGrid.currentMonthKey();
-    SurfaceSkeletonGrid.applyMeta(container, { monthKey, photoCount });
+    const dayKey =
+      meta?.first_cluster?.day_key ??
+      dayKeyFromDateTaken(meta?.first_cluster?.date_taken) ??
+      SurfaceSkeletonGrid.currentDayKey();
+    SurfaceSkeletonGrid.applyMeta(container, {
+      monthKey: dayKey,
+      photoCount,
+      granularity: CLUSTER_GRANULARITY,
+    });
   }
 
   return {
-    monthKeyFromDateTaken,
+    dayKeyFromDateTaken,
     estimateViewportCellCount: SurfaceSkeletonGrid.estimateViewportCellCount,
     renderInstantBoot,
     applyMeta,
