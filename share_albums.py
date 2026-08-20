@@ -927,7 +927,10 @@ def iter_publish_share_album(
 
     total = len(photo_rows)
     validate_photos_for_share(library_path, photo_rows)
-    _share_log(f"publish start slug={slug} photos={total} token={access_token[:8]}…")
+    _share_log(
+        f"publish start slug={slug} photos={total} token={access_token[:8]}… "
+        f"delivery=share_delivery"
+    )
 
     album_id: Optional[str] = None
     current_index: Optional[int] = None
