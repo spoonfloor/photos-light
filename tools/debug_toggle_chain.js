@@ -39,6 +39,7 @@ const sandbox = {
           '--grid-month-section-margin-px': '48px',
           '--grid-gap-px': '4px',
           '--grid-min-col-px': '200px',
+          '--grid-min-cols': '2',
         };
         return defaults[prop] || '';
       },

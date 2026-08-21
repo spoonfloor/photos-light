@@ -24,6 +24,7 @@ cp "$ROOT/scripts/share-viewer-pages.yml" "$OUT/.github/workflows/pages.yml"
 
 mkdir -p "$OUT/js/photoSurface"
 
+cp "$ROOT/static/js/gridLayout.js" "$OUT/js/gridLayout.js"
 cp "$ROOT/static/js/viewCapabilities.js" "$OUT/js/viewCapabilities.js"
 cp "$ROOT/static/js/shareBoot.js" "$OUT/js/shareBoot.js"
 cp "$ROOT/static/js/photoSurface/"*.js "$OUT/js/photoSurface/"
@@ -84,6 +85,7 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="js/config.js"></script>
     <script src="js/viewCapabilities.js"></script>
+    <script src="js/gridLayout.js"></script>
     <script src="js/photoSurface/gridTile.js"></script>
     <script src="js/photoSurface/gridSelection.js"></script>
     <script src="js/photoSurface/gridInteractions.js"></script>
@@ -101,6 +103,7 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="js/photoSurface/surfaceLoadOverlay.js"></script>
     <script src="js/photoSurface/surfaceLoadChrome.js"></script>
     <script src="js/photoSurface/datePickerChrome.js"></script>
+    <script src="js/photoSurface/appBarLayout.js"></script>
     <script src="js/photoSurface/shareDatePicker.js"></script>
     <script src="js/photoSurface/downloadExport.js"></script>
     <script src="js/shareBoot.js?v=8"></script>

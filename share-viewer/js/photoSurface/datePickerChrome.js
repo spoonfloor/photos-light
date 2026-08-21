@@ -5,6 +5,8 @@
 const DatePickerChrome = (() => {
   let lastCatalog = [];
   let pendingReveal = false;
+  let catalogVisible = false;
+  let suppressed = false;
   let visible = false;
 
   function isCalendarMonthKey(monthKey) {
@@ -217,26 +219,43 @@ const DatePickerChrome = (() => {
     return !!ViewCapabilities.get().dateJumper;
   }
 
-  function setJumperVisible(show) {
+  function applyJumperDom() {
     const el = document.querySelector('.date-picker');
+    visible = catalogVisible && !suppressed && capAllowsJumper();
+
     if (!el) {
-      visible = false;
+      document.body.classList.remove('app-bar--jumper');
+      if (typeof AppBarLayout !== 'undefined') {
+        AppBarLayout.scheduleLayout();
+      }
       return;
     }
 
-    visible = show && capAllowsJumper();
+    document.body.classList.toggle('app-bar--jumper', visible);
+
     if (!visible) {
       el.hidden = true;
-      el.style.visibility = 'hidden';
       el.setAttribute('aria-hidden', 'true');
       el.classList.remove('date-jumper-active');
-      return;
+    } else {
+      el.hidden = false;
+      el.removeAttribute('aria-hidden');
+      el.classList.add('date-jumper-active');
     }
 
-    el.hidden = false;
-    el.style.visibility = 'visible';
-    el.removeAttribute('aria-hidden');
-    el.classList.add('date-jumper-active');
+    if (typeof AppBarLayout !== 'undefined') {
+      AppBarLayout.scheduleLayout();
+    }
+  }
+
+  function setJumperVisible(show) {
+    catalogVisible = show;
+    applyJumperDom();
+  }
+
+  function setJumperSuppressed(value) {
+    suppressed = !!value;
+    applyJumperDom();
   }
 
   function syncCatalog(availableMonths, { sortOrder = 'newest', anchorMonth = null, reveal = true } = {}) {
@@ -332,5 +351,6 @@ const DatePickerChrome = (() => {
     isVisible,
     getLastCatalog,
     setJumperVisible,
+    setJumperSuppressed,
   };
 })();

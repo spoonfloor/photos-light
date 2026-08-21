@@ -82,6 +82,7 @@ function loadGridModules() {
             '--grid-month-section-margin-px': '48px',
             '--grid-gap-px': '4px',
             '--grid-min-col-px': '200px',
+            '--grid-min-cols': '2',
             '--grid-comfort-full-rows': '12',
             '--grid-comfort-partial-col-offset': '2',
             '--grid-comfort-partial-min-cols': '1',

@@ -137,6 +137,9 @@ const PhotoChrome = (() => {
         el.setAttribute('aria-hidden', enabled ? 'false' : 'true');
       }
     });
+    if (typeof AppBarLayout !== 'undefined') {
+      AppBarLayout.scheduleLayout();
+    }
   }
 
   function wireUtilitiesDismiss(menu, utilitiesBtn) {

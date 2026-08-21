@@ -830,6 +830,9 @@
 
     loadLocalState();
     PhotoSurface.mountChrome(caps);
+    if (typeof AppBarLayout !== 'undefined') {
+      AppBarLayout.init();
+    }
     ShareDatePicker.wire({ sortOrderGetter: () => state.sortOrder });
     wireLightbox();
     wireEvents();

@@ -1406,6 +1406,11 @@ function wireAppBar() {
     TrashView.wireAppBarRestore();
     TrashView.updateAppBarForMode();
   }
+
+  if (typeof AppBarLayout !== 'undefined') {
+    AppBarLayout.disconnect();
+    AppBarLayout.init();
+  }
 }
 
 /**
@@ -1454,10 +1459,7 @@ async function populateDatePicker(options = {}) {
     }
 
     if (!applyDatePickerFromYears(years, anchorMonth)) {
-      const datePickerContainer = document.querySelector('.date-picker');
-      if (datePickerContainer) {
-        datePickerContainer.style.visibility = 'hidden';
-      }
+      DatePickerChrome.setJumperVisible(false);
     }
   } catch (error) {
     console.warn('⚠️  Date picker disabled:', error.message);
@@ -1830,6 +1832,10 @@ function updateDeleteButtonVisibility() {
   }
 
   updateUtilityMenuAvailability();
+
+  if (typeof AppBarLayout !== 'undefined') {
+    AppBarLayout.scheduleLayout();
+  }
 }
 
 // =====================
@@ -4670,11 +4676,14 @@ function buildCatalogEmptyIndex() {
   return { total: 0, months: [] };
 }
 
-function syncCatalogEmptyChrome(mode) {
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = mode ? 'hidden' : 'visible';
+function hideAppBarDateJumper() {
+  if (typeof DatePickerChrome !== 'undefined') {
+    DatePickerChrome.setJumperVisible(false);
   }
+}
+
+function syncCatalogEmptyChrome(mode) {
+  hideAppBarDateJumper();
   enableAppBarButtons();
   updateFilterChipRailVisibility();
   if (mode === 'trash' && typeof TrashView !== 'undefined') {
@@ -4688,20 +4697,14 @@ function syncCatalogFilterZeroChrome() {
 }
 
 function showPagedFilterEmptyState(options = {}) {
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
-  }
+  hideAppBarDateJumper();
   renderFilterEmptyState(options);
   enableAppBarButtons();
   updateFilterChipRailVisibility();
 }
 
 function showPagedLibraryEmptyState() {
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
-  }
+  hideAppBarDateJumper();
   renderEmptyLibraryState();
   enableAppBarButtons();
   updateFilterChipRailVisibility();
@@ -4710,10 +4713,7 @@ function showPagedLibraryEmptyState() {
 function showPagedTrashEmptyState() {
   state.photos = [];
   state.hasMore = false;
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
-  }
+  hideAppBarDateJumper();
   renderEmptyTrashState();
   enableAppBarButtons();
   updateFilterChipRailVisibility();
@@ -4858,9 +4858,9 @@ function restoreCatalogFilterZeroChrome() {
   updateRecentImportsFilterUi();
   enableAppBarButtons();
   updateFilterChipRailVisibility();
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer && state.photoTotalCount > 0) {
-    datePickerContainer.style.visibility = 'visible';
+  if (typeof DatePickerChrome !== 'undefined') {
+    DatePickerChrome.setJumperSuppressed(false);
+    refreshDatePickerMonthAvailability();
   }
 }
 
@@ -5033,7 +5033,6 @@ function updateRecentImportsFilterUi() {
   }
 
   const sortToggleBtn = document.getElementById('sortToggleBtn');
-  const datePickerContainer = document.querySelector('.date-picker');
   const recentImportsActive = isRecentImportsFilterActive();
 
   if (recentImportsActive) {
@@ -5041,16 +5040,16 @@ function updateRecentImportsFilterUi() {
       sortToggleBtn.style.opacity = '0.3';
       sortToggleBtn.style.pointerEvents = 'none';
     }
-    if (datePickerContainer) {
-      datePickerContainer.style.visibility = 'hidden';
+    if (typeof DatePickerChrome !== 'undefined') {
+      DatePickerChrome.setJumperSuppressed(true);
     }
   } else {
     if (sortToggleBtn && state.photos.length > 0) {
       sortToggleBtn.style.opacity = '1';
       sortToggleBtn.style.pointerEvents = 'auto';
     }
-    if (datePickerContainer && state.photos.length > 0) {
-      datePickerContainer.style.visibility = 'visible';
+    if (typeof DatePickerChrome !== 'undefined') {
+      DatePickerChrome.setJumperSuppressed(false);
     }
   }
 
@@ -8416,11 +8415,7 @@ function renderFirstRunEmptyState() {
 
   setPagedGridContainerMode(container, false);
 
-  const datePickerContainer = document.querySelector('.date-picker');
-  if (datePickerContainer) {
-    datePickerContainer.style.visibility = 'hidden';
-    datePickerContainer.setAttribute('aria-hidden', 'true');
-  }
+  hideAppBarDateJumper();
   if (typeof SurfaceSkeletonGrid !== 'undefined') {
     SurfaceSkeletonGrid.clearDatePickerPlaceholder();
   }
@@ -8587,10 +8582,13 @@ function setPagedGridContainerMode(container, enabled) {
     container.classList.add('grid-root', 'grid-paged');
     container.classList.remove('grid-labels-gated');
   } else {
+    if (typeof GridLayout !== 'undefined') {
+      GridLayout.disconnectContainerGeometry(container);
+    }
     container.classList.remove('grid-root', 'grid-paged', 'grid-labels-gated');
+    container.style.removeProperty('--grid-cols');
+    container.style.removeProperty('--grid-cell-px');
   }
-  container.style.removeProperty('--grid-cols');
-  container.style.removeProperty('--grid-cell-px');
 }
 
 /**
@@ -8728,6 +8726,10 @@ function renderPhotoGrid(photos, append = false) {
   }
 
   ensureGridInteractionsWired();
+
+  if (typeof GridLayout !== 'undefined') {
+    GridLayout.observeContainerGeometry(container);
+  }
 
   // Notify date picker to observe new month sections
   if (state.onMonthsRendered) {
@@ -14448,10 +14450,7 @@ async function releaseLibrarySession(options = {}) {
   if (toFirstRun) {
     state.hasDatabase = false;
     state.libraryPath = null;
-    const datePickerContainer = document.querySelector('.date-picker');
-    if (datePickerContainer) {
-      datePickerContainer.style.visibility = 'hidden';
-    }
+    hideAppBarDateJumper();
     if (!skipFirstRunShell) {
       renderFirstRunEmptyState();
       updateFilterChipRailVisibility();

@@ -27,6 +27,9 @@ const SimplePhotoGrid = (() => {
     const clusterGranularity = caps.dayClusters ? 'day' : 'month';
 
     if (!photos.length) {
+      if (typeof GridLayout !== 'undefined') {
+        GridLayout.clearContainerGeometry(container);
+      }
       if (ctx.interactionCtx && typeof GridInteractions !== 'undefined') {
         GridInteractions.wireContainer(container, ctx.interactionCtx);
       }
@@ -74,6 +77,10 @@ const SimplePhotoGrid = (() => {
 
     if (ctx.interactionCtx && typeof GridInteractions !== 'undefined') {
       GridInteractions.wireContainer(container, ctx.interactionCtx);
+    }
+
+    if (typeof GridLayout !== 'undefined') {
+      GridLayout.syncContainerGeometry(container);
     }
 
     ctx.onAfterRender?.(photos);

@@ -116,11 +116,32 @@ class TestGridHandoffContract(unittest.TestCase):
         for token in (
             "--grid-gap-px:",
             "--grid-min-col-px:",
+            "--grid-min-cols:",
             "--grid-comfort-full-rows:",
             "--grid-comfort-partial-col-offset:",
             "--grid-comfort-partial-min-cols:",
         ):
             self.assertIn(token, self.styles_css)
+
+    def test_compute_column_layout_enforces_min_cols_token(self):
+        column_body = _function_body(self.grid_layout_js, "computeColumnLayout")
+        rhythm_body = _function_body(self.grid_layout_js, "readGridRhythmTokens")
+        self.assertIn("'--grid-min-cols'", rhythm_body)
+        self.assertIn("rhythm.minCols", column_body)
+        self.assertNotRegex(column_body, r"Math\.max\(\s*1\s*,")
+
+    def test_eager_grid_hosts_use_container_geometry_engine(self):
+        simple_grid = (REPO_ROOT / "static" / "js" / "photoSurface" / "simpleGrid.js").read_text()
+        surface_init = (REPO_ROOT / "static" / "js" / "photoSurface" / "init.js").read_text()
+        skeleton_grid = (
+            REPO_ROOT / "static" / "js" / "photoSurface" / "surfaceSkeletonGrid.js"
+        ).read_text()
+        render_body = _function_body(self.main_js, "renderPhotoGrid")
+        self.assertIn("GridLayout.syncContainerGeometry", simple_grid)
+        self.assertIn("GridLayout.observeContainerGeometry", surface_init)
+        self.assertIn("GridLayout.syncContainerGeometry", skeleton_grid)
+        self.assertIn("GridLayout.observeContainerGeometry", render_body)
+        self.assertNotIn("auto-fill", self.styles_css.split(".grid-root")[1].split(".photo-card")[0])
 
     def test_publish_css_vars_sets_only_dynamic_geometry(self):
         body = _function_body(self.grid_layout_js, "publishCssVars")
@@ -156,9 +177,10 @@ class TestGridHandoffContract(unittest.TestCase):
     def test_paged_grid_uses_css_rhythm_tokens(self):
         body = _function_body(self.main_js, "renderPhotoGrid")
         self.assertIn("setPagedGridContainerMode(container, true)", body)
+        self.assertIn("GridLayout.observeContainerGeometry", body)
         self.assertIn("month-header-band", body)
         self.assertIn(".grid-root.grid-paged .month-section", self.styles_css)
-        self.assertIn(".grid-root.grid-paged .photo-grid", self.styles_css)
+        self.assertIn(".grid-root .photo-grid", self.styles_css)
         self.assertIn("headerGap: 12", self.grid_layout_js)
         self.assertIn("headerBand: 56", self.grid_layout_js)
         self.assertIn("--grid-header-gap-px:", self.styles_css)

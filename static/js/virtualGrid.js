@@ -2425,7 +2425,7 @@ const VirtualGrid = (() => {
     if (!targetLayout?.sections?.length || !criteria) {
       return null;
     }
-    const columns = targetLayout.columnLayout?.columns ?? 1;
+    const columns = targetLayout.columnLayout?.columns ?? 2;
     for (const section of targetLayout.sections) {
       const photos = monthCache.get(monthCacheKey(section.month));
       if (!photos?.length) {
@@ -2449,7 +2449,7 @@ const VirtualGrid = (() => {
     if (!targetLayout?.sections?.length || !criteria) {
       return null;
     }
-    const columns = targetLayout.columnLayout?.columns ?? 1;
+    const columns = targetLayout.columnLayout?.columns ?? 2;
     for (const section of targetLayout.sections) {
       let photos = monthCache.get(monthCacheKey(section.month));
       if (!photos) {
@@ -3379,7 +3379,7 @@ const VirtualGrid = (() => {
     if (!section) {
       return null;
     }
-    const columns = layout.columnLayout?.columns ?? 1;
+    const columns = layout.columnLayout?.columns ?? 2;
     const localIndex = globalIndex - section.globalStart;
     return {
       month: section.month,

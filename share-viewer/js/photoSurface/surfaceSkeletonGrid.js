@@ -5,8 +5,6 @@
 const SurfaceSkeletonGrid = (() => {
   const MONTH_LABEL_PLACEHOLDER = 'Month & Year';
   const DAY_LABEL_PLACEHOLDER = 'Month Day, Year';
-  const GRID_MIN_CELL_PX = 200;
-  const GRID_GAP_PX = 4;
   const MONTH_HEADER_RESERVE_PX = 56;
 
   function currentMonthKey() {
@@ -18,19 +16,26 @@ const SurfaceSkeletonGrid = (() => {
       container?.clientWidth ||
       document.querySelector('.page-wrapper')?.clientWidth ||
       window.innerWidth;
-    const cols = Math.max(
-      1,
-      Math.floor((width + GRID_GAP_PX) / (GRID_MIN_CELL_PX + GRID_GAP_PX)),
-    );
+
+    let cols = 2;
+    let cellPx = 200;
+    let gap = 4;
+    if (typeof GridLayout !== 'undefined' && container) {
+      container.classList.add('grid-root');
+      const columnLayout = GridLayout.computeColumnLayout(container);
+      cols = columnLayout.columns;
+      cellPx = columnLayout.trackWidth;
+      gap = columnLayout.gap;
+    }
 
     const top = container?.getBoundingClientRect?.().top ?? window.innerHeight * 0.25;
     const availableHeight = Math.max(
-      GRID_MIN_CELL_PX * 2,
+      cellPx * 2,
       window.innerHeight - top - MONTH_HEADER_RESERVE_PX,
     );
     const rows = Math.max(
       2,
-      Math.ceil((availableHeight + GRID_GAP_PX) / (GRID_MIN_CELL_PX + GRID_GAP_PX)),
+      Math.ceil((availableHeight + gap) / (cellPx + gap)),
     );
     return cols * rows;
   }
@@ -54,12 +59,17 @@ const SurfaceSkeletonGrid = (() => {
     }
 
     container.innerHTML = '';
-    container.classList.remove('grid-root', 'grid-paged', 'grid-labels-gated');
-    container.style.removeProperty('--grid-cols');
-    container.style.removeProperty('--grid-cell-px');
+    container.classList.remove('grid-paged', 'grid-labels-gated');
 
     const count = Math.max(0, Number(cellCount) || 0);
     if (count === 0) {
+      if (typeof GridLayout !== 'undefined') {
+        GridLayout.clearContainerGeometry(container);
+      } else {
+        container.classList.remove('grid-root');
+        container.style.removeProperty('--grid-cols');
+        container.style.removeProperty('--grid-cell-px');
+      }
       return;
     }
 
@@ -87,6 +97,12 @@ const SurfaceSkeletonGrid = (() => {
     }
 
     container.appendChild(section.sectionEl);
+
+    if (typeof GridLayout !== 'undefined') {
+      GridLayout.syncContainerGeometry(container);
+    } else {
+      container.classList.add('grid-root');
+    }
   }
 
   function renderInstantShell(container, { granularity = 'month' } = {}) {

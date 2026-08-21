@@ -66,9 +66,20 @@ const PhotoSurface = (() => {
       PhotoGrid.hydrateThumbs(container, getPhotos(), gridCtx);
     }
 
+    if (typeof GridLayout !== 'undefined') {
+      GridLayout.observeContainerGeometry(container);
+    }
+
+    function destroyGridLayout() {
+      if (typeof GridLayout !== 'undefined') {
+        GridLayout.disconnectContainerGeometry(container);
+      }
+    }
+
     return {
       renderGrid,
       hydrateThumbs,
+      destroyGridLayout,
       gridCtx,
       interactionCtx,
       getContainer: () => container,
