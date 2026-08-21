@@ -11,6 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
       - name: Run share unit tests
         run: |
           python3 -m unittest test_grid_selection test_share_viewer_build test_share_albums test_share_publish_contract test_share_resolve_contract test_share_resolve_client
