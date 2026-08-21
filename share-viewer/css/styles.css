@@ -335,6 +335,7 @@ body.trash-view-active #lightboxDownloadBtn {
   height: 100%;
   background: transparent;
   --app-bar-gap: 12px;
+  --app-bar-actions-gap: 12px;
   --app-bar-title-max-w: calc(100% - 12rem);
   --app-bar-jumper-left: 0px;
 }
@@ -440,11 +441,15 @@ body.trash-view-active #lightboxDownloadBtn {
   bottom: 0;
   display: flex;
   align-items: center;
-  gap: var(--app-bar-gap);
+  gap: var(--app-bar-actions-gap, var(--app-bar-gap));
   flex-shrink: 0;
   white-space: nowrap;
   background: transparent;
   z-index: 1;
+}
+
+.app-bar-elements-layer.app-bar-layout--actions-squeezed .app-bar-icon-button {
+  position: relative;
 }
 
 /* --- Filter chip rail --- */

@@ -352,6 +352,8 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      // Keep SSE import/clean streams alive when native pickers or other apps take focus.
+      backgroundThrottling: false,
     },
   });
 

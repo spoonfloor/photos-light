@@ -20,6 +20,42 @@ async function apiFetchJson(url, options = {}) {
   return { response, data };
 }
 
+function isTransientFetchNetworkError(error) {
+  if (!error || error.name === 'AbortError') {
+    return false;
+  }
+  const message = String(error.message || '').toLowerCase();
+  return message === 'network error' || message.includes('failed to fetch');
+}
+
+async function fetchWithTransientNetworkRetry(
+  url,
+  options = {},
+  { attempts = 3 } = {},
+) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      if (typeof window.focus === 'function') {
+        window.focus();
+      }
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+      }
+      return await fetch(url, options);
+    } catch (error) {
+      if (options?.signal?.aborted || error?.name === 'AbortError') {
+        throw error;
+      }
+      lastError = error;
+      if (!isTransientFetchNetworkError(error) || attempt === attempts - 1) {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
+}
+
 function formatConvertAuditIssueLine(issue = {}) {
   const kind = issue.kind ? `${issue.kind}` : 'issue';
   const path = issue.path ? ` — ${issue.path}` : '';
@@ -16515,13 +16551,16 @@ async function startImportFromPaths(filePaths) {
       }
     };
 
-    // Start SSE stream
-    const response = await fetch('/api/photos/import-from-paths', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paths: filePaths }),
-      signal: internalAbort.signal,
-    });
+    // Start SSE stream (retry transient Chromium network suspension errors)
+    const response = await fetchWithTransientNetworkRetry(
+      '/api/photos/import-from-paths',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: filePaths }),
+        signal: internalAbort.signal,
+      },
+    );
 
     if (!response.ok) {
       cleanupCallerSignal();
@@ -16615,7 +16654,10 @@ async function startImportFromPaths(filePaths) {
     }
 
     console.error('❌ Import failed:', error);
-    showToast(`Import failed: ${error.message}`, null);
+    const toastMessage = isTransientFetchNetworkError(error)
+      ? 'Import could not start — keep Photos Light in the foreground and try again.'
+      : `Import failed: ${error.message}`;
+    showToast(toastMessage, null);
     await hideImportOverlay(false);
   } finally {
     if (internalAbort) {

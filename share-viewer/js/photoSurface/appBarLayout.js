@@ -4,6 +4,8 @@
  */
 const AppBarLayout = (() => {
   const GAP_PX = 12;
+  const ACTIONS_GAP_PX = 12;
+  const ICON_W_FALLBACK = 44;
 
   let layer = null;
   let resizeObserver = null;
@@ -82,6 +84,60 @@ const AppBarLayout = (() => {
     return measured;
   }
 
+  function visibleActionButtons(actionsEl) {
+    if (!actionsEl) {
+      return [];
+    }
+    return [...actionsEl.querySelectorAll('.app-bar-icon-button')].filter((btn) => !btn.hidden);
+  }
+
+  function measureIconWidth(buttons) {
+    if (buttons.length === 0) {
+      return ICON_W_FALLBACK;
+    }
+    return Math.ceil(buttons[0].getBoundingClientRect().width) || ICON_W_FALLBACK;
+  }
+
+  function actionsWidth(count, iconW, gap) {
+    if (count <= 0) {
+      return 0;
+    }
+    if (count === 1) {
+      return iconW;
+    }
+    return count * iconW + (count - 1) * gap;
+  }
+
+  /** Shrink gap to 0, then overlap down to a single icon column. */
+  function squeezeActionsGap(count, iconW, budget) {
+    if (count <= 1) {
+      return ACTIONS_GAP_PX;
+    }
+
+    const naturalW = actionsWidth(count, iconW, ACTIONS_GAP_PX);
+    if (naturalW <= budget) {
+      return ACTIONS_GAP_PX;
+    }
+
+    const gap = (budget - count * iconW) / (count - 1);
+    return Math.max(-iconW, gap);
+  }
+
+  function resolveActionsLayout(actionsEl, barW) {
+    const buttons = visibleActionButtons(actionsEl);
+    const count = buttons.length;
+    const iconW = measureIconWidth(buttons);
+    const gap = squeezeActionsGap(count, iconW, barW);
+    const width = actionsWidth(count, iconW, gap);
+
+    return {
+      count,
+      gap,
+      width,
+      squeezed: gap < ACTIONS_GAP_PX - 0.5,
+    };
+  }
+
   function layout() {
     if (!queryElements()) {
       return;
@@ -92,12 +148,14 @@ const AppBarLayout = (() => {
     const jumperEl = layer.querySelector('.date-picker');
 
     const barW = barWidth();
-    const actionsW = measureWidth(actionsEl);
 
     if (barW === 0) {
       requestAnimationFrame(scheduleLayout);
       return;
     }
+
+    const actionsLayout = resolveActionsLayout(actionsEl, barW);
+    const actionsW = actionsLayout.width;
 
     let jumperW = 0;
     let jumperLeft = 0;
@@ -132,6 +190,7 @@ const AppBarLayout = (() => {
     const showTitle = titleMaxW > 0;
 
     layer.style.setProperty('--app-bar-gap', `${GAP_PX}px`);
+    layer.style.setProperty('--app-bar-actions-gap', `${actionsLayout.gap}px`);
     layer.style.setProperty('--app-bar-actions-w', `${actionsW}px`);
     layer.style.setProperty('--app-bar-jumper-w', `${showJumper ? jumperW : 0}px`);
     layer.style.setProperty('--app-bar-jumper-left', `${showJumper ? jumperLeft : 0}px`);
@@ -140,6 +199,7 @@ const AppBarLayout = (() => {
     layer.classList.toggle('app-bar-layout--jumper', showJumper);
     layer.classList.toggle('app-bar-layout--jumper-no-fit', noFit);
     layer.classList.toggle('app-bar-layout--title', showTitle);
+    layer.classList.toggle('app-bar-layout--actions-squeezed', actionsLayout.squeezed);
 
     if (titleEl) {
       titleEl.hidden = !showTitle;
