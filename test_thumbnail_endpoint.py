@@ -5,6 +5,7 @@ import app as photo_app
 
 class ThumbnailEndpointTests(unittest.TestCase):
     def setUp(self):
+        photo_app.reset_test_library_state()
         photo_app.clear_library_session()
 
     def test_thumbnail_returns_503_when_library_not_configured(self):

@@ -136,6 +136,7 @@ class MediaDateRebuildContractTest(unittest.TestCase):
 
 class MediaDateEditRebuildContractTest(unittest.TestCase):
     def setUp(self):
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.original_paths = (
             photo_app.LIBRARY_PATH,
@@ -165,8 +166,7 @@ class MediaDateEditRebuildContractTest(unittest.TestCase):
         db_path = os.path.join(library_path, ".library", "photo_library.db")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-        photo_app.LIBRARY_PATH = library_path
-        photo_app.DB_PATH = db_path
+        photo_app.update_app_paths(library_path, db_path)
         photo_app.THUMBNAIL_CACHE_DIR = os.path.join(library_path, ".thumbnails")
         photo_app.TRASH_DIR = os.path.join(library_path, ".trash")
         photo_app.DB_BACKUP_DIR = os.path.join(library_path, ".backups")
@@ -334,8 +334,7 @@ class QuickTimePatchArtifactContractTest(unittest.TestCase):
         db_path = os.path.join(library_path, ".library", "photo_library.db")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
-        photo_app.LIBRARY_PATH = library_path
-        photo_app.DB_PATH = db_path
+        photo_app.update_app_paths(library_path, db_path)
         photo_app.THUMBNAIL_CACHE_DIR = os.path.join(library_path, ".thumbnails")
         photo_app.TRASH_DIR = os.path.join(library_path, ".trash")
         photo_app.DB_BACKUP_DIR = os.path.join(library_path, ".backups")

@@ -16,6 +16,8 @@ from photo_canonicalization import CanonicalizedPhoto, UNKNOWN_PHOTO_DATE_TAKEN
 
 class ConvertInvarianceContractTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.original_paths = (
             photo_app.LIBRARY_PATH,
@@ -26,7 +28,6 @@ class ConvertInvarianceContractTest(unittest.TestCase):
             photo_app.IMPORT_TEMP_DIR,
             photo_app.LOG_DIR,
         )
-        photo_app.app.config["TESTING"] = True
         self.client = photo_app.app.test_client()
         self.fake_subprocess_result = subprocess.CompletedProcess(
             args=["tool"],

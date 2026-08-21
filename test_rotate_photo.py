@@ -13,6 +13,8 @@ from rotation_utils import RotationResult
 
 class RotatePhotoRouteTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.library_path = self.tmpdir.name
         self.db_path = os.path.join(self.library_path, ".library", "photo_library.db")
@@ -34,7 +36,6 @@ class RotatePhotoRouteTest(unittest.TestCase):
             photo_app.LOG_DIR,
         )
         photo_app.update_app_paths(self.library_path, self.db_path)
-        photo_app.app.config["TESTING"] = True
         self.client = photo_app.app.test_client()
 
     def tearDown(self):

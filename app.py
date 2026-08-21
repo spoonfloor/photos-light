@@ -3,7 +3,7 @@
 Photo Viewer - Flask Server with Database API
 """
 
-from flask import Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
+from flask import g, has_request_context, Flask, send_from_directory, jsonify, request, send_file, Response, stream_with_context
 from collections import defaultdict
 import base64
 import re
@@ -13,6 +13,15 @@ import traceback
 from functools import wraps
 from hash_cache import HashCache
 from runtime_paths import get_base_dir, get_config_file, get_static_dir
+from library_context import (
+    SESSION_COOKIE_NAME,
+    SESSION_HEADER_NAME,
+    TEST_SESSION_ID,
+    LibraryContext,
+    LibraryContextSnapshot,
+    new_session_id,
+    session_registry,
+)
 
 def handle_db_corruption(f):
     """
@@ -193,17 +202,94 @@ app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='/static')
 # Feature flags
 app.config['DRY_RUN_DATE_EDIT'] = False  # REAL UPDATES - using test library
 
-# Library paths - set when the user opens or creates a library this session
-DB_PATH = None
+# Shared media classification policy
+PHOTO_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS
+VIDEO_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS
+
+
+# ---------------------------------------------------------------------------
+# Per-client library sessions (see library_context.py)
+# ---------------------------------------------------------------------------
+
+# Deprecated mirrors for unit tests that read/write photo_app.get_library().library_path directly.
 LIBRARY_PATH = None
+DB_PATH = None
 THUMBNAIL_CACHE_DIR = None
 TRASH_DIR = None
 DB_BACKUP_DIR = None
 IMPORT_TEMP_DIR = None
 LOG_DIR = None
-# Shared media classification policy
-PHOTO_EXTENSIONS = PHOTO_MEDIA_EXTENSIONS
-VIDEO_EXTENSIONS = VIDEO_MEDIA_EXTENSIONS
+LIBRARY_CATALOG_REVISION = 0
+
+
+def _sync_test_path_mirrors(ctx: LibraryContext) -> None:
+    """Expose session paths on module attrs for legacy unit tests."""
+    global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR
+    global DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR, LIBRARY_CATALOG_REVISION
+    LIBRARY_PATH = ctx.library_path
+    DB_PATH = ctx.db_path
+    THUMBNAIL_CACHE_DIR = ctx.thumbnail_cache_dir
+    TRASH_DIR = ctx.trash_dir
+    DB_BACKUP_DIR = ctx.db_backup_dir
+    IMPORT_TEMP_DIR = ctx.import_temp_dir
+    LOG_DIR = ctx.log_dir
+    LIBRARY_CATALOG_REVISION = ctx.catalog_revision
+
+
+def get_library() -> LibraryContext:
+    """Return the library context for the current client session."""
+    if has_request_context():
+        if not hasattr(g, "library"):
+            session_id = (
+                request.cookies.get(SESSION_COOKIE_NAME)
+                or request.headers.get(SESSION_HEADER_NAME)
+            )
+            if not session_id:
+                session_id = TEST_SESSION_ID if app.config.get("TESTING") else new_session_id()
+                if not app.config.get("TESTING"):
+                    g._new_session_id = session_id
+            g.library = session_registry.get_or_create(session_id)
+        return g.library
+    return session_registry.get_or_create(
+        TEST_SESSION_ID if app.config.get("TESTING") else "offline-legacy"
+    )
+
+
+def _schedule_open_reconcile_for_context(
+    library_path: str,
+    db_path: str,
+    generation: int,
+    invalidate_caches,
+) -> bool:
+    from library_open_reconcile import schedule_open_reconcile_background
+
+    return schedule_open_reconcile_background(
+        library_path,
+        db_path,
+        generation=generation,
+        invalidate_caches=invalidate_caches,
+    )
+
+
+@app.before_request
+def bind_library_session():
+    if request.method == "OPTIONS":
+        return None
+    get_library()
+
+
+@app.after_request
+def attach_library_session_cookie(response):
+    new_session_id = getattr(g, "_new_session_id", None)
+    if new_session_id:
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            new_session_id,
+            httponly=True,
+            samesite="Lax",
+        )
+    return response
+
 
 # ============================================================================
 # LOGGING CONFIGURATION (Hybrid Approach: print() + persistent logs)
@@ -221,17 +307,7 @@ error_logger.setLevel(logging.WARNING)
 
 def get_db_connection():
     """Create database connection with WAL mode enabled"""
-    conn = sqlite3.connect(DB_PATH, timeout=60)
-    conn.row_factory = sqlite3.Row  # Return rows as dictionaries
-    
-    # Enable Write-Ahead Logging for better concurrency
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=60000")
-    
-    # Enable foreign keys for data integrity
-    conn.execute("PRAGMA foreign_keys=ON")
-    
-    return conn
+    return get_library().get_db_connection()
 
 def get_image_dimensions(file_path):
     """Get image/video dimensions (width, height) from file"""
@@ -386,17 +462,17 @@ def create_db_backup():
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_filename = f"photo_library_{timestamp}.db"
-        backup_path = os.path.join(DB_BACKUP_DIR, backup_filename)
+        backup_path = os.path.join(get_library().db_backup_dir, backup_filename)
         
         # Copy database
-        shutil.copy2(DB_PATH, backup_path)
+        shutil.copy2(get_library().db_path, backup_path)
         print(f"✅ Created DB backup: {backup_filename}")
         
         # Clean up old backups (keep max 20)
-        backups = sorted([f for f in os.listdir(DB_BACKUP_DIR) if f.endswith('.db')])
+        backups = sorted([f for f in os.listdir(get_library().db_backup_dir) if f.endswith('.db')])
         while len(backups) > 20:
             oldest = backups.pop(0)
-            os.remove(os.path.join(DB_BACKUP_DIR, oldest))
+            os.remove(os.path.join(get_library().db_backup_dir, oldest))
             print(f"🗑️  Removed old backup: {oldest}")
         
         return backup_path
@@ -413,7 +489,7 @@ def delete_thumbnail_for_hash(content_hash):
     if not content_hash:
         return
 
-    thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
+    thumbnail_path = thumbnail_cache_path(get_library().thumbnail_cache_dir, content_hash)
     if os.path.exists(thumbnail_path):
         os.remove(thumbnail_path)
         cleanup_empty_thumbnail_folders(thumbnail_path)
@@ -455,7 +531,7 @@ def stage_photo_for_canonicalization(source_path, *, temp_prefix, temp_dir=None)
     paths resolve date fallback, metadata writes, canonical bytes, and canonical
     relative path through the same rulebook.
     """
-    staging_dir = temp_dir or IMPORT_TEMP_DIR
+    staging_dir = temp_dir or get_library().import_temp_dir
     if not staging_dir:
         raise RuntimeError("No import temp directory configured for photo staging")
     os.makedirs(staging_dir, exist_ok=True)
@@ -693,7 +769,7 @@ def update_photo_date_with_files(photo_id, new_date, conn):
         file_type = row['file_type']
         old_hash = row['content_hash']
         
-        old_full_path = os.path.join(LIBRARY_PATH, old_rel_path)
+        old_full_path = os.path.join(get_library().library_path, old_rel_path)
         
         if not os.path.exists(old_full_path):
             return False, {'status': 'error', 'error': 'File not found on disk'}, transaction
@@ -738,7 +814,7 @@ def update_photo_date_with_files(photo_id, new_date, conn):
             finalize_result = finalize_mutated_media(
                 conn=conn,
                 photo_id=photo_id,
-                library_path=LIBRARY_PATH,
+                library_path=get_library().library_path,
                 current_rel_path=old_rel_path,
                 date_taken=new_date,
                 old_hash=old_hash,
@@ -747,7 +823,7 @@ def update_photo_date_with_files(photo_id, new_date, conn):
                 get_dimensions=get_image_dimensions,
                 delete_thumbnail_for_hash=delete_thumbnail_for_hash,
                 duplicate_policy='trash',
-                duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
+                duplicate_trash_dir=os.path.join(get_library().trash_dir, 'duplicates'),
             )
 
             if finalize_result.status == 'duplicate_removed':
@@ -791,15 +867,15 @@ def update_photo_date_with_files(photo_id, new_date, conn):
 def generate_thumbnail_for_file(file_path, content_hash, file_type):
     """Generate thumbnail for a file using hash-based sharding"""
     try:
-        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash, mkdir=True)
+        thumbnail_path = thumbnail_cache_path(get_library().thumbnail_cache_dir, content_hash, mkdir=True)
 
         # Skip if already exists
         if os.path.exists(thumbnail_path):
             return True
 
         if file_type == 'video':
-            os.makedirs(IMPORT_TEMP_DIR, exist_ok=True)
-            temp_frame = os.path.join(IMPORT_TEMP_DIR, f"temp_frame_{content_hash[:16]}.jpg")
+            os.makedirs(get_library().import_temp_dir, exist_ok=True)
+            temp_frame = os.path.join(get_library().import_temp_dir, f"temp_frame_{content_hash[:16]}.jpg")
             generate_video_square_thumbnail(
                 file_path,
                 thumbnail_path,
@@ -921,72 +997,53 @@ PHOTO_GRID_SELECT = """
     FROM photos
 """
 
-# Monotonic catalog generation for grid read caches. Bumped on library switch and
-# structural catalog changes (photos table rebuild, full DB re-index). Row-level
-# mutations invalidate histogram caches without bumping revision.
-LIBRARY_CATALOG_REVISION = 0
-PHOTO_TOTAL_COUNT_CACHE = None
-PHOTO_TOTAL_COUNT_CACHE_REVISION = None
-MONTH_INDEX_CACHE = {}
-MONTH_INDEX_CACHE_REVISION = None
-
-
 def get_library_catalog_revision():
     """Return current server catalog revision exposed to the grid client."""
-    return LIBRARY_CATALOG_REVISION
+    return get_library().get_catalog_revision()
 
 
 def attach_catalog_revision(payload):
     """Attach catalog_revision to a grid API JSON payload."""
-    if isinstance(payload, dict):
-        payload = dict(payload)
-        payload['catalog_revision'] = LIBRARY_CATALOG_REVISION
-    return payload
+    return get_library().attach_catalog_revision(payload)
 
 
 def bump_library_catalog_revision():
     """Bump catalog revision after structural library/catalog changes."""
-    global LIBRARY_CATALOG_REVISION
-    LIBRARY_CATALOG_REVISION += 1
-    invalidate_grid_read_caches()
+    get_library().bump_catalog_revision()
+    _sync_test_path_mirrors(get_library())
 
 
 def invalidate_grid_read_caches():
     """Drop cached month histogram and total count after row/histogram mutations."""
-    invalidate_photo_total_count_cache()
-    invalidate_month_index_cache()
-    invalidate_trash_grid_caches()
+    get_library().invalidate_grid_read_caches()
 
 
 def commit_row_mutation(conn, *, invalidate_histogram=True):
     """Commit a row mutation and invalidate grid read caches on success."""
-    conn.commit()
-    if invalidate_histogram:
-        invalidate_grid_read_caches()
+    get_library().commit_row_mutation(conn, invalidate_histogram=invalidate_histogram)
 
 
 def invalidate_photo_total_count_cache():
     """Drop cached library row count for the current catalog revision."""
-    global PHOTO_TOTAL_COUNT_CACHE, PHOTO_TOTAL_COUNT_CACHE_REVISION
-    PHOTO_TOTAL_COUNT_CACHE = None
-    PHOTO_TOTAL_COUNT_CACHE_REVISION = None
+    get_library().invalidate_photo_total_count_cache()
 
 
 def invalidate_month_index_cache():
-    """Drop cached per-sort month histogram for the current catalog revision."""
-    global MONTH_INDEX_CACHE
-    MONTH_INDEX_CACHE = {}
+    """Drop cached month histogram for the current catalog revision."""
+    get_library().invalidate_month_index_cache()
 
 
-def notify_catalog_reset_from_make_perfect(result):
+def notify_catalog_reset_from_make_perfect(result, ctx=None):
     """Bump catalog revision after a successful make-perfect (Clean) run."""
-    if result and result.get('status') == 'SUCCESS':
-        bump_library_catalog_revision()
+    target = ctx or get_library()
+    target.notify_catalog_reset_from_make_perfect(result)
+    if ctx is None:
+        _sync_test_path_mirrors(get_library())
 
 
 def ensure_photo_grid_indices(db_path=None):
     """Create keyset pagination indices if missing (idempotent)."""
-    target_db = db_path or DB_PATH
+    target_db = db_path or get_library().db_path
     if not target_db or not os.path.exists(target_db):
         return
     from db_schema import PHOTOS_INDICES
@@ -1025,11 +1082,11 @@ def ensure_photo_grid_indices(db_path=None):
 
 def get_photo_total_count(cursor):
     """Return total photos row count; cached per catalog revision."""
-    global PHOTO_TOTAL_COUNT_CACHE, PHOTO_TOTAL_COUNT_CACHE_REVISION
-    if PHOTO_TOTAL_COUNT_CACHE_REVISION != LIBRARY_CATALOG_REVISION:
-        PHOTO_TOTAL_COUNT_CACHE = cursor.execute('SELECT COUNT(*) FROM photos').fetchone()[0]
-        PHOTO_TOTAL_COUNT_CACHE_REVISION = LIBRARY_CATALOG_REVISION
-    return PHOTO_TOTAL_COUNT_CACHE
+    ctx = get_library()
+    if ctx.photo_total_count_cache_revision != ctx.catalog_revision:
+        ctx.photo_total_count_cache = cursor.execute('SELECT COUNT(*) FROM photos').fetchone()[0]
+        ctx.photo_total_count_cache_revision = ctx.catalog_revision
+    return ctx.photo_total_count_cache
 
 
 def normalize_month_for_sql(month_str):
@@ -1719,25 +1776,25 @@ def get_cached_month_index(
     import_sets=None,
 ):
     """Return month histogram; cached per sort + filter for the current catalog revision."""
-    global MONTH_INDEX_CACHE, MONTH_INDEX_CACHE_REVISION
-    if MONTH_INDEX_CACHE_REVISION != LIBRARY_CATALOG_REVISION:
-        MONTH_INDEX_CACHE = {}
-        MONTH_INDEX_CACHE_REVISION = LIBRARY_CATALOG_REVISION
+    ctx = get_library()
+    if ctx.month_index_cache_revision != ctx.catalog_revision:
+        ctx.month_index_cache = {}
+        ctx.month_index_cache_revision = ctx.catalog_revision
     cache_key = _month_index_cache_key(
         sort_order,
         starred,
         video,
         import_sets=import_sets,
     )
-    if cache_key not in MONTH_INDEX_CACHE:
-        MONTH_INDEX_CACHE[cache_key] = build_month_index(
+    if cache_key not in ctx.month_index_cache:
+        ctx.month_index_cache[cache_key] = build_month_index(
             cursor,
             sort_order,
             starred=starred,
             video=video,
             import_sets=import_sets,
         )
-    return MONTH_INDEX_CACHE[cache_key]
+    return ctx.month_index_cache[cache_key]
 
 
 def fetch_photos_for_import_month(
@@ -1936,7 +1993,7 @@ def get_photo_dimensions(photo_id):
             return jsonify({'error': 'Photo not found'}), 404
         
         # Get dimensions from file
-        full_path = os.path.join(LIBRARY_PATH, row['current_path'])
+        full_path = os.path.join(get_library().library_path, row['current_path'])
         dimensions = get_image_dimensions(full_path)
         
         if dimensions:
@@ -1960,7 +2017,7 @@ def get_photo_thumbnail(photo_id):
     - Subsequent requests: serve cached version
     - Uses hash-based sharding: .thumbnails/{hash[:2]}/{hash[2:4]}/{hash}.v2.jpg
     """
-    if not LIBRARY_PATH or not THUMBNAIL_CACHE_DIR or not DB_PATH:
+    if not get_library().library_path or not get_library().thumbnail_cache_dir or not get_library().db_path:
         return jsonify({'error': 'Library not configured'}), 503
 
     try:
@@ -1984,18 +2041,18 @@ def get_photo_thumbnail(photo_id):
         if not content_hash:
             return jsonify({'error': 'Photo missing content hash'}), 404
         
-        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
+        thumbnail_path = thumbnail_cache_path(get_library().thumbnail_cache_dir, content_hash)
 
         # Serve cached thumbnail if it exists
         if os.path.exists(thumbnail_path):
             return send_file(thumbnail_path, mimetype='image/jpeg')
 
-        full_path = os.path.join(LIBRARY_PATH, relative_path)
+        full_path = os.path.join(get_library().library_path, relative_path)
 
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
 
-        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash, mkdir=True)
+        thumbnail_path = thumbnail_cache_path(get_library().thumbnail_cache_dir, content_hash, mkdir=True)
 
         if row['file_type'] == 'video':
             temp_frame = os.path.join(os.path.dirname(thumbnail_path), f"temp_{photo_id}.jpg")
@@ -2061,7 +2118,7 @@ def get_photo_file(photo_id):
             return jsonify({'error': 'Photo not found'}), 404
         
         # Get full path
-        full_path = os.path.join(LIBRARY_PATH, row['current_path'])
+        full_path = os.path.join(get_library().library_path, row['current_path'])
         
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
@@ -2148,7 +2205,7 @@ def rotate_photo(photo_id):
                 400,
             )
 
-        full_path = os.path.join(LIBRARY_PATH, row['current_path'])
+        full_path = os.path.join(get_library().library_path, row['current_path'])
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
 
@@ -2241,12 +2298,12 @@ def rotate_photo(photo_id):
         if rotation_result.output_path:
             rel_path_for_finalize = os.path.relpath(
                 rotation_result.output_path,
-                LIBRARY_PATH,
+                get_library().library_path,
             )
         finalize_result = finalize_mutated_media(
             conn=conn,
             photo_id=photo_id,
-            library_path=LIBRARY_PATH,
+            library_path=get_library().library_path,
             current_rel_path=rel_path_for_finalize,
             date_taken=row['date_taken'],
             old_hash=old_hash,
@@ -2255,14 +2312,14 @@ def rotate_photo(photo_id):
             get_dimensions=get_image_dimensions,
             delete_thumbnail_for_hash=delete_thumbnail_for_hash,
             duplicate_policy='trash',
-            duplicate_trash_dir=os.path.join(TRASH_DIR, 'duplicates'),
+            duplicate_trash_dir=os.path.join(get_library().trash_dir, 'duplicates'),
             defer_thumbnail_cleanup=True,
         )
         # Defer HEIC source removal until after DB commit so rollback can still
         # restore the conversion sibling if commit fails.
         heic_to_remove = None
         if source_heic_rel_path:
-            source_heic_full_path = os.path.join(LIBRARY_PATH, source_heic_rel_path)
+            source_heic_full_path = os.path.join(get_library().library_path, source_heic_rel_path)
             if os.path.exists(source_heic_full_path):
                 if (
                     finalize_result.full_path
@@ -2294,7 +2351,7 @@ def rotate_photo(photo_id):
                 }
                 for abandoned_rel in abandoned_rels:
                     cleanup_empty_date_folders(
-                        os.path.join(LIBRARY_PATH, abandoned_rel)
+                        os.path.join(get_library().library_path, abandoned_rel)
                     )
         except Exception:
             conn.rollback()
@@ -2480,7 +2537,7 @@ def _delete_photo_id(cursor, photo_id, trash_dir):
 
         photo_data = dict(row)
         current_path = photo_data['current_path']
-        original_full_path = os.path.join(LIBRARY_PATH, current_path)
+        original_full_path = os.path.join(get_library().library_path, current_path)
 
         print(f"  - Photo {photo_id}: {current_path}")
 
@@ -2490,7 +2547,7 @@ def _delete_photo_id(cursor, photo_id, trash_dir):
             photo_id=photo_id,
             photo_data=photo_data,
             current_path=current_path,
-            library_path=LIBRARY_PATH,
+            library_path=get_library().library_path,
             trash_dir=trash_dir,
             deleted_at=deleted_at,
         )
@@ -2509,11 +2566,11 @@ def _delete_photo_id(cursor, photo_id, trash_dir):
             moved_to_trash = resolve_user_deleted_trash_path(trash_dir, trash_filename)
             print(f"    ✓ Moved to: {moved_to_trash}", flush=True)
 
-        cleanup_empty_folders(original_full_path, LIBRARY_PATH)
+        cleanup_empty_folders(original_full_path, get_library().library_path)
 
         content_hash = photo_data.get('content_hash')
         if content_hash:
-            thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
+            thumbnail_path = thumbnail_cache_path(get_library().thumbnail_cache_dir, content_hash)
             if os.path.exists(thumbnail_path):
                 os.remove(thumbnail_path)
                 cleanup_empty_thumbnail_folders(thumbnail_path)
@@ -2573,7 +2630,7 @@ def delete_photos():
         
         deleted_count = 0
         errors = []
-        trash_dir = TRASH_DIR
+        trash_dir = get_library().trash_dir
         ensure_user_deleted_trash_dir(trash_dir)
         
         print(f"    Starting delete loop for {len(photo_ids)} photos...", flush=True)
@@ -2627,7 +2684,7 @@ def reveal_in_finder(photo_id):
             return jsonify({'error': 'Photo not found'}), 404
 
         relative_path = row['current_path']
-        full_path = os.path.join(LIBRARY_PATH, relative_path)
+        full_path = os.path.join(get_library().library_path, relative_path)
 
         if not os.path.exists(full_path):
             return jsonify({'error': 'File not found on disk'}), 404
@@ -2645,7 +2702,7 @@ def reveal_in_finder(photo_id):
 def export_photo():
     """Copy a library photo's original file to a user-chosen folder."""
     try:
-        if not LIBRARY_PATH:
+        if not get_library().library_path:
             return jsonify({'error': 'Library not configured'}), 503
 
         data = request.get_json() or {}
@@ -2692,7 +2749,7 @@ def _resolve_library_photo_original_path(photo_id):
     if not row or not row['current_path']:
         return None, (jsonify({'error': 'Photo not found'}), 404)
 
-    source_path = os.path.join(LIBRARY_PATH, row['current_path'])
+    source_path = os.path.join(get_library().library_path, row['current_path'])
     if not os.path.exists(source_path):
         return None, (jsonify({'error': 'File not found on disk'}), 404)
 
@@ -2730,7 +2787,7 @@ def _unique_destination_path(destination, filename):
 def get_photo_original(photo_id):
     """Serve a library photo's original file bytes (for zip assembly)."""
     try:
-        if not LIBRARY_PATH:
+        if not get_library().library_path:
             return jsonify({'error': 'Library not configured'}), 503
 
         source_path, error_response = _resolve_library_photo_original_path(photo_id)
@@ -2749,7 +2806,7 @@ def get_photo_original(photo_id):
 def export_file():
     """Write an uploaded file (e.g. client-built zip) into a user-chosen folder."""
     try:
-        if not LIBRARY_PATH:
+        if not get_library().library_path:
             return jsonify({'error': 'Library not configured'}), 503
 
         destination = request.form.get('destination')
@@ -2810,7 +2867,7 @@ def update_photo_date():
             })
         else:
             # Rollback transaction
-            transaction.rollback(LIBRARY_PATH)
+            transaction.rollback(get_library().library_path)
             conn.rollback()
             conn.close()
             
@@ -2965,7 +3022,7 @@ def bulk_update_photo_dates():
         if master_transaction.failed_files:
             # At least one failure - rollback EVERYTHING
             print(f"❌ {len(master_transaction.failed_files)} failures - rolling back all changes")
-            master_transaction.rollback(LIBRARY_PATH)
+            master_transaction.rollback(get_library().library_path)
             conn.rollback()
             conn.close()
             
@@ -3044,7 +3101,7 @@ def update_photo_date_execute():
                 yield f"event: complete\ndata: {json.dumps(complete_payload)}\n\n"
             else:
                 # Rollback transaction
-                transaction.rollback(LIBRARY_PATH)
+                transaction.rollback(get_library().library_path)
                 conn.rollback()
                 conn.close()
                 
@@ -3215,7 +3272,7 @@ def bulk_update_photo_dates_execute():
                 print(f"🔍 DEBUG: failed_files content: {master_transaction.failed_files}")
                 print(f"🔍 DEBUG: failed_files types: {[type(f) for f in master_transaction.failed_files]}")
                 
-                master_transaction.rollback(LIBRARY_PATH)
+                master_transaction.rollback(get_library().library_path)
                 conn.rollback()
                 conn.close()
                 
@@ -3280,7 +3337,7 @@ def _restore_photo_ids(cursor, photo_ids, trash_dir):
                 cursor,
                 photo_id=photo_id,
                 trash_dir=trash_dir,
-                library_path=LIBRARY_PATH,
+                library_path=get_library().library_path,
             )
             if outcome == 'error':
                 print(f"    ❌ {error}")
@@ -3328,7 +3385,7 @@ def restore_photos():
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        restored_count, merged_count, processed_ids, merged_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
+        restored_count, merged_count, processed_ids, merged_ids, errors = _restore_photo_ids(cursor, photo_ids, get_library().trash_dir)
         
         if restored_count > 0:
             commit_row_mutation(conn)
@@ -3363,7 +3420,7 @@ def _trash_grid_helpers():
         'month_bounds_for_sql': month_bounds_for_sql,
         'decode_photos_cursor': decode_photos_cursor,
         'cursor_from_row': cursor_from_row,
-        'catalog_revision': LIBRARY_CATALOG_REVISION,
+        'catalog_revision': get_library().catalog_revision,
     }
 
 
@@ -3558,7 +3615,7 @@ def get_trash_years():
 @app.route('/api/trash/photo/<int:photo_id>/thumbnail')
 @handle_db_corruption
 def get_trash_photo_thumbnail(photo_id):
-    if not LIBRARY_PATH or not THUMBNAIL_CACHE_DIR or not DB_PATH:
+    if not get_library().library_path or not get_library().thumbnail_cache_dir or not get_library().db_path:
         return jsonify({'error': 'Library not configured'}), 503
     try:
         conn = get_db_connection()
@@ -3574,15 +3631,15 @@ def get_trash_photo_thumbnail(photo_id):
         if not content_hash:
             return jsonify({'error': 'Photo missing content hash'}), 404
 
-        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash)
+        thumbnail_path = thumbnail_cache_path(get_library().thumbnail_cache_dir, content_hash)
         if os.path.exists(thumbnail_path):
             return send_file(thumbnail_path, mimetype='image/jpeg')
 
-        full_path = _deleted_media_full_path(TRASH_DIR, deleted_row)
+        full_path = _deleted_media_full_path(get_library().trash_dir, deleted_row)
         if not full_path:
             return jsonify({'error': 'File not found in trash'}), 404
 
-        thumbnail_path = thumbnail_cache_path(THUMBNAIL_CACHE_DIR, content_hash, mkdir=True)
+        thumbnail_path = thumbnail_cache_path(get_library().thumbnail_cache_dir, content_hash, mkdir=True)
         if file_type == 'video':
             temp_frame = os.path.join(os.path.dirname(thumbnail_path), f"temp_trash_{photo_id}.jpg")
             try:
@@ -3617,7 +3674,7 @@ def get_trash_photo_file(photo_id):
         if not deleted_row:
             return jsonify({'error': 'Photo not found in trash'}), 404
 
-        full_path = _deleted_media_full_path(TRASH_DIR, deleted_row)
+        full_path = _deleted_media_full_path(get_library().trash_dir, deleted_row)
         if not full_path:
             return jsonify({'error': 'File not found in trash'}), 404
 
@@ -3658,7 +3715,7 @@ def purge_trash_photos():
 
         purged_count = 0
         errors = []
-        trash_dir = TRASH_DIR
+        trash_dir = get_library().trash_dir
 
         for photo_id in photo_ids:
             try:
@@ -3705,7 +3762,7 @@ def restore_all_trash_photos():
             return jsonify({'restored': 0, 'total': 0})
 
         print(f"\n↩️  RESTORE ALL REQUEST: {len(photo_ids)} photos")
-        restored_count, merged_count, processed_ids, merged_ids, errors = _restore_photo_ids(cursor, photo_ids, TRASH_DIR)
+        restored_count, merged_count, processed_ids, merged_ids, errors = _restore_photo_ids(cursor, photo_ids, get_library().trash_dir)
         if restored_count > 0:
             commit_row_mutation(conn)
         else:
@@ -4040,25 +4097,25 @@ def import_from_paths():
                 yield from emit_event('error', {'error': 'No paths provided'})
                 return
 
-            if not LIBRARY_PATH or not DB_PATH:
+            if not get_library().library_path or not get_library().db_path:
                 yield from emit_event('error', {'error': 'No library configured'})
                 return
             
             total_files = len(file_paths)
             print(f"\n{'='*60}")
             print(f"📥 IMPORT FROM PATHS: {total_files} file(s)")
-            print(f"LIBRARY_PATH: {LIBRARY_PATH}")
-            print(f"DB_PATH: {DB_PATH}")
+            print(f"get_library().library_path: {get_library().library_path}")
+            print(f"get_library().db_path: {get_library().db_path}")
             print(f"{'='*60}\n")
             
             if not (yield from emit_event('start', {'total': total_files})):
                 return
 
-            logs_dir = os.path.join(LIBRARY_PATH, '.logs')
+            logs_dir = os.path.join(get_library().library_path, '.logs')
             os.makedirs(logs_dir, exist_ok=True)
             log_filename = f"import_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
             log_path_abs = os.path.join(logs_dir, log_filename)
-            log_path_rel = os.path.relpath(log_path_abs, LIBRARY_PATH)
+            log_path_rel = os.path.relpath(log_path_abs, get_library().library_path)
             log_file = open(log_path_abs, 'w')
 
             def log_import_entry(event_type, data):
@@ -4072,7 +4129,7 @@ def import_from_paths():
 
             conn = get_db_connection()
             ingest_deps = IngestDependencies(
-                library_path=LIBRARY_PATH,
+                library_path=get_library().library_path,
                 hash_cache=HashCache(conn),
                 stage_photo_for_canonicalization=stage_photo_for_canonicalization,
                 cleanup_staged_file=cleanup_staged_file,
@@ -4258,33 +4315,34 @@ def start_background_thumbnail_generation(photo_ids):
     This runs AFTER import completes, so it doesn't block the import process.
     """
     import threading
-    
+
+    ctx_snapshot = get_library().snapshot_for_thread()
+
     def worker():
         for photo_id in photo_ids:
             try:
-                # Fetch photo info including hash
-                conn = get_db_connection()
+                conn = ctx_snapshot.get_db_connection()
                 cursor = conn.cursor()
-                cursor.execute("SELECT current_path, file_type, content_hash FROM photos WHERE id = ?", (photo_id,))
+                cursor.execute(
+                    "SELECT current_path, file_type, content_hash FROM photos WHERE id = ?",
+                    (photo_id,),
+                )
                 row = cursor.fetchone()
                 conn.close()
-                
-                if not row:
+
+                if not row or not ctx_snapshot.library_path:
                     continue
-                
-                # Generate thumbnail (will be cached)
-                full_path = os.path.join(LIBRARY_PATH, row['current_path'])
+
+                full_path = os.path.join(ctx_snapshot.library_path, row['current_path'])
                 if os.path.exists(full_path):
-                    # Trigger the lazy generation by calling the function directly
-                    # The thumbnail endpoint would do this on first request anyway
                     generate_thumbnail_for_file(full_path, row['content_hash'], row['file_type'])
                     print(f"  🖼️  Background: Generated thumbnail for photo {photo_id}")
             except Exception as e:
-                # Don't let thumbnail failures crash the background thread
-                error_logger.warning(f"Background thumbnail generation failed for photo {photo_id}: {e}")
+                error_logger.warning(
+                    f"Background thumbnail generation failed for photo {photo_id}: {e}"
+                )
                 continue
-    
-    # Start daemon thread (won't prevent app shutdown)
+
     thread = threading.Thread(target=worker, daemon=True, name="ThumbnailGenerator")
     thread.start()
 
@@ -4309,7 +4367,7 @@ def scan_rebuild_database():
     try:
         print("\n🔍 REBUILD DATABASE: Pre-scanning library...")
         
-        file_count = count_media_files(LIBRARY_PATH)
+        file_count = count_media_files(get_library().library_path)
         minutes, display = estimate_duration(file_count)
         
         print(f"  Found {file_count} media files")
@@ -4339,7 +4397,7 @@ def execute_rebuild_database():
             import_logger.info("Rebuild Database execute started")
             
             # Create backup before rebuilding (if database exists)
-            if os.path.exists(DB_PATH):
+            if os.path.exists(get_library().db_path):
                 print(f"\n💾 Creating database backup before rebuild...")
                 backup_path = create_db_backup()
                 if backup_path:
@@ -4349,13 +4407,13 @@ def execute_rebuild_database():
             
             # Remove old database (even if corrupted) and create fresh one
             print(f"\n🗑️  Removing old database...")
-            if os.path.exists(DB_PATH):
-                os.remove(DB_PATH)
+            if os.path.exists(get_library().db_path):
+                os.remove(get_library().db_path)
                 print(f"  ✅ Removed old database file")
             
-            print(f"\n📦 Creating fresh database at: {DB_PATH}")
-            os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-            conn = sqlite3.connect(DB_PATH)
+            print(f"\n📦 Creating fresh database at: {get_library().db_path}")
+            os.makedirs(os.path.dirname(get_library().db_path), exist_ok=True)
+            conn = sqlite3.connect(get_library().db_path)
             cursor = conn.cursor()
             create_database_schema(cursor)
             conn.commit()
@@ -4364,7 +4422,7 @@ def execute_rebuild_database():
             
             # Ensure library directory structure exists (Tier 1: silent auto-fix)
             print(f"📁 Ensuring library directory structure...")
-            for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, LOG_DIR]:
+            for directory in [get_library().thumbnail_cache_dir, get_library().trash_dir, get_library().db_backup_dir, get_library().log_dir]:
                 try:
                     os.makedirs(directory, exist_ok=True)
                 except (PermissionError, OSError) as e:
@@ -4373,7 +4431,7 @@ def execute_rebuild_database():
             conn = get_db_connection()
             
             for event in synchronize_library_generator(
-                LIBRARY_PATH,
+                get_library().library_path,
                 conn,
                 get_image_dimensions,
                 mode='full',
@@ -4423,63 +4481,38 @@ def delete_config():
         return True
     return False
 
-def clear_library_session():
+def reset_test_library_state() -> None:
+    """Clear all in-memory library sessions (unit tests only)."""
+    session_registry._sessions.clear()
+    ctx = session_registry.get_or_create(TEST_SESSION_ID)
+    ctx.clear()
+    _sync_test_path_mirrors(ctx)
+
+
+def clear_library_session(ctx=None):
     """Drop in-memory library paths so status returns not_configured."""
-    global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR
-
-    LIBRARY_PATH = None
-    DB_PATH = None
-    THUMBNAIL_CACHE_DIR = None
-    TRASH_DIR = None
-    DB_BACKUP_DIR = None
-    IMPORT_TEMP_DIR = None
-    LOG_DIR = None
+    target = ctx or get_library()
+    target.clear()
+    _sync_test_path_mirrors(target)
 
 
-def reset_to_welcome_state():
-    """Clear session and saved config — first-run / welcome screen."""
-    delete_config()
-    clear_library_session()
-    invalidate_grid_read_caches()
+def reset_to_welcome_state(ctx=None, *, delete_saved_config=False):
+    """Clear this client session; optionally delete saved picker config."""
+    if delete_saved_config:
+        delete_config()
+    clear_library_session(ctx)
 
-def update_app_paths(library_path, db_path):
-    """Update all global path variables"""
-    global LIBRARY_PATH, DB_PATH, THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, IMPORT_TEMP_DIR, LOG_DIR
 
-    bump_library_catalog_revision()
-    LIBRARY_PATH = library_path
-    DB_PATH = db_path
-    ensure_photo_grid_indices(db_path)
-    THUMBNAIL_CACHE_DIR = os.path.join(LIBRARY_PATH, '.thumbnails')
-    TRASH_DIR = os.path.join(LIBRARY_PATH, '.trash')
-    DB_BACKUP_DIR = os.path.join(LIBRARY_PATH, '.db_backups')
-    IMPORT_TEMP_DIR = os.path.join(LIBRARY_PATH, '.import_temp')
-    LOG_DIR = os.path.join(LIBRARY_PATH, '.logs')
-    
-    # Ensure directories exist (Tier 1: silent auto-fix)
-    for directory in [THUMBNAIL_CACHE_DIR, TRASH_DIR, DB_BACKUP_DIR, LOG_DIR]:
-        try:
-            os.makedirs(directory, exist_ok=True)
-        except (PermissionError, OSError) as e:
-            print(f"⚠️  Warning: Could not create directory {directory}: {e}")
-            print(f"   This may indicate the library is not accessible.")
-    if TRASH_DIR:
-        ensure_user_deleted_trash_dir(TRASH_DIR)
-
-    # Cheap background dirty-delta reconcile — never blocks open/grid load.
-    try:
-        from library_open_reconcile import schedule_open_reconcile_background
-
-        scheduled = schedule_open_reconcile_background(
-            library_path,
-            db_path,
-            generation=get_library_catalog_revision(),
-            invalidate_caches=invalidate_grid_read_caches,
-        )
-        if scheduled:
-            print("  🔄 Open reconcile scheduled (background)")
-    except Exception as exc:
-        print(f"  ⚠️  Open reconcile schedule skipped: {exc}")
+def update_app_paths(library_path, db_path, ctx=None):
+    """Bind library paths for the current (or provided) client session."""
+    target = ctx or get_library()
+    target.update_paths(
+        library_path,
+        db_path,
+        ensure_photo_grid_indices=ensure_photo_grid_indices,
+        schedule_open_reconcile=_schedule_open_reconcile_for_context,
+    )
+    _sync_test_path_mirrors(target)
 
 
 def primary_health_action(report):
@@ -4597,9 +4630,10 @@ def backup_database_for_migration(library_path, db_path):
 @app.route('/api/library/current', methods=['GET'])
 def get_current_library():
     """Get current library path"""
+    ctx = get_library()
     return jsonify(attach_catalog_revision({
-        'library_path': LIBRARY_PATH,
-        'db_path': DB_PATH
+        'library_path': ctx.library_path,
+        'db_path': ctx.db_path
     }))
 
 
@@ -4629,7 +4663,7 @@ def library_status():
     Returns status, message, and paths for frontend decision-making.
     """
     try:
-        if not LIBRARY_PATH or not DB_PATH:
+        if not get_library().library_path or not get_library().db_path:
             return jsonify({
                 'status': 'not_configured',
                 'message': 'No library configured. Please select a library.',
@@ -4638,15 +4672,15 @@ def library_status():
                 'valid': False
             })
 
-        library_path = LIBRARY_PATH
-        db_path = DB_PATH
+        library_path = get_library().library_path
+        db_path = get_library().db_path
 
         # Check filesystem access
         try:
             library_exists = os.path.exists(library_path)
         except (OSError, PermissionError) as e:
             print(f"⚠️  Library inaccessible — returning to welcome: {library_path} ({e})")
-            reset_to_welcome_state()
+            reset_to_welcome_state(ctx=get_library())
             return jsonify({
                 'status': 'not_configured',
                 'message': 'No library configured. Please select a library.',
@@ -4657,7 +4691,7 @@ def library_status():
 
         if not library_exists:
             print(f"⚠️  Library folder missing — returning to welcome: {library_path}")
-            reset_to_welcome_state()
+            reset_to_welcome_state(ctx=get_library())
             return jsonify({
                 'status': 'not_configured',
                 'message': 'No library configured. Please select a library.',
@@ -5508,8 +5542,8 @@ def migrate_library_database():
     """Migrate the configured (or specified) library database schema in place."""
     try:
         data = request.json or {}
-        library_path = (data.get('library_path') or LIBRARY_PATH or '').strip()
-        db_path = data.get('db_path') or DB_PATH
+        library_path = (data.get('library_path') or get_library().library_path or '').strip()
+        db_path = data.get('db_path') or get_library().db_path
 
         if not library_path or not db_path:
             return jsonify({
@@ -5548,7 +5582,7 @@ def migrate_library_database():
             payload['backup_path'] = backup_path
             return jsonify(payload), 400
 
-        configured_library = LIBRARY_PATH and os.path.abspath(LIBRARY_PATH) == abs_library_path
+        configured_library = get_library().library_path and os.path.abspath(get_library().library_path) == abs_library_path
         if configured_library:
             update_app_paths(abs_library_path, resolved_db_path)
             save_config(abs_library_path, resolved_db_path)
@@ -5670,8 +5704,8 @@ def switch_library():
         
         return jsonify({
             'status': 'success',
-            'library_path': LIBRARY_PATH,
-            'db_path': DB_PATH,
+            'library_path': get_library().library_path,
+            'db_path': get_library().db_path,
             'open_reconcile': 'scheduled',
         })
         
@@ -5686,7 +5720,7 @@ def reset_library():
     """Reset library configuration to first-run state (debug feature)"""
     try:
         had_config = os.path.exists(CONFIG_FILE)
-        reset_to_welcome_state()
+        reset_to_welcome_state(delete_saved_config=True)
 
         if had_config:
             print("\n🔄 Library configuration reset - returning to first-run state")
@@ -6256,7 +6290,7 @@ def set_photo_favorite_rating(photo_id, explicit_rating=None):
         return {'error': 'Photo not found'}, 404
 
     rel_path = row['current_path']
-    full_path = os.path.join(LIBRARY_PATH, rel_path)
+    full_path = os.path.join(get_library().library_path, rel_path)
 
     if not os.path.exists(full_path):
         conn.close()
@@ -6418,28 +6452,28 @@ def api_make_library_perfect():
     try:
         from make_library_perfect import run_db_normalization_engine
 
-        if not LIBRARY_PATH:
+        if not get_library().library_path:
             return jsonify({'error': 'No library configured'}), 400
 
-        if not os.path.isdir(LIBRARY_PATH):
+        if not os.path.isdir(get_library().library_path):
             return jsonify({'error': 'Configured library path is missing or invalid'}), 400
 
-        if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+        if not os.access(get_library().library_path, os.R_OK | os.X_OK):
             return jsonify({'error': 'Configured library path is not accessible'}), 503
 
-        if not DB_PATH:
+        if not get_library().db_path:
             return jsonify({'error': 'No database configured'}), 400
 
-        db_dir = os.path.dirname(DB_PATH) or '.'
+        db_dir = os.path.dirname(get_library().db_path) or '.'
         if not os.path.isdir(db_dir):
             return jsonify({'error': 'Configured database path is invalid'}), 400
         
         print(f"\n{'='*60}")
-        print(f"🔧 MAKE LIBRARY PERFECT: {LIBRARY_PATH}")
+        print(f"🔧 MAKE LIBRARY PERFECT: {get_library().library_path}")
         print(f"{'='*60}\n")
         
         # Execute the operation against the configured DB path.
-        result = run_db_normalization_engine(LIBRARY_PATH, db_path=DB_PATH)
+        result = run_db_normalization_engine(get_library().library_path, db_path=get_library().db_path)
         
         notify_catalog_reset_from_make_perfect(result)
         
@@ -6462,19 +6496,19 @@ def api_make_library_perfect_stream():
     for live processed/total progress. Final event: {"type":"complete","result":...}
     or {"type":"error","error":"..."}.
     """
-    if not LIBRARY_PATH:
+    if not get_library().library_path:
         return jsonify({'error': 'No library configured'}), 400
 
-    if not os.path.isdir(LIBRARY_PATH):
+    if not os.path.isdir(get_library().library_path):
         return jsonify({'error': 'Configured library path is missing or invalid'}), 400
 
-    if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+    if not os.access(get_library().library_path, os.R_OK | os.X_OK):
         return jsonify({'error': 'Configured library path is not accessible'}), 503
 
-    if not DB_PATH:
+    if not get_library().db_path:
         return jsonify({'error': 'No database configured'}), 400
 
-    db_dir = os.path.dirname(DB_PATH) or '.'
+    db_dir = os.path.dirname(get_library().db_path) or '.'
     if not os.path.isdir(db_dir):
         return jsonify({'error': 'Configured database path is invalid'}), 400
 
@@ -6490,6 +6524,8 @@ def api_make_library_perfect_stream():
 
     event_queue: queue.Queue = queue.Queue()
     cancel_event = threading.Event()
+    ctx_snapshot = get_library().snapshot_for_thread()
+    session_ctx = get_library()
 
     def run_op():
         try:
@@ -6501,8 +6537,8 @@ def api_make_library_perfect_stream():
                 return cancel_event.is_set()
 
             result = run_db_normalization_engine(
-                LIBRARY_PATH,
-                db_path=DB_PATH,
+                ctx_snapshot.library_path,
+                db_path=ctx_snapshot.db_path,
                 progress_callback=progress_callback,
                 resume=resume,
                 cancel_check=cancel_check,
@@ -6529,8 +6565,8 @@ def api_make_library_perfect_stream():
                 if kind == 'evt':
                     yield f"data: {json.dumps(payload)}\n\n"
                 elif kind == 'done':
-                    notify_catalog_reset_from_make_perfect(payload)
-                    yield f"data: {json.dumps({'type': 'complete', 'result': attach_catalog_revision(payload)})}\n\n"
+                    notify_catalog_reset_from_make_perfect(payload, ctx=session_ctx)
+                    yield f"data: {json.dumps({'type': 'complete', 'result': session_ctx.attach_catalog_revision(payload)})}\n\n"
                     break
                 elif kind == 'cancelled':
                     yield f"data: {json.dumps({'type': 'cancelled', 'result': payload})}\n\n"
@@ -6558,19 +6594,19 @@ def api_make_library_perfect_date_range_stream():
 
     Body: {"date_from": "2026-05-01", "date_to": "2026-06-30"}
     """
-    if not LIBRARY_PATH:
+    if not get_library().library_path:
         return jsonify({'error': 'No library configured'}), 400
 
-    if not os.path.isdir(LIBRARY_PATH):
+    if not os.path.isdir(get_library().library_path):
         return jsonify({'error': 'Configured library path is missing or invalid'}), 400
 
-    if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+    if not os.access(get_library().library_path, os.R_OK | os.X_OK):
         return jsonify({'error': 'Configured library path is not accessible'}), 503
 
-    if not DB_PATH:
+    if not get_library().db_path:
         return jsonify({'error': 'No database configured'}), 400
 
-    db_dir = os.path.dirname(DB_PATH) or '.'
+    db_dir = os.path.dirname(get_library().db_path) or '.'
     if not os.path.isdir(db_dir):
         return jsonify({'error': 'Configured database path is invalid'}), 400
 
@@ -6584,6 +6620,8 @@ def api_make_library_perfect_date_range_stream():
 
     event_queue: queue.Queue = queue.Queue()
     cancel_event = threading.Event()
+    ctx_snapshot = get_library().snapshot_for_thread()
+    session_ctx = get_library()
 
     def run_op():
         try:
@@ -6595,8 +6633,8 @@ def api_make_library_perfect_date_range_stream():
                 return cancel_event.is_set()
 
             result = run_db_normalization_engine(
-                LIBRARY_PATH,
-                db_path=DB_PATH,
+                ctx_snapshot.library_path,
+                db_path=ctx_snapshot.db_path,
                 progress_callback=progress_callback,
                 resume=False,
                 cancel_check=cancel_check,
@@ -6625,8 +6663,8 @@ def api_make_library_perfect_date_range_stream():
                 if kind == 'evt':
                     yield f"data: {json.dumps(payload)}\n\n"
                 elif kind == 'done':
-                    notify_catalog_reset_from_make_perfect(payload)
-                    yield f"data: {json.dumps({'type': 'complete', 'result': attach_catalog_revision(payload)})}\n\n"
+                    notify_catalog_reset_from_make_perfect(payload, ctx=session_ctx)
+                    yield f"data: {json.dumps({'type': 'complete', 'result': session_ctx.attach_catalog_revision(payload)})}\n\n"
                     break
                 elif kind == 'cancelled':
                     yield f"data: {json.dumps({'type': 'cancelled', 'result': payload})}\n\n"
@@ -6653,13 +6691,13 @@ def api_clean_library_checkpoint_probe():
     try:
         from make_library_perfect import find_resumable_clean_library_checkpoint
 
-        if not LIBRARY_PATH:
+        if not get_library().library_path:
             return jsonify({'error': 'No library configured'}), 400
 
-        if not os.path.isdir(LIBRARY_PATH):
+        if not os.path.isdir(get_library().library_path):
             return jsonify({'error': 'Configured library path is missing or invalid'}), 400
 
-        checkpoint = find_resumable_clean_library_checkpoint(LIBRARY_PATH)
+        checkpoint = find_resumable_clean_library_checkpoint(get_library().library_path)
         if not checkpoint:
             return jsonify({'status': 'NONE', 'resumable': False})
 
@@ -6685,10 +6723,10 @@ def _resolve_library_log_file(path_param: str):
     """Resolve a manifest path under the library .logs directory, or return an error."""
     if not path_param:
         return None, 'path query parameter is required'
-    if not LIBRARY_PATH:
+    if not get_library().library_path:
         return None, 'No library configured'
 
-    abs_library = os.path.abspath(LIBRARY_PATH)
+    abs_library = os.path.abspath(get_library().library_path)
     logs_dir = os.path.abspath(os.path.join(abs_library, '.logs'))
     if os.path.isabs(path_param):
         abs_path = os.path.abspath(path_param)
@@ -6752,10 +6790,10 @@ def api_abandon_clean_library_checkpoint():
             find_resumable_clean_library_checkpoint,
         )
 
-        if not LIBRARY_PATH:
+        if not get_library().library_path:
             return jsonify({'error': 'No library configured'}), 400
 
-        checkpoint = find_resumable_clean_library_checkpoint(LIBRARY_PATH)
+        checkpoint = find_resumable_clean_library_checkpoint(get_library().library_path)
         if checkpoint:
             abandon_clean_library_checkpoint(checkpoint['_checkpoint_path'])
         return jsonify({'ok': True, 'abandoned': bool(checkpoint)})
@@ -6776,20 +6814,20 @@ def api_scan_make_library_perfect():
 
         verify = str(request.args.get("verify", "")).lower() in {"1", "true", "yes"}
 
-        if not LIBRARY_PATH:
+        if not get_library().library_path:
             return jsonify({'error': 'No library configured'}), 400
 
-        if not os.path.isdir(LIBRARY_PATH):
+        if not os.path.isdir(get_library().library_path):
             return jsonify({'error': 'Configured library path is missing or invalid'}), 400
 
-        if not os.access(LIBRARY_PATH, os.R_OK | os.X_OK):
+        if not os.access(get_library().library_path, os.R_OK | os.X_OK):
             return jsonify({'error': 'Configured library path is not accessible'}), 503
 
         print(f"\n{'='*60}")
-        print(f"🔎 CLEAN LIBRARY SCAN: {LIBRARY_PATH}")
+        print(f"🔎 CLEAN LIBRARY SCAN: {get_library().library_path}")
         print(f"{'='*60}\n")
 
-        result = scan_library_cleanliness(LIBRARY_PATH, db_path=DB_PATH, verify=verify)
+        result = scan_library_cleanliness(get_library().library_path, db_path=get_library().db_path, verify=verify)
         return jsonify(result)
 
     except Exception as e:
@@ -6949,7 +6987,7 @@ def _share_prepare_session_fields(rows):
 def share_prepare():
     if not share_is_configured():
         return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
-    if not LIBRARY_PATH or not DB_PATH:
+    if not get_library().library_path or not get_library().db_path:
         return jsonify({'error': 'Library not configured'}), 503
 
     data = request.get_json() or {}
@@ -6970,14 +7008,14 @@ def share_prepare():
         return jsonify({'error': str(exc)}), 404
 
     try:
-        validate_photos_for_share(LIBRARY_PATH, rows)
+        validate_photos_for_share(get_library().library_path, rows)
     except SharePublishError as exc:
         return jsonify(exc.to_payload()), 400
 
     max_bytes = get_share_storage_max_bytes()
     max_mb = bytes_to_display_mb(max_bytes)
     oversized, shareable_ids = partition_share_photos_by_size(
-        LIBRARY_PATH,
+        get_library().library_path,
         rows,
         max_bytes,
     )
@@ -7019,7 +7057,7 @@ def share_prepare():
 def share_publish():
     if not share_is_configured():
         return jsonify({'error': share_config_error() or 'Share is not configured'}), 503
-    if not LIBRARY_PATH or not DB_PATH:
+    if not get_library().library_path or not get_library().db_path:
         return jsonify({'error': 'Library not configured'}), 503
 
     data = request.get_json() or {}
@@ -7053,7 +7091,7 @@ def share_publish():
         return jsonify({'error': str(exc)}), 404
 
     try:
-        validate_photos_for_share(LIBRARY_PATH, rows)
+        validate_photos_for_share(get_library().library_path, rows)
     except SharePublishError as exc:
         payload = exc.to_payload()
         app.logger.error(f"Share publish validation failed: {payload}")
@@ -7061,7 +7099,7 @@ def share_publish():
 
     max_bytes = get_share_storage_max_bytes()
     oversized, _shareable = partition_share_photos_by_size(
-        LIBRARY_PATH,
+        get_library().library_path,
         rows,
         max_bytes,
     )
@@ -7093,7 +7131,7 @@ def share_publish():
                 access_token=access_token,
                 title=final_title,
                 photo_rows=rows,
-                library_path=LIBRARY_PATH,
+                library_path=get_library().library_path,
                 generate_still_thumb=generate_still_square_thumbnail,
                 generate_video_thumb=generate_video_square_thumbnail,
                 to_rgb=convert_to_rgb_properly,

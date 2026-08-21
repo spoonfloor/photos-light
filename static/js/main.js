@@ -15,7 +15,10 @@ function versionedStaticUrl(path) {
 }
 
 async function apiFetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, {
+    ...options,
+    credentials: options.credentials ?? 'same-origin',
+  });
   const data = await response.json().catch(() => ({}));
   return { response, data };
 }
@@ -42,7 +45,10 @@ async function fetchWithTransientNetworkRetry(
       if (attempt > 0) {
         await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
       }
-      return await fetch(url, options);
+      return await fetch(url, {
+        ...options,
+        credentials: options.credentials ?? 'same-origin',
+      });
     } catch (error) {
       if (options?.signal?.aborted || error?.name === 'AbortError') {
         throw error;

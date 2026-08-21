@@ -11,6 +11,8 @@ from library_layout import canonical_db_path
 
 class CleanLibraryApiTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.library_path = os.path.join(self.tmpdir.name, "library")
         os.makedirs(self.library_path, exist_ok=True)
@@ -33,7 +35,6 @@ class CleanLibraryApiTest(unittest.TestCase):
             photo_app.LOG_DIR,
         )
         photo_app.update_app_paths(self.library_path, self.db_path)
-        photo_app.app.config["TESTING"] = True
         self.client = photo_app.app.test_client()
 
     def tearDown(self):

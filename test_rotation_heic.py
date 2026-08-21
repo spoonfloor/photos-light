@@ -31,6 +31,8 @@ def create_test_heic(path: str, size=(120, 80)) -> None:
 
 class RotateHeicUtilsTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.heic_path = os.path.join(self.tmpdir.name, "sample.heic")
         if not HEIF_TESTS_AVAILABLE:

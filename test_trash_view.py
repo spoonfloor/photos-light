@@ -20,6 +20,8 @@ from trash_catalog import (
 
 class TrashViewTests(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self._tmpdir = tempfile.mkdtemp()
         self.library_path = os.path.join(self._tmpdir, "Library")
         os.makedirs(self.library_path, exist_ok=True)
@@ -30,10 +32,7 @@ class TrashViewTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = self.library_path
-        photo_app.DB_PATH = self.db_path
         photo_app.update_app_paths(self.library_path, self.db_path)
-        photo_app.app.config["TESTING"] = True
         self.client = photo_app.app.test_client()
 
         self._seed_photo()

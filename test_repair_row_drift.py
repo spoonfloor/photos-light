@@ -12,6 +12,7 @@ from tools.repair_row_drift import assess_row, find_file_by_content_hash
 
 class RepairRowDriftTest(unittest.TestCase):
     def setUp(self):
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.library_path = self.tmpdir.name
         self.db_path = os.path.join(self.library_path, ".library", "photo_library.db")

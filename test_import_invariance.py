@@ -17,6 +17,8 @@ class ImportInvarianceContractTest(unittest.TestCase):
             shared_reader.assert_called_once_with("/tmp/example.jpg")
 
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.original_paths = (
             photo_app.LIBRARY_PATH,
@@ -27,7 +29,6 @@ class ImportInvarianceContractTest(unittest.TestCase):
             photo_app.IMPORT_TEMP_DIR,
             photo_app.LOG_DIR,
         )
-        photo_app.app.config["TESTING"] = True
 
     def tearDown(self):
         (

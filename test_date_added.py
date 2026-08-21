@@ -139,6 +139,8 @@ class DateAddedRebuildTest(unittest.TestCase):
 
 class DateAddedTrashRestoreTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self._tmpdir = TemporaryDirectory()
         self.library_path = os.path.join(self._tmpdir.name, "library")
         os.makedirs(self.library_path, exist_ok=True)
@@ -151,10 +153,7 @@ class DateAddedTrashRestoreTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = self.library_path
-        photo_app.DB_PATH = self.db_path
         photo_app.update_app_paths(self.library_path, self.db_path)
-        photo_app.app.config["TESTING"] = True
 
     def tearDown(self):
         shutil.rmtree(self._tmpdir.name, ignore_errors=True)
@@ -259,8 +258,7 @@ class DateAddedApiSortTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = self.library_path
-        photo_app.DB_PATH = self.db_path
+        photo_app.update_app_paths(self.library_path, self.db_path)
 
     def tearDown(self):
         shutil.rmtree(self._tmpdir.name, ignore_errors=True)

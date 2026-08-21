@@ -5,10 +5,12 @@ import app as photo_app
 
 class CatalogRevisionTest(unittest.TestCase):
     def setUp(self):
+        photo_app.reset_test_library_state()
         self._initial_revision = photo_app.get_library_catalog_revision()
 
     def tearDown(self):
         photo_app.LIBRARY_CATALOG_REVISION = self._initial_revision
+        photo_app.get_library().catalog_revision = self._initial_revision
         photo_app.invalidate_grid_read_caches()
 
     def test_bump_increments_revision(self):

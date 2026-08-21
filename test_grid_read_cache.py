@@ -6,11 +6,14 @@ from urllib.parse import quote
 from unittest.mock import patch
 
 import app as photo_app
+from library_context import session_registry
 from media_finalization import FinalizeMediaResult
 
 
 class GridReadCacheTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self._tmpdir = tempfile.TemporaryDirectory()
         self.library_path = os.path.join(self._tmpdir.name, "library")
         os.makedirs(self.library_path, exist_ok=True)
@@ -56,17 +59,13 @@ class GridReadCacheTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = self.library_path
-        photo_app.DB_PATH = self.db_path
-        photo_app.TRASH_DIR = os.path.join(self.library_path, ".trash")
-        photo_app.THUMBNAIL_CACHE_DIR = os.path.join(self.library_path, ".thumbnails")
-        os.makedirs(photo_app.TRASH_DIR, exist_ok=True)
-        os.makedirs(photo_app.THUMBNAIL_CACHE_DIR, exist_ok=True)
-        photo_app.invalidate_grid_read_caches()
+        session_registry._sessions.clear()
+        photo_app.update_app_paths(self.library_path, self.db_path)
         self.client = photo_app.app.test_client()
 
     def tearDown(self):
         photo_app.invalidate_grid_read_caches()
+        session_registry._sessions.clear()
         self._tmpdir.cleanup()
 
     def test_month_index_cache_serves_stale_data_until_invalidated(self):

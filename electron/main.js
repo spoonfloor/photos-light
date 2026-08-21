@@ -4,9 +4,11 @@ const { spawn, execFileSync } = require("child_process");
 const net = require("net");
 
 const HOST = "127.0.0.1";
-const PORT = 5001;
-const APP_URL = `http://${HOST}:${PORT}`;
-const LIBRARY_STATUS_URL = `${APP_URL}/api/library/status`;
+const DEFAULT_PORT = 5001;
+const PORT_SCAN_MAX = 20;
+
+/** @type {number} */
+let activePort = DEFAULT_PORT;
 
 /** @type {import('child_process').ChildProcess | null} */
 let backendProcess = null;
@@ -27,6 +29,14 @@ function repoRoot() {
   return path.join(__dirname, "..");
 }
 
+function appUrl(port = activePort) {
+  return `http://${HOST}:${port}`;
+}
+
+function libraryStatusUrl(port = activePort) {
+  return `${appUrl(port)}/api/library/status`;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -35,6 +45,7 @@ function backendLaunchConfig() {
   const env = {
     ...process.env,
     PHOTOS_LIGHT_ELECTRON: "1",
+    PHOTOS_LIGHT_PORT: String(activePort),
     PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ""}`,
   };
 
@@ -56,9 +67,9 @@ function backendLaunchConfig() {
   };
 }
 
-function isServerReachable(timeoutMs = 500) {
+function isServerReachable(port = activePort, timeoutMs = 500) {
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host: HOST, port: PORT }, () => {
+    const socket = net.createConnection({ host: HOST, port }, () => {
       socket.end();
       resolve(true);
     });
@@ -73,6 +84,36 @@ function isServerReachable(timeoutMs = 500) {
       resolve(false);
     });
   });
+}
+
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once("error", () => resolve(false));
+    probe.listen({ host: HOST, port }, () => {
+      probe.close(() => resolve(true));
+    });
+  });
+}
+
+async function probePhotosLightServer(port, timeoutMs = 1500) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(libraryStatusUrl(port), {
+      credentials: "include",
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) {
+      return false;
+    }
+    const payload = await response.json();
+    return typeof payload?.status === "string";
+  } catch {
+    return false;
+  }
 }
 
 function getListeningPids(port) {
@@ -168,34 +209,56 @@ async function stopOurBackendOnPort(port) {
   }
 }
 
-async function assertPortAvailableForLaunch() {
-  await stopOurBackendOnPort(PORT);
+function markBackendReused(port) {
+  activePort = port;
+  ownsBackend = false;
+  backendProcess = null;
+}
 
-  const foreignPids = getListeningPids(PORT).filter((pid) => {
-    if (pid === process.pid) {
-      return false;
+async function ensureBackend() {
+  if (backendProcess && ownsBackend && (await isServerReachable(activePort))) {
+    return;
+  }
+
+  // Reuse an existing Photos Light server (e.g. dev `python3 app.py` on 5001).
+  if (await probePhotosLightServer(DEFAULT_PORT)) {
+    markBackendReused(DEFAULT_PORT);
+    return;
+  }
+
+  await stopOurBackendOnPort(DEFAULT_PORT);
+
+  if (await isPortFree(DEFAULT_PORT)) {
+    activePort = DEFAULT_PORT;
+    spawnOwnedBackend();
+    return;
+  }
+
+  // Default port held by a non-Photos-Light process — scan for reuse or a free port.
+  for (let port = DEFAULT_PORT + 1; port <= DEFAULT_PORT + PORT_SCAN_MAX; port++) {
+    if (await probePhotosLightServer(port)) {
+      markBackendReused(port);
+      return;
     }
-    return !isOurBackendCommand(getProcessCommand(pid));
-  });
-
-  if (foreignPids.length > 0) {
-    const foreignCommand = getProcessCommand(foreignPids[0]) || "unknown process";
-    throw new Error(
-      `Port ${PORT} is already in use by another application:\n\n${foreignCommand}\n\nQuit that process and try again.`,
-    );
+    if (await isPortFree(port)) {
+      activePort = port;
+      spawnOwnedBackend();
+      return;
+    }
   }
 
-  if (await isServerReachable()) {
-    throw new Error(`Port ${PORT} is still in use. Quit the other process and try again.`);
-  }
+  throw new Error(
+    `Could not find an available port between ${DEFAULT_PORT} and ${DEFAULT_PORT + PORT_SCAN_MAX}.\n\nQuit other local servers and try again.`,
+  );
 }
 
 function waitForServer(timeoutMs = 45000) {
+  const url = appUrl();
   return new Promise((resolve, reject) => {
     const deadline = Date.now() + timeoutMs;
 
     const tryConnect = () => {
-      const socket = net.createConnection({ host: HOST, port: PORT }, () => {
+      const socket = net.createConnection({ host: HOST, port: activePort }, () => {
         socket.end();
         resolve();
       });
@@ -203,7 +266,7 @@ function waitForServer(timeoutMs = 45000) {
       socket.on("error", () => {
         socket.destroy();
         if (Date.now() >= deadline) {
-          reject(new Error(`Photos Light server did not start on ${APP_URL}`));
+          reject(new Error(`Photos Light server did not start on ${url}`));
           return;
         }
         setTimeout(tryConnect, 200);
@@ -214,39 +277,23 @@ function waitForServer(timeoutMs = 45000) {
   });
 }
 
-async function waitForEmptyLibrarySession(timeoutMs = 15000) {
+async function waitForBackendReady(timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
-  let lastStatus = null;
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(LIBRARY_STATUS_URL);
-      const payload = await response.json();
-      lastStatus = payload?.status || null;
-
-      if (payload?.status === "not_configured") {
+      const response = await fetch(libraryStatusUrl(), { credentials: "include" });
+      if (response.ok) {
         return;
       }
-
-      if (payload?.status === "healthy") {
-        throw new Error(
-          "Photos Light started with a library already loaded. This usually means an old backend was reused.",
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("already loaded")) {
-        throw error;
-      }
+    } catch {
+      // Server still starting.
     }
 
     await sleep(200);
   }
 
-  throw new Error(
-    lastStatus
-      ? `Photos Light did not reach the welcome state (last status: ${lastStatus}).`
-      : "Photos Light did not reach the welcome state.",
-  );
+  throw new Error(`Photos Light server did not become ready on ${appUrl()}.`);
 }
 
 function stopBackend() {
@@ -324,15 +371,6 @@ function spawnOwnedBackend() {
   attachBackendProcessHandlers(backendProcess);
 }
 
-async function ensureBackend() {
-  if (backendProcess && ownsBackend && (await isServerReachable())) {
-    return;
-  }
-
-  await assertPortAvailableForLaunch();
-  spawnOwnedBackend();
-}
-
 function createWindow() {
   if (mainWindow) {
     mainWindow.focus();
@@ -362,7 +400,7 @@ function createWindow() {
     mainWindow.show();
   });
 
-  mainWindow.loadURL(APP_URL);
+  mainWindow.loadURL(appUrl());
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -425,7 +463,7 @@ async function bootstrapOnce() {
   try {
     await ensureBackend();
     await waitForServer();
-    await waitForEmptyLibrarySession();
+    await waitForBackendReady();
   } catch (error) {
     dialog.showErrorBox("Photos Light", error.message);
     stopBackend();

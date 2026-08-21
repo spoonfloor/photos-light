@@ -9,6 +9,7 @@ from unittest.mock import patch
 import app as photo_app
 from db_health import DBStatus, check_database_health
 from db_schema import create_database_schema
+from library_context import session_registry
 from library_layout import canonical_db_path
 
 
@@ -42,6 +43,8 @@ def create_photos_only_db(db_path, *, include_rating=True, include_date_added=Tr
 
 class DBHealthMatrixTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
 
     def tearDown(self):
@@ -116,6 +119,8 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.client = photo_app.app.test_client()
 
     def tearDown(self):
+        session_registry._sessions.clear()
+        photo_app.clear_library_session()
         (
             photo_app.LIBRARY_PATH,
             photo_app.DB_PATH,
@@ -125,6 +130,8 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
             photo_app.IMPORT_TEMP_DIR,
             photo_app.LOG_DIR,
         ) = self.original_paths
+        if self.original_paths[0] and self.original_paths[1]:
+            photo_app.update_app_paths(self.original_paths[0], self.original_paths[1])
         self.config_patcher.stop()
         self.tmpdir.cleanup()
 
@@ -319,7 +326,8 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         self.assertEqual(payload["status"], "not_configured")
         self.assertIsNone(payload["library_path"])
         self.assertIsNone(photo_app.LIBRARY_PATH)
-        self.assertFalse(os.path.exists(self.config_path))
+        # Saved picker config may remain; only this session is cleared.
+        self.assertTrue(os.path.exists(self.config_path))
 
     def test_switch_library_missing_db_requires_create_new(self):
         library_path = self._make_library("switch-missing-db")
@@ -528,8 +536,7 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = library_path
-        photo_app.DB_PATH = db_path
+        photo_app.update_app_paths(library_path, db_path)
 
         response = self.client.get("/api/photos?sort=newest")
 
@@ -568,8 +575,7 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = library_path
-        photo_app.DB_PATH = db_path
+        photo_app.update_app_paths(library_path, db_path)
         photo_app.invalidate_photo_total_count_cache()
 
         first = self.client.get("/api/photos?sort=newest&limit=2").get_json()
@@ -611,8 +617,7 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = library_path
-        photo_app.DB_PATH = db_path
+        photo_app.update_app_paths(library_path, db_path)
         photo_app.invalidate_photo_total_count_cache()
         photo_app.invalidate_month_index_cache()
 
@@ -658,8 +663,7 @@ class DBHealthRouteConsistencyTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-        photo_app.LIBRARY_PATH = library_path
-        photo_app.DB_PATH = db_path
+        photo_app.update_app_paths(library_path, db_path)
         photo_app.invalidate_photo_total_count_cache()
 
         response = self.client.get("/api/photos/jump?month=1900-01&sort=newest&limit=50")

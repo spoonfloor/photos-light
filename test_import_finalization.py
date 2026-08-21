@@ -13,6 +13,8 @@ from library_cleanliness import build_canonical_photo_path
 
 class ImportFinalizationRouteTest(unittest.TestCase):
     def setUp(self):
+        photo_app.app.config["TESTING"] = True
+        photo_app.reset_test_library_state()
         self.tmpdir = TemporaryDirectory()
         self.library_path = os.path.join(self.tmpdir.name, "library")
         os.makedirs(self.library_path, exist_ok=True)
@@ -35,7 +37,6 @@ class ImportFinalizationRouteTest(unittest.TestCase):
             photo_app.LOG_DIR,
         )
         photo_app.update_app_paths(self.library_path, self.db_path)
-        photo_app.app.config["TESTING"] = True
         self.client = photo_app.app.test_client()
 
     def tearDown(self):
