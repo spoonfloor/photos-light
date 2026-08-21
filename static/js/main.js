@@ -9275,11 +9275,29 @@ let importState = {
   runStartedAtMs: null,
   estimatedSeconds: null,
   estimatedDisplay: null,
+  dropBatchId: null,
+  dropImportInProgress: false,
 };
 
 function setImportOverlayPhase(phase) {
   importState.overlayPhase = phase;
   FlowController.syncOverlayPhase('add', phase);
+}
+
+async function clearImportDropBatch(batchId = importState.dropBatchId) {
+  if (!batchId) {
+    return;
+  }
+  try {
+    await fetch(`/api/import/drop-batch/${encodeURIComponent(batchId)}`, {
+      method: 'DELETE',
+    });
+  } catch (error) {
+    console.warn('Failed to clear staged drop batch:', error);
+  }
+  if (importState.dropBatchId === batchId) {
+    importState.dropBatchId = null;
+  }
 }
 
 let terraformProgressState = {
@@ -9768,8 +9786,37 @@ async function hideImportOverlay(reloadPhotos = true) {
     overlay.style.display = 'none';
   }
 
-  if (reloadPhotos) {
+  if (reloadPhotos && state.hasDatabase) {
     await syncGridAfterHistogramChange();
+  }
+}
+
+/**
+ * Hide the import overlay shell without reloading the grid (early drop cancel).
+ */
+async function dismissImportOverlayShell(options = {}) {
+  const reloadGrid = options.reloadGrid ?? false;
+  const keepBatch = options.keepBatch ?? false;
+  const overlay = document.getElementById('importOverlay');
+  if (!isFlowOverlayVisible(overlay)) {
+    setImportOverlayPhase(null);
+    if (!keepBatch) {
+      await clearImportDropBatch();
+    }
+    return;
+  }
+
+  if (typeof FlowController !== 'undefined') {
+    await FlowController.dismissOverlay('add', { reloadGrid });
+  } else {
+    await hideImportOverlay(reloadGrid);
+  }
+
+  setImportOverlayPhase(null);
+  importState.preflight = null;
+  importState.preflightResolve = null;
+  if (!keepBatch) {
+    await clearImportDropBatch();
   }
 }
 
@@ -9789,7 +9836,9 @@ async function closeImportOverlay() {
 
   const overlay = document.getElementById('importOverlay');
   if (isFlowOverlayVisible(overlay)) {
-    await FlowController.cancelRecovery('add');
+    await FlowController.cancelRecovery('add', {
+      reloadGrid: state.hasDatabase,
+    });
   }
 }
 
@@ -9882,6 +9931,7 @@ function registerAddFlowAdapter() {
       resetSession: () => {
         importState.preflight = null;
         importState.preflightResolve = null;
+        void clearImportDropBatch();
         if (importState.overlayPhase) {
           setImportOverlayPhase(null);
         }
@@ -15789,9 +15839,14 @@ async function createNewLibraryWithName(dialogOptions = {}) {
       renderEmptyLibraryState();
       enableAppBarButtons();
 
-      await triggerImport({
-        onPickerVisible: () => hideCreateLibraryOverlay(),
-      });
+      if (typeof dialogOptions.afterLibraryReady === 'function') {
+        hideCreateLibraryOverlay();
+        await dialogOptions.afterLibraryReady();
+      } else if (dialogOptions.openPickerAfterCreate !== false) {
+        await triggerImport({
+          onPickerVisible: () => hideCreateLibraryOverlay(),
+        });
+      }
       return true;
     }
   } catch (error) {
@@ -15977,6 +16032,7 @@ async function switchToLibrary(libraryPath, dbPath, switchOptions = {}) {
 
     // Close overlays
     closeSwitchLibraryOverlay();
+    hideCreateLibraryOverlay();
     const createOverlay = document.getElementById('createLibraryOverlay');
     if (createOverlay) createOverlay.style.display = 'none';
 
@@ -16144,6 +16200,105 @@ async function triggerImportWithLibraryCheck() {
   } catch (error) {
     console.error('❌ Failed to check library status:', error);
     showToast(`Error: ${error.message}`, 'error');
+  }
+}
+
+/**
+ * Begin import from an acquired drop (native paths or staged scan result).
+ */
+async function beginImportFromAcquired(acquired) {
+  if (!acquired) {
+    return;
+  }
+
+  if (acquired.mode === 'staged') {
+    await scanAndImport(null, {
+      scanResult: acquired.scanResult,
+      dropBatchId: acquired.dropBatchId,
+    });
+    return;
+  }
+
+  await scanAndImport(acquired.paths);
+}
+
+async function discardAcquiredDrop(acquired) {
+  if (acquired?.dropBatchId) {
+    await clearImportDropBatch(acquired.dropBatchId);
+  }
+}
+
+/**
+ * Ensure a library is configured, then run a drop import from acquired sources.
+ */
+async function ensureLibraryThenImportFromAcquired(acquired) {
+  const response = await fetch('/api/library/status');
+  const status = await response.json();
+
+  if (status.status === 'not_configured') {
+    await dismissImportOverlayShell({ reloadGrid: false, keepBatch: true });
+
+    const created = await createNewLibraryWithName({
+      title: 'Add to new library',
+      subtitle:
+        'To add photos, first create a new library. Give your library a name and location to continue.',
+      openPickerAfterCreate: false,
+      afterLibraryReady: async () => {
+        await beginImportFromAcquired(acquired);
+      },
+    });
+
+    if (!created) {
+      await discardAcquiredDrop(acquired);
+      renderFirstRunEmptyState();
+    }
+    return;
+  }
+
+  await beginImportFromAcquired(acquired);
+}
+
+/**
+ * Handle files dropped onto the app window.
+ * @param {{ nativePaths: string[], files: File[], entries: FileSystemEntry[] }} snapshot
+ */
+async function handleImportDrop(snapshot) {
+  if (!getViewCapabilities().import || importState.dropImportInProgress) {
+    return;
+  }
+
+  importState.dropImportInProgress = true;
+  try {
+    await prepareImportPreflightOverlay();
+    const statusEl = document.getElementById('importStatusText');
+    if (statusEl) {
+      const stagingLabel =
+        typeof ImportDrop !== 'undefined' &&
+        ImportDrop.canResolveNativePaths()
+          ? 'Scanning photos…'
+          : 'Staging photos…';
+      setImportSpinnerStatus(statusEl, stagingLabel);
+    }
+
+    const acquired = await ImportDrop.acquireFromDrop(snapshot);
+    if (
+      !acquired ||
+      ((!acquired.paths || acquired.paths.length === 0) &&
+        !(acquired.scanResult?.files || []).length)
+    ) {
+      await discardAcquiredDrop(acquired);
+      await dismissImportOverlayShell({ reloadGrid: false });
+      showToast('No media files found', null);
+      return;
+    }
+
+    await ensureLibraryThenImportFromAcquired(acquired);
+  } catch (error) {
+    await dismissImportOverlayShell({ reloadGrid: false });
+    console.error('❌ Failed to import dropped files:', error);
+    showToast(`Error: ${error.message}`, 'error');
+  } finally {
+    importState.dropImportInProgress = false;
   }
 }
 
@@ -16414,19 +16569,22 @@ async function prepareImportPreflightOverlay() {
 
   const statusEl = document.getElementById('importStatusText');
   if (statusEl) {
-    setImportSpinnerStatus(statusEl, 'Scanning library…');
+    setImportSpinnerStatus(statusEl, 'Scanning photos…');
   }
 
   showFlowOverlay(overlay);
   return overlay;
 }
 
-async function runImportPreflightInOverlay(paths) {
+async function runImportPreflightInOverlay(paths, options = {}) {
   const existingOverlay = document.getElementById('importOverlay');
-  if (
-    !isFlowOverlayVisible(existingOverlay) ||
-    importState.overlayPhase !== 'scanning'
-  ) {
+  const overlayAlreadyScanning =
+    isFlowOverlayVisible(existingOverlay) &&
+    importState.overlayPhase === 'scanning';
+
+  if (!options.scanResult && !overlayAlreadyScanning) {
+    await prepareImportPreflightOverlay();
+  } else if (options.scanResult && !isFlowOverlayVisible(existingOverlay)) {
     await prepareImportPreflightOverlay();
   }
 
@@ -16435,19 +16593,25 @@ async function runImportPreflightInOverlay(paths) {
     throw new Error('Import overlay unavailable');
   }
 
+  if (options.dropBatchId) {
+    importState.dropBatchId = options.dropBatchId;
+  }
+
   const orientStartedAt = Date.now();
   let scanResult;
   try {
-    scanResult = await scanImportPaths(paths);
+    scanResult = options.scanResult || (await scanImportPaths(paths));
   } catch (error) {
-    await closeImportOverlay();
+    await clearImportDropBatch(options.dropBatchId);
+    await dismissImportOverlayShell({ reloadGrid: state.hasDatabase });
     throw error;
   }
 
   await waitPreflightScoreboardOrientDelay(orientStartedAt);
 
   if ((scanResult.total_count || 0) === 0) {
-    await closeImportOverlay();
+    await clearImportDropBatch(options.dropBatchId);
+    await dismissImportOverlayShell({ reloadGrid: false });
     showToast('No media files found', null);
     return null;
   }
@@ -16484,6 +16648,7 @@ async function runImportPreflightInOverlay(paths) {
   setImportOverlayPhase(null);
 
   if (!confirmed) {
+    await clearImportDropBatch(options.dropBatchId);
     return null;
   }
 
@@ -16493,14 +16658,15 @@ async function runImportPreflightInOverlay(paths) {
 /**
  * Scan paths in-overlay, show preflight, then import on Continue.
  */
-async function scanAndImport(paths) {
+async function scanAndImport(paths, options = {}) {
   try {
-    const result = await runImportPreflightInOverlay(paths);
+    const result = await runImportPreflightInOverlay(paths, options);
     if (!result) {
       return;
     }
     await startImportFromPaths(result.files);
   } catch (error) {
+    await clearImportDropBatch(options.dropBatchId);
     console.error('❌ Failed to scan paths:', error);
     showToast(`Error: ${error.message}`, 'error');
   }
@@ -16793,10 +16959,12 @@ async function handleImportEvent(event, data) {
       logPath: data.log_path || null,
     });
 
+    void clearImportDropBatch();
     await syncGridAfterHistogramChange();
   }
 
   if (event === 'error') {
+    void clearImportDropBatch();
     if (statusText) {
       statusText.innerHTML = `<p>Import failed: ${data.error}</p>`;
     }
@@ -16895,6 +17063,12 @@ async function init() {
 
   // Check library health before making any data API calls
   await checkLibraryHealthAndInit();
+
+  if (typeof ImportDrop !== 'undefined') {
+    ImportDrop.wireWindowImportDrop({
+      onDrop: handleImportDrop,
+    });
+  }
 }
 
 /**

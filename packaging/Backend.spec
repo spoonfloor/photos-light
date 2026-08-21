@@ -42,6 +42,8 @@ HIDDEN_IMPORTS = [
     "quicktime_date_atoms",
     "migrate_db",
     "init_db",
+    "import_scan",
+    "library_context",
 ]
 
 a = Analysis(

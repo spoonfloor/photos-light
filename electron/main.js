@@ -390,6 +390,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      preload: path.join(__dirname, "preload.js"),
       // Keep SSE import/clean streams alive when native pickers or other apps take focus.
       backgroundThrottling: false,
     },
@@ -401,6 +402,12 @@ function createWindow() {
   });
 
   mainWindow.loadURL(appUrl());
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (url.startsWith("file://")) {
+      event.preventDefault();
+    }
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;

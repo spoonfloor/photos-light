@@ -122,6 +122,7 @@ from normalization_convert import (
     iter_convert_events,
     scan_convert_library,
 )
+from import_scan import delete_drop_batch, scan_media_paths, stage_drop_uploads
 from normalization_ingest import IngestDependencies, iter_ingest_events
 from photo_canonicalization import (
     CanonicalizedPhoto,
@@ -3955,107 +3956,74 @@ def scan_import_paths():
     try:
         data = request.json
         paths = data.get('paths', [])
-        
+
         if not paths:
             return jsonify({'error': 'No paths provided'}), 400
-        
+
         print(f"\n🔍 Scanning {len(paths)} path(s)...")
-        
-        media_files = []
-        files_count = 0
-        folders_count = 0
-        photo_count = 0
-        video_count = 0
-        photo_bytes = 0
-        video_bytes = 0
-
-        def path_is_hidden(location):
-            for component in os.path.normpath(location).split(os.sep):
-                if component and component not in ('.', '..') and component.startswith('.'):
-                    return True
-            return False
-
-        def add_media_file(full_path):
-            nonlocal photo_count, video_count, photo_bytes, video_bytes
-
-            if path_is_hidden(full_path):
-                return False
-
-            _, ext = os.path.splitext(full_path)
-            ext_lower = ext.lower()
-            if ext_lower not in PHOTO_EXTENSIONS and ext_lower not in VIDEO_EXTENSIONS:
-                return False
-
-            media_files.append(full_path)
-            try:
-                size_bytes = os.path.getsize(full_path)
-            except OSError:
-                size_bytes = 0
-
-            if ext_lower in VIDEO_EXTENSIONS:
-                video_count += 1
-                video_bytes += size_bytes
-            else:
-                photo_count += 1
-                photo_bytes += size_bytes
-            return True
-        
-        for path in paths:
-            if not os.path.exists(path):
-                print(f"  ⚠️  Path not found: {path}")
-                continue
-            
-            if os.path.isfile(path):
-                # Individual file
-                if add_media_file(path):
-                    files_count += 1
-            
-            elif os.path.isdir(path):
-                if path_is_hidden(path):
-                    print(f"  ⏭️  Skipping hidden folder: {path}")
-                    continue
-
-                # Folder - scan recursively
-                folders_count += 1
-                print(f"  📁 Scanning folder: {path}")
-                
-                for root, dirs, files in os.walk(path, followlinks=False):
-                    dirs[:] = [d for d in dirs if not d.startswith('.')]
-                    for filename in files:
-                        if filename.startswith('.'):
-                            continue
-                        full_path = os.path.join(root, filename)
-                        add_media_file(full_path)
-        
-        print(f"  ✅ Found {len(media_files)} media files")
-        print(f"     {files_count} direct file(s), {folders_count} folder(s) scanned")
-
-        estimated_seconds = estimate_clean_duration_seconds(
-            photo_count=photo_count,
-            video_count=video_count,
-            photo_bytes=photo_bytes,
-            video_bytes=video_bytes,
+        scan_result = scan_media_paths(paths)
+        print(f"  ✅ Found {scan_result.total_count} media files")
+        print(
+            f"     {scan_result.files_selected} direct file(s), "
+            f"{scan_result.folders_scanned} folder(s) scanned"
         )
-        _seconds, estimated_display = format_about_duration(estimated_seconds)
-        
-        return jsonify({
-            'status': 'success',
-            'files': media_files,
-            'total_count': len(media_files),
-            'photo_count': photo_count,
-            'video_count': video_count,
-            'photo_bytes': photo_bytes,
-            'video_bytes': video_bytes,
-            'total_bytes': photo_bytes + video_bytes,
-            'estimated_seconds': round(estimated_seconds, 1),
-            'estimated_display': estimated_display,
-            'files_selected': files_count,
-            'folders_scanned': folders_count
-        })
-        
+
+        return jsonify(scan_result.to_payload())
+
     except Exception as e:
         error_logger.error(f"Scan paths failed: {e}")
         print(f"\n❌ Scan paths failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/import/stage-drop', methods=['POST'])
+@handle_db_corruption
+def stage_import_drop():
+    """Stage browser-dropped files in system temp and return scan preflight payload."""
+    try:
+        uploads = request.files.getlist('files')
+        if not uploads:
+            return jsonify({'error': 'No files provided'}), 400
+
+        relative_paths_raw = request.form.get('relative_paths', '[]')
+        try:
+            relative_paths = json.loads(relative_paths_raw)
+        except json.JSONDecodeError:
+            relative_paths = []
+
+        if not isinstance(relative_paths, list):
+            relative_paths = []
+
+        staged_uploads = []
+        for index, upload in enumerate(uploads):
+            relative_path = (
+                relative_paths[index]
+                if index < len(relative_paths)
+                else (upload.filename or f"upload-{index}")
+            )
+            staged_uploads.append((upload, str(relative_path)))
+
+        batch_id, scan_result = stage_drop_uploads(staged_uploads)
+        payload = scan_result.to_payload()
+        payload['batch_id'] = batch_id
+        return jsonify(payload)
+    except Exception as e:
+        error_logger.error(f"Stage drop failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/import/drop-batch/<batch_id>', methods=['DELETE'])
+def delete_import_drop_batch(batch_id):
+    """Remove a staged browser drop batch from system temp."""
+    try:
+        deleted = delete_drop_batch(batch_id)
+        if not deleted:
+            return jsonify({'status': 'not_found'}), 404
+        return jsonify({'status': 'deleted'})
+    except ValueError:
+        return jsonify({'error': 'Invalid batch id'}), 400
+    except Exception as e:
+        error_logger.error(f"Delete drop batch failed: {e}")
         return jsonify({'error': str(e)}), 500
 
 
