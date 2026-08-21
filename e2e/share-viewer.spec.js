@@ -120,8 +120,9 @@ test.describe('share viewer parity', () => {
   });
 
   test('html-first load shell before scripts run', async ({ page }) => {
+    await page.route('**/*.js', (route) => route.abort());
     await mockShareResolve(page);
-    await page.goto('/?t=e2e-test-token', { waitUntil: 'commit' });
+    await page.goto('/?t=e2e-test-token', { waitUntil: 'load' });
 
     await expect(page.locator('body')).toHaveClass(/surface-load-active/);
     await expect(page.locator('#surfaceLoadOverlay')).toBeVisible();
