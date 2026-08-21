@@ -31,6 +31,27 @@ class ShareResolveContractTest(unittest.TestCase):
         self.assertIn('parseSortOrder', text)
         self.assertIn('searchParams.get("sort")', text)
 
+    def test_structured_error_codes(self):
+        text = SHARE_RESOLVE.read_text(encoding="utf-8")
+        self.assertIn('code: "share_not_found"', text)
+        self.assertIn('code: "share_revoked"', text)
+        self.assertIn('code: "share_expired"', text)
+        self.assertIn('code: "share_unavailable"', text)
+        self.assertIn('code: "share_misconfigured"', text)
+        self.assertIn('kind: "db_error"', text)
+        self.assertNotIn("albumIsAccessible", text)
+
+    def test_db_errors_are_unavailable_not_not_found(self):
+        text = SHARE_RESOLVE.read_text(encoding="utf-8")
+        lookup_block = text.split("async function loadAlbumByToken", 1)[1].split(
+            "async function loadFirstClusterPhoto",
+            1,
+        )[0]
+        self.assertIn('kind: "db_error"', lookup_block)
+        self.assertIn("album lookup failed", lookup_block)
+        self.assertIn("unavailableResponse", text)
+        self.assertIn("503", text)
+
 
 if __name__ == "__main__":
     unittest.main()

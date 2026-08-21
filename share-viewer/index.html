@@ -176,7 +176,17 @@
         <h1 class="share-page-title" id="sharePageTitle"></h1>
         <div id="photoContainer"></div>
         <div class="share-empty" id="shareEmpty" hidden>No photos match these filters.</div>
-        <div class="share-error" id="shareError" hidden></div>
+        <div class="share-error-panel" id="shareErrorPanel">
+          <div class="share-error" id="shareError" hidden></div>
+          <button
+            type="button"
+            class="btn btn-primary share-error-retry"
+            id="shareErrorRetryBtn"
+            hidden
+          >
+            Try again
+          </button>
+        </div>
       </div>
     </main>
 <!-- Lightbox Overlay -->
@@ -368,6 +378,7 @@
     <script src="js/photoSurface/appBarLayout.js?v=2"></script>
     <script src="js/photoSurface/shareDatePicker.js"></script>
     <script src="js/photoSurface/downloadExport.js"></script>
-    <script src="js/shareBoot.js?v=9"></script>
+    <script src="js/shareResolveClient.js?v=1"></script>
+    <script src="js/shareBoot.js?v=10"></script>
   </body>
 </html>

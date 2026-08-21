@@ -27,6 +27,7 @@ mkdir -p "$OUT/js/photoSurface"
 cp "$ROOT/static/js/gridLayout.js" "$OUT/js/gridLayout.js"
 cp "$ROOT/static/js/viewCapabilities.js" "$OUT/js/viewCapabilities.js"
 cp "$ROOT/static/js/shareBoot.js" "$OUT/js/shareBoot.js"
+cp "$ROOT/static/js/shareResolveClient.js" "$OUT/js/shareResolveClient.js"
 cp "$ROOT/static/js/photoSurface/"*.js "$OUT/js/photoSurface/"
 
 rm -f "$OUT/css/share.css" "$OUT/js/app.js"
@@ -68,7 +69,17 @@ cat >> "$OUT/index.html" <<'HTML_MAIN'
         <h1 class="share-page-title" id="sharePageTitle"></h1>
         <div id="photoContainer"></div>
         <div class="share-empty" id="shareEmpty" hidden>No photos match these filters.</div>
-        <div class="share-error" id="shareError" hidden></div>
+        <div class="share-error-panel" id="shareErrorPanel">
+          <div class="share-error" id="shareError" hidden></div>
+          <button
+            type="button"
+            class="btn btn-primary share-error-retry"
+            id="shareErrorRetryBtn"
+            hidden
+          >
+            Try again
+          </button>
+        </div>
       </div>
     </main>
 HTML_MAIN
@@ -106,7 +117,8 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="js/photoSurface/appBarLayout.js?v=2"></script>
     <script src="js/photoSurface/shareDatePicker.js"></script>
     <script src="js/photoSurface/downloadExport.js"></script>
-    <script src="js/shareBoot.js?v=9"></script>
+    <script src="js/shareResolveClient.js?v=1"></script>
+    <script src="js/shareBoot.js?v=10"></script>
   </body>
 </html>
 HTML_TAIL

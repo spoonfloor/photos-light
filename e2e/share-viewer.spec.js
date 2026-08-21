@@ -376,12 +376,74 @@ test.describe('share viewer parity', () => {
       await route.fulfill({
         status: 404,
         contentType: 'application/json',
-        body: JSON.stringify({ error: 'Share not found' }),
+        body: JSON.stringify({ error: 'Share not found', code: 'share_not_found' }),
       });
     });
     await page.goto('/?t=bad-token');
     await expect(page.locator('#shareError')).toHaveText(
       'This link is no longer valid and the requested photos are unavailable.',
     );
+    await expect(page.locator('#shareErrorRetryBtn')).toBeHidden();
+  });
+
+  test('recovers from transient share-resolve failure without refresh', async ({ page }) => {
+    let attempts = 0;
+    await page.route('**/functions/v1/share-resolve**', async (route) => {
+      attempts += 1;
+      if (attempts <= 2) {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'Could not load share',
+            code: 'share_unavailable',
+          }),
+        });
+        return;
+      }
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('phase') === 'meta') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(MOCK_SHARE_META),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(MOCK_SHARE),
+      });
+    });
+
+    await page.goto('/?t=e2e-test-token');
+    await expect(page.locator('#sharePageTitle')).toHaveText('E2E Test Album');
+    await expect(page.locator('.photo-card')).toHaveCount(2);
+    await expect(page.locator('#shareError')).toBeHidden();
+  });
+
+  test('shows try again after repeated share-resolve failures', async ({ page }) => {
+    await page.route('**/functions/v1/share-resolve**', async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'Could not load share',
+          code: 'share_unavailable',
+        }),
+      });
+    });
+
+    await page.goto('/?t=e2e-test-token');
+    await expect(page.locator('#shareError')).toHaveText(
+      "Couldn't reach the share service. Check your connection and try again.",
+    );
+    await expect(page.locator('#shareErrorRetryBtn')).toBeVisible();
+
+    await mockShareResolve(page);
+    await page.locator('#shareErrorRetryBtn').click();
+    await expect(page.locator('#sharePageTitle')).toHaveText('E2E Test Album');
+    await expect(page.locator('.photo-card')).toHaveCount(2);
   });
 });

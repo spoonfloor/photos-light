@@ -7,8 +7,6 @@
 
   const config = window.SHARE_VIEWER_CONFIG;
   const caps = ViewCapabilities.SHARE;
-  const SHARE_NOT_FOUND_MESSAGE =
-    'This link is no longer valid and the requested photos are unavailable.';
 
   const state = {
     token: null,
@@ -31,6 +29,7 @@
     sharePageTitle: document.getElementById('sharePageTitle'),
     shareEmpty: document.getElementById('shareEmpty'),
     shareError: document.getElementById('shareError'),
+    shareErrorRetryBtn: document.getElementById('shareErrorRetryBtn'),
     sortToggleBtn: document.getElementById('sortToggleBtn'),
     sortIcon: document.getElementById('sortIcon'),
     downloadBtn: document.getElementById('downloadBtn'),
@@ -81,46 +80,6 @@
   function parseShareToken() {
     const params = new URLSearchParams(window.location.search);
     return params.get('t') || params.get('s');
-  }
-
-  function shareResolveUrl() {
-    if (config.shareResolveUrl) {
-      return config.shareResolveUrl;
-    }
-    return `${config.supabaseUrl}/functions/v1/share-resolve`;
-  }
-
-  async function fetchShareResolve(searchParams, { signal } = {}) {
-    const params = new URLSearchParams(searchParams);
-    params.set('token', state.token);
-    const response = await fetch(`${shareResolveUrl()}?${params.toString()}`, {
-      headers: {
-        apikey: config.supabaseKey,
-        Authorization: `Bearer ${config.supabaseKey}`,
-      },
-      signal,
-    });
-    if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error(SHARE_NOT_FOUND_MESSAGE);
-      }
-      throw new Error(`Could not load share (${response.status})`);
-    }
-    return response.json();
-  }
-
-  async function resolveShareMeta(options = {}) {
-    return fetchShareResolve(
-      {
-        phase: 'meta',
-        sort: state.sortOrder,
-      },
-      options,
-    );
-  }
-
-  async function resolveShareFull(options = {}) {
-    return fetchShareResolve({}, options);
   }
 
   function applyShareTitle(title) {
@@ -778,7 +737,25 @@
     }
   }
 
-  function showShareFailure(message, { notFound = false } = {}) {
+  function hideShareErrorState() {
+    document.body.classList.remove('share-view--not-found');
+    const chromeMount = document.getElementById('appChromeMount');
+    if (chromeMount) {
+      chromeMount.hidden = false;
+    }
+    if (els.sharePageTitle) {
+      els.sharePageTitle.hidden = false;
+    }
+    if (els.shareError) {
+      els.shareError.hidden = true;
+      els.shareError.textContent = '';
+    }
+    if (els.shareErrorRetryBtn) {
+      els.shareErrorRetryBtn.hidden = true;
+    }
+  }
+
+  function showShareFailure(message, { notFound = false, retryable = false } = {}) {
     if (typeof SurfaceLoadChrome !== 'undefined') {
       SurfaceLoadChrome.complete();
     }
@@ -810,6 +787,20 @@
       els.shareError.hidden = false;
       els.shareError.textContent = message;
     }
+
+    if (els.shareErrorRetryBtn) {
+      els.shareErrorRetryBtn.hidden = !retryable;
+    }
+  }
+
+  function wireShareErrorRetry() {
+    if (!els.shareErrorRetryBtn || els.shareErrorRetryBtn.dataset.shareRetryWired) {
+      return;
+    }
+    els.shareErrorRetryBtn.dataset.shareRetryWired = 'true';
+    els.shareErrorRetryBtn.addEventListener('click', () => {
+      void loadShareContent();
+    });
   }
 
   function finishShareSurfaceLoad() {
@@ -821,21 +812,8 @@
     ShareDatePicker.refreshCatalog(filteredPhotos(), parseDate);
   }
 
-  async function boot() {
-    state.token = parseShareToken();
-    if (!state.token) {
-      showShareFailure('Missing share link.', { notFound: true });
-      return;
-    }
-
-    loadLocalState();
-    PhotoSurface.mountChrome(caps);
-    if (typeof AppBarLayout !== 'undefined') {
-      AppBarLayout.init();
-    }
-    ShareDatePicker.wire({ sortOrderGetter: () => state.sortOrder });
-    wireLightbox();
-    wireEvents();
+  async function loadShareContent() {
+    hideShareErrorState();
 
     ShareSkeletonGrid.renderInstantBoot(els.sharePageTitle, els.photoContainer);
     if (typeof SurfaceLoadChrome !== 'undefined') {
@@ -858,14 +836,19 @@
       scrimStartedAt,
       onCancel: () => {
         loadAbort.abort();
-        showShareFailure('Loading cancelled.');
+        showShareFailure(ShareResolveClient.MESSAGES.cancelled);
       },
     });
 
     let loadSucceeded = false;
     try {
-      const metaPromise = resolveShareMeta({ signal: loadAbort.signal });
-      const fullPromise = resolveShareFull({ signal: loadAbort.signal });
+      const metaPromise = ShareResolveClient.resolveMeta(state.token, {
+        sort: state.sortOrder,
+        signal: loadAbort.signal,
+      });
+      const fullPromise = ShareResolveClient.resolveFull(state.token, {
+        signal: loadAbort.signal,
+      });
 
       const meta = await metaPromise;
       state.album = meta.album;
@@ -899,14 +882,39 @@
       if (error.name === 'AbortError') {
         return;
       }
-      const message = error.message || 'Could not load share.';
-      const notFound = message === SHARE_NOT_FOUND_MESSAGE;
-      showShareFailure(message, { notFound });
+      const code = error instanceof ShareResolveClient.ShareResolveError ? error.code : null;
+      const retryable =
+        error instanceof ShareResolveClient.ShareResolveError && error.retryable;
+      const notFound = ShareResolveClient.isPermanentFailure(code);
+      const message =
+        error.message ||
+        ShareResolveClient.messageForCode(code, ShareResolveClient.MESSAGES.generic);
+      showShareFailure(message, { notFound, retryable });
     } finally {
       if (loadSucceeded) {
         finishShareSurfaceLoad();
       }
     }
+  }
+
+  async function boot() {
+    state.token = parseShareToken();
+    if (!state.token) {
+      showShareFailure(ShareResolveClient.MESSAGES.missing_token, { notFound: true });
+      return;
+    }
+
+    loadLocalState();
+    PhotoSurface.mountChrome(caps);
+    if (typeof AppBarLayout !== 'undefined') {
+      AppBarLayout.init();
+    }
+    ShareDatePicker.wire({ sortOrderGetter: () => state.sortOrder });
+    wireLightbox();
+    wireEvents();
+    wireShareErrorRetry();
+
+    await loadShareContent();
   }
 
   void boot();

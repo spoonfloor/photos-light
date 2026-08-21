@@ -11,6 +11,22 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
 
+type AlbumRow = {
+  id: string;
+  title: string | null;
+  photo_count: number | null;
+  created_at: string;
+  revoked_at: string | null;
+  expires_at: string | null;
+};
+
+type AlbumLookupResult =
+  | { kind: "ok"; album: AlbumRow }
+  | { kind: "not_found" }
+  | { kind: "revoked" }
+  | { kind: "expired" }
+  | { kind: "db_error" };
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -21,20 +37,35 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function albumIsAccessible(album: {
-  revoked_at: string | null;
-  expires_at: string | null;
-}): boolean {
-  if (album.revoked_at) {
-    return false;
+function unavailableResponse(message = "Could not load share") {
+  return jsonResponse(
+    { error: message, code: "share_unavailable" },
+    503,
+  );
+}
+
+function lookupErrorResponse(
+  result: Exclude<AlbumLookupResult, { kind: "ok" }>,
+): Response {
+  switch (result.kind) {
+    case "not_found":
+      return jsonResponse(
+        { error: "Share not found", code: "share_not_found" },
+        404,
+      );
+    case "revoked":
+      return jsonResponse(
+        { error: "Share revoked", code: "share_revoked" },
+        410,
+      );
+    case "expired":
+      return jsonResponse(
+        { error: "Share expired", code: "share_expired" },
+        410,
+      );
+    case "db_error":
+      return unavailableResponse();
   }
-  if (album.expires_at) {
-    const expiresAt = new Date(album.expires_at);
-    if (!Number.isNaN(expiresAt.getTime()) && expiresAt <= new Date()) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function monthKeyFromDateTaken(dateTaken: string | null): string {
@@ -87,17 +118,33 @@ function stillExtension(filename: string | null): string {
   return filename.slice(dot).toLowerCase();
 }
 
-async function loadAlbumByToken(supabase: ReturnType<typeof createClient>, token: string) {
+async function loadAlbumByToken(
+  supabase: ReturnType<typeof createClient>,
+  token: string,
+): Promise<AlbumLookupResult> {
   const { data: album, error: albumError } = await supabase
     .from("albums")
     .select("id, title, photo_count, created_at, revoked_at, expires_at")
     .eq("access_token", token)
     .maybeSingle();
 
-  if (albumError || !album || !albumIsAccessible(album)) {
-    return null;
+  if (albumError) {
+    console.error("share-resolve album lookup failed", albumError.message);
+    return { kind: "db_error" };
   }
-  return album;
+  if (!album) {
+    return { kind: "not_found" };
+  }
+  if (album.revoked_at) {
+    return { kind: "revoked" };
+  }
+  if (album.expires_at) {
+    const expiresAt = new Date(album.expires_at);
+    if (!Number.isNaN(expiresAt.getTime()) && expiresAt <= new Date()) {
+      return { kind: "expired" };
+    }
+  }
+  return { kind: "ok", album };
 }
 
 async function loadFirstClusterPhoto(
@@ -141,22 +188,27 @@ Deno.serve(async (req: Request) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !serviceRoleKey) {
-    return jsonResponse({ error: "Server misconfigured" }, 500);
+    return jsonResponse(
+      { error: "Server misconfigured", code: "share_misconfigured" },
+      500,
+    );
   }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-  const album = await loadAlbumByToken(supabase, token);
-  if (!album) {
-    return jsonResponse({ error: "Share not found" }, 404);
+  const lookup = await loadAlbumByToken(supabase, token);
+  if (lookup.kind !== "ok") {
+    return lookupErrorResponse(lookup);
   }
+  const album = lookup.album;
 
   if (phase === "meta") {
     let firstPhoto = null;
     try {
       firstPhoto = await loadFirstClusterPhoto(supabase, album.id, sort);
-    } catch {
-      return jsonResponse({ error: "Could not load share" }, 500);
+    } catch (error) {
+      console.error("share-resolve meta query failed", error);
+      return unavailableResponse();
     }
 
     const dateTaken = firstPhoto?.date_taken ?? null;
@@ -185,7 +237,8 @@ Deno.serve(async (req: Request) => {
     .order("position", { ascending: true });
 
   if (photosError) {
-    return jsonResponse({ error: "Could not load share" }, 500);
+    console.error("share-resolve photos query failed", photosError.message);
+    return unavailableResponse();
   }
 
   const photos = [];
@@ -213,10 +266,18 @@ Deno.serve(async (req: Request) => {
     const displayResult = displayStoragePath ? signResults[2] : null;
 
     if (thumbResult.error || originalResult.error) {
-      return jsonResponse({ error: "Could not load share assets" }, 500);
+      console.error("share-resolve asset signing failed", {
+        thumb: thumbResult.error?.message,
+        original: originalResult.error?.message,
+      });
+      return unavailableResponse("Could not load share assets");
     }
     if (displayResult?.error) {
-      return jsonResponse({ error: "Could not load share assets" }, 500);
+      console.error(
+        "share-resolve display asset signing failed",
+        displayResult.error.message,
+      );
+      return unavailableResponse("Could not load share assets");
     }
 
     let displayUrl: string | null = null;

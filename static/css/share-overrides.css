@@ -32,6 +32,14 @@ body.share-view.filter-chip-rail-visible {
   color: #ff6b6b;
 }
 
+.share-error-panel {
+  text-align: center;
+}
+
+.share-error-retry {
+  margin-top: 16px;
+}
+
 body.share-view.share-view--not-found {
   --app-chrome-height: 0px;
 }
@@ -55,6 +63,10 @@ body.share-view.share-view--not-found .share-error {
   font-size: 18px;
   line-height: 1.5;
   color: var(--text-primary);
+}
+
+body.share-view.share-view--not-found .share-error-retry {
+  margin-top: 24px;
 }
 
 .share-page-title.surface-layout-placeholder {
