@@ -9,6 +9,7 @@ const AppBarLayout = (() => {
   let resizeObserver = null;
   let mutationObserver = null;
   let pendingRaf = null;
+  let cachedJumperW = 0;
 
   function queryElements() {
     layer = document.querySelector('.app-bar-elements-layer');
@@ -24,28 +25,60 @@ const AppBarLayout = (() => {
     );
   }
 
+  function barWidth() {
+    if (!layer) {
+      return 0;
+    }
+    const w = layer.clientWidth;
+    if (w > 0) {
+      return w;
+    }
+    return layer.parentElement?.clientWidth || 0;
+  }
+
   function measureWidth(el) {
     if (!el) {
       return 0;
     }
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 ? rect.width : el.offsetWidth;
+    return Math.ceil(el.getBoundingClientRect().width) || el.offsetWidth || 0;
   }
 
+  /** Intrinsic jumper width — never reads layout while suppressed/hidden. */
   function measureJumperWidth(jumperEl) {
     if (!jumperEl) {
       return 0;
     }
-    const width = measureWidth(jumperEl);
-    if (width > 0) {
-      return width;
+
+    const live = measureWidth(jumperEl);
+    if (live > 0) {
+      cachedJumperW = live;
+      return live;
     }
-    const prevVisibility = jumperEl.style.visibility;
-    jumperEl.style.visibility = 'hidden';
-    jumperEl.style.display = 'flex';
+    if (cachedJumperW > 0) {
+      return cachedJumperW;
+    }
+
+    const style = jumperEl.style;
+    const prev = {
+      visibility: style.visibility,
+      display: style.display,
+      position: style.position,
+      left: style.left,
+    };
+
+    style.visibility = 'hidden';
+    style.display = 'flex';
+    style.position = 'absolute';
+    style.left = '-9999px';
+
     const measured = jumperEl.offsetWidth;
-    jumperEl.style.visibility = prevVisibility;
-    jumperEl.style.removeProperty('display');
+    cachedJumperW = measured;
+
+    style.visibility = prev.visibility;
+    style.display = prev.display;
+    style.position = prev.position;
+    style.left = prev.left;
+
     return measured;
   }
 
@@ -58,24 +91,37 @@ const AppBarLayout = (() => {
     const actionsEl = layer.querySelector('.actions');
     const jumperEl = layer.querySelector('.date-picker');
 
-    const barW = layer.clientWidth;
+    const barW = barWidth();
     const actionsW = measureWidth(actionsEl);
+
+    if (barW === 0) {
+      requestAnimationFrame(scheduleLayout);
+      return;
+    }
 
     let jumperW = 0;
     let jumperLeft = 0;
     let showJumper = false;
+    let noFit = false;
 
     if (isJumperEligible(jumperEl)) {
       jumperW = measureJumperWidth(jumperEl);
-      const trailingMin = actionsW + GAP_PX;
-      const roomForJumper = barW - trailingMin;
 
-      if (jumperW > 0 && roomForJumper >= jumperW) {
+      if (jumperW === 0) {
+        requestAnimationFrame(scheduleLayout);
+        return;
+      }
+
+      const attachedLeft = barW - actionsW - GAP_PX - jumperW;
+      if (attachedLeft >= 0) {
         showJumper = true;
         const idealLeft = (barW - jumperW) / 2;
-        const attachedLeft = barW - actionsW - GAP_PX - jumperW;
-        jumperLeft = Math.max(0, Math.min(idealLeft, attachedLeft));
+        jumperLeft = Math.min(idealLeft, attachedLeft);
+      } else {
+        noFit = true;
       }
+    } else {
+      cachedJumperW = 0;
     }
 
     let titleMaxW = Math.max(0, barW - actionsW - GAP_PX);
@@ -92,10 +138,7 @@ const AppBarLayout = (() => {
     layer.style.setProperty('--app-bar-title-max-w', `${titleMaxW}px`);
 
     layer.classList.toggle('app-bar-layout--jumper', showJumper);
-    layer.classList.toggle(
-      'app-bar-layout--jumper-suppressed',
-      isJumperEligible(jumperEl) && !showJumper,
-    );
+    layer.classList.toggle('app-bar-layout--jumper-no-fit', noFit);
     layer.classList.toggle('app-bar-layout--title', showTitle);
 
     if (titleEl) {
@@ -144,12 +187,13 @@ const AppBarLayout = (() => {
       attributes: true,
       childList: true,
       subtree: true,
-      attributeFilter: ['hidden', 'class', 'aria-hidden', 'style'],
+      attributeFilter: ['hidden', 'class', 'aria-hidden'],
     });
   }
 
   function init() {
     disconnect();
+    cachedJumperW = 0;
     if (!queryElements()) {
       return;
     }
@@ -162,6 +206,7 @@ const AppBarLayout = (() => {
     mutationObserver?.disconnect();
     resizeObserver = null;
     mutationObserver = null;
+    cachedJumperW = 0;
     if (pendingRaf != null) {
       cancelAnimationFrame(pendingRaf);
       pendingRaf = null;

@@ -370,7 +370,7 @@ body.trash-view-active #lightboxDownloadBtn {
   z-index: 0;
 }
 
-.app-bar-elements-layer.app-bar-layout--jumper-suppressed .date-picker.date-jumper-active {
+.app-bar-elements-layer.app-bar-layout--jumper-no-fit .date-picker.date-jumper-active {
   visibility: hidden;
   pointer-events: none;
 }

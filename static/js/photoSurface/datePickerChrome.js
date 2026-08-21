@@ -241,6 +241,7 @@ const DatePickerChrome = (() => {
       el.hidden = false;
       el.removeAttribute('aria-hidden');
       el.classList.add('date-jumper-active');
+      el.style.removeProperty('visibility');
     }
 
     if (typeof AppBarLayout !== 'undefined') {
