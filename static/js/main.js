@@ -8,7 +8,7 @@ const PHOTO_PAGE_SIZE = 400;
 const IMPORT_SET_LIMIT = 5;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '464';
+const STATIC_ASSET_VERSION = '465';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
