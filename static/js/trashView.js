@@ -148,6 +148,17 @@ const TrashView = (() => {
 
   function updateAppBarForMode() {
     const caps = getViewCapabilities();
+
+    // downloadBtn has no per-button handling here — it's only ever synced
+    // by chrome.js's generic [data-cap] loop, which enter()/exit() never
+    // called on its own, so it stayed visible across trash transitions.
+    if (
+      typeof PhotoChrome !== 'undefined' &&
+      typeof ViewCapabilities !== 'undefined'
+    ) {
+      PhotoChrome.applySurfaceChrome(ViewCapabilities.get());
+    }
+
     const addPhotoBtn = document.getElementById('addPhotoBtn');
     const editDateBtn = document.getElementById('editDateBtn');
     const restoreBtn = document.getElementById('restoreBtn');
@@ -165,6 +176,16 @@ const TrashView = (() => {
     if (deleteBtn) {
       deleteBtn.setAttribute('title', caps.deleteAppBarLabel);
       deleteBtn.setAttribute('aria-label', caps.deleteAppBarLabel);
+    }
+
+    if (
+      typeof AppBarVisibility !== 'undefined' &&
+      typeof ViewCapabilities !== 'undefined'
+    ) {
+      AppBarVisibility.devDiff(
+        ViewCapabilities.get(),
+        'trashView.updateAppBarForMode',
+      );
     }
 
     updateTrashMenuItems();

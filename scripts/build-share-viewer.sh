@@ -100,6 +100,7 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="js/photoSurface/gridTile.js"></script>
     <script src="js/photoSurface/gridSelection.js"></script>
     <script src="js/photoSurface/gridInteractions.js"></script>
+    <script src="js/photoSurface/appBarVisibility.js"></script>
     <script src="js/photoSurface/chrome.js"></script>
     <script src="js/photoSurface/filterChipLifecycle.js"></script>
     <script src="js/photoSurface/monthGrid.js"></script>
