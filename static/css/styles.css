@@ -45,6 +45,11 @@
   --utilities-menu-viewport-inset-end: 0px; /* outer: + nudges whole panel left (away from viewport right) */
   --app-bar-title-size: 20px;
   --app-bar-gap: 4px;
+  --app-bar-icon-btn-size: 44px;
+  --app-bar-icon-glyph-size: 24px;
+  --dialog-title-size: 20px;
+  --dialog-message-size: 15px;
+  --btn-font-size: 14px;
 
   /* --- Import-style overlay scoreboards (preflight + in-flight) --- */
   --scoreboard-col-min-width: 64px;
@@ -57,6 +62,31 @@
   --z-toast: 21000;
   /* Full-screen pickers must sit above library recovery dock (toast layer). */
   --z-folder-picker: 22000;
+}
+
+/* --- Small-screen overrides ---
+   Single breakpoint for narrow/mobile-width layout tuning. Override
+   existing :root vars here rather than hardcoding values in selectors,
+   so every rule that already consumes the var picks this up for free. */
+@media (max-width: 480px) {
+  :root {
+    --app-bar-title-size: 24px;
+    --app-bar-icon-btn-size: 44px; /* = current value, dial in */
+    --app-bar-icon-glyph-size: 24px; /* = current value, dial in */
+    --filter-chip-height: 32px; /* = current value, dial in */
+    --filter-chip-padding-x: 16px; /* = current value, dial in */
+    --filter-chip-font-size: 15px; /* = current value, dial in */
+    --dialog-title-size: 20px; /* = current value, dial in */
+    --dialog-message-size: 15px; /* = current value, dial in */
+    --btn-font-size: 14px; /* = current value, dial in */
+  }
+
+  /* Icon gap vars are scoped to .app-bar-elements-layer (also read at
+     runtime by AppBarLayout.js), not :root — override here to match. */
+  .app-bar-elements-layer {
+    --app-bar-gap: 12px; /* = current value, dial in */
+    --app-bar-actions-gap: 10px; /* = current value, dial in */
+  }
 }
 
 /* --- Reset --- */
@@ -133,7 +163,7 @@ body {
 .btn {
   padding: 8px 16px;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: var(--btn-font-size);
   font-weight: 500;
   cursor: pointer;
   border: none;
@@ -573,8 +603,8 @@ body.trash-view-active #lightboxDownloadBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: var(--app-bar-icon-btn-size);
+  height: var(--app-bar-icon-btn-size);
   cursor: pointer;
   background: none;
   border: none;
@@ -583,8 +613,8 @@ body.trash-view-active #lightboxDownloadBtn {
 }
 
 .app-bar-icon-button img.app-bar-icon {
-  width: 24px;
-  height: 24px;
+  width: var(--app-bar-icon-glyph-size);
+  height: var(--app-bar-icon-glyph-size);
   user-select: none;
   pointer-events: none;
 }
@@ -600,7 +630,7 @@ body.trash-view-active #lightboxDownloadBtn {
 }
 
 .app-bar-icon-button .material-symbols-outlined {
-  font-size: 24px;
+  font-size: var(--app-bar-icon-glyph-size);
   color: var(--text-primary);
   user-select: none;
   pointer-events: none;
@@ -1433,7 +1463,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .dialog-title {
-  font-size: 20px;
+  font-size: var(--dialog-title-size);
   font-weight: 500;
   margin: 0;
   color: var(--text-primary);
@@ -1461,7 +1491,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .dialog-message {
-  font-size: 15px;
+  font-size: var(--dialog-message-size);
   margin-bottom: 24px;
   padding: 0 24px;
   color: var(--text-secondary);
