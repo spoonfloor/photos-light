@@ -279,33 +279,17 @@ body.trash-view-active.filter-chip-rail-visible {
   font-weight: 300;
 }
 
-.trash-chrome-bar[hidden] {
+/* Structural fix, not an allowlist: `[hidden]`'s UA-default display:none
+   has near-zero specificity, so any component rule that sets its own
+   `display` (e.g. .app-bar-icon-button { display: flex }) silently wins
+   and the hidden attribute stops doing anything. This previously had to
+   be re-asserted per element in a manually-maintained id list — which is
+   exactly how #deleteBtn fell through and stayed visible while hidden.
+   One universal rule makes that failure mode structurally impossible. */
+[hidden] {
   display: none !important;
 }
 
-#restoreBtn[hidden],
-#addPhotoBtn[hidden],
-#editDateBtn[hidden],
-#downloadSelectedBtn[hidden],
-#switchLibraryBtn[hidden],
-#convertToLibraryBtn[hidden],
-#closeLibraryBtn[hidden],
-#cleanOrganizeBtn[hidden],
-#lightboxEditDateBtn[hidden],
-#lightboxRotateBtn[hidden],
-#lightboxStarBtn[hidden],
-#lightboxDownloadBtn[hidden],
-#lightboxDeleteBtn[hidden],
-#lightboxRestoreBtn[hidden],
-#viewTrashBtn[hidden],
-#emptyTrashBtn[hidden],
-#restoreAllTrashBtn[hidden],
-#trashMenuDivider[hidden] {
-  display: none !important;
-}
-
-body.trash-view-active #addPhotoBtn,
-body.trash-view-active #editDateBtn,
 body.trash-view-active #lightboxEditDateBtn,
 body.trash-view-active #lightboxRotateBtn,
 body.trash-view-active #lightboxStarBtn,

@@ -149,9 +149,13 @@ const TrashView = (() => {
   function updateAppBarForMode() {
     const caps = getViewCapabilities();
 
-    // downloadBtn has no per-button handling here — it's only ever synced
-    // by chrome.js's generic [data-cap] loop, which enter()/exit() never
-    // called on its own, so it stayed visible across trash transitions.
+    // Single mechanism for app-bar button visibility: chrome.js's generic
+    // [data-cap] loop, driven by the canonical ViewCapabilities.get()
+    // (which already routes to TrashView.getViewCapabilities() when trash
+    // is active). This covers addPhotoBtn/editDateBtn/restoreBtn/downloadBtn
+    // — updateAppBarForMode() used to also set addPhotoBtn/editDateBtn/
+    // restoreBtn.hidden directly, a second, redundant write of the same
+    // data this call already produces.
     if (
       typeof PhotoChrome !== 'undefined' &&
       typeof ViewCapabilities !== 'undefined'
@@ -159,20 +163,7 @@ const TrashView = (() => {
       PhotoChrome.applySurfaceChrome(ViewCapabilities.get());
     }
 
-    const addPhotoBtn = document.getElementById('addPhotoBtn');
-    const editDateBtn = document.getElementById('editDateBtn');
-    const restoreBtn = document.getElementById('restoreBtn');
     const deleteBtn = document.getElementById('deleteBtn');
-
-    if (addPhotoBtn) {
-      addPhotoBtn.hidden = !caps.import;
-    }
-    if (editDateBtn) {
-      editDateBtn.hidden = !caps.editDate;
-    }
-    if (restoreBtn) {
-      restoreBtn.hidden = !caps.restore;
-    }
     if (deleteBtn) {
       deleteBtn.setAttribute('title', caps.deleteAppBarLabel);
       deleteBtn.setAttribute('aria-label', caps.deleteAppBarLabel);
