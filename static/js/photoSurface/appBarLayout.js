@@ -3,8 +3,8 @@
  * Driven by measured widths + CSS variables; no viewport breakpoints.
  */
 const AppBarLayout = (() => {
-  const GAP_PX = 12;
-  const ACTIONS_GAP_PX = 12;
+  const GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
+  const ACTIONS_GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
   const ICON_W_FALLBACK = 44;
 
   let layer = null;
@@ -12,10 +12,32 @@ const AppBarLayout = (() => {
   let mutationObserver = null;
   let pendingRaf = null;
   let cachedJumperW = 0;
+  let gapDefaultPx = GAP_FALLBACK_PX;
+  let actionsGapDefaultPx = ACTIONS_GAP_FALLBACK_PX;
 
   function queryElements() {
     layer = document.querySelector('.app-bar-elements-layer');
     return layer;
+  }
+
+  /**
+   * Reads a gap default from a CSS custom property on the layer instead of
+   * hardcoding it in JS, so there's a single source of truth and the two
+   * can't drift apart. Temporarily clears any inline override first so the
+   * read reflects the stylesheet cascade, not a previously-computed value.
+   */
+  function readGapDefault(propName, fallback) {
+    if (!layer) {
+      return fallback;
+    }
+    const inline = layer.style.getPropertyValue(propName);
+    layer.style.removeProperty(propName);
+    const computed = getComputedStyle(layer).getPropertyValue(propName);
+    if (inline) {
+      layer.style.setProperty(propName, inline);
+    }
+    const parsed = parseFloat(computed);
+    return Number.isFinite(parsed) ? parsed : fallback;
   }
 
   function isJumperEligible(el) {
@@ -111,12 +133,12 @@ const AppBarLayout = (() => {
   /** Shrink gap to 0, then overlap down to a single icon column. */
   function squeezeActionsGap(count, iconW, budget) {
     if (count <= 1) {
-      return ACTIONS_GAP_PX;
+      return actionsGapDefaultPx;
     }
 
-    const naturalW = actionsWidth(count, iconW, ACTIONS_GAP_PX);
+    const naturalW = actionsWidth(count, iconW, actionsGapDefaultPx);
     if (naturalW <= budget) {
-      return ACTIONS_GAP_PX;
+      return actionsGapDefaultPx;
     }
 
     const gap = (budget - count * iconW) / (count - 1);
@@ -134,7 +156,7 @@ const AppBarLayout = (() => {
       count,
       gap,
       width,
-      squeezed: gap < ACTIONS_GAP_PX - 0.5,
+      squeezed: gap < actionsGapDefaultPx - 0.5,
     };
   }
 
@@ -170,7 +192,7 @@ const AppBarLayout = (() => {
         return;
       }
 
-      const attachedLeft = barW - actionsW - GAP_PX - jumperW;
+      const attachedLeft = barW - actionsW - gapDefaultPx - jumperW;
       if (attachedLeft >= 0) {
         showJumper = true;
         const idealLeft = (barW - jumperW) / 2;
@@ -182,14 +204,14 @@ const AppBarLayout = (() => {
       cachedJumperW = 0;
     }
 
-    let titleMaxW = Math.max(0, barW - actionsW - GAP_PX);
+    let titleMaxW = Math.max(0, barW - actionsW - gapDefaultPx);
     if (showJumper) {
-      titleMaxW = Math.min(titleMaxW, Math.max(0, jumperLeft - GAP_PX));
+      titleMaxW = Math.min(titleMaxW, Math.max(0, jumperLeft - gapDefaultPx));
     }
 
     const showTitle = titleMaxW > 0;
 
-    layer.style.setProperty('--app-bar-gap', `${GAP_PX}px`);
+    layer.style.setProperty('--app-bar-gap', `${gapDefaultPx}px`);
     layer.style.setProperty('--app-bar-actions-gap', `${actionsLayout.gap}px`);
     layer.style.setProperty('--app-bar-actions-w', `${actionsW}px`);
     layer.style.setProperty('--app-bar-jumper-w', `${showJumper ? jumperW : 0}px`);
@@ -257,6 +279,8 @@ const AppBarLayout = (() => {
     if (!queryElements()) {
       return;
     }
+    gapDefaultPx = readGapDefault('--app-bar-gap', GAP_FALLBACK_PX);
+    actionsGapDefaultPx = readGapDefault('--app-bar-actions-gap', ACTIONS_GAP_FALLBACK_PX);
     bindObservers();
     scheduleLayout();
   }
@@ -267,6 +291,8 @@ const AppBarLayout = (() => {
     resizeObserver = null;
     mutationObserver = null;
     cachedJumperW = 0;
+    gapDefaultPx = GAP_FALLBACK_PX;
+    actionsGapDefaultPx = ACTIONS_GAP_FALLBACK_PX;
     if (pendingRaf != null) {
       cancelAnimationFrame(pendingRaf);
       pendingRaf = null;
