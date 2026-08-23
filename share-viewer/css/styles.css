@@ -335,7 +335,7 @@ body.trash-view-active #lightboxDownloadBtn {
   height: 100%;
   background: transparent;
   --app-bar-gap: 12px;
-  --app-bar-actions-gap: 12px;
+  --app-bar-actions-gap: 10px;
   --app-bar-title-max-w: calc(100% - 12rem);
   --app-bar-jumper-left: 0px;
 }
@@ -371,7 +371,8 @@ body.trash-view-active #lightboxDownloadBtn {
   z-index: 0;
 }
 
-.app-bar-elements-layer.app-bar-layout--jumper-no-fit .date-picker.date-jumper-active {
+.app-bar-elements-layer.app-bar-layout--jumper-no-fit
+  .date-picker.date-jumper-active {
   visibility: hidden;
   pointer-events: none;
 }
@@ -642,7 +643,9 @@ body.trash-view-active #lightboxDownloadBtn {
   overflow: hidden;
 }
 
-.grid-root.grid-unknown-layout .grid-content-layer .virtual-month-section:not(.grid-anchor-month-section) {
+.grid-root.grid-unknown-layout
+  .grid-content-layer
+  .virtual-month-section:not(.grid-anchor-month-section) {
   visibility: hidden;
 }
 
@@ -734,7 +737,8 @@ body.trash-view-active #lightboxDownloadBtn {
   background: var(--placeholder-bg);
 }
 
-.date-picker.surface-date-picker-loading .date-picker-select.surface-layout-placeholder {
+.date-picker.surface-date-picker-loading
+  .date-picker-select.surface-layout-placeholder {
   pointer-events: none;
   border-color: transparent;
 }
@@ -761,7 +765,9 @@ body.surface-load-phase-meta .date-picker.date-jumper-active {
   pointer-events: none;
 }
 
-body.surface-load-phase-meta .date-picker.date-jumper-active .date-picker-select {
+body.surface-load-phase-meta
+  .date-picker.date-jumper-active
+  .date-picker-select {
   pointer-events: none;
 }
 
@@ -2273,18 +2279,6 @@ body.open-library-modal-handoff .page-main {
 
 body.library-recovery-active .library-recovery-dock {
   display: block;
-}
-
-@media (max-width: 640px) {
-  .library-recovery-dock {
-    left: 16px;
-    right: 16px;
-    bottom: 16px;
-  }
-
-  .library-recovery-card {
-    width: 100%;
-  }
 }
 
 #cleanLibraryOverlay .import-stats {

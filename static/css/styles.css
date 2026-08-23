@@ -2281,18 +2281,6 @@ body.library-recovery-active .library-recovery-dock {
   display: block;
 }
 
-@media (max-width: 640px) {
-  .library-recovery-dock {
-    left: 16px;
-    right: 16px;
-    bottom: 16px;
-  }
-
-  .library-recovery-card {
-    width: 100%;
-  }
-}
-
 #cleanLibraryOverlay .import-stats {
   display: grid;
   grid-template-columns: repeat(
