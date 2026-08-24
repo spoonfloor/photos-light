@@ -5,6 +5,7 @@
 const AppBarLayout = (() => {
   const GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
   const ACTIONS_GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
+  const TITLE_GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
   const ICON_W_FALLBACK = 44;
 
   let layer = null;
@@ -14,6 +15,11 @@ const AppBarLayout = (() => {
   let cachedJumperW = 0;
   let gapDefaultPx = GAP_FALLBACK_PX;
   let actionsGapDefaultPx = ACTIONS_GAP_FALLBACK_PX;
+  // Dedicated "how close can the title get to the icons before truncating"
+  // knob — deliberately separate from gapDefaultPx (--app-bar-gap), which
+  // is also the jumper's buffer and the inter-icon gap fallback, so dialing
+  // one doesn't move the others.
+  let titleGapDefaultPx = TITLE_GAP_FALLBACK_PX;
 
   function queryElements() {
     layer = document.querySelector('.app-bar-elements-layer');
@@ -145,9 +151,33 @@ const AppBarLayout = (() => {
     return Math.max(-iconW, gap);
   }
 
+  /**
+   * Sum of each visible icon's *actual* width, not count * a single sampled
+   * width — icons aren't all the same size (#utilitiesBtn is narrower than
+   * the rest), so assuming uniformity overreserved space and made the title
+   * truncate earlier than the icons it's supposedly dodging actually need.
+   */
+  function actionsNaturalWidth(buttons, gap) {
+    if (buttons.length === 0) {
+      return 0;
+    }
+    const totalIconW = buttons.reduce((sum, btn) => sum + measureWidth(btn), 0);
+    return totalIconW + Math.max(0, buttons.length - 1) * gap;
+  }
+
   function resolveActionsLayout(actionsEl, barW) {
     const buttons = visibleActionButtons(actionsEl);
     const count = buttons.length;
+    const naturalW = actionsNaturalWidth(buttons, actionsGapDefaultPx);
+
+    if (naturalW <= barW) {
+      return { count, gap: actionsGapDefaultPx, width: naturalW, squeezed: false };
+    }
+
+    // Squeeze path: icons themselves must shrink/overlap to fit. Rare —
+    // only hit once the bar is too narrow for the icons at their normal
+    // gap — so the uniform-width approximation here is an accepted
+    // simplification, unlike the common case above.
     const iconW = measureIconWidth(buttons);
     const gap = squeezeActionsGap(count, iconW, barW);
     const width = actionsWidth(count, iconW, gap);
@@ -204,9 +234,9 @@ const AppBarLayout = (() => {
       cachedJumperW = 0;
     }
 
-    let titleMaxW = Math.max(0, barW - actionsW - gapDefaultPx);
+    let titleMaxW = Math.max(0, barW - actionsW - titleGapDefaultPx);
     if (showJumper) {
-      titleMaxW = Math.min(titleMaxW, Math.max(0, jumperLeft - gapDefaultPx));
+      titleMaxW = Math.min(titleMaxW, Math.max(0, jumperLeft - titleGapDefaultPx));
     }
 
     const showTitle = titleMaxW > 0;
@@ -281,6 +311,7 @@ const AppBarLayout = (() => {
     }
     gapDefaultPx = readGapDefault('--app-bar-gap', GAP_FALLBACK_PX);
     actionsGapDefaultPx = readGapDefault('--app-bar-actions-gap', ACTIONS_GAP_FALLBACK_PX);
+    titleGapDefaultPx = readGapDefault('--app-bar-title-gap', TITLE_GAP_FALLBACK_PX);
     bindObservers();
     scheduleLayout();
   }
@@ -293,6 +324,7 @@ const AppBarLayout = (() => {
     cachedJumperW = 0;
     gapDefaultPx = GAP_FALLBACK_PX;
     actionsGapDefaultPx = ACTIONS_GAP_FALLBACK_PX;
+    titleGapDefaultPx = TITLE_GAP_FALLBACK_PX;
     if (pendingRaf != null) {
       cancelAnimationFrame(pendingRaf);
       pendingRaf = null;

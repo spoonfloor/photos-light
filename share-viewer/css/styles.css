@@ -86,6 +86,7 @@
   .app-bar-elements-layer {
     --app-bar-gap: 12px; /* = current value, dial in */
     --app-bar-actions-gap: 10px; /* = current value, dial in */
+    --app-bar-title-gap: 12px; /* = current value, dial in — min. distance from title to icons before truncation */
   }
 }
 
@@ -350,6 +351,7 @@ body.trash-view-active #lightboxDownloadBtn {
   background: transparent;
   --app-bar-gap: 12px;
   --app-bar-actions-gap: 10px;
+  --app-bar-title-gap: 12px;
   --app-bar-title-max-w: calc(100% - 12rem);
   --app-bar-jumper-left: 0px;
 }
