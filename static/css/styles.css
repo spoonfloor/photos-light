@@ -64,32 +64,6 @@
   --z-folder-picker: 22000;
 }
 
-/* --- Small-screen overrides ---
-   Single breakpoint for narrow/mobile-width layout tuning. Override
-   existing :root vars here rather than hardcoding values in selectors,
-   so every rule that already consumes the var picks this up for free. */
-@media (max-width: 480px) {
-  :root {
-    --app-bar-title-size: 24px;
-    --app-bar-icon-btn-size: 44px; /* = current value, dial in */
-    --app-bar-icon-glyph-size: 30px; /* = current value, dial in */
-    --filter-chip-height: 32px; /* = current value, dial in */
-    --filter-chip-padding-x: 16px; /* = current value, dial in */
-    --filter-chip-font-size: 15px; /* = current value, dial in */
-    --dialog-title-size: 20px; /* = current value, dial in */
-    --dialog-message-size: 15px; /* = current value, dial in */
-    --btn-font-size: 14px; /* = current value, dial in */
-  }
-
-  /* Icon gap vars are scoped to .app-bar-elements-layer (also read at
-     runtime by AppBarLayout.js), not :root — override here to match. */
-  .app-bar-elements-layer {
-    --app-bar-gap: 12px; /* = current value, dial in */
-    --app-bar-actions-gap: 10px; /* = current value, dial in */
-    --app-bar-title-gap: 12px; /* = current value, dial in — min. distance from title to icons before truncation */
-  }
-}
-
 /* --- Reset --- */
 * {
   margin: 0;
@@ -349,8 +323,11 @@ body.trash-view-active #lightboxDownloadBtn {
   width: 100%;
   height: 100%;
   background: transparent;
+  /* Base gap: JS may squeeze --app-bar-actions-gap below this at runtime
+     (down to a floor of -iconW) when the bar is too narrow for all icons
+     at full gap — see squeezeActionsGap() in appBarLayout.js. */
   --app-bar-gap: 12px;
-  --app-bar-actions-gap: 10px;
+  --app-bar-actions-gap: 8px;
   --app-bar-title-gap: 12px;
   --app-bar-title-max-w: calc(100% - 12rem);
   --app-bar-jumper-left: 0px;
@@ -3467,4 +3444,33 @@ body.library-recovery-active .library-recovery-dock {
 
 .share-manage-icon-btn .material-symbols-outlined {
   font-size: 20px;
+}
+
+/* --- Small-screen overrides ---
+   Single breakpoint for narrow/mobile-width layout tuning. Kept as one
+   block, last in the file, so every override here reliably wins any
+   cascade tie against a same-specificity base rule declared earlier —
+   regardless of which selector that base rule used. Do not add another
+   @media (max-width: 480px) block elsewhere for these selectors; a
+   second one earlier in the file can silently lose this fight again. */
+@media (max-width: 480px) {
+  :root {
+    --app-bar-title-size: 24px;
+    --app-bar-icon-btn-size: 44px; /* = current value, dial in */
+    --app-bar-icon-glyph-size: 30px; /* = current value, dial in */
+    --filter-chip-height: 32px; /* = current value, dial in */
+    --filter-chip-padding-x: 16px; /* = current value, dial in */
+    --filter-chip-font-size: 15px; /* = current value, dial in */
+    --dialog-title-size: 20px; /* = current value, dial in */
+    --dialog-message-size: 15px; /* = current value, dial in */
+    --btn-font-size: 14px; /* = current value, dial in */
+  }
+
+  /* Icon gap vars are scoped to .app-bar-elements-layer (also read at
+     runtime by AppBarLayout.js), not :root — override here to match. */
+  .app-bar-elements-layer {
+    --app-bar-gap: 12px; /* = current value, dial in */
+    --app-bar-actions-gap: 8px; /* = current value, dial in */
+    --app-bar-title-gap: 0px; /* = current value, dial in — min. distance from title to icons before truncation */
+  }
 }

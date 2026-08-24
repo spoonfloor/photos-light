@@ -28,13 +28,6 @@
       </select>
     </div>
 
-    <!-- TEMP: only sort/download/deselect/more visible while dialing in
-         app-bar sizing. addPhoto/editDate/delete disabled below by renaming
-         data-cap -> data-cap-disabled (so chrome.js's [data-cap] loop skips
-         them) plus a hidden attribute — AppBarLayout.js's collision math
-         already filters on !btn.hidden, so it automatically only accounts
-         for the icons actually showing. To restore: rename
-         data-cap-disabled back to data-cap and remove hidden. -->
     <div class="actions">
       <button
         type="button"
@@ -54,8 +47,7 @@
         id="addPhotoBtn"
         aria-label="Add Photo"
         title="Add photo"
-        data-cap-disabled="import"
-        hidden
+        data-cap="import"
       >
         <span class="material-symbols-outlined app-bar-icon">add_a_photo</span>
       </button>
@@ -87,8 +79,7 @@
         id="editDateBtn"
         aria-label="Edit Date"
         title="Change date"
-        data-cap-disabled="editDate"
-        hidden
+        data-cap="editDate"
       >
         <span class="material-symbols-outlined app-bar-icon">edit_calendar</span>
       </button>
@@ -111,8 +102,7 @@
         id="deleteBtn"
         aria-label="Delete"
         title="Delete selected"
-        data-cap-disabled="deleteKind"
-        hidden
+        data-cap="deleteKind"
       >
         <span class="material-symbols-outlined app-bar-icon">delete</span>
       </button>
