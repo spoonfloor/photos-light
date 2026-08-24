@@ -55,24 +55,37 @@
   --app-bar-icon-glyph-size: 24px;
 
   /* --- Modal typography (dial-in tokens) ---
-     Every modal's title/body text reads from one of these instead of a
-     hardcoded font-size, so every tunable size lives in one place —
-     here, and its mirror in the @media (max-width: 480px) block at EOF.
-     --modal-title-size is shared by .dialog-title and .date-editor-title
-     because they're already the same size by design (centered-modal
-     heading, same role). The rest get their own var because their sizes
-     genuinely differ per component — don't collapse those without also
-     deciding you want the visuals to match. */
-  --modal-title-size: 20px; /* .dialog-title, .date-editor-title */
-  --dialog-message-size: 15px;
-  --import-title-size: 16px; /* bottom-docked family: import / share-loading / clean-library */
-  --import-status-text-size: 14px;
-  --toast-message-size: 15px;
-  --date-editor-current-size: 14px;
+     Every modal's title/body/caption text reads from one of these
+     instead of a hardcoded font-size, so every tunable size lives in
+     one place — here, and its mirror in the @media (max-width: 480px)
+     block at EOF. Two tiers, by how much weight the modal carries:
+     "blocking" (dialog, date editor — the user must resolve it) and
+     "compact" (docked/panel surfaces — import progress, pickers — that
+     don't demand full attention). Caption and path are one tier each,
+     shared by every modal regardless of blocking/compact, since nothing
+     in the app currently has a reason for a caption or a path readout
+     to be a different size in one modal than another.
+     --modal-stat-value-size / --modal-stat-label-size (declared with
+     the import-overlay scoreboard below) are intentionally NOT part of
+     this scale — a stat tile is a different role than prose, not a
+     missed unification. */
+  --modal-title-size: 20px; /* blocking: .dialog-title, .date-editor-title */
+  --modal-title-size-compact: 16px; /* compact: .import-title (import/share-loading/clean-library), .picker-title */
+  --modal-body-size: 15px; /* blocking: .dialog-message, .toast-message, create-library name input, share title */
+  --modal-body-size-compact: 14px; /* compact: import status/explainer, date-editor current, picker subtitle, breadcrumb, folder/photo-picker rows, share-overlay-remaining, empty-state */
+  --modal-caption-size: 13px; /* fine-print prose: radio description, form errors, counts, status lines, field labels */
+  --modal-path-size: 12px; /* monospace path/breadcrumb readouts only */
   --btn-font-size: 14px;
+  --btn-padding-block: 8px; /* vertical padding — the actual lever for button height, since .btn has no explicit height */
+  --btn-padding-inline: 16px; /* horizontal padding */
 
-  /* --- Import-style overlay scoreboards (preflight + in-flight) --- */
+  /* --- Import-style overlay scoreboards (preflight + in-flight) ---
+     Deliberately outside the modal typography scale above — a stat
+     tile (big number + tiny caps label) is a different role than
+     prose, not a missed unification. */
   --scoreboard-col-min-width: 64px;
+  --modal-stat-value-size: 24px;
+  --modal-stat-label-size: 11px;
 
   /* --- Z-index scale --- */
   --z-app-chrome: 1000;
@@ -156,7 +169,7 @@ body {
    ============================================================================ */
 
 .btn {
-  padding: 8px 16px;
+  padding: var(--btn-padding-block) var(--btn-padding-inline);
   border-radius: 6px;
   font-size: var(--btn-font-size);
   font-weight: 500;
@@ -1474,7 +1487,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .dialog-message {
-  font-size: var(--dialog-message-size);
+  font-size: var(--modal-body-size);
   margin-bottom: 24px;
   padding: 0 24px;
   color: var(--text-secondary);
@@ -1528,7 +1541,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .date-editor-current {
-  font-size: var(--date-editor-current-size);
+  font-size: var(--modal-body-size-compact);
   color: var(--text-secondary);
   margin-bottom: 24px;
 }
@@ -1556,14 +1569,14 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .date-editor-radio .radio-title {
-  font-size: 15px;
+  font-size: var(--modal-body-size);
   color: var(--text-primary);
   margin-bottom: 4px;
   font-weight: 500;
 }
 
 .date-editor-radio .radio-description {
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
   color: var(--text-secondary);
   line-height: 1.4;
   display: flex;
@@ -1578,7 +1591,7 @@ body.surface-load-active .app-bar-icon-button {
   border-radius: 4px;
   color: var(--text-primary);
   padding: 4px 28px 4px 8px; /* More padding on right for chevron */
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
   font-family: inherit;
   cursor: pointer;
   /* Remove browser default chevron */
@@ -1625,7 +1638,9 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .date-editor-field label {
-  font-size: 12px;
+  font-size: var(
+    --modal-caption-size
+  ); /* was 12px — not monospace, moved off the path tier onto caption */
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1638,7 +1653,7 @@ body.surface-load-active .app-bar-icon-button {
   border-radius: 4px;
   color: var(--text-primary);
   padding: 12px;
-  font-size: 16px;
+  font-size: 16px; /* intentionally off the token scale: iOS Safari auto-zooms on focus for any input under 16px */
   font-family: inherit;
 }
 
@@ -1674,7 +1689,9 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .date-editor-timezone label {
-  font-size: 12px;
+  font-size: var(
+    --modal-caption-size
+  ); /* was 12px — not monospace, moved off the path tier onto caption */
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1688,7 +1705,7 @@ body.surface-load-active .app-bar-icon-button {
   border-radius: 4px;
   color: var(--text-secondary);
   padding: 12px;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
 }
 
 .date-editor-actions {
@@ -1715,7 +1732,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .toast-message {
-  font-size: var(--toast-message-size);
+  font-size: var(--modal-body-size);
   font-weight: 400;
   color: #ffffff;
 }
@@ -1724,7 +1741,9 @@ body.surface-load-active .app-bar-icon-button {
   background: transparent;
   border: none;
   color: #64b5f6;
-  font-size: 15px;
+  font-size: var(
+    --btn-font-size
+  ); /* it's a CTA, same tier as every .btn — was hardcoded 15px, drifted off the button token */
   font-weight: 500;
   cursor: pointer;
   padding: 0;
@@ -1911,7 +1930,7 @@ body.surface-load-active .app-bar-icon-button {
   border-radius: 6px;
   color: var(--text-primary);
   padding: 12px 14px;
-  font-size: 15px;
+  font-size: var(--modal-body-size);
   font-family: inherit;
   box-sizing: border-box;
   outline: none;
@@ -1920,7 +1939,7 @@ body.surface-load-active .app-bar-icon-button {
 #nameLibraryOverlay .create-library-name-error {
   margin-top: 4px;
   color: #ff6b6b;
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
   min-height: 0;
   line-height: 18px;
   visibility: hidden;
@@ -1938,7 +1957,9 @@ body.surface-load-active .app-bar-icon-button {
   border: none;
   border-radius: 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(
+    --modal-path-size
+  ); /* was 13px — monospace path readout, same role as the other path text (which is 12px); this one was the outlier */
   font-family: monospace;
   text-align: left;
   cursor: pointer;
@@ -2023,13 +2044,6 @@ body.surface-load-active .app-bar-icon-button {
   padding-bottom: 4px;
 }
 
-#cleanLibraryOverlay .import-explainer {
-  margin: 0 0 12px;
-  font-size: 14px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
 .import-details-section .clean-library-log-feed {
   display: none;
   box-sizing: border-box;
@@ -2061,7 +2075,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .import-title {
-  font-size: var(--import-title-size);
+  font-size: var(--modal-title-size-compact);
   font-weight: 500;
   color: var(--text-primary);
 }
@@ -2104,7 +2118,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .import-status-text {
-  font-size: var(--import-status-text-size);
+  font-size: var(--modal-body-size-compact);
   color: var(--text-primary);
   margin-bottom: 0;
   display: flex;
@@ -2123,7 +2137,7 @@ body.surface-load-active .app-bar-icon-button {
 
 .download-prep-note {
   margin: 12px 0 0;
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
   line-height: 1.5;
   color: var(--text-secondary);
 }
@@ -2199,14 +2213,14 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .import-stat-label {
-  font-size: 11px;
+  font-size: var(--modal-stat-label-size);
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .import-stat-value {
-  font-size: 24px;
+  font-size: var(--modal-stat-value-size);
   font-weight: 500;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums; /* Monospaced numbers for smooth animation */
@@ -2237,7 +2251,7 @@ body.surface-load-active .app-bar-icon-button {
   gap: 8px;
   margin-top: 16px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
 }
 
 .library-recovery-cleaner-debug {
@@ -2256,7 +2270,7 @@ body.surface-load-active .app-bar-icon-button {
   background: rgba(244, 67, 54, 0.12);
   border: 1px solid rgba(244, 67, 54, 0.28);
   color: #ffb4ab;
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
   line-height: 1.5;
 }
 
@@ -2360,20 +2374,19 @@ body.library-recovery-active .library-recovery-dock {
   text-align: left;
 }
 
-#importOverlay .import-explainer,
-#terraformProgressOverlay .import-explainer,
-#terraformCompleteOverlay .import-explainer {
+/* Shared by every import-style overlay (import, share-loading,
+   clean-library, all terraform steps) — was 5 byte-identical ID-scoped
+   copies of the same rule; collapsed to one. */
+.import-explainer {
   margin: 0 0 12px;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
   line-height: 1.45;
   color: var(--text-secondary);
 }
 
-#importOverlay .import-secondary-status,
-#cleanLibraryOverlay .import-secondary-status,
-#terraformProgressOverlay .import-secondary-status {
+.import-secondary-status {
   margin-top: 8px;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
   line-height: 1.4;
   color: var(--text-secondary);
 }
@@ -2382,16 +2395,9 @@ body.library-recovery-active .library-recovery-dock {
   display: block;
 }
 
-#terraformPreviewOverlay .import-explainer {
-  margin: 0 0 12px;
-  font-size: 14px;
-  line-height: 1.45;
-  color: var(--text-secondary);
-}
-
 #terraformPreviewOverlay .terraform-preview-path {
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--modal-path-size);
   color: var(--text-secondary);
   margin: 0 0 16px;
   word-break: break-all;
@@ -2408,7 +2414,7 @@ body.library-recovery-active .library-recovery-dock {
 #libraryTransitionOverlay .library-transition-path {
   margin-top: 8px;
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--modal-path-size);
   line-height: 1.4;
   color: var(--text-secondary);
   word-break: break-all;
@@ -2446,7 +2452,7 @@ body.library-recovery-active .library-recovery-dock {
   padding: 8px 0;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
   width: 100%;
 }
 
@@ -2694,7 +2700,7 @@ body.library-recovery-active .library-recovery-dock {
 }
 
 .picker-title {
-  font-size: 16px;
+  font-size: var(--modal-title-size-compact);
   font-weight: 500;
   color: #e7e7e7;
   margin-bottom: 0;
@@ -2721,7 +2727,7 @@ body.library-recovery-active .library-recovery-dock {
 }
 
 .picker-subtitle {
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
   color: #e7e7e7;
   margin: 0;
   line-height: 1.5;
@@ -2746,7 +2752,7 @@ body.library-recovery-active .library-recovery-dock {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
@@ -2790,7 +2796,7 @@ body.library-recovery-active .library-recovery-dock {
   cursor: pointer;
   transition: color 0.2s;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--modal-path-size);
   font-family: monospace;
 }
 
@@ -2830,7 +2836,7 @@ body.library-recovery-active .library-recovery-dock {
   align-items: center;
   gap: 12px;
   transition: all 0.2s;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
 }
 
 .folder-item:hover {
@@ -2949,7 +2955,7 @@ body.library-recovery-active .library-recovery-dock {
 
 .selected-path p {
   margin: 0 0 12px 0;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
   color: #e7e7e7;
   line-height: 1.5;
 }
@@ -2957,14 +2963,14 @@ body.library-recovery-active .library-recovery-dock {
 .selected-path p:nth-child(2) {
   margin: 0;
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--modal-path-size);
   color: #b3b3b3;
 }
 
 .picker-selection-hint {
   margin: 8px 0 0 0 !important;
   font-family: inherit !important;
-  font-size: 13px !important;
+  font-size: var(--modal-caption-size) !important;
   color: #fff !important;
   line-height: 1.4 !important;
 }
@@ -2983,7 +2989,7 @@ body.library-recovery-active .library-recovery-dock {
   align-items: center;
   justify-content: center;
   color: #666;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
 }
 
 /* Breadcrumb scrollbar */
@@ -3044,7 +3050,7 @@ body.library-recovery-active .library-recovery-dock {
   align-items: center;
   gap: 12px;
   transition: all 0.2s;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
 }
 
 .photo-picker-item:hover {
@@ -3140,11 +3146,13 @@ body.library-recovery-active .library-recovery-dock {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
 }
 
 .photo-picker-meta {
-  font-size: 12px;
+  font-size: var(
+    --modal-caption-size
+  ); /* was 12px — not monospace, same drift as the two field labels below */
   color: #888;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3168,7 +3176,7 @@ body.library-recovery-active .library-recovery-dock {
 }
 
 .photo-picker-count {
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
   color: #a8a8a8;
 }
 
@@ -3258,7 +3266,7 @@ body.library-recovery-active .library-recovery-dock {
   gap: 8px;
   margin-top: 16px;
   margin-bottom: 8px;
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
   /* No cards, no backgrounds */
 }
 
@@ -3318,7 +3326,7 @@ body.library-recovery-active .library-recovery-dock {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--modal-caption-size);
   word-break: break-all;
 }
 
@@ -3330,7 +3338,7 @@ body.library-recovery-active .library-recovery-dock {
   background: none;
   color: var(--text-primary);
   font: inherit;
-  font-size: 15px;
+  font-size: var(--modal-body-size);
   text-decoration: underline;
   cursor: pointer;
 }
@@ -3346,7 +3354,7 @@ body.library-recovery-active .library-recovery-dock {
   border-radius: 8px;
   color: var(--text-primary);
   padding: 10px 12px;
-  font-size: 15px;
+  font-size: var(--modal-body-size);
   font-family: inherit;
   box-sizing: border-box;
   outline: none;
@@ -3380,7 +3388,7 @@ body.library-recovery-active .library-recovery-dock {
 .share-overlay-remaining {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: var(--modal-body-size-compact);
 }
 
 .share-copy-btn {
@@ -3474,25 +3482,25 @@ body.library-recovery-active .library-recovery-dock {
    @media (max-width: 480px) block elsewhere for these selectors; a
    second one earlier in the file can silently lose this fight again. */
 @media (max-width: 480px) {
+  /* Only actual deltas from the :root base live here now — a line in
+     this block means this breakpoint genuinely differs from desktop.
+     A token with no reason to differ yet simply isn't declared here;
+     it falls through to its :root value like any normal CSS property.
+     (Previously every dial-in token got a same-value placeholder line
+     here "for discoverability" — cut because a line that changes
+     nothing reads as a real override until you check both places.) */
   :root {
     --app-bar-title-size: 24px;
-    --app-bar-icon-btn-size: 44px; /* = current value, dial in */
     --app-bar-icon-glyph-size: 30px; /* = current value, dial in */
     --filter-chip-height: 36px; /* = current value, dial in */
     --filter-chip-padding-x: 18px; /* = current value, dial in */
     --filter-chip-font-size: 17px; /* = current value, dial in */
-    --btn-font-size: 14px; /* = current value, dial in */
+    --btn-font-size: 17px; /* = current value, dial in */
+    --btn-padding-block: 10px; /* = current value, dial in */
+    --btn-padding-inline: 18px; /* = current value, dial in */
     --month-header-font-size: 17px; /* = current value, dial in */
-
-    /* Modal typography — mirrors the token group in :root above. Same
-       names, so this stays the one other place to look when dialing in
-       a modal's text size for mobile specifically. */
-    --modal-title-size: 99px; /* = current value, dial in */
-    --dialog-message-size: 15px; /* = current value, dial in */
-    --import-title-size: 16px; /* = current value, dial in */
-    --import-status-text-size: 14px; /* = current value, dial in */
-    --toast-message-size: 15px; /* = current value, dial in */
-    --date-editor-current-size: 14px; /* = current value, dial in */
+    --modal-title-size-compact: 22px; /* = current value, dial in */
+    --modal-body-size-compact: 17px; /* = current value, dial in */
     /* Single source for how far every modal sits from the viewport edge
        at this breakpoint. Bottom-docked and centered modals below both
        read this instead of each re-deriving their own width/margin pair
