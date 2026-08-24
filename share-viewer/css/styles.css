@@ -21,7 +21,12 @@
 
   /* --- Layout --- */
   --app-bar-height: 64px;
-  --filter-chip-rail-height: 50px;
+  /* Rail height derives from chip height so growing the chip pushes the
+     rail — and everything downstream keyed off --app-chrome-height —
+     down with it, instead of overflowing the app bar above. */
+  --filter-chip-rail-height: calc(
+    var(--filter-chip-height) + 2 * var(--filter-chip-rail-vpad)
+  );
   --trash-chrome-height: 48px;
   --app-chrome-height: var(--app-bar-height);
   --page-top-gap: 24px;
@@ -40,6 +45,7 @@
   --filter-chip-font-weight: 300;
   --filter-chip-height: 32px;
   --filter-chip-padding-x: 16px;
+  --filter-chip-rail-vpad: 9px; /* rail height = chip height + 2x this */
   /* Utilities (⋮) dropdown knobs */
   --utilities-menu-padding-inline-end: 24px; /* inner: label → panel right */
   --utilities-menu-viewport-inset-end: 0px; /* outer: + nudges whole panel left (away from viewport right) */
@@ -47,8 +53,22 @@
   --app-bar-gap: 4px;
   --app-bar-icon-btn-size: 44px;
   --app-bar-icon-glyph-size: 24px;
-  --dialog-title-size: 20px;
+
+  /* --- Modal typography (dial-in tokens) ---
+     Every modal's title/body text reads from one of these instead of a
+     hardcoded font-size, so every tunable size lives in one place —
+     here, and its mirror in the @media (max-width: 480px) block at EOF.
+     --modal-title-size is shared by .dialog-title and .date-editor-title
+     because they're already the same size by design (centered-modal
+     heading, same role). The rest get their own var because their sizes
+     genuinely differ per component — don't collapse those without also
+     deciding you want the visuals to match. */
+  --modal-title-size: 20px; /* .dialog-title, .date-editor-title */
   --dialog-message-size: 15px;
+  --import-title-size: 16px; /* bottom-docked family: import / share-loading / clean-library */
+  --import-status-text-size: 14px;
+  --toast-message-size: 15px;
+  --date-editor-current-size: 14px;
   --btn-font-size: 14px;
 
   /* --- Import-style overlay scoreboards (preflight + in-flight) --- */
@@ -865,7 +885,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .month-header {
-  font-size: 16px;
+  font-size: var(--month-header-font-size, 16px);
   font-weight: 500;
   margin-bottom: 20px;
   color: var(--text-primary);
@@ -1426,7 +1446,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .dialog-title {
-  font-size: var(--dialog-title-size);
+  font-size: var(--modal-title-size);
   font-weight: 500;
   margin: 0;
   color: var(--text-primary);
@@ -1501,14 +1521,14 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .date-editor-title {
-  font-size: 20px;
+  font-size: var(--modal-title-size);
   font-weight: 400;
   color: var(--text-primary);
   margin: 0 0 16px 0;
 }
 
 .date-editor-current {
-  font-size: 14px;
+  font-size: var(--date-editor-current-size);
   color: var(--text-secondary);
   margin-bottom: 24px;
 }
@@ -1695,7 +1715,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .toast-message {
-  font-size: 15px;
+  font-size: var(--toast-message-size);
   font-weight: 400;
   color: #ffffff;
 }
@@ -2041,7 +2061,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .import-title {
-  font-size: 16px;
+  font-size: var(--import-title-size);
   font-weight: 500;
   color: var(--text-primary);
 }
@@ -2084,7 +2104,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .import-status-text {
-  font-size: 14px;
+  font-size: var(--import-status-text-size);
   color: var(--text-primary);
   margin-bottom: 0;
   display: flex;
@@ -3458,12 +3478,26 @@ body.library-recovery-active .library-recovery-dock {
     --app-bar-title-size: 24px;
     --app-bar-icon-btn-size: 44px; /* = current value, dial in */
     --app-bar-icon-glyph-size: 30px; /* = current value, dial in */
-    --filter-chip-height: 32px; /* = current value, dial in */
-    --filter-chip-padding-x: 16px; /* = current value, dial in */
-    --filter-chip-font-size: 15px; /* = current value, dial in */
-    --dialog-title-size: 20px; /* = current value, dial in */
-    --dialog-message-size: 15px; /* = current value, dial in */
+    --filter-chip-height: 36px; /* = current value, dial in */
+    --filter-chip-padding-x: 18px; /* = current value, dial in */
+    --filter-chip-font-size: 17px; /* = current value, dial in */
     --btn-font-size: 14px; /* = current value, dial in */
+    --month-header-font-size: 17px; /* = current value, dial in */
+
+    /* Modal typography — mirrors the token group in :root above. Same
+       names, so this stays the one other place to look when dialing in
+       a modal's text size for mobile specifically. */
+    --modal-title-size: 99px; /* = current value, dial in */
+    --dialog-message-size: 15px; /* = current value, dial in */
+    --import-title-size: 16px; /* = current value, dial in */
+    --import-status-text-size: 14px; /* = current value, dial in */
+    --toast-message-size: 15px; /* = current value, dial in */
+    --date-editor-current-size: 14px; /* = current value, dial in */
+    /* Single source for how far every modal sits from the viewport edge
+       at this breakpoint. Bottom-docked and centered modals below both
+       read this instead of each re-deriving their own width/margin pair
+       (that's what let import-card's width and margin drift apart). */
+    --modal-inset-mobile: 20px;
   }
 
   /* Icon gap vars are scoped to .app-bar-elements-layer (also read at
@@ -3472,5 +3506,34 @@ body.library-recovery-active .library-recovery-dock {
     --app-bar-gap: 12px; /* = current value, dial in */
     --app-bar-actions-gap: 8px; /* = current value, dial in */
     --app-bar-title-gap: 0px; /* = current value, dial in — min. distance from title to icons before truncation */
+  }
+
+  /* Bottom-docked modals (import progress, share-loading, clean library)
+     become a full-width bottom sheet instead of a left-anchored compact
+     card, using --modal-inset-mobile for both the width subtraction and
+     the margin so they can't fall out of sync. */
+  .import-card,
+  #cleanLibraryOverlay .import-card {
+    width: calc(100% - 2 * var(--modal-inset-mobile));
+    max-width: none;
+    margin: var(--modal-inset-mobile);
+  }
+
+  .library-recovery-dock {
+    left: var(--modal-inset-mobile);
+    bottom: var(--modal-inset-mobile);
+  }
+
+  .library-recovery-card {
+    width: calc(100vw - 2 * var(--modal-inset-mobile));
+  }
+
+  /* Centered modals (confirm dialogs, date editor) keep their vertical
+     centering but also fill the width, using the same inset. */
+  .dialog,
+  .date-editor {
+    width: calc(100% - 2 * var(--modal-inset-mobile));
+    max-width: none;
+    min-width: 0;
   }
 }
