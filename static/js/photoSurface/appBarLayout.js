@@ -1,8 +1,17 @@
 /**
  * App bar collision layout — title (left), jumper (center-until-collision), actions (right).
  * Driven by measured widths + CSS variables; no viewport breakpoints.
+ *
+ * Instance-scoped: createController(mountId) builds one controller bound to
+ * the `.app-bar-elements-layer` inside the element with that id. This used
+ * to be a single module-level singleton bound to whichever
+ * `.app-bar-elements-layer` `document.querySelector` found first — which
+ * only worked for a second app bar (lightbox) by accident of DOM order
+ * (#appBarMount precedes #lightboxMount in index.html). Scoping by mount id
+ * makes that explicit instead of implicit, and lets grid and lightbox each
+ * run their own instance without stepping on each other's state.
  */
-const AppBarLayout = (() => {
+function createAppBarLayoutController(mountId) {
   const GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
   const ACTIONS_GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
   const TITLE_GAP_FALLBACK_PX = 12; // used only if the CSS custom property can't be read
@@ -22,7 +31,8 @@ const AppBarLayout = (() => {
   let titleGapDefaultPx = TITLE_GAP_FALLBACK_PX;
 
   function queryElements() {
-    layer = document.querySelector('.app-bar-elements-layer');
+    const mount = document.getElementById(mountId);
+    layer = mount ? mount.querySelector('.app-bar-elements-layer') : null;
     return layer;
   }
 
@@ -294,7 +304,7 @@ const AppBarLayout = (() => {
     }
 
     mutationObserver = new MutationObserver(scheduleLayout);
-    const observeTarget = document.getElementById('appBarMount') || layer;
+    const observeTarget = document.getElementById(mountId) || layer;
     mutationObserver.observe(observeTarget, {
       attributes: true,
       childList: true,
@@ -336,4 +346,15 @@ const AppBarLayout = (() => {
     disconnect,
     scheduleLayout,
   };
-})();
+}
+
+// Grid's instance — same public API as before the refactor, so every
+// existing `AppBarLayout.init()` / `.disconnect()` / `.scheduleLayout()`
+// call site (main.js, shareBoot.js, datePickerChrome.js, chrome.js) is
+// unchanged.
+const AppBarLayout = createAppBarLayoutController('appBarMount');
+
+// Lightbox's instance — same engine, scoped to #lightboxMount. Driven by
+// LightboxShell (see lightboxShell.js show()/hide()) so lightbox icons get
+// the same overflow/squeeze behavior as grid's, not just matching sizes.
+const LightboxAppBarLayout = createAppBarLayoutController('lightboxMount');

@@ -6615,29 +6615,6 @@ function wireLightbox() {
 }
 
 /**
- * Show lightbox UI
- */
-function showLightboxUI() {
-  LightboxShell.showUI();
-}
-
-function hideLightboxUI() {
-  LightboxShell.hideUI();
-}
-
-function clearLightboxUIHideTimeout() {
-  LightboxShell.clearUIHideTimeout();
-}
-
-function scheduleLightboxUIHide() {
-  LightboxShell.scheduleUIHide();
-}
-
-function syncLightboxUIHoverState() {
-  LightboxShell.syncUIHoverState();
-}
-
-/**
  * Handle keyboard events for lightbox
  */
 function handleLightboxKeyboard(e) {
@@ -6918,9 +6895,6 @@ async function closeLightbox({ commitRotations = true } = {}) {
   state.lightboxGlobalIndex = null;
   state.lightboxNavMode = null;
   state.lightboxNavPhotoIds = null;
-
-  // Clear UI timeout and hover tracking
-  clearLightboxUIHideTimeout();
 
   // Check if we need to navigate to a specific month
   if (state.navigateToMonth) {

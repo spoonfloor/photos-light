@@ -191,60 +191,80 @@
     </main>
 <!-- Lightbox Overlay -->
 <div class="lightbox-overlay" id="lightboxOverlay" style="display: none">
-  <!-- Top bar with gradient -->
-  <div class="lightbox-top-bar">
-    <button
-      class="lightbox-icon-button"
-      id="lightboxBackBtn"
-      aria-label="Close"
-    >
-      <span class="material-symbols-outlined">arrow_back</span>
-    </button>
-    <div class="lightbox-spacer"></div>
-    <button
-      class="lightbox-icon-button"
-      id="lightboxRotateBtn"
-      aria-label="Rotate"
-    >
-      <span class="material-symbols-outlined">rotate_left</span>
-    </button>
-    <button
-      class="lightbox-icon-button"
-      id="lightboxEditDateBtn"
-      aria-label="Edit Date"
-    >
-      <span class="material-symbols-outlined">edit_calendar</span>
-    </button>
-    <button class="lightbox-icon-button" id="lightboxStarBtn" aria-label="Star">
-      <span class="material-symbols-outlined">star</span>
-    </button>
-    <button class="lightbox-icon-button" id="lightboxInfoBtn" aria-label="Info">
-      <span class="material-symbols-outlined">info</span>
-    </button>
-    <button
-      class="lightbox-icon-button"
-      id="lightboxRestoreBtn"
-      aria-label="Restore"
-      title="Restore"
-      hidden
-    >
-      <span class="material-symbols-outlined">undo</span>
-    </button>
-    <button
-      class="lightbox-icon-button"
-      id="lightboxDownloadBtn"
-      aria-label="Download"
-      title="Download"
-    >
-      <span class="material-symbols-outlined">download</span>
-    </button>
-    <button
-      class="lightbox-icon-button"
-      id="lightboxDeleteBtn"
-      aria-label="Delete"
-    >
-      <span class="material-symbols-outlined">delete</span>
-    </button>
+  <!-- Top chrome: decorative scrim (fixed extent) + icon row.
+       Icon row reuses the grid app bar's actual markup (.app-bar-wrapper /
+       .app-bar-elements-layer / .actions / .app-bar-icon-button) instead
+       of a parallel implementation, so sizing, centering, and
+       overflow/squeeze behavior come from the same component and can't
+       drift out of sync. .lightbox-top-bar / .lightbox-icon-button carry
+       only the lightbox-specific deltas (transparent background, white
+       icon color) — see styles.css.
+       Deliberately NOT using .title-and-back for the back button: that
+       class is grid's decorative title, which AppBarLayout.layout() hides
+       when the bar gets crowded (title-and-back < 480px etc.) — fine for
+       optional text, wrong for a close control the user must always be
+       able to reach. .lightbox-back-btn gets equivalent left-aligned,
+       vertically-centered positioning without going through that
+       show/hide logic. -->
+  <div class="lightbox-top-chrome">
+    <div class="lightbox-scrim" aria-hidden="true"></div>
+    <div class="app-bar-wrapper lightbox-top-bar">
+      <div class="app-bar-elements-layer">
+        <button
+          class="app-bar-icon-button lightbox-icon-button lightbox-back-btn"
+          id="lightboxBackBtn"
+          aria-label="Close"
+        >
+          <span class="material-symbols-outlined app-bar-icon">arrow_back</span>
+        </button>
+        <div class="actions">
+          <button
+            class="app-bar-icon-button lightbox-icon-button"
+            id="lightboxRotateBtn"
+            aria-label="Rotate"
+          >
+            <span class="material-symbols-outlined app-bar-icon">rotate_left</span>
+          </button>
+          <button
+            class="app-bar-icon-button lightbox-icon-button"
+            id="lightboxEditDateBtn"
+            aria-label="Edit Date"
+          >
+            <span class="material-symbols-outlined app-bar-icon">edit_calendar</span>
+          </button>
+          <button class="app-bar-icon-button lightbox-icon-button" id="lightboxStarBtn" aria-label="Star">
+            <span class="material-symbols-outlined app-bar-icon">star</span>
+          </button>
+          <button class="app-bar-icon-button lightbox-icon-button" id="lightboxInfoBtn" aria-label="Info">
+            <span class="material-symbols-outlined app-bar-icon">info</span>
+          </button>
+          <button
+            class="app-bar-icon-button lightbox-icon-button"
+            id="lightboxRestoreBtn"
+            aria-label="Restore"
+            title="Restore"
+            hidden
+          >
+            <span class="material-symbols-outlined app-bar-icon">undo</span>
+          </button>
+          <button
+            class="app-bar-icon-button lightbox-icon-button"
+            id="lightboxDownloadBtn"
+            aria-label="Download"
+            title="Download"
+          >
+            <span class="material-symbols-outlined app-bar-icon">download</span>
+          </button>
+          <button
+            class="app-bar-icon-button lightbox-icon-button"
+            id="lightboxDeleteBtn"
+            aria-label="Delete"
+          >
+            <span class="material-symbols-outlined app-bar-icon">delete</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Navigation chevrons -->

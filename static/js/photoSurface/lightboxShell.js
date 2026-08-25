@@ -6,8 +6,6 @@ const LightboxShell = (() => {
   /** @type {object | null} */
   let ctx = null;
   let wired = false;
-  let uiHideTimeout = null;
-  let uiHovered = false;
 
   const els = {
     overlay: null,
@@ -31,7 +29,9 @@ const LightboxShell = (() => {
 
   function cacheElements() {
     els.overlay = document.getElementById('lightboxOverlay');
-    els.topBar = document.querySelector('.lightbox-top-bar');
+    // .lightbox-top-chrome wraps both the scrim and the icon row so
+    // show/hide fades them together (see styles.css .lightbox-top-chrome).
+    els.topBar = document.querySelector('.lightbox-top-chrome');
     els.content = document.getElementById('lightboxContent');
     els.backBtn = document.getElementById('lightboxBackBtn');
     els.prevBtn = document.getElementById('lightboxPrevBtn');
@@ -66,22 +66,6 @@ const LightboxShell = (() => {
 
   function hideUI() {
     els.topBar?.classList.add('hidden');
-  }
-
-  function clearUIHideTimeout() {
-    if (uiHideTimeout !== null) {
-      clearTimeout(uiHideTimeout);
-      uiHideTimeout = null;
-    }
-  }
-
-  function scheduleUIHide() {
-    clearUIHideTimeout();
-    uiHideTimeout = setTimeout(() => {
-      if (isOpen() && !uiHovered) {
-        hideUI();
-      }
-    }, 2000);
   }
 
   function hideInfoPanel() {
@@ -163,24 +147,15 @@ const LightboxShell = (() => {
     }
   }
 
-  function syncUIHoverState() {
-    if (!els.overlay || !isOpen()) {
-      return;
-    }
-    uiHovered = els.overlay.matches(':hover');
-    showUI();
-    clearUIHideTimeout();
-    if (!uiHovered) {
-      scheduleUIHide();
-    }
-  }
-
   function show() {
     if (els.overlay) {
       els.overlay.style.display = 'flex';
     }
     document.body.style.overflow = 'hidden';
-    syncUIHoverState();
+    showUI();
+    // Same overflow/squeeze engine as the grid app bar, scoped to
+    // #lightboxMount — see appBarLayout.js.
+    LightboxAppBarLayout.init();
   }
 
   function hide() {
@@ -189,8 +164,8 @@ const LightboxShell = (() => {
       els.overlay.style.display = 'none';
     }
     document.body.style.overflow = '';
-    clearUIHideTimeout();
-    uiHovered = false;
+    touchActive = false;
+    LightboxAppBarLayout.disconnect();
   }
 
   function refreshChrome() {
@@ -198,18 +173,7 @@ const LightboxShell = (() => {
     refreshInfo();
     ctx?.updateNavArrows?.();
     ctx?.updateStarButton?.();
-    syncUIHoverState();
-  }
-
-  function onOverlayMouseEnter() {
-    uiHovered = true;
     showUI();
-    clearUIHideTimeout();
-  }
-
-  function onOverlayMouseLeave() {
-    uiHovered = false;
-    scheduleUIHide();
   }
 
   function handleKey(e, { includeEscape = true } = {}) {
@@ -274,6 +238,61 @@ const LightboxShell = (() => {
     handleKey(e);
   }
 
+  // --- Gesture recognizer ---
+  // Single recognizer shared by swipe left/right (Step 2, wired below),
+  // swipe down to exit (Step 3, not yet wired), and tap-unclaimed-area to
+  // toggle the app bar (Step 4, not yet wired) — see docs/lightbox-480-plan.md.
+  // Hard cut only: we track start/end points on touchend, no live drag
+  // tracking or filmstrip motion (locked decision, explicitly out of scope).
+  const SWIPE_MIN_DISTANCE = 50; // px
+  let touchActive = false;
+  let touchStartX = 0;
+  let touchStartY = 0;
+
+  function isInteractiveTarget(target) {
+    return Boolean(
+      target?.closest?.(
+        'button, a, input, textarea, select, [contenteditable], .lightbox-info-panel',
+      ),
+    );
+  }
+
+  function onOverlayTouchStart(e) {
+    if (!isOpen() || e.touches.length !== 1 || isInteractiveTarget(e.target)) {
+      touchActive = false;
+      return;
+    }
+    touchActive = true;
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }
+
+  function onOverlayTouchEnd(e) {
+    if (!touchActive) {
+      return;
+    }
+    touchActive = false;
+    const touch = e.changedTouches[0];
+    if (!touch) {
+      return;
+    }
+    const deltaX = touch.clientX - touchStartX;
+    const deltaY = touch.clientY - touchStartY;
+
+    if (Math.abs(deltaX) >= SWIPE_MIN_DISTANCE && Math.abs(deltaX) > Math.abs(deltaY)) {
+      // Swipe left → next, swipe right → previous (same convention as the
+      // chevrons: ctx.navigate(-1) is prev, ctx.navigate(1) is next).
+      ctx?.navigate?.(deltaX < 0 ? 1 : -1);
+      return;
+    }
+    // Vertical swipe-down (Step 3) and no-movement tap (Step 4) aren't
+    // wired up yet — this recognizer only acts on the horizontal case today.
+  }
+
+  function onOverlayTouchCancel() {
+    touchActive = false;
+  }
+
   function bindEvents() {
     els.backBtn?.addEventListener('click', () => ctx?.onBack?.());
     els.prevBtn?.addEventListener('click', () => ctx?.navigate?.(-1));
@@ -309,8 +328,9 @@ const LightboxShell = (() => {
     });
     els.restoreBtn?.addEventListener('click', () => ctx?.onRestore?.());
 
-    els.overlay?.addEventListener('mouseenter', onOverlayMouseEnter);
-    els.overlay?.addEventListener('mouseleave', onOverlayMouseLeave);
+    els.overlay?.addEventListener('touchstart', onOverlayTouchStart, { passive: true });
+    els.overlay?.addEventListener('touchend', onOverlayTouchEnd);
+    els.overlay?.addEventListener('touchcancel', onOverlayTouchCancel);
   }
 
   function wire(adapter) {
@@ -339,9 +359,6 @@ const LightboxShell = (() => {
     setNavArrows,
     showUI,
     hideUI,
-    clearUIHideTimeout,
-    scheduleUIHide,
-    syncUIHoverState,
     handleKey,
   };
 })();

@@ -53,6 +53,25 @@
   --app-bar-gap: 4px;
   --app-bar-icon-btn-size: 44px;
   --app-bar-icon-glyph-size: 24px;
+  /* Base value only — .app-bar-elements-layer re-declares this locally
+     (same 8px today) so JS can squeeze it at runtime for icon crowding
+     (see squeezeActionsGap() in appBarLayout.js); that local declaration
+     always wins for anything inside the grid app bar. This root copy
+     exists so non-grid consumers (e.g. .lightbox-top-bar) can reuse the
+     same static value without inheriting the grid's squeeze behavior. */
+  --app-bar-actions-gap: 8px;
+
+  /* --- Lightbox chrome ---
+     Bar height and icon sizing above reuse --app-bar-* directly (see
+     .lightbox-top-bar / .lightbox-icon-button) rather than duplicating
+     those values here. Nav chevrons have no grid counterpart, so they
+     get their own knobs instead of forcing a fit onto an app-bar token
+     that means something else. Desktop is mouse-driven and doesn't need
+     a touch-sized target, so these are backed-in smaller (same 4:3
+     btn:glyph ratio) from the touch size, which lives in the
+     @media (max-width: 480px) block at EOF. */
+  --lightbox-nav-btn-size: 40px;
+  --lightbox-nav-glyph-size: 30px;
 
   /* --- Photo grid corner badges (select circle + star) ---
      Visual glyph size and tap-target size are independent knobs. The
@@ -1147,41 +1166,54 @@ body.surface-load-active .app-bar-icon-button {
   overflow: hidden;
 }
 
-.lightbox-top-bar {
+/* Decorative scrim and icon row are separate, independently-sized layers:
+   the scrim's extent is purely a legibility/visual choice (how much fade
+   sits over the photo) and must not couple to the icon row's own size —
+   they used to be one element, which meant taller-for-the-gradient and
+   taller-for-the-icons were the same knob and pulled against each other.
+   Both fade together via .lightbox-top-chrome.hidden. */
+.lightbox-top-chrome {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: 80px;
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0));
-  display: flex;
-  align-items: flex-start;
-  padding: 20px;
+  height: calc(var(--app-bar-height) + 16px);
   z-index: 1;
 }
 
-.lightbox-top-bar.hidden {
+.lightbox-top-chrome.hidden {
   opacity: 0;
   pointer-events: none;
 }
 
-.lightbox-spacer {
-  flex: 1;
+.lightbox-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0));
+  pointer-events: none;
 }
 
-.lightbox-icon-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  cursor: pointer;
-  background: none;
-  border: none;
-  padding: 0;
-  -webkit-tap-highlight-color: transparent;
-  position: relative;
-  z-index: 2;
+/* Icon row now shares the grid's actual .app-bar-wrapper / .app-bar-elements-layer
+   / .actions / .app-bar-icon-button markup (see lightbox.html) instead of a
+   parallel implementation — same box model, same overflow/squeeze engine
+   (AppBarLayout, instance-scoped to #lightboxMount), not just matching
+   token values by hand. .lightbox-top-bar is only the delta: grid's bar
+   is opaque, lightbox's must stay transparent so the scrim behind it
+   shows through. Sits in normal flow at the top of .lightbox-top-chrome
+   (the scrim is position:absolute, out of flow, so it doesn't push this). */
+.app-bar-wrapper.lightbox-top-bar {
+  background: transparent;
+}
+
+/* Positioned like .app-bar-wrapper .title-and-back (left-aligned, vertically
+   centered) without using that class — see lightbox.html comment for why:
+   AppBarLayout hides .title-and-back under overflow, which is wrong for a
+   close control. */
+.lightbox-back-btn {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .lightbox-icon-button[aria-disabled='true'] {
@@ -1198,11 +1230,12 @@ body.surface-load-active .app-bar-icon-button {
   cursor: default;
 }
 
+/* Icon color delta: grid uses --text-primary (off-white) against opaque
+   chrome; lightbox uses pure white for max contrast against arbitrary
+   photo content. Wins over .app-bar-icon-button's rule by declaration
+   order (this rule is later in the cascade — same specificity either way). */
 .lightbox-icon-button .material-symbols-outlined {
-  font-size: 24px;
   color: white;
-  user-select: none;
-  pointer-events: none;
 }
 
 /* Filled star state */
@@ -1825,8 +1858,8 @@ body.surface-load-active .app-bar-icon-button {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 48px;
-  height: 48px;
+  width: var(--lightbox-nav-btn-size);
+  height: var(--lightbox-nav-btn-size);
   background: rgba(0, 0, 0, 0.5);
   border: none;
   border-radius: 50%;
@@ -1850,7 +1883,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .lightbox-nav-btn .material-symbols-outlined {
-  font-size: 36px;
+  font-size: var(--lightbox-nav-glyph-size);
   color: white;
   user-select: none;
   pointer-events: none;
@@ -3532,6 +3565,10 @@ body.library-recovery-active .library-recovery-dock {
   :root {
     --app-bar-title-size: 24px;
     --app-bar-icon-glyph-size: 30px; /* = current value, dial in */
+    /* Touch-target size — desktop's :root default is backed in smaller
+       (mouse-driven, no touch-target floor needed) from this value. */
+    --lightbox-nav-btn-size: 48px;
+    --lightbox-nav-glyph-size: 36px;
     --photo-badge-visual-size: 28px; /* bigger glyph for touch; hit box grows with it via --photo-badge-hit-size */
     --filter-chip-height: 36px; /* = current value, dial in */
     --filter-chip-padding-x: 18px; /* = current value, dial in */
