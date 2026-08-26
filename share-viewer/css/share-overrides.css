@@ -72,3 +72,14 @@ body.share-view.share-view--not-found .share-error-retry {
 .share-page-title.surface-layout-placeholder {
   width: fit-content;
 }
+
+/* Grid app bar, ≤480px: styles.css moves #downloadBtn into the more menu
+   at this breakpoint, but share's utilities menu (utilitiesMenuShare.html)
+   has no download entry to catch it — download only ever lives in the app
+   bar on share (docs/share-ui-deltas.md). Restore it here rather than
+   scoping the app-only move in the shared stylesheet. */
+@media (max-width: 480px) {
+  body.share-view #downloadBtn {
+    display: flex;
+  }
+}

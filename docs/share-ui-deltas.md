@@ -18,7 +18,10 @@ Only the items below may differ; everything else must come from shared source.
 - Photos grouped by **day** with headers like `August 10, 2026`
 - Month/year jumper: month is always a dropdown; year is static (no chevron) when the album spans one year
 - Month/year jumper hidden when all photos fall in a single month; hidden until month span is known
-- Download button in app bar (not utilities menu)
+- Download button in app bar (not utilities menu) — including at ≤480px,
+  where the app moves its own download button into the more menu instead
+  (`share-overrides.css` restores app-bar placement; share's utilities menu
+  has no download entry)
 - Utilities menu: **Clear stars** + **Copy link** only
 - Stars persisted in viewer `localStorage` (not library DB)
 - Data loaded from Supabase edge function `share-resolve` (`shareBoot.js`)

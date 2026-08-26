@@ -3761,13 +3761,12 @@ body.library-recovery-active .library-recovery-dock {
   }
 
   /* Grid: download + change-date move into the more menu at this
-     breakpoint — app surface only, per docs/lightbox-480-plan.md. Share's
-     app-bar fragment reuses these same #downloadBtn/#editDateBtn ids
-     (appBarShare.html), so this has to be scoped off share explicitly
-     rather than relying on width alone; share-viewer/index.html's <body>
-     already carries .share-view for exactly this kind of surface check. */
-  body:not(.share-view) #downloadBtn,
-  body:not(.share-view) #editDateBtn {
+     breakpoint, per docs/lightbox-480-plan.md. Unconditional — editDateBtn
+     is already cap-hidden on share (edit date is app-only), and download
+     staying in the app bar on share is a documented delta restored by
+     share-overrides.css rather than carved out here. */
+  #downloadBtn,
+  #editDateBtn {
     display: none;
   }
 
@@ -3784,18 +3783,20 @@ body.library-recovery-active .library-recovery-dock {
     order: -1;
   }
 
-  /* Lightbox: rotate/change-date/download move into a new more menu at
-     this breakpoint — app surface only, mirroring the grid above. Share's
-     lightbox never shows rotate/edit-date at all (ViewCapabilities.SHARE),
-     so only download is a genuine surface-scoped delta here; rotate/
-     edit-date are scoped too for consistency/defensiveness. */
-  body:not(.share-view) #lightboxRotateBtn,
-  body:not(.share-view) #lightboxEditDateBtn,
-  body:not(.share-view) #lightboxDownloadBtn {
+  /* Lightbox: rotate/change-date/download move into the more menu at this
+     breakpoint. Unconditional and fully shared — the more menu's items
+     (#lightboxRotateMenuBtn etc.) live in the one shared lightbox.html
+     fragment and carry the same caps.* gates as their inline counterparts
+     (see lightboxShell.js applyCapabilities), so share ends up with a
+     more-button offering only Download, exactly as if it had always been
+     built that way. Nothing here needs a surface exception. */
+  #lightboxRotateBtn,
+  #lightboxEditDateBtn,
+  #lightboxDownloadBtn {
     display: none;
   }
 
-  body:not(.share-view) #lightboxMoreBtn {
+  #lightboxMoreBtn {
     display: flex;
   }
 }
