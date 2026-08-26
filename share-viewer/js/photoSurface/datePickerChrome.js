@@ -3,6 +3,21 @@
  * App (main.js) and share (shareDatePicker.js) both delegate here.
  */
 const DatePickerChrome = (() => {
+  const MONTH_LABELS = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
   let lastCatalog = [];
   let pendingReveal = false;
   let catalogVisible = false;
@@ -135,6 +150,22 @@ const DatePickerChrome = (() => {
     yearPicker.classList.toggle('date-picker-select--static', isStatic);
     yearPicker.tabIndex = isStatic ? -1 : 0;
     yearPicker.setAttribute('aria-disabled', isStatic ? 'true' : 'false');
+  }
+
+  function populateMonthPicker() {
+    const monthPicker = document.getElementById('monthPicker');
+    if (!monthPicker || monthPicker.options.length) {
+      return monthPicker;
+    }
+
+    MONTH_LABELS.forEach((label, index) => {
+      const option = document.createElement('option');
+      option.value = String(index + 1);
+      option.textContent = label;
+      monthPicker.appendChild(option);
+    });
+
+    return monthPicker;
   }
 
   function populateYearPicker(years, sortOrder) {
@@ -276,6 +307,7 @@ const DatePickerChrome = (() => {
       return { shown: false, catalogKnown: false, resolvedMonth: null };
     }
 
+    populateMonthPicker();
     populateYearPicker(years, sortOrder);
 
     const monthPicker = document.getElementById('monthPicker');
@@ -341,6 +373,7 @@ const DatePickerChrome = (() => {
     monthsFromPhotos,
     shouldShowJumper,
     nearestMonthInIndex,
+    populateMonthPicker,
     populateYearPicker,
     applyMonthDisabledState,
     setPickerValues,

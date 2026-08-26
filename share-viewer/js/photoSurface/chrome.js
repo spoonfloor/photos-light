@@ -13,7 +13,7 @@ const PhotoChrome = (() => {
       return;
     }
 
-    const isVisible = menu.style.display === 'block';
+    const isVisible = menu.style.display === 'flex';
     if (isVisible) {
       hideUtilitiesMenu(menu);
       return;
@@ -32,7 +32,12 @@ const PhotoChrome = (() => {
     menu.style.top = `${btnRect.bottom + 8}px`;
     menu.style.right = `${window.innerWidth - btnRect.right + insetExtra}px`;
     menu.style.left = '';
-    menu.style.display = 'block';
+    // .utilities-menu's own class already declares display:flex/flex-direction:
+    // column (styles.css) — this must match that, not 'block', or the menu
+    // silently loses flex layout the instant it's actually shown and any
+    // per-item `order` (e.g. narrow-width Download/Change-date reordering,
+    // docs/lightbox-480-plan.md) has no effect despite computing correctly.
+    menu.style.display = 'flex';
   }
 
   function ensureSelectedFilterChip(scroll, onToggle) {

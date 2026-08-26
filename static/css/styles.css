@@ -73,6 +73,14 @@
   --lightbox-nav-btn-size: 40px;
   --lightbox-nav-glyph-size: 30px;
 
+  /* Edge nav strips (Step 5): wide invisible hit targets for prev/next,
+     one value at every breakpoint — unlike the chevron tokens above, this
+     one deliberately does NOT get a ≤480px override. 96px was sized for
+     touch thumb-reach, but the Google Photos hover-reveal design (see
+     docs/lightbox-480-plan.md) settled on reusing it for mouse too rather
+     than tuning a second value. */
+  --lightbox-edge-strip-width: 96px;
+
   /* --- Photo grid corner badges (select circle + star) ---
      Visual glyph size and tap-target size are independent knobs. The
      hit box is whichever is bigger: the best-practice floor, or the
@@ -557,9 +565,6 @@ body.trash-view-active #lightboxDownloadBtn {
   line-height: 1;
   cursor: pointer;
   white-space: nowrap;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
 }
 
 .filter-chip:hover {
@@ -1216,6 +1221,13 @@ body.surface-load-active .app-bar-icon-button {
   transform: translateY(-50%);
 }
 
+/* Hidden by default (desktop + share); narrow-width app-only override
+   below reveals it and hides rotate/edit-date/download inline in favor of
+   the new lightbox more menu — see docs/lightbox-480-plan.md. */
+#lightboxMoreBtn {
+  display: none;
+}
+
 .lightbox-icon-button[aria-disabled='true'] {
   opacity: 0.35;
   cursor: not-allowed;
@@ -1247,6 +1259,24 @@ body.surface-load-active .app-bar-icon-button {
     'opsz' 24;
 }
 
+/* position + negative z-index (not just z-index alone — z-index has no
+   effect without a position) makes this establish its own stacking
+   context. Required because LightboxMedia sets the actual <img>/<video>
+   to position:absolute inline (lightboxMedia.js applyMediaStyles), inside
+   .lightbox-media-frame (position:relative, no z-index of its own) — with
+   no stacking context anywhere in between, that positioned media element
+   "escapes" this non-positioned container entirely and competes directly
+   in .lightbox-overlay's own stacking order, at the same z-index:auto/0
+   tier as .lightbox-edge-strip (Step 5). Tied z-index there is broken by
+   DOM order, and the photo is inserted after the strip — so without this
+   rule the photo paints (and hit-tests) above the strip, silently
+   swallowing every hover/click on it. Only reproduces with a real photo
+   loaded, which is why Step 5/6's testing (empty library, no image ever
+   in this element) never caught it. Negative, not just 0: 0 would only
+   make .lightbox-content itself tie with the strip and lose the same way
+   by DOM order; negative puts the whole contained subtree in the stacking
+   order's negative tier, unconditionally below the strip/chevrons/top-bar
+   regardless of DOM order. */
 .lightbox-content {
   flex: 1;
   min-width: 0;
@@ -1256,6 +1286,8 @@ body.surface-load-active .app-bar-icon-button {
   justify-content: center;
   padding: 0;
   overflow: hidden;
+  position: relative;
+  z-index: -1;
 }
 
 .lightbox-content img,
@@ -1853,8 +1885,30 @@ body.surface-load-active .app-bar-icon-button {
   font-size: 18px;
   font-weight: 300;
 }
-/* Lightbox navigation chevrons */
+/* Lightbox navigation chevrons (Step 6, docs/lightbox-480-plan.md: arrow
+   visibility is width-gated, two independent designs sharing one formula).
+   --lightbox-nav-shown / --lightbox-nav-active-opacity are separate knobs
+   multiplied together in `opacity` so "is it revealed" (hover on wide,
+   the JS timer's .hidden class on narrow) and "is it usable" (.inactive,
+   at a nav boundary) compose correctly on their own — neither rule needs
+   to know about the other, and both-at-once (hidden AND inactive) just
+   works out to 0 automatically.
+   Wide default (this rule, unscoped = desktop): hidden until the matching
+   edge strip is hovered (see the :has() rules below) — Google Photos
+   convention, no timer. pointer-events: none is deliberate: it hands all
+   pointer/touch hit-testing to the edge strip sitting beneath it (same
+   navigate() action either way), which keeps ':hover' on the strip
+   continuously true even while the cursor sits on top of the now-visible
+   chevron glyph — without this, the chevron (topmost, z-index 10) would
+   steal hover away from the strip the instant the cursor reached it,
+   instantly hiding the very control the cursor is moving toward.
+   Keyboard access is unaffected: pointer-events doesn't block Tab focus
+   or a keyboard-triggered click. Narrow (≤480px, touch) overrides both
+   of these back — see the EOF media block — to the original always-shown,
+   directly-tappable behavior, driven by the JS auto-hide timer instead. */
 .lightbox-nav-btn {
+  --lightbox-nav-shown: 0;
+  --lightbox-nav-active-opacity: 1;
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
@@ -1868,6 +1922,9 @@ body.surface-load-active .app-bar-icon-button {
   align-items: center;
   justify-content: center;
   z-index: 10;
+  opacity: calc(var(--lightbox-nav-shown) * var(--lightbox-nav-active-opacity));
+  pointer-events: none;
+  transition: opacity 150ms ease;
 }
 
 .lightbox-nav-btn:hover {
@@ -1880,6 +1937,28 @@ body.surface-load-active .app-bar-icon-button {
 
 .lightbox-nav-right {
   right: 20px;
+}
+
+/* Wide-width reveal: hovering an edge strip shows only its own chevron
+   (exclusive per side, not both) — see .lightbox-edge-strip in Step 5's
+   rules above. Order-independent :has() rather than a `~` sibling
+   combinator on purpose: the strips currently sit after the chevrons in
+   lightbox.html, and a forward-only sibling selector would require
+   keeping that DOM order in lockstep with this CSS.
+   Explicitly gated to wide widths, not left to fall out of the cascade by
+   coincidence: this rule's specificity is high enough to beat the narrow
+   .hidden class below regardless of viewport, so without this guard a
+   mouse-hover on a narrow (≤480px) viewport — a real combination in a
+   resized desktop browser, even though real touch devices never hover —
+   would pin the chevron visible and defeat Step 6's auto-hide timer. */
+@media (min-width: 481px) {
+  .lightbox-overlay:has(.lightbox-edge-strip--left:hover) .lightbox-nav-left {
+    --lightbox-nav-shown: 1;
+  }
+
+  .lightbox-overlay:has(.lightbox-edge-strip--right:hover) .lightbox-nav-right {
+    --lightbox-nav-shown: 1;
+  }
 }
 
 .lightbox-nav-btn .material-symbols-outlined {
@@ -1895,9 +1974,50 @@ body.surface-load-active .app-bar-icon-button {
   pointer-events: none;
 }
 
-/* Inactive lightbox nav button */
+/* Inactive lightbox nav button — sets the "usable" half of the
+   shown × active-opacity formula above (see .lightbox-nav-btn), so a
+   nav-boundary chevron reads dimmed if shown, and stays fully invisible
+   (0 × 0.3) if the auto-hide timer or hover-visibility also has it
+   hidden — no extra rule needed for that combination. */
 .lightbox-nav-btn.inactive {
-  opacity: 0.3;
+  --lightbox-nav-active-opacity: 0.3;
+  pointer-events: none;
+  cursor: default;
+}
+
+/* Edge nav strips (Step 5, docs/lightbox-480-plan.md): wide invisible
+   click/tap targets for prev/next, full height, one per side. z-index is
+   deliberately below .lightbox-top-chrome (1) and .lightbox-nav-btn (10)
+   so clicks on those controls still win where the strip overlaps them —
+   the strip only catches surface clicks that don't land on an actual
+   control. Plain <button> so isInteractiveTarget() in lightboxShell.js
+   (selector includes `button`) excludes these from the swipe/tap
+   recognizer for free. aria-hidden/tabindex=-1 (see lightbox.html): the
+   chevron is the accessible control, this is a supplementary pointer
+   target only, not a second "Previous"/"Next" for keyboard/AT users. */
+.lightbox-edge-strip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--lightbox-edge-strip-width);
+  z-index: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  appearance: none;
+}
+
+.lightbox-edge-strip--left {
+  left: 0;
+}
+
+.lightbox-edge-strip--right {
+  right: 0;
+}
+
+.lightbox-edge-strip.inactive {
   pointer-events: none;
   cursor: default;
 }
@@ -2036,7 +2156,6 @@ body.surface-load-active .app-bar-icon-button {
   font-family: monospace;
   text-align: left;
   cursor: pointer;
-  transition: color 0.2s;
 }
 
 #nameLibraryOverlay .library-location-compact:hover {
@@ -2837,7 +2956,6 @@ body.library-recovery-active .library-recovery-dock {
   align-items: center;
   gap: 4px;
   cursor: pointer;
-  transition: color 0.2s;
   flex-shrink: 0;
 }
 
@@ -2861,13 +2979,11 @@ body.library-recovery-active .library-recovery-dock {
   font-weight: 200;
   color: #b3b3b3;
   flex-shrink: 0;
-  transition: color 0.2s;
 }
 
 .breadcrumb-item {
   color: #b3b3b3;
   cursor: pointer;
-  transition: color 0.2s;
   flex-shrink: 0;
   font-size: var(--modal-path-size);
   font-family: monospace;
@@ -2908,7 +3024,6 @@ body.library-recovery-active .library-recovery-dock {
   display: flex;
   align-items: center;
   gap: 12px;
-  transition: all 0.2s;
   font-size: var(--modal-body-size);
 }
 
@@ -2992,7 +3107,6 @@ body.library-recovery-active .library-recovery-dock {
   margin: 0;
   flex-shrink: 0;
   user-select: none;
-  transition: color 0.2s;
 }
 
 .folder-checkbox:hover {
@@ -3122,7 +3236,6 @@ body.library-recovery-active .library-recovery-dock {
   display: flex;
   align-items: center;
   gap: 12px;
-  transition: all 0.2s;
   font-size: var(--modal-body-size);
 }
 
@@ -3256,26 +3369,6 @@ body.library-recovery-active .library-recovery-dock {
 .photo-picker-clear-btn {
   background: none;
   border: none;
-  padding: 4px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #a8a8a8;
-  transition: color 0.2s;
-}
-
-.photo-picker-clear-btn:hover {
-  color: #e7e7e7;
-}
-
-.photo-picker-clear-btn .material-symbols-outlined {
-  font-size: 18px;
-}
-
-.photo-picker-clear-btn {
-  background: none;
-  border: none;
   color: #a8a8a8;
   cursor: pointer;
   padding: 4px;
@@ -3283,7 +3376,6 @@ body.library-recovery-active .library-recovery-dock {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.2s;
 }
 
 .photo-picker-clear-btn:hover {
@@ -3621,5 +3713,89 @@ body.library-recovery-active .library-recovery-dock {
     width: calc(100% - 2 * var(--modal-inset-mobile));
     max-width: none;
     min-width: 0;
+  }
+
+  /* Chevron visibility delta (Step 6): narrow/touch has no hover, so it
+     keeps the original always-shown, directly-tappable behavior instead
+     of wide's hover-per-strip reveal — visibility here is driven by the
+     JS auto-hide timer (lightboxShell.js scheduleChevronHide) toggling
+     .hidden instead. pointer-events reverts to auto since there's no
+     hover-flicker risk to guard against on touch. */
+  .lightbox-nav-btn {
+    --lightbox-nav-shown: 1;
+    pointer-events: auto;
+  }
+
+  .lightbox-nav-btn.hidden {
+    --lightbox-nav-shown: 0;
+    pointer-events: none;
+  }
+
+  /* More menu (.utilities-menu) had no narrow override at all — frozen at
+     desktop size, same bug pattern Step 0/1 fixed for the lightbox bar. */
+  .utilities-menu-item {
+    font-size: 17px;
+  }
+
+  .utilities-menu-item .material-symbols-outlined {
+    font-size: 32px;
+  }
+
+  /* Clear stars' composite icon (two stacked glyphs, not one) has to scale
+     as a unit: container + outer glyph go to 32px like every sibling, and
+     the inner filled star keeps its desktop 2/3 ratio (13.333/20) so it
+     still reads as one "star with a slash" glyph instead of drifting out
+     of proportion with the outer shape. */
+  .utilities-menu-icon-composite {
+    flex-basis: 32px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .utilities-menu-icon-composite > .material-symbols-outlined {
+    font-size: 32px;
+  }
+
+  .utilities-menu-icon-composite > .material-symbols-outlined.filled {
+    font-size: 21.333px; /* 32px * (13.333/20), same ratio as desktop */
+  }
+
+  /* Grid: download + change-date move into the more menu at this
+     breakpoint — app surface only, per docs/lightbox-480-plan.md. Share's
+     app-bar fragment reuses these same #downloadBtn/#editDateBtn ids
+     (appBarShare.html), so this has to be scoped off share explicitly
+     rather than relying on width alone; share-viewer/index.html's <body>
+     already carries .share-view for exactly this kind of surface check. */
+  body:not(.share-view) #downloadBtn,
+  body:not(.share-view) #editDateBtn {
+    display: none;
+  }
+
+  /* Float the menu's download/change-date entries above Clear stars at
+     this breakpoint only — desktop keeps the plain DOM order (Clear
+     stars first). #downloadSelectedBtn/#editDateSelectedBtn only exist in
+     utilitiesMenu.html (not utilitiesMenuShare.html), so no share scoping
+     is needed here — the elements simply aren't present on share. */
+  #downloadSelectedBtn {
+    order: -2;
+  }
+
+  #editDateSelectedBtn {
+    order: -1;
+  }
+
+  /* Lightbox: rotate/change-date/download move into a new more menu at
+     this breakpoint — app surface only, mirroring the grid above. Share's
+     lightbox never shows rotate/edit-date at all (ViewCapabilities.SHARE),
+     so only download is a genuine surface-scoped delta here; rotate/
+     edit-date are scoped too for consistency/defensiveness. */
+  body:not(.share-view) #lightboxRotateBtn,
+  body:not(.share-view) #lightboxEditDateBtn,
+  body:not(.share-view) #lightboxDownloadBtn {
+    display: none;
+  }
+
+  body:not(.share-view) #lightboxMoreBtn {
+    display: flex;
   }
 }

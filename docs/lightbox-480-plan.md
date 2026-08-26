@@ -1,6 +1,8 @@
 # Lightbox @ 480px breakpoint — tracking doc
 
-Status: **in progress** (Steps 0–2 done; Step 3 up next). Update the
+Status: **all steps landed** (0–6), plus follow-on narrow-width refinements
+landed 2026-08-26 (see "Locked decisions" and session log — chevron timing/
+single-side reveal, more-menu sizing, more-menu relocation). Update the
 checkboxes and append to the session log as work lands, so any new agent
 session can pick this up cold.
 
@@ -17,17 +19,53 @@ below for exact parameters — don't re-litigate these without the user.
 - Swipe left/right and swipe down are **hard cuts**, not a filmstrip drag.
   Fancy interactive filmstrip transition is explicitly out of scope (see
   "Explored & rejected" below) — don't revisit without the user raising it.
-- Edge nav strips: **96px** wide, full height, one per side.
+- Edge nav strips: **96px** wide, full height, one per side — same width at
+  every breakpoint (touch and wide/mouse both use 96px; no separate desktop
+  value). Resolved 2026-08-25, see session log.
 - Debug aid: strips get a visible red overlay while sizing is dialed in —
   must be trivial to flip off before ship (flag/class, not baked in).
 - **App bar never auto-hides.** No timer applies to it. It shows/hides only
   on an explicit tap of an unclaimed area (Step 4) — a manual toggle, not a
   fade-on-idle.
-- **Arrow auto-hide timer applies only to the chevrons**, independent of the
-  app bar's state. Delay: **1000ms** from image load. Any nav interaction
-  (arrow tap or strip tap) resets the timer and re-shows the arrows. (Update
-  2026-08-25: originally scoped as one shared timer for bar + arrows —
-  split per user direction, see session log.)
+- **Arrow visibility is width-gated — two independent designs, not one
+  shared timer** (redesigned 2026-08-25, adopts the Google Photos hover
+  convention for wide widths; see session log):
+  - **Narrow (≤480px, touch):** 1500ms auto-hide timer from image load
+    (changed from the original 1000ms, then briefly 2000ms, to 1500ms —
+    2026-08-26, see session log), independent of the app bar's state. Any
+    nav interaction (arrow tap or strip tap) resets the timer and re-shows
+    the arrows. **Only the side just used re-shows**, not both — e.g. after
+    navigating back, only the left chevron reappears (added 2026-08-26, see
+    session log). Both still show on a true initial open. No hover — touch
+    has none.
+  - **Wide (>480px):** no timer at all. Chevrons are hidden by default;
+    hovering the left edge strip reveals the left chevron only, hovering
+    the right strip reveals the right chevron only — exclusive per side,
+    pure hover-driven (plain CSS `:hover`, no JS timer/state). This
+    replaces — not layers onto — the earlier "hover/movement over the
+    lightbox resets the timer" decision for wide widths.
+- **Drag-based swipe (left/right/down) is touch-only.** Click-drag isn't a
+  discoverable desktop convention the way touch swipe is, and a mouse drag
+  doesn't carry the same intentionality as a touch swipe at the same
+  distance threshold — so a desktop mouse never navigates or closes via
+  drag. Plain click (no drag) still toggles the app bar on both inputs,
+  since a click is a normal desktop interaction. Desktop nav relies on
+  chevrons, edge strips (Step 5), and keyboard instead. (Added 2026-08-25,
+  reverses part of the mouse-support session below — see session log.)
+- **More menu relocation, narrow-width + app-surface only, not share**
+  (added 2026-08-26, see session log): grid's inline Download/Change-date
+  app-bar icons and the lightbox's inline Rotate/Change-date/Download icons
+  hide at ≤480px and move into an overflow ("more") menu instead — grid's
+  existing `#utilitiesMenu`, and a new lightbox-only instance
+  (`#lightboxUtilitiesMenu` + `#lightboxMoreBtn`) that reuses the same
+  `.utilities-menu` component/`PhotoChrome.toggleUtilitiesMenu` helper, not
+  a parallel implementation. Share is unaffected at any width — scoped via
+  `body:not(.share-view)` in CSS (grid) and by simply not existing in
+  share's fragments (lightbox has no `*Share.html` fork, so this only
+  applies where the moved buttons are app-only to begin with). Grid's menu
+  additionally reorders Download/Change-date above Clear stars at this
+  breakpoint only (`order: -2`/`-1` on `#downloadSelectedBtn`/
+  `#editDateSelectedBtn`).
 
 ## Prereq diagnosis (agreed necessary before feature work)
 
@@ -72,6 +110,13 @@ Full diagnosis is in the session transcript from 2026-08-24; summary:
   desktop is mouse-driven and doesn't need a touch-target floor; 48px
   already read "horsey" as the constant/only size.
 
+## Open questions — resolved 2026-08-25
+
+- **Edge nav strip width for mouse/desktop: resolved — same as touch.**
+  Settled while adopting the Google Photos hover convention for wide
+  widths (see "Locked decisions" and session log): 96px at every
+  breakpoint, one CSS token, no separate desktop value to dial in.
+
 ## Explored & rejected
 
 - **Filmstrip-style interactive swipe transition** — would require live 1:1
@@ -102,16 +147,27 @@ Full diagnosis is in the session transcript from 2026-08-24; summary:
       at desktop and 390px.)
 - [x] **2. Swipe left/right → navigate** (hard cut, reuses existing
       `navigate(±1)`) — done + verified 2026-08-25, see session log
-- [ ] **3. Swipe down → exit to grid** (same gesture recognizer as #2)
-- [ ] **4. Tap unclaimed area → toggle app bar** (no-movement case of the
+- [x] **3. Swipe down → exit to grid** (same gesture recognizer as #2) —
+      done + verified 2026-08-25, see session log
+- [x] **4. Tap unclaimed area → toggle app bar** (no-movement case of the
       same recognizer; anything hitting a registered interactive element is
       excluded automatically). App bar only — no timer, no effect on
-      chevron visibility.
-- [ ] **5. Edge nav strips** — 96px, full height, red debug overlay,
-      registered as interactive elements so #4 excludes them for free
-- [ ] **6. Arrow auto-hide** — 1000ms from image load, resets on any nav
-      interaction (arrow tap or strip tap). Chevrons only, runs independent
-      of app bar state/visibility.
+      chevron visibility. Done + verified 2026-08-25, see session log.
+- [x] **5. Edge nav strips** — 96px wide, full height, one per side,
+      red debug overlay, registered as interactive elements so #4 excludes
+      them for free. Width is a single CSS token used at every breakpoint —
+      no separate desktop value (resolved 2026-08-25, see session log).
+      Wide-width strips also need hover-state tracking (mouseenter/
+      mouseleave), since Step 6's chevron reveal now depends on it.
+- [x] **6. Arrow visibility, width-gated** (redesigned 2026-08-25 to adopt
+      the Google Photos hover convention for wide widths — see "Locked
+      decisions" and session log):
+  - Narrow (≤480px, touch): 1000ms auto-hide timer from image load, resets
+    on any nav interaction (arrow tap or strip tap). Chevrons only, runs
+    independent of app bar state/visibility.
+  - Wide (>480px): no timer. Chevrons hidden by default; hovering the left
+    strip shows the left chevron only, hovering the right strip shows the
+    right chevron only — exclusive per side, pure hover-driven.
 
 ## Definition of done
 
@@ -357,3 +413,615 @@ behavior before declaring a step complete, not "it's fixed"). Draft:
     real photos (this pass used synthetic `Event` objects with hand-set
     `touches`/`changedTouches`, since no library was loaded in the
     isolated verification tab).
+
+- **2026-08-25** — Step 3, swipe down → exit to grid. Extended the same
+  recognizer in `static/js/photoSurface/lightboxShell.js`'s
+  `onOverlayTouchEnd` (no new listeners — reuses the touchstart/touchend
+  binding from Step 2):
+  - Added a second classification branch after the existing horizontal
+    check: `deltaY >= 50px && deltaY > |deltaX|` (vertical-dominant,
+    downward only) calls `ctx?.onBack?.()` — the same path as tapping the
+    back/close button (commits pending rotations), not the Escape
+    shortcut (which discards them). Deliberate: swipe-down is a purposeful
+    exit gesture, not a discard-and-bail escape hatch.
+  - Swipe-up is a negative `deltaY`, so it falls through both branches and
+    stays a no-op — not in scope per the locked decision (only "swipe
+    down" was specified).
+  - Both adapters (`main.js:6553`, `shareBoot.js:684`) already expose
+    `onBack`, so this is inherited by share automatically with zero
+    share-only code — consistent with the app→share inheritance rule.
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh` (diffed
+    byte-identical to `static/`, not deployed).
+  - **Verified live** (same isolated-tab, synthetic-touch method as Step
+    2's entry — no library loaded, no real photo/session state touched;
+    this pass corrected an initial mistake of patching `window.state` /
+    `window.closeLightbox`, which are `undefined` since `main.js` is a
+    classic script and `const state` doesn't attach to `window` — switched
+    to bare identifiers, which do resolve in the shared script realm):
+    spied on `closeLightbox` and `navigateLightbox`, forced
+    `state.lightboxOpen = true` and the overlay visible, dispatched five
+    synthetic swipes against the real running `LightboxShell`. Results:
+    swipe down (100px) → 1 `closeLightbox` call; swipe up (100px) → 0
+    (correctly a no-op); sub-threshold vertical (20px) → 0; swipe left/
+    right (100px each, regression check) → `navigateLightbox` calls
+    `[1, -1]` unchanged from Step 2. All test state (spies, `lightboxOpen`,
+    overlay `display`) restored and confirmed back to original values.
+  - Not yet done: same caveat as Step 2 — no actual touch device/emulator
+    confirmation yet, synthetic events only.
+  - Next: Step 4 — tap unclaimed area toggles the app bar (no-movement
+    case of this same recognizer; registered interactive elements are
+    already excluded via `isInteractiveTarget()`).
+
+- **2026-08-25** — Step 4, tap unclaimed area → toggle app bar. Extended
+  `onOverlayTouchEnd` in `static/js/photoSurface/lightboxShell.js` with a
+  third classification branch (no new listeners, same touchstart/touchend
+  binding as Steps 2–3):
+  - New constant `TAP_MAX_MOVEMENT = 10px`, deliberately separate from
+    `SWIPE_MIN_DISTANCE` (50px) — a genuine tap, not "any failed swipe
+    attempt." A drag of 11-49px in either axis is ambiguous and stays a
+    no-op, same as the existing sub-threshold-swipe no-op from Step 2.
+  - `|deltaX| <= 10 && |deltaY| <= 10` → `toggleAppBar()`, a new function
+    that reads `.lightbox-top-chrome`'s `hidden` class and calls the
+    existing `showUI()`/`hideUI()` setters (from the Step 0 hide-timer
+    removal) accordingly. App bar only — doesn't touch chevron visibility,
+    which is unbuilt (Step 6) and independent per the locked decision.
+  - "Anything hitting a registered interactive element is excluded
+    automatically" came for free from Step 2's `onOverlayTouchStart`: a
+    touch starting on a `button/a/input/textarea/select/[contenteditable]/
+    .lightbox-info-panel` never sets `touchActive = true`, so
+    `onOverlayTouchEnd` returns before any classification runs. No new
+    exclusion logic needed. (Step 5's edge strips will need to render as
+    one of these selectors — noted for that step, not addressed here.)
+  - Touch-only (no click/mouse listener) — consistent with Steps 2–3 and
+    with this plan's scope (≤480px touch behavior only); desktop is
+    unaffected.
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh` (diffed
+    byte-identical to `static/`, not deployed). No share-only code — the
+    toggle only touches shared DOM/state already present in both boot
+    paths.
+  - **Verified live** (same isolated-tab, synthetic-touch method as Steps
+    2–3, real running `LightboxShell`, no library/session state touched):
+    forced the bar visible, then dispatched in order — tiny tap (3px) →
+    bar hidden; tiny tap again → bar visible again (toggle both
+    directions); ambiguous 25px drag → unchanged; swipe-left 100px →
+    `navigateLightbox(1)` fired, bar state unchanged (toggle doesn't
+    fire on a classified swipe); tap starting on `#lightboxBackBtn` →
+    unchanged (interactive-target exclusion confirmed). All 5 checkpoints
+    matched expected state in sequence:
+    `[false, true, false, false, false, false]` (hidden-class value after
+    each step). All test state (spies, `lightboxOpen`, overlay `display`,
+    bar's `hidden` class) restored and confirmed back to original values.
+  - Not yet done: same caveat as Steps 2-3 — synthetic events only, no
+    real touch device/emulator pass yet.
+  - Next: Step 5 — 96px-wide full-height edge nav strips, red debug
+    overlay, registered as one of `onOverlayTouchStart`'s interactive
+    selectors so Step 4's toggle excludes them for free.
+
+- **2026-08-25** — Mouse support added retroactively to Steps 2-4, per
+  explicit user direction. User hit this live: restarted the dev server,
+  loaded their real library, opened the lightbox, and clicked on/above/
+  below a photo with a mouse — no-op. Root cause: the recognizer only ever
+  bound `touchstart`/`touchend`, so a desktop mouse click never fired any
+  of it. This was a known, flagged gap (every prior verification used
+  synthetic touch dispatch, never a real click), not a regression — the
+  plan just never said desktop should be excluded, and the user wants it
+  included. Asked user narrow-vs-broad scope (toggle-only vs all three
+  gestures); user deferred to the recommendation — all three, mouse and
+  touch feeding one shared classifier so they can't drift apart.
+  In `static/js/photoSurface/lightboxShell.js`:
+  - Extracted `classifyGesture(deltaX, deltaY)` out of `onOverlayTouchEnd`
+    — the same three-branch swipe/swipe-down/tap logic, now called from
+    both input paths so there's exactly one place the thresholds and
+    branch order live.
+  - Added `onOverlayMouseDown`/`onDocumentMouseUp`, mirroring
+    `onOverlayTouchStart`/`onOverlayTouchEnd`: mousedown on the overlay
+    arms the gesture (same `isInteractiveTarget` exclusion, plus
+    `e.button !== 0` to ignore right/middle click), mouseup classifies it.
+  - mouseup is bound on `document`, not the overlay — touch events
+    auto-capture to their start element for the life of the gesture, mouse
+    events don't, so a drag released over the info panel or outside the
+    viewport still needs to resolve. Touch's existing `touchcancel`
+    handling has no clean mouse equivalent; `mouseActive` still gets reset
+    on `hide()` like `touchActive` does, covering the lightbox-closes-
+    mid-gesture case.
+  - `onOverlayMouseDown` calls `e.preventDefault()` once a gesture is
+    armed, suppressing native image drag/text-selection so it can't steal
+    the pointer mid-swipe or leave a drag-ghost artifact.
+  - Rebuilt `share-viewer/` (diffed byte-identical, not deployed). No
+    share-only code — same shared module, inherited automatically.
+  - **Verified live with real browser-generated mouse events** (first
+    time verification used the actual `computer` tool instead of
+    synthetic `Event` dispatch) — no real library loaded (this
+    environment has none; forced the overlay visible/state open the same
+    way as prior isolated passes, spied `navigateLightbox`/`closeLightbox`
+    on the window bindings): real click on empty overlay area toggled the
+    bar hidden, click again toggled it back visible; a real click-drag
+    left (150px) fired `navigateLightbox(1)` and left the bar state
+    unchanged; a real click directly on `#lightboxBackBtn` fired the
+    button's own click handler (`backCalls` incremented via the normal
+    path, not the gesture path) and did not affect the bar — confirming
+    the interactive-target exclusion holds for genuine mouse events, not
+    just synthetic ones. All test state (spies, `lightboxOpen`, overlay
+    `display`, bar's `hidden` class) restored and confirmed back to
+    original values afterward.
+  - Not yet done: a pass against the user's actual library/real photo (the
+    dev server in this environment has no library loaded) — worth a quick
+    manual click-through on their end now that the underlying cause is
+    fixed.
+
+- **2026-08-25** — Scope correction on mouse support: dropped drag-based
+  nav/close for mouse entirely, per user direction after reviewing the
+  prior entry's design. Reasoning discussed and agreed: click-drag isn't a
+  discoverable desktop convention (touch swipe is, on mobile); a mouse drag
+  doesn't carry the same intentionality as a touch swipe at the same
+  distance threshold, so treating them as equivalent risked accidental
+  triggers (most acutely for swipe-down-to-close). Chevrons, edge strips,
+  and keyboard already give desktop a click-based nav path, so the drag
+  gesture was redundant on top of being undiscoverable. Also flagged and
+  resolved in the same discussion: chevron auto-hide (unbuilt, Step 6)
+  needed a hover-reveal path for mouse or it'd be a dead end (no way to
+  bring back a vanished, invisible control without already knowing to
+  click blindly); and edge-strip width (unbuilt, Step 5) shouldn't
+  pre-lock 96px for mouse since that number's rationale is touch-specific.
+  See "Locked decisions" and "Open questions" above for the resulting
+  decisions. Only the mouse-drag scope-back required an actual code
+  change, since Steps 5–6 aren't built yet (the other two are forward-
+  looking notes for when they are):
+  - `static/js/photoSurface/lightboxShell.js`: `classifyGesture(deltaX,
+    deltaY)` → `classifyGesture(deltaX, deltaY, { allowDrag })`. The
+    swipe-left/right and swipe-down branches are now gated behind
+    `allowDrag`; the tap-to-toggle branch is unconditional (unchanged for
+    both inputs). Touch's call site passes `allowDrag: true`; mouse's
+    passes `allowDrag: false` — so a mouse drag past the 10px tap threshold
+    is now a no-op at any distance, in any direction, instead of firing
+    navigate/close. `e.preventDefault()` on mousedown is unchanged (still
+    needed to suppress native image drag-ghost even though drag no longer
+    does anything).
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh` (diffed
+    byte-identical to `static/`, not deployed). No share-only code.
+  - **Verified live** (same isolated-tab, synthetic-mouse-event method as
+    the prior mouse-support entry, real running `LightboxShell`, no
+    library/session state touched): spied `navigateLightbox`/
+    `closeLightbox`, forced the overlay visible/bar shown. A synthetic
+    mouse drag-left (150px) and a synthetic mouse drag-down (150px) each
+    produced zero nav/close calls (previously 1 each, per the prior
+    entry's own verification) — confirming the walk-back took effect. A
+    plain click (no drag) still toggled the bar's `hidden` class
+    (`false → true`), confirming the shared tap path is untouched. All test
+    state (spies, `lightboxOpen`, overlay `display`, bar's `hidden` class)
+    restored and confirmed back to original values afterward.
+  - Not yet done: real mouse device confirmation (synthetic events only,
+    same caveat as every prior gesture-verification entry); Step 6's
+    hover-reveal and Step 5's width decision are unbuilt, tracked above.
+
+- **2026-08-25** — Planning only: adopted Google Photos' hover convention
+  for edge nav at wide widths, per user direction. Resolves the standing
+  "desktop strip width" open question and reshapes Step 6:
+  - Edge nav strip width is now a single value, 96px, at every
+    breakpoint — no separate desktop/mouse value to dial in live. Removes
+    Step 5's "decide empirically" open question.
+  - Step 6 splits into two independent designs instead of one shared
+    timer: narrow (≤480px, touch) keeps the original 1000ms-auto-hide-
+    timer design unchanged; wide (>480px) drops the timer entirely and
+    instead reveals chevrons purely via hover — hovering the left strip
+    shows the left chevron only, right strip shows the right chevron only,
+    exclusive per side. This supersedes (not layers onto) the 2026-08-25
+    "hover/movement over the lightbox resets the [shared] timer" decision
+    logged earlier today, for wide widths specifically.
+  - Confirmed with user: the timer does not survive at all for mouse/
+    wide-width use — hover-in/hover-out on each strip is the entire show/
+    hide mechanism there, likely implementable as pure CSS with no JS
+    timer/state.
+  - No code changed this session — doc/plan update only. Next: Step 5
+    (96px edge strips, red debug overlay, hover-state wiring for the
+    wide-width chevron reveal).
+
+- **2026-08-25** — Step 5, edge nav strips. Added to
+  `static/js/photoSurface/lightboxShell.js`, `static/fragments/lightbox.html`,
+  `static/css/styles.css`:
+  - New `--lightbox-edge-strip-width: 96px` root token, no ≤480px override
+    — single value at every breakpoint, per this morning's Google Photos
+    decision (no more empirical desktop-width pass needed).
+  - `.lightbox-edge-strip`: `position: absolute`, full height (`top: 0;
+    bottom: 0`), `width: var(--lightbox-edge-strip-width)`, transparent,
+    `z-index: 0` — deliberately below `.lightbox-top-chrome` (1) and
+    `.lightbox-nav-btn` (10), so the strip only catches clicks that don't
+    land on an actual control, even though the chevrons and top-bar icons
+    spatially overlap the strip's 96px zone. `.lightbox-edge-strip--debug`
+    adds the red overlay; both are plain modifier classes on the two
+    buttons in `lightbox.html`, one-line removal to flip off before ship.
+  - Markup: two new `<button>`s (`#lightboxPrevStrip` / `#lightboxNextStrip`),
+    not `<div>`s — `isInteractiveTarget()`'s selector already includes
+    `button`, so Step 4's tap-to-toggle excludes them for free, no selector
+    change needed (this was flagged as a to-do in Step 4's log entry).
+    `aria-hidden="true"` + `tabindex="-1"`: the chevron remains the single
+    accessible "Previous"/"Next" control; the strip is a supplementary
+    pointer/touch target only, not a second one for keyboard/AT users.
+  - `lightboxShell.js`: cached `els.prevStrip`/`els.nextStrip`, bound
+    `click` → `ctx.navigate(-1)`/`ctx.navigate(1)` (same pattern as the
+    existing chevron bindings), and extended `setNavArrows()` to toggle
+    `.inactive` on the strips alongside the chevrons — the strip is a
+    hit-target for the same action, so it shares the chevron's
+    enabled/disabled state (`.lightbox-edge-strip.inactive` sets
+    `pointer-events: none`, mirroring `.lightbox-nav-btn.inactive`).
+  - No adapter changes in `main.js`/`shareBoot.js` — both already pass
+    `navigate` into the shared `ctx`, so this is inherited by share
+    automatically. Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh`
+    (diffed identical to `static/`, not deployed).
+  - **Verified live** (existing dev server on :5001, no library loaded in
+    this environment — same isolated-tab method as prior entries: forced
+    the overlay open via direct DOM state, no real photo/session data
+    touched): `getBoundingClientRect()` on both strips at a 1280×720
+    viewport — `{x:0, y:0, w:96, h:720}` (left) and `{x:1184, y:0, w:96,
+    h:720}` (right), full height, chevrons (`{x:20,w:40}` / `{x:1220,w:40}`)
+    correctly nested inside each strip's zone. Screenshot confirmed the red
+    debug overlay spans full height and chevrons + top-bar icons remain
+    visually on top and unobstructed. Spied `navigateLightbox`: clicking
+    inside the left strip away from the chevron fired `navigate(-1)`,
+    right strip fired `navigate(1)` — correct chevron-matching direction.
+    Forced the app bar hidden, then clicked inside a strip — bar stayed
+    hidden and `navigate(-1)` still fired, confirming the strip click does
+    not also reach the tap-toggle gesture path (interactive-target
+    exclusion holds). Called `setNavArrows(false, true)` — `prevStrip`
+    gained `.inactive` alongside `prevBtn`; clicking the inactive left
+    strip produced zero additional `navigate` calls (`pointer-events: none`
+    holds), matching the chevron's own inactive behavior. All test state
+    (spy, bar `hidden` class, `setNavArrows`, overlay `display`,
+    `state.lightboxOpen`) restored and confirmed back to original values.
+  - Not yet done: real touch/mouse device confirmation with actual photos
+    (synthetic/forced-state verification only, same caveat as every prior
+    gesture-verification entry in this doc); Step 6's hover-reveal wiring
+    for wide widths is unbuilt — nothing today reads the strip's hover
+    state yet, since that reveal is expected to be pure CSS (`:hover`)
+    when Step 6 lands, not JS state.
+  - Next: Step 6 — arrow visibility, width-gated (narrow: 1000ms auto-hide
+    timer; wide: hover-per-strip reveal, no timer).
+
+- **2026-08-25** — Step 5 correction: debug overlay now paints above every
+  layer, per explicit user direction. The original debug rule tinted the
+  strip's own background (`.lightbox-edge-strip--debug`), but the strip
+  sits at `z-index: 0` on purpose, so the tint was rendering *underneath*
+  the chevrons and top-bar icon row wherever they overlap it — the debug
+  aid didn't actually show the strip's true full extent. Fixed in
+  `static/css/styles.css` / `static/fragments/lightbox.html`:
+  - New decorative-only elements, `.lightbox-edge-strip-debug` (two
+    `<div>`s, one per side, siblings of the strip buttons, same
+    position/size via the shared `--lightbox-edge-strip-width` token) —
+    `pointer-events: none`, `z-index: 20`, above `.lightbox-nav-btn` (10)
+    and `.lightbox-top-chrome` (1). Deliberately a separate element from
+    `.lightbox-edge-strip` rather than raising that button's own z-index:
+    the strip has to stay at z-index 0 so real clicks on the chevron/top
+    bar keep winning over it (Step 5's core behavior) — bumping it instead
+    would have made debug mode start swallowing those clicks. This layer
+    is purely visual and never affects hit-testing.
+  - Removed the old `.lightbox-edge-strip--debug` rule and modifier class
+    from both strip buttons in `lightbox.html` — the tint no longer lives
+    on the functional element at all.
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh` (diffed
+    identical to `static/`, not deployed).
+  - **Verified live** (same isolated-tab method as prior entries, no
+    library loaded, forced overlay open, all state restored after):
+    `getBoundingClientRect()` on both new debug elements — `{x:0,y:0,
+    w:96,h:720}` (left) / `{x:1184,y:0,w:96,h:720}` (right), `z-index: 20`,
+    `pointer-events: none`, siblings of `.lightbox-overlay` alongside the
+    chevrons/top-chrome (so CSS stacking-context rules guarantee the paint
+    order, not just the computed z-index values). Visual confirmation at a
+    narrow (400px) viewport: the back-arrow icon, previously rendered
+    pure white against the top-chrome's dark background, now shows visibly
+    red-tinted — proof the debug layer paints above the icon row, not
+    under it. Regression-checked nav afterward at 1280px: clicking inside
+    each strip (now with the debug `<div>` sitting on top of it) still
+    fired `navigateLightbox(-1)` / `navigateLightbox(1)` correctly —
+    `pointer-events: none` on the debug layer holds, so it doesn't
+    intercept the click meant for the strip underneath.
+  - Not yet done: same caveats as the main Step 5 entry above (no real
+    device pass). Debug removal before ship still just two `<div>`s + one
+    CSS rule, unchanged in shape from before this fix.
+
+- **2026-08-25** — Step 6, arrow visibility, width-gated. Implemented per
+  the locked design (two independent mechanisms, not one shared timer):
+  - **CSS (`static/css/styles.css`)** — `.lightbox-nav-btn` reworked around
+    two composable custom properties instead of a plain `opacity` value:
+    `--lightbox-nav-shown` (is it revealed) × `--lightbox-nav-active-opacity`
+    (is it usable, formerly `.inactive`'s hardcoded `opacity: 0.3`) — kept
+    separate so "hidden by the timer/hover" and "disabled at a nav
+    boundary" compose correctly without a combinatorial rule for every
+    state pair; both-at-once just multiplies out to 0 automatically.
+    - Wide default (unscoped rule = desktop, matching this file's
+      established convention): `--lightbox-nav-shown: 0` — hidden until
+      revealed — plus `pointer-events: none` on the chevron itself,
+      permanently, at wide widths.
+    - New `@media (min-width: 481px)` rules:
+      `.lightbox-overlay:has(.lightbox-edge-strip--left:hover)
+      .lightbox-nav-left { --lightbox-nav-shown: 1; }` (and the mirror for
+      right/right) — exclusive per side, order-independent `:has()` rather
+      than a `~` sibling combinator (the strips sit after the chevrons in
+      the DOM, and `~` only flows forward).
+    - Narrow override (existing EOF `@media (max-width: 480px)` block):
+      `--lightbox-nav-shown: 1` by default (always shown, unchanged from
+      pre-Step-6 behavior) and `pointer-events: auto` restored (direct tap
+      on the chevron, no strip indirection); `.lightbox-nav-btn.hidden`
+      sets `--lightbox-nav-shown: 0` — the class the new JS timer toggles.
+  - **Root-caused before shipping, not left as a caveat — the "peekaboo"
+    hover bug:** the chevron sits inside its strip's 96px zone but stacks
+    above it (z-index 10 vs 0). If the chevron kept normal pointer-events,
+    moving the cursor from "hovering the strip" onto the now-visible
+    chevron would hand hit-testing to the chevron, which the `:hover`
+    strip rule doesn't cover — the strip would lose `:hover` at the exact
+    moment the user reached for the control, hiding it instantly and
+    making it unclickable by mouse. Fixed by giving the chevron
+    `pointer-events: none` at wide widths permanently: every click in the
+    96px zone, including directly on the visible glyph, now resolves to
+    the strip beneath, which already performs the identical `navigate()`
+    call. Keyboard access (Tab + Enter/Space on the chevron `<button>`) is
+    unaffected — `pointer-events` only gates mouse/touch hit-testing, not
+    focus or synthetic click-from-keydown. Narrow keeps the chevron
+    directly tappable (`pointer-events: auto`), since the timer-driven
+    model has no hover state to protect.
+  - **Second gap caught during live verification, not assumed away:** the
+    `:has()` reveal rule, if left unscoped, has higher specificity (four
+    class-equivalents) than the narrow `.hidden` class (two) — so on a
+    narrow-but-mouse-capable viewport (a resized desktop browser window;
+    this exact test setup), hovering the strip would pin the chevron
+    visible and defeat the auto-hide timer, even though real touch devices
+    never hover and would never hit this. Confirmed live, then fixed by
+    wrapping the reveal rules in `@media (min-width: 481px)` so wide and
+    narrow are genuinely two independent, non-overlapping designs, not
+    "narrow happens to agree by coincidental default value."
+  - **JS (`static/js/photoSurface/lightboxShell.js`)** — new
+    `CHEVRON_AUTO_HIDE_DELAY = 1000`, `scheduleChevronHide()` (checks
+    `window.matchMedia('(max-width: 480px)')` at arm-time — not
+    continuously — before scheduling anything; wide never arms a timer at
+    all, matching "the timer does not survive at all for mouse", not just
+    "has no visible effect"), and `showChevrons()` (clears `.hidden` on
+    both chevrons, then re-arms). `showChevrons()` is called once, from
+    inside `refreshChrome()` — the single hook every existing call site
+    (`main.js` and `shareBoot.js`, both pre-dating this plan) already
+    calls right after loading a photo into the lightbox, whether that's
+    the initial open or a nav-triggered swap. That one hook covers both of
+    Step 6's narrow triggers ("1000ms from image load" and "any nav
+    interaction resets the timer") without a second call site, since a
+    successful nav interaction always ends in a new image load. No
+    adapter changes needed in either surface. `hide()` now also calls the
+    new `clearChevronHideTimeout()`, alongside the existing
+    touch/mouse-gesture state reset, so a stray timeout can't fire after
+    the lightbox has closed.
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh` twice (once
+    per fix pass) — diffed identical to `static/` both times, not
+    deployed. No share-only code anywhere in this step.
+  - **Verified live** (existing dev server on :5001, no library loaded,
+    forced overlay open, real mouse-driven `computer` tool input — not
+    synthetic events — for every hover/click check; all state restored
+    after): at 1280px, chevrons render with zero opacity by default
+    (confirmed visually via screenshot — `getComputedStyle().opacity` was
+    unreliable for calc()-derived values in this specific tool's JS
+    introspection and was abandoned in favor of screenshots + DOM/class
+    checks for the rest of this pass); hovering the left strip revealed
+    the left chevron only, right stayed hidden, and vice versa on the
+    right — confirmed by screenshot both ways, plus hovering neither
+    hid both again. Clicking exactly on the now-visible chevron glyph
+    (not just the surrounding strip) still fired `navigateLightbox(-1)`
+    exactly once, confirming the pointer-events hand-off to the strip
+    works and doesn't double-fire. At 390px: chevrons shown by default
+    after `refreshChrome()`, both gained `.hidden` after ~1.3s (no
+    `.hidden` right after refresh, present after the wait — consistent
+    with the 1000ms delay), calling `refreshChrome()` again immediately
+    cleared `.hidden` on both (reset confirmed), and — the specific
+    regression this pass's second fix targeted — hovering the strip at
+    390px with `.hidden` already present left it hidden, confirmed via
+    screenshot showing no chevron rendered despite the hover. Re-confirmed
+    the wide hover-reveal still worked after adding the `min-width` guard
+    (not just before it). All test state (nav spy, overlay `display`,
+    `state.lightboxOpen`, chevrons' `.hidden` class) restored and
+    confirmed back to original values afterward.
+  - Not yet done: real touch/mouse device confirmation with actual photos
+    — same caveat as every step in this doc; everything above was
+    real-input verification (`computer` tool hover/click) but still
+    against a forced-open lightbox with no library loaded, not a genuine
+    end-to-end session.
+  - **Task order is now fully landed (Steps 0–6).** Remaining before this
+    plan is truly done: a real-device/real-library pass (flagged as
+    outstanding in every step's log above) and removing the Step 5 debug
+    red-overlay markup (two `<div>`s in `lightbox.html` + one CSS rule) —
+    both intentionally left for a deliberate close-out pass, not done
+    inline here.
+
+- **2026-08-25** — Real-library regression found and fixed: the exact
+  "real-device pass" caveat repeated in every entry above turned out to
+  be hiding a real bug, not just an unverified formality. User's repro
+  (fresh server restart, incognito window, real library): edge strips
+  rendered (red debug visible) but hovering revealed no chevron and
+  clicking was a no-op — both Step 5 and Step 6 silently non-functional
+  the moment a real photo was on screen.
+  - **Diagnosis, in order:** ruled out a stale server/build first — diffed
+    the actual bytes served from `:5001` against `static/` source for
+    `styles.css`, `lightboxShell.js`, and `fragments/lightbox.html`
+    (fetched dynamically via `loadLightbox()`, not inlined at initial page
+    load — confirmed via `versionedStaticUrl`), all identical; confirmed
+    the server process had genuinely restarted (new PID); confirmed
+    Chrome 151 fully supports `:has()`. None of those were it. Asked the
+    user to run one targeted diagnostic
+    (`document.elementFromPoint()` at the strip's own center) in their
+    real console rather than keep guessing blind — came back
+    `IMG#.lightbox-media-element`, i.e. the photo itself was the topmost
+    hit-tested element at that point, not the strip.
+  - **Root cause:** `LightboxMedia.applyMediaStyles()`
+    (`static/js/photoSurface/lightboxMedia.js:111,122`) sets the actual
+    `<img>`/`<video>` to `position: absolute` inline, inside
+    `.lightbox-media-frame` (`position: relative`, no z-index of its own).
+    `.lightbox-content`, their container, had no `position` set at all.
+    Per the CSS2.1 stacking spec, a non-positioned container is not a
+    containment boundary — a positioned descendant with no stacking
+    context anywhere between it and the nearest real stacking-context
+    ancestor "bubbles up" and is painted as a direct participant of that
+    ancestor's own stacking order. Here that ancestor is
+    `.lightbox-overlay` itself, and the escaped media element lands in the
+    same z-index:auto/0 tier as `.lightbox-edge-strip` (Step 5, explicit
+    `z-index: 0`). Tied z-index falls back to DOM order, and the photo is
+    inserted into the DOM after the strip — so the photo silently painted
+    (and hit-tested) above it. `.lightbox-nav-btn` (z:10) and
+    `.lightbox-top-chrome` (z:1) were never at risk, since positive
+    z-index is a tier above this entirely — consistent with the user only
+    reporting the strip as broken, not the chevrons or top bar. This is
+    exactly why Steps 5–6's own testing never caught it: this environment
+    has no library, so `.lightbox-content` was always empty — there was
+    never anything present that could escape and cover the strip.
+  - **Fix** (`static/css/styles.css`, `.lightbox-content`): added
+    `position: relative; z-index: -1;`. Position is required for z-index
+    to have any effect at all; the value is negative, not `0`, on purpose
+    — `0` would only make `.lightbox-content` itself tie with the strip
+    and lose the same way, by the same DOM-order tie-break. Negative
+    places the whole now-contained subtree (frame, image, video,
+    placeholder — contained regardless of their own internal
+    position/z-index, since none of them can escape past this boundary
+    anymore) in the stacking order's negative tier, unconditionally below
+    the strip/chevrons/top-bar, with no dependency on DOM order at all.
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh` (not
+    deployed).
+  - **Verified the fix directly, not just in theory:** since this
+    environment still has no real library, reproduced the exact failure
+    condition synthetically — built a `.lightbox-media-frame` +
+    `.lightbox-media-element` `<img>` with the identical classes, nesting,
+    and inline styles `applyMediaStyles()` actually sets (not a
+    simplified stand-in), inserted into `#lightboxContent`. Before
+    confirming the fix, `elementFromPoint()` at the strip's center
+    reproduced the user's exact symptom
+    (`IMG#.lightbox-media-element` on top). After rebuilding with the CSS
+    fix in place, the same check resolved to
+    `BUTTON#lightboxPrevStrip.lightbox-edge-strip...`, matching the
+    pre-bug expectation. Re-ran the real-mouse-input checks from the Step
+    6 entry with the fake photo still present: hovering the strip revealed
+    only that side's chevron (screenshot-confirmed), and clicking fired
+    `navigateLightbox(-1)` exactly once. All test state (nav spy, injected
+    fake media, overlay `display`, `state.lightboxOpen`, chevrons'
+    `.hidden` class) restored and confirmed back to original values
+    afterward.
+  - **Confirmed by the user against their real library** (reload, no
+    hard-refresh needed — same repro as the original report): hover
+    reveals the chevron, click navigates. This regression is closed.
+
+- **2026-08-25** — Debug overlay removed (the Step 5 close-out item flagged
+  above). Deleted the two `.lightbox-edge-strip-debug` `<div>`s from
+  `static/fragments/lightbox.html` and their CSS rule
+  (`.lightbox-edge-strip-debug` + the `--left`/`--right` modifiers) from
+  `static/css/styles.css`. Grepped both `static/` and `share-viewer/` for
+  `lightbox-edge-strip-debug` afterward — the only remaining hits were in
+  the (stale) generated `share-viewer/`, cleared by rebuilding. The strips
+  themselves (`.lightbox-edge-strip`, functional, invisible) are
+  untouched. **Verified live:** 0 `.lightbox-edge-strip-debug` elements in
+  the DOM, 2 `.lightbox-edge-strip` elements still present; screenshot
+  confirms no red tint at either edge; clicking the (now fully invisible)
+  left strip still fired `navigateLightbox(-1)`. Test state restored
+  afterward. Rebuilt `share-viewer/` (not deployed).
+  - Only remaining open item from Step 5/6's close-out: a real touch
+    device pass (swipe/tap), never re-confirmed since the mouse-support
+    work landed.
+
+- **2026-08-26** — Follow-on narrow-width batch, four changes landed
+  together per user request (all in `static/`, rebuilt into `share-viewer/`
+  byte-identical, verified live in an isolated tab — no library loaded,
+  same forced-open/synthetic-event method as every prior entry):
+  1. Chevron auto-hide timer 1000ms → 2000ms (later corrected to 1500ms,
+     see below) — `CHEVRON_AUTO_HIDE_DELAY` in `lightboxShell.js`.
+  2. Chevrons now show only the side just used after a nav interaction,
+     not both — new `navigate(delta)` funnel inside `lightboxShell.js`
+     (every trigger — chevron click, strip click, swipe, arrow key — routes
+     through it) sets `lastNavDelta`; `showChevrons()` reveals only that
+     side, both on a true initial open. See "Locked decisions".
+  3. More menu (`.utilities-menu`) had no narrow-width override at all —
+     frozen at desktop size (14px font / 20px icon), same bug pattern
+     Step 0/1 fixed for the lightbox bar. Added to the canonical EOF
+     `@media (max-width: 480px)` block: 17px font, 32px icons. Clear
+     stars' two-glyph composite icon (`hide_source` + filled `star`
+     stacked, not one glyph like every sibling) scaled as a unit — 32px
+     container + outer glyph, inner star kept its desktop 2/3 ratio
+     (13.333/20 → 21.333px) so it still reads as one icon.
+  4. More-menu relocation (see "Locked decisions" above for the full
+     description) — grid's `#downloadBtn`/`#editDateBtn` and the
+     lightbox's inline rotate/edit-date/download hide at this breakpoint
+     on the app surface; grid reuses the (previously silently-always-
+     visible-regardless-of-width) `#downloadSelectedBtn` plus a new
+     `#editDateSelectedBtn` — handler factored into a shared
+     `openDateEditorForSelection()` in `main.js` so the app-bar button and
+     the menu item aren't two implementations. Lightbox gets a new
+     `#lightboxMoreBtn` + `#lightboxUtilitiesMenu`, wired via the existing
+     `PhotoChrome.toggleUtilitiesMenu`/`hideUtilitiesMenu` helpers (no new
+     toggle logic) and calling the same `ctx.onRotate`/`onEditDate`/
+     `onDownload` the inline buttons already called. Also added
+     `.utilities-menu` to `isInteractiveTarget()`'s exclusion selector —
+     without it, a tap landing on the (now-present) lightbox menu's own
+     padding, not on one of its buttons, would have fallen through to the
+     tap-to-toggle-app-bar gesture underneath.
+  - Not done this pass: this doc wasn't updated until the whole 2026-08-26
+    batch (this entry + the two fixes below) landed; real touch-device
+    confirmation still outstanding (same standing caveat as every entry in
+    this doc).
+
+- **2026-08-26** — Chevron regression found and fixed, from a live user
+  repro: open lightbox → let chevrons auto-hide → tap left → **both**
+  chevrons reappeared instead of just the left one. Also requested in the
+  same pass: auto-hide timer 2000ms → **1500ms**.
+  - **Root cause:** `openLightbox()` (`main.js`) calls `LightboxShell.show()`
+    on *every* photo load, not only the true first open — a nav interaction
+    reloads the lightbox with a new photo the same way opening it does.
+    `show()` unconditionally reset `lastNavDelta = null` on every call, so
+    it wiped out the direction `navigate(delta)` had just set a moment
+    earlier, right before `showChevrons()` read it — every nav looked
+    identical to "initial open" and showed both sides. The prior session's
+    own live verification missed this because it stubbed `navigateLightbox`
+    to a no-op to avoid crashing on missing photo data, which skipped the
+    real re-`show()` call and hid the bug from the test itself.
+  - **Fix** (`lightboxShell.js`): `show()` now tracks whether the overlay
+    was already open via a new internal `isShowing` flag (set true in
+    `show()`, false in `hide()`) and only resets `lastNavDelta` when this
+    is a genuine open-from-closed transition, not a nav-triggered reshow.
+    Self-contained inside `lightboxShell.js` — no change needed to `main.js`/
+    `shareBoot.js`'s adapters, since `ctx.isOpen()` can't be used for this
+    (the caller already flips `state.lightboxOpen = true` before calling
+    `show()` either way, so it can't distinguish the two cases from inside
+    `show()`).
+  - Rebuilt `share-viewer/` (byte-identical), not deployed.
+  - **Verified live** with a proper end-to-end repro this time (real
+    `show()` re-invoked on nav via a stub that mimics `openLightbox()`'s
+    actual call shape — `show()` then `refreshChrome()` — instead of a
+    total no-op): open → both shown; wait for the real 1500ms timer to
+    fire → both hidden; real click on the left chevron → only left shown,
+    right stays hidden. Matches the user's repro exactly.
+
+- **2026-08-26** — More-menu reorder bug found and fixed, from a live user
+  screenshot: Download/Change-date were rendering *below* Clear stars in
+  the grid's more menu, not above it as intended by the narrow-width
+  `order: -2`/`-1` CSS from the batch above.
+  - **Root cause:** `PhotoChrome.toggleUtilitiesMenu()` (`chrome.js`) set
+    `menu.style.display = 'block'` when opening the menu. `.utilities-menu`'s
+    own class already declares `display: flex; flex-direction: column` —
+    but that inline style wins over any stylesheet rule regardless of
+    specificity, so the menu was actually laid out as a plain block the
+    instant it was shown. Flex `order` only has an effect on children of a
+    flex (or grid) container; in block layout it's inert, so the two items
+    silently rendered in plain DOM order (below Clear stars) even though
+    their computed `order` value was correctly -2/-1 — which is exactly
+    what the prior session verified and mistook for confirmation, without
+    ever actually checking visual position with the menu open. Pre-existing
+    bug, unrelated to the new narrow-width work — just never visible
+    before because block layout and flex-column-with-default-order look
+    identical until something sets a non-zero `order`.
+  - **Fix** (`chrome.js`): `toggleUtilitiesMenu()` now sets
+    `menu.style.display = 'flex'` (matching the class), and its own
+    open/closed check updated from `=== 'block'` to `=== 'flex'` to match.
+    Shared helper — the fix applies to both the grid's `#utilitiesMenu` and
+    the new `#lightboxUtilitiesMenu`, one implementation. Left the same bug
+    pattern in `main.js`'s `toggleUtilitiesMenu()`/`hideUtilitiesMenu()`
+    fallback branches untouched and flagged only — that code path is dead
+    (it only runs `if (typeof PhotoChrome === 'undefined')`, and
+    `PhotoChrome` is always loaded), out of scope for this fix.
+  - Rebuilt `share-viewer/` (byte-identical), not deployed.
+  - **Verified live**, real page reload (the running page had the old
+    `chrome.js` already parsed/executed in memory — editing the file on
+    disk doesn't retroactively change a script a live page already ran, so
+    the first re-check after editing still showed the bug until reloaded):
+    open/close/reopen toggle still works (`display` correctly `flex` when
+    open, `none` when closed); with the menu open at 375px, Download and
+    Change-date now render above Clear stars (`top: 74`/`126`/`178`px
+    respectively); at 1280px (desktop), order is unchanged — Clear stars
+    still first, as intended (the `order` override is narrow-width only).

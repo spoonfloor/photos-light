@@ -18,6 +18,15 @@
     <span>Download</span>
   </button>
 
+  <!-- Narrow width only (styles.css narrow block sets order: -1/-2 to float
+       these two above Clear stars): mirrors the app bar's inline download/
+       change-date controls, which hide at this breakpoint. Desktop keeps
+       its default DOM order (below Clear stars), unchanged. -->
+  <button class="utilities-menu-item" id="editDateSelectedBtn" type="button" data-cap="editDate">
+    <span class="material-symbols-outlined">edit_calendar</span>
+    <span>Change date</span>
+  </button>
+
   <button class="utilities-menu-item" id="getShareLinkBtn" type="button" data-cap="shareLink">
     <span class="material-symbols-outlined">link</span>
     <span>Get link</span>

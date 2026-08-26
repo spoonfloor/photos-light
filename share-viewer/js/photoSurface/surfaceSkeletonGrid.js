@@ -150,6 +150,7 @@ const SurfaceSkeletonGrid = (() => {
     datePickerContainer.removeAttribute('aria-hidden');
     datePickerContainer.classList.add('surface-date-picker-loading');
 
+    DatePickerChrome.populateMonthPicker();
     monthPicker.value = String(now.getMonth() + 1);
     monthPicker.classList.add('surface-layout-placeholder');
     monthPicker.disabled = true;

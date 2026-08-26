@@ -1328,6 +1328,31 @@ function loadAppBar() {
     });
 }
 
+/**
+ * Open the date editor for the current grid selection (single or bulk mode).
+ * Shared by the app bar's inline editDateBtn and the utilities menu's
+ * editDateSelectedBtn (narrow width moves the control into the menu — see
+ * docs/lightbox-480-plan.md) so both call one implementation.
+ */
+function openDateEditorForSelection() {
+  if (!getViewCapabilities().editDate) {
+    return;
+  }
+  const count = state.selectedPhotos.size;
+
+  if (count === 0) return;
+
+  const selectedIds = Array.from(state.selectedPhotos);
+
+  // Special case: if only 1 photo selected, open in single mode
+  if (count === 1) {
+    openDateEditor(selectedIds[0]);
+  } else {
+    // 2+ photos: open in bulk mode
+    openDateEditor(selectedIds);
+  }
+}
+
 // Wire up app bar button handlers
 function wireAppBar() {
   const menuBtn = document.getElementById('appBarMenuBtn');
@@ -1392,24 +1417,7 @@ function wireAppBar() {
 
   const editDateBtn = document.getElementById('editDateBtn');
   if (editDateBtn) {
-    editDateBtn.addEventListener('click', () => {
-      if (!getViewCapabilities().editDate) {
-        return;
-      }
-      const count = state.selectedPhotos.size;
-
-      if (count === 0) return;
-
-      const selectedIds = Array.from(state.selectedPhotos);
-
-      // Special case: if only 1 photo selected, open in single mode
-      if (count === 1) {
-        openDateEditor(selectedIds[0]);
-      } else {
-        // 2+ photos: open in bulk mode
-        openDateEditor(selectedIds);
-      }
-    });
+    editDateBtn.addEventListener('click', openDateEditorForSelection);
   }
 
   if (deselectAllBtn) {
@@ -10160,6 +10168,7 @@ async function loadUtilitiesMenu() {
     // Wire up menu items
     const clearStarsBtn = document.getElementById('clearStarsBtn');
     const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
+    const editDateSelectedBtn = document.getElementById('editDateSelectedBtn');
     const switchLibraryBtn = document.getElementById('switchLibraryBtn');
     const convertToLibraryBtn = document.getElementById('convertToLibraryBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
@@ -10176,6 +10185,13 @@ async function loadUtilitiesMenu() {
       downloadSelectedBtn.addEventListener('click', () => {
         hideUtilitiesMenu();
         void saveSelectedPhotos();
+      });
+    }
+
+    if (editDateSelectedBtn) {
+      editDateSelectedBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        openDateEditorForSelection();
       });
     }
 
@@ -10380,6 +10396,15 @@ function updateUtilityMenuAvailability() {
   enableMenuItem(
     'downloadSelectedBtn',
     hasDatabase && hasSelectedPhotos && caps.download && !photoExportInProgress,
+  );
+
+  const editDateSelectedBtn = document.getElementById('editDateSelectedBtn');
+  if (editDateSelectedBtn) {
+    editDateSelectedBtn.hidden = !caps.editDate;
+  }
+  enableMenuItem(
+    'editDateSelectedBtn',
+    hasDatabase && hasSelectedPhotos && caps.editDate,
   );
 
   if (typeof ShareFlow !== 'undefined') {

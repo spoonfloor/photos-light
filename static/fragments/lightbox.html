@@ -71,9 +71,44 @@
           >
             <span class="material-symbols-outlined app-bar-icon">delete</span>
           </button>
+
+          <!-- Narrow width, app surface only (see styles.css narrow block):
+               rotate/edit-date/download move into this menu instead of
+               sitting inline — hidden by default (desktop + share), see
+               .lightbox-icon-button below. -->
+          <button
+            class="app-bar-icon-button lightbox-icon-button"
+            id="lightboxMoreBtn"
+            aria-label="More options"
+            title="More options"
+          >
+            <span class="material-symbols-outlined app-bar-icon">more_vert</span>
+          </button>
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- More menu (narrow, app-only — see #lightboxMoreBtn above). Reuses the
+       grid app bar's .utilities-menu component (styles.css) and its
+       PhotoChrome.toggleUtilitiesMenu/hideUtilitiesMenu helpers instead of a
+       parallel implementation; own instance since the grid's #utilitiesMenu
+       id is already taken. Items call the same ctx.onRotate/onEditDate/
+       onDownload as their inline counterparts — two triggers, one handler,
+       same pattern as the edge strips vs. chevrons (Step 5). -->
+  <div class="utilities-menu" id="lightboxUtilitiesMenu" style="display: none">
+    <button class="utilities-menu-item" id="lightboxRotateMenuBtn" type="button">
+      <span class="material-symbols-outlined">rotate_left</span>
+      <span>Rotate</span>
+    </button>
+    <button class="utilities-menu-item" id="lightboxEditDateMenuBtn" type="button">
+      <span class="material-symbols-outlined">edit_calendar</span>
+      <span>Change date</span>
+    </button>
+    <button class="utilities-menu-item" id="lightboxDownloadMenuBtn" type="button">
+      <span class="material-symbols-outlined">download</span>
+      <span>Download</span>
+    </button>
   </div>
 
   <!-- Navigation chevrons -->
@@ -91,6 +126,24 @@
   >
     <span class="material-symbols-outlined">chevron_right</span>
   </button>
+
+  <!-- Edge nav strips: wide invisible hit targets for prev/next, same
+       96px width at every breakpoint (see styles.css .lightbox-edge-strip
+       and docs/lightbox-480-plan.md Step 5). aria-hidden + tabindex=-1
+       because the chevrons above are the accessible controls; these are a
+       supplementary pointer/touch target only. -->
+  <button
+    class="lightbox-edge-strip lightbox-edge-strip--left"
+    id="lightboxPrevStrip"
+    aria-hidden="true"
+    tabindex="-1"
+  ></button>
+  <button
+    class="lightbox-edge-strip lightbox-edge-strip--right"
+    id="lightboxNextStrip"
+    aria-hidden="true"
+    tabindex="-1"
+  ></button>
 
   <!-- Photo content -->
   <div class="lightbox-content" id="lightboxContent">
