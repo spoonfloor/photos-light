@@ -1975,12 +1975,13 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 /* Inactive lightbox nav button — sets the "usable" half of the
-   shown × active-opacity formula above (see .lightbox-nav-btn), so a
-   nav-boundary chevron reads dimmed if shown, and stays fully invisible
-   (0 × 0.3) if the auto-hide timer or hover-visibility also has it
-   hidden — no extra rule needed for that combination. */
+   shown × active-opacity formula above (see .lightbox-nav-btn). A
+   nav-boundary chevron (first/last photo) is fully hidden, never shown
+   dimmed/disabled — product rule: a disabled chevron must never be
+   visible. Composes for free with the auto-hide timer or
+   hover-visibility also having it hidden (0 × 0 either way). */
 .lightbox-nav-btn.inactive {
-  --lightbox-nav-active-opacity: 0.3;
+  --lightbox-nav-active-opacity: 0;
   pointer-events: none;
   cursor: default;
 }

@@ -457,6 +457,11 @@ const LightboxShell = (() => {
       return;
     }
     touchActive = false;
+    // Suppress the browser's post-touch compatibility mouse events
+    // (mousedown/mouseup/click), which would otherwise replay this same
+    // gesture through the mouse path a moment later — e.g. double-firing
+    // toggleAppBar() and cancelling out the tap the user just made.
+    e.preventDefault();
     const touch = e.changedTouches[0];
     if (!touch) {
       return;
