@@ -1,10 +1,12 @@
 # Lightbox @ 480px breakpoint — tracking doc
 
 Status: **all steps landed** (0–6), plus follow-on narrow-width refinements
-landed 2026-08-26 (see "Locked decisions" and session log — chevron timing/
-single-side reveal, more-menu sizing, more-menu relocation). Update the
-checkboxes and append to the session log as work lands, so any new agent
-session can pick this up cold.
+(2026-08-26: chevron timing/single-side reveal, more-menu sizing, more-menu
+relocation). **2026-08-27:** Step 5's edge strips were removed and replaced
+with a per-chevron hit halo, and swipe no longer touches the chevrons — part
+of the lightbox/share batch, `docs/lightbox-share-batch-plan.md` (see
+"Locked decisions" and session log). Update the checkboxes and append to the
+session log as work lands, so any new agent session can pick this up cold.
 
 ## Goal
 
@@ -19,11 +21,15 @@ below for exact parameters — don't re-litigate these without the user.
 - Swipe left/right and swipe down are **hard cuts**, not a filmstrip drag.
   Fancy interactive filmstrip transition is explicitly out of scope (see
   "Explored & rejected" below) — don't revisit without the user raising it.
-- Edge nav strips: **96px** wide, full height, one per side — same width at
-  every breakpoint (touch and wide/mouse both use 96px; no separate desktop
-  value). Resolved 2026-08-25, see session log.
-- Debug aid: strips get a visible red overlay while sizing is dialed in —
-  must be trivial to flip off before ship (flag/class, not baked in).
+- ~~Edge nav strips: **96px** wide, full height, one per side.~~
+  **Superseded 2026-08-27** (user "changed my mind" — see batch plan
+  `docs/lightbox-share-batch-plan.md` #2 and session log below): the
+  full-height edge strips are gone at every width. Each chevron instead
+  carries its own invisible square hit halo — a `::before`, side =
+  `--lightbox-nav-btn-size + 2 * --lightbox-nav-halo-pad` (8px pad → 56px
+  wide / 64px narrow), centred on the chevron. The halo is the entire
+  prev/next pointer target and, on wide, the hover surface that reveals the
+  chevron.
 - **App bar never auto-hides.** No timer applies to it. It shows/hides only
   on an explicit tap of an unclaimed area (Step 4) — a manual toggle, not a
   fade-on-idle.
@@ -32,25 +38,30 @@ below for exact parameters — don't re-litigate these without the user.
   convention for wide widths; see session log):
   - **Narrow (≤480px, touch):** 1500ms auto-hide timer from image load
     (changed from the original 1000ms, then briefly 2000ms, to 1500ms —
-    2026-08-26, see session log), independent of the app bar's state. Any
-    nav interaction (arrow tap or strip tap) resets the timer and re-shows
-    the arrows. **Only the side just used re-shows**, not both — e.g. after
-    navigating back, only the left chevron reappears (added 2026-08-26, see
-    session log). Both still show on a true initial open. No hover — touch
+    2026-08-26, see session log), independent of the app bar's state. A
+    chevron tap or an arrow key resets the timer and re-shows the arrows.
+    The chevron's hit halo stays tappable even after the chevron has faded
+    (`.hidden` only drops opacity, not pointer-events — 2026-08-27); a tap
+    there pages and re-reveals that side. Only `.inactive` (nav boundary)
+    makes the halo inert.
+    **Only the side just used re-shows**, not both — e.g. after navigating
+    back, only the left chevron reappears (added 2026-08-26, see session
+    log). Both still show on a true initial open. **A swipe does nothing to
+    the chevrons** — no reveal, no timer reset (changed 2026-08-27, see
+    session log; `lastNavWasSwipe` in `lightboxShell.js`). No hover — touch
     has none.
   - **Wide (>480px):** no timer at all. Chevrons are hidden by default;
-    hovering the left edge strip reveals the left chevron only, hovering
-    the right strip reveals the right chevron only — exclusive per side,
-    pure hover-driven (plain CSS `:hover`, no JS timer/state). This
-    replaces — not layers onto — the earlier "hover/movement over the
-    lightbox resets the timer" decision for wide widths.
+    hovering a chevron's own hit halo reveals that chevron only — exclusive
+    per side, pure hover-driven (plain CSS `.lightbox-nav-btn:hover`, no JS
+    timer/state). Was strip-hover-driven until 2026-08-27 (strips removed —
+    see the superseded edge-strip decision above).
 - **Drag-based swipe (left/right/down) is touch-only.** Click-drag isn't a
   discoverable desktop convention the way touch swipe is, and a mouse drag
   doesn't carry the same intentionality as a touch swipe at the same
   distance threshold — so a desktop mouse never navigates or closes via
   drag. Plain click (no drag) still toggles the app bar on both inputs,
-  since a click is a normal desktop interaction. Desktop nav relies on
-  chevrons, edge strips (Step 5), and keyboard instead. (Added 2026-08-25,
+  since a click is a normal desktop interaction. Desktop nav relies on the
+  chevrons (and their hit halos) and keyboard instead. (Added 2026-08-25,
   reverses part of the mouse-support session below — see session log.)
 - **More menu relocation, narrow-width + app-surface only, not share**
   (added 2026-08-26, see session log): grid's inline Download/Change-date
@@ -1025,3 +1036,63 @@ behavior before declaring a step complete, not "it's fixed"). Draft:
     Change-date now render above Clear stars (`top: 74`/`126`/`178`px
     respectively); at 1280px (desktop), order is unchanged — Clear stars
     still first, as intended (the `order` override is narrow-width only).
+
+- **2026-08-27** — Phase 1 of the lightbox/share batch
+  (`docs/lightbox-share-batch-plan.md`): edge strips removed, swipe no
+  longer touches the chevrons. All in `static/`; `share-viewer/` rebuild
+  deferred to the batch close-out.
+  - **#2 — edge strips → concentric hit halo.** User reversed the Step 5
+    decision ("changed my mind"). Removed both `.lightbox-edge-strip`
+    `<button>`s from `lightbox.html`, the `.lightbox-edge-strip*` CSS, the
+    `--lightbox-edge-strip-width` token, and the `els.prevStrip`/`nextStrip`
+    caching + click bindings + `setNavArrows` toggles in `lightboxShell.js`.
+    New `--lightbox-nav-halo-pad: 8px` (+ `--lightbox-nav-btn-edge-gap:
+    20px`, factored out of the two hardcoded `left/right: 20px`). Each
+    `.lightbox-nav-btn` gets a `::before` with `inset: calc(-1 *
+    var(--lightbox-nav-halo-pad))` — an invisible square hit area, side =
+    button + 2·pad (56px wide, 64px narrow), staying centred on the chevron
+    (centre is 40px from the edge, so the halo is fully on-screen for any
+    pad ≤ 20px). Base rule `pointer-events: none` → `auto` so the chevron's
+    own `:hover` fires and a click through the still-invisible halo pages
+    immediately. Wide reveal rewired from
+    `.lightbox-overlay:has(.lightbox-edge-strip--left:hover)
+    .lightbox-nav-left` to plain `@media (min-width: 481px) {
+    .lightbox-nav-btn:hover { --lightbox-nav-shown: 1 } }` — still exclusive
+    per side, no flicker (reveal keys off the same element the cursor sits
+    on, so the old `pointer-events: none`/strip-indirection dance is
+    unnecessary). `.lightbox-content`'s negative-z-index comment updated (it
+    referenced the strip); the rule is kept — positive-z-index chrome
+    already outranks the escaped media, but the negative tier is a
+    belt-and-braces guard regardless of DOM order.
+  - **#8 — swipe does nothing to the chevrons.** New module-scope
+    `lastNavWasSwipe`, set by `navigate(delta, { fromSwipe })` (only the
+    swipe branch of `classifyGesture` passes `true`; chevron clicks and
+    arrow keys use the default `false`). `showChevrons()` returns early when
+    it's set — no class change, no `scheduleChevronHide()` re-arm — so a
+    swipe leaves whatever the timer was already doing untouched. Reset to
+    `false` on a genuine open (alongside `lastNavDelta = null` in `show()`).
+  - **Verified** (static file server, lightbox force-opened with a
+    placeholder image, no backend): 0 `.lightbox-edge-strip` elements;
+    `::before` halo present at ±8px inset; `elementFromPoint` across the
+    halo box hits `#lightboxPrevBtn` and just outside falls through to
+    `#lightboxContent`; wide — chevron invisible by default, real
+    mouse-hover over the halo reveals that side only; narrow (375px) —
+    chevron always shown, 48px button / 36px glyph, halo 64px. JS
+    `node --check` clean. **Not verified live:** the swipe→no-chevron path
+    end-to-end (needs touch events + real photo nav / backend) — traced and
+    syntax-checked only. Real touch-device pass still outstanding (standing
+    caveat on every entry in this doc).
+  - **Follow-ups from user testing, same day:**
+    1. Narrow: a tap on the hit halo must page even once the chevron has
+       auto-hidden — the old edge strip stayed tappable through the
+       auto-hide, the halo did not. Fix: dropped `pointer-events: none`
+       from `.lightbox-nav-btn.hidden` (narrow block); the base rule's
+       `auto` now carries through, and only `.inactive` kills the halo.
+       Verified: `.hidden` → opacity 0 but `elementFromPoint` still hits
+       the button; `.inactive` → halo inert.
+    2. `[Intervention] Ignored attempt to cancel a touchend event with
+       cancelable=false` spam while dragging in the lightbox on a real
+       device. `onOverlayTouchEnd`'s `e.preventDefault()` is now guarded
+       on `e.cancelable`. The scroll that makes touchend non-cancelable is
+       the #3 bug (lightbox shouldn't scroll at all on narrow) — this only
+       silences the warning.

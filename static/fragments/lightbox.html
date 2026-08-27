@@ -94,8 +94,8 @@
        PhotoChrome.toggleUtilitiesMenu/hideUtilitiesMenu helpers instead of a
        parallel implementation; own instance since the grid's #utilitiesMenu
        id is already taken. Items call the same ctx.onRotate/onEditDate/
-       onDownload as their inline counterparts — two triggers, one handler,
-       same pattern as the edge strips vs. chevrons (Step 5). -->
+       onDownload as their inline counterparts — two triggers, one
+       handler. -->
   <div class="utilities-menu" id="lightboxUtilitiesMenu" style="display: none">
     <button class="utilities-menu-item" id="lightboxRotateMenuBtn" type="button">
       <span class="material-symbols-outlined">rotate_left</span>
@@ -111,7 +111,10 @@
     </button>
   </div>
 
-  <!-- Navigation chevrons -->
+  <!-- Navigation chevrons. Each carries its own enlarged square hit halo
+       (a ::before, side = button + 2 * --lightbox-nav-halo-pad) — the only
+       pointer target for prev/next at every width. On wide, hovering the
+       halo is also what reveals the chevron (see styles.css). -->
   <button
     class="lightbox-nav-btn lightbox-nav-left"
     id="lightboxPrevBtn"
@@ -126,24 +129,6 @@
   >
     <span class="material-symbols-outlined">chevron_right</span>
   </button>
-
-  <!-- Edge nav strips: wide invisible hit targets for prev/next, same
-       96px width at every breakpoint (see styles.css .lightbox-edge-strip
-       and docs/lightbox-480-plan.md Step 5). aria-hidden + tabindex=-1
-       because the chevrons above are the accessible controls; these are a
-       supplementary pointer/touch target only. -->
-  <button
-    class="lightbox-edge-strip lightbox-edge-strip--left"
-    id="lightboxPrevStrip"
-    aria-hidden="true"
-    tabindex="-1"
-  ></button>
-  <button
-    class="lightbox-edge-strip lightbox-edge-strip--right"
-    id="lightboxNextStrip"
-    aria-hidden="true"
-    tabindex="-1"
-  ></button>
 
   <!-- Photo content -->
   <div class="lightbox-content" id="lightboxContent">
