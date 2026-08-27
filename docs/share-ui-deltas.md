@@ -31,6 +31,11 @@ Only the items below may differ; everything else must come from shared source.
   selection). No selection → downloads the whole filtered album; with a
   selection → downloads the selection. `shareBoot.js` clears the `inactive`
   class the shared `appBar.html` ships with
+- ≤480 select mode also exits on a tap in the header chrome dead space —
+  the album-title row, the gap above it, and the filter-chip rail gutter —
+  matching the "tap outside the grid" exit `gridInteractions.js` gives
+  `#photoContainer`. `shareBoot.js` wires it and calls the shared
+  `GridInteractions.exitSelectMode`
 - Utilities menu: **Select** (≤480px only, shared with app — see below) +
   **Clear stars** + **Copy link** only
 - Stars persisted in viewer `localStorage` (not library DB)

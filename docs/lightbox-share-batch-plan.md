@@ -39,7 +39,7 @@ freelance.
 | 1 | Shared text-inset token = 2px | 4 | share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `4ed2abf`, share rebuilt + deployed `476f318` |
 | 5 | Share download button stuck disabled | 5 | share, all widths | session 0f18 (2026-08-27) | ✅ shipped — app `08aa999`, share rebuilt + deployed `a91118a` |
 | 7 | Clear-selection CTA also hides overlay | 6 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `8a3ab48`, share rebuilt + deployed `88d4e28` |
-| 6 | Share header dead-space hides overlay | 6 | share, narrow | — | not started |
+| 6 | Share header dead-space hides overlay | 6 | share, narrow | session 0f18 (2026-08-27) | source done, needs share rebuild |
 
 ---
 

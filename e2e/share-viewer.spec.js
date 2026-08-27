@@ -313,6 +313,31 @@ test.describe('share viewer parity', () => {
     await expect(page.locator('#deselectAllBtn')).toHaveClass(/\binactive\b/);
   });
 
+  test('tapping share header dead space exits select mode (#6)', async ({ page }) => {
+    await page.setViewportSize({ width: 400, height: 800 });
+    await mockShareResolve(page);
+    await page.goto('/?t=e2e-test-token');
+    await expect(page.locator('#surfaceLoadOverlay')).toBeHidden();
+
+    await page.locator('#utilitiesBtn').click();
+    await page.locator('#selectModeBtn').click();
+    await expect(page.locator('#photoContainer')).toHaveClass(/\bselect-mode\b/);
+
+    // Tap the album-title row (non-interactive header chrome) — dismisses.
+    await page.locator('#sharePageTitle').click();
+    await expect(page.locator('#photoContainer')).not.toHaveClass(/\bselect-mode\b/);
+
+    // Re-enter, then confirm a filter chip still toggles (not swallowed).
+    await page.locator('#utilitiesBtn').click();
+    await page.locator('#selectModeBtn').click();
+    await expect(page.locator('#photoContainer')).toHaveClass(/\bselect-mode\b/);
+    await page.locator('.filter-chip[data-filter="starred"]').click();
+    await expect(page.locator('.filter-chip[data-filter="starred"]')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
   test('copy link writes share url and shows toast', async ({ page }) => {
     await mockShareResolve(page);
     await page.goto('/?t=e2e-test-token');
