@@ -125,7 +125,7 @@
      not a knob. */
   --lightbox-info-font-size: 14px;
   --lightbox-info-panel-pad-y: 20px;
-  --lightbox-info-panel-bg: rgba(0, 0, 0, 0.95);
+  --lightbox-info-panel-bg: #1f1f1f; /* = --app-bar-bg; opaque */
   --lightbox-info-close-size: 20px;
 
   /* --- Photo grid corner badges (select circle + star) ---
@@ -1526,6 +1526,12 @@ body.surface-load-active .app-bar-icon-button {
   padding: var(--lightbox-info-panel-pad-y) 28px;
   z-index: 1;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5);
+  /* iOS Safari auto-inflates text per-element based on its block width, so
+     the short "Date:" label and the longer value get different boosts and
+     visibly diverge in size. Pin it off here so .info-label / .info-value
+     move strictly in tandem off --lightbox-info-font-size. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 .info-close-btn {
@@ -3759,11 +3765,12 @@ body.library-recovery-active .library-recovery-dock {
     --modal-inset-mobile: 20px;
 
     /* Lightbox info panel → toast proportions at this breakpoint (#9,
-       docs/lightbox-share-batch-plan.md). Text tracks the toast message
-       (--modal-body-size, 17px here); padding matches the toast's 16px
-       vertical; close-X matches .toast-close-btn's 18px. Background stays
-       near-black (its :root value) — deliberately NOT the toast's grey. */
-    --lightbox-info-font-size: var(--modal-body-size);
+       docs/lightbox-share-batch-plan.md). Padding matches the toast's 16px
+       vertical; close-X matches .toast-close-btn's 18px.
+       Font size: TEMP DEBUG — 2x the toast message so the label/value
+       tandem is obvious while dialing it in; owner will drop this back to
+       plain var(--modal-body-size). */
+    --lightbox-info-font-size: calc(var(--modal-body-size) * 2);
     --lightbox-info-panel-pad-y: 16px;
     --lightbox-info-close-size: 18px;
   }
