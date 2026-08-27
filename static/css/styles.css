@@ -3727,8 +3727,8 @@ body.library-recovery-active .library-recovery-dock {
     --btn-font-size: 17px; /* = current value, dial in */
     --btn-padding-block: 10px; /* = current value, dial in */
     --btn-padding-inline: 18px; /* = current value, dial in */
-    /* Pin at the pre-18px wide-width value — the wide-width bump to
-       --app-bar-title-padding-l above is not meant to reach narrow. */
+    /* Own narrow dial, independent of the 18px wide value — the title sits
+       further off the leading edge at this breakpoint. */
     --app-bar-title-padding-l: 24px;
     --month-header-font-size: 19px;
     --modal-title-size: 22px; /* = current value, dial in — matches what was already dialed in for the compact family; now shared by every modal */
