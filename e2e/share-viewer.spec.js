@@ -127,7 +127,11 @@ test.describe('share viewer parity', () => {
     await expect(page.locator('body')).toHaveClass(/surface-load-active/);
     await expect(page.locator('#surfaceLoadOverlay')).toBeVisible();
     await expect(page.locator('[data-filter="recentImports"]')).toHaveCount(0);
+    // App-only app-bar actions ship `hidden` in the shared appBar.html
+    // fragment so they never flash before shareBoot's chrome pass runs.
     await expect(page.locator('#addPhotoBtn')).toBeHidden();
+    await expect(page.locator('#editDateBtn')).toBeHidden();
+    await expect(page.locator('#deleteBtn')).toBeHidden();
 
     const sortPointerEvents = await page.locator('#sortToggleBtn').evaluate(
       (el) => getComputedStyle(el).pointerEvents,
@@ -261,8 +265,10 @@ test.describe('share viewer parity', () => {
     await page.locator('#utilitiesBtn').click();
     await expect(page.locator('#copyShareLinkBtn')).toBeVisible();
     await expect(page.locator('#copyShareLinkBtn')).toHaveText(/Copy link/);
-    await expect(page.locator('#manageShareLinksBtn')).toHaveCount(0);
-    await expect(page.locator('#getShareLinkBtn')).toHaveCount(0);
+    // Present in the shared utilitiesMenu.html fragment but data-cap
+    // gated off for share (shareLink: false) — chrome.js hides them.
+    await expect(page.locator('#manageShareLinksBtn')).toBeHidden();
+    await expect(page.locator('#getShareLinkBtn')).toBeHidden();
   });
 
   test('copy link writes share url and shows toast', async ({ page }) => {

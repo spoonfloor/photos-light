@@ -15,7 +15,13 @@
 <!-- App Bar Shell — shared by app and share (build-share-viewer.sh reads
      this file directly). Per-surface differences are data-cap gates,
      resolved by ViewCapabilities.get() + chrome.js's [data-cap] loop —
-     not a second copy of this fragment. -->
+     not a second copy of this fragment.
+
+     data-cap items that are OFF for some surface ship `hidden` so the
+     pre-JS html-first shell never flashes them where they don't belong
+     (share must not show add/edit/delete). chrome.js un-hides the ones
+     the active surface's caps enable — same mechanism the date-picker
+     and #restoreBtn below already rely on. -->
 <div class="app-bar-wrapper no-select">
   <div class="app-bar-elements-layer">
     <div class="title-and-back">
@@ -59,6 +65,7 @@
         aria-label="Add Photo"
         title="Add photo"
         data-cap="import"
+        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">add_a_photo</span>
       </button>
@@ -91,6 +98,7 @@
         aria-label="Edit Date"
         title="Change date"
         data-cap="editDate"
+        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">edit_calendar</span>
       </button>
@@ -114,6 +122,7 @@
         aria-label="Delete"
         title="Delete selected"
         data-cap="deleteKind"
+        hidden
       >
         <span class="material-symbols-outlined app-bar-icon">delete</span>
       </button>
