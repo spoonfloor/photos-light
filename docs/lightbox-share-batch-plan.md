@@ -32,9 +32,11 @@ freelance.
 > **2026-08-27 — batch complete.** All 9 items shipped to `main` and deployed
 > to `spoonfloor/photos-light-sharing` (last: `65f9b75` / sharing `8524d62`).
 > Each phase was rebuilt + deployed as it landed rather than one deploy at the
-> end (owner's call). Close-out below was run incrementally. Outstanding:
-> #3's on-device iPhone-Safari check, and #9's owner-dialed numbers are a
-> live in-progress tuning (not a TEMP debug value any more).
+> end (owner's call). Close-out below was run incrementally. UX signed off
+> 2026-08-27. Outstanding: only #3's on-device iPhone-Safari check. #9's
+> numbers are the owner's live tuning (not TEMP). Two stale
+> `test_share_viewer_build.py` assertions (predating the fragment unification,
+> unrelated to this batch) were fixed in passing — `34fd654`.
 
 | # | Item | Phase | Scope | Claimed by | State |
 |---|------|-------|-------|-----------|-------|
