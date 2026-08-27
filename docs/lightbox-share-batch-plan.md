@@ -33,8 +33,8 @@ freelance.
 > to `spoonfloor/photos-light-sharing` (last: `65f9b75` / sharing `8524d62`).
 > Each phase was rebuilt + deployed as it landed rather than one deploy at the
 > end (owner's call). Close-out below was run incrementally. UX signed off
-> 2026-08-27. Outstanding: only #3's on-device iPhone-Safari check. #9's
-> numbers are the owner's live tuning (not TEMP). Two stale
+> 2026-08-27, including #3 confirmed on real iPhone Safari. Nothing
+> outstanding. #9's numbers are the owner's live tuning (not TEMP). Two stale
 > `test_share_viewer_build.py` assertions (predating the fragment unification,
 > unrelated to this batch) were fixed in passing — `34fd654`.
 
@@ -42,7 +42,7 @@ freelance.
 |---|------|-------|-------|-----------|-------|
 | 2 | Remove edge strips → concentric halo | 1 | app+share, all widths | session 0306 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173` |
 | 8 | Swipe no longer flashes chevron | 1 | app+share, narrow | session 0306 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173` |
-| 3 | Lightbox fully contains the grid | 2 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173`. **Not yet verified on iPhone Safari** (fix is `100dvh` + `touch-action: none`; the repro is iOS-only and can't be reproduced in desktop Chromium) |
+| 3 | Lightbox fully contains the grid | 2 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173`. Confirmed on real iPhone Safari by owner (`100dvh` + `touch-action: none`) |
 | 4 | Info panel: date only, tighten gap | 3 | share, all widths | session 0f18 (2026-08-27) | ✅ shipped — app `ac0de77`, share rebuilt + deployed `fdf170e` |
 | 9 | Info panel: 4 tuning vars | 3 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `a860b56`, share rebuilt + deployed `affa3d1` |
 | 1 | Shared text-inset token = 2px | 4 | share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `4ed2abf`, share rebuilt + deployed `476f318` |
