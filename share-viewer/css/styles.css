@@ -3764,6 +3764,13 @@ body.library-recovery-active .library-recovery-dock {
        (that's what let import-card's width and margin drift apart). */
     --modal-inset-mobile: 20px;
 
+    /* How far left-aligned text (date-header labels, and the share album
+       title via share-overrides.css) sits from the viewport edge once the
+       grid goes full-bleed at this breakpoint. One value so the title and
+       the headers share an edge — see #1 in docs/lightbox-share-batch-plan.md.
+       Narrow-only, like --modal-inset-mobile above. */
+    --narrow-text-inset: 2px;
+
     /* Lightbox info panel at this breakpoint (#9,
        docs/lightbox-share-batch-plan.md) — owner-dialed values, applies to
        app + share. Font size 17px = the narrow --modal-body-size / toast
@@ -3793,8 +3800,8 @@ body.library-recovery-active .library-recovery-dock {
      change. Date headers are the one thing that must NOT go full-bleed —
      .month-header-band re-applies an inset as padding so they don't
      bleed with the rest of the grid. Right edge matches
-     .page-wrapper's old inset; left is intentionally narrower (16px) at
-     this breakpoint. */
+     .page-wrapper's old inset; left is the shared --narrow-text-inset
+     (see below), so the headers line up with the share album title. */
   .page-wrapper {
     padding-inline: 0;
   }
@@ -3808,7 +3815,7 @@ body.library-recovery-active .library-recovery-dock {
   }
 
   .grid-root .month-header-band {
-    padding-inline: 16px var(--page-wrapper-padding-x);
+    padding-inline: var(--narrow-text-inset) var(--page-wrapper-padding-x);
   }
 
   /* Lighter glyph weight at this breakpoint — 400 reads heavy at the
