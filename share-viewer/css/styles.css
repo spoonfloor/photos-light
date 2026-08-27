@@ -21,6 +21,12 @@
 
   /* --- Layout --- */
   --app-bar-height: 64px;
+  /* .page-wrapper's own L/R inset — also read by the narrow-breakpoint
+     grid bleed below so the negative margin that pulls the thumbnail
+     grid edge-to-edge, and the counter-padding that keeps date headers
+     sitting exactly where this inset puts them, can't drift out of sync
+     with the inset itself. */
+  --page-wrapper-padding-x: 20px;
   /* Rail height derives from chip height so growing the chip pushes the
      rail — and everything downstream keyed off --app-chrome-height —
      down with it, instead of overflowing the app bar above. */
@@ -72,20 +78,21 @@
      is a separate dial for the trailing edge specifically when the last
      action icon is the more-menu button (#utilitiesBtn / #lightboxMoreBtn)
      — independent from the base inset so the two can be tuned without
-     fighting each other. All three (this, the more-menu dial, and the
-     title dial below) currently hold the same value at every width and
-     have no narrow-width entry in the @media (max-width: 480px) block —
-     narrow inherits these via the cascade until one is deliberately
-     given a different narrow value, same convention as every other
-     token that has no reason to differ yet (see that block's own header
-     comment). */
+     fighting each other. This pair currently holds the same value at
+     every width and has no narrow-width entry in the
+     @media (max-width: 480px) block — narrow inherits these via the
+     cascade until one is deliberately given a different narrow value,
+     same convention as every other token that has no reason to differ
+     yet (see that block's own header comment). */
   --app-bar-padding-x: 14px;
   --app-bar-padding-more-menu-r: 18px;
   /* Leading edge gets its own dial too, for the "Photos Light" title
      specifically (.title-and-back — grid only; lightbox has no title
      element here, see .lightbox-back-btn instead). Same delta pattern as
-     --app-bar-padding-more-menu-r above. */
-  --app-bar-title-padding-l: 16px;
+     --app-bar-padding-more-menu-r above, except this one *is* dialed
+     differently at narrow widths — see its @media (max-width: 480px)
+     override in the :root block below. */
+  --app-bar-title-padding-l: 18px;
 
   /* --- Lightbox chrome ---
      Bar height and icon sizing above reuse --app-bar-* directly (see
@@ -396,7 +403,7 @@ body.trash-view-active #lightboxDownloadBtn {
   width: 100%;
   max-width: 1400px;
   margin: 0px auto;
-  padding: 0 20px;
+  padding: 0 var(--page-wrapper-padding-x);
 }
 
 .scroll-sentinel {
@@ -3758,6 +3765,9 @@ body.library-recovery-active .library-recovery-dock {
     --btn-font-size: 17px; /* = current value, dial in */
     --btn-padding-block: 10px; /* = current value, dial in */
     --btn-padding-inline: 18px; /* = current value, dial in */
+    /* Pin at the pre-18px wide-width value — the wide-width bump to
+       --app-bar-title-padding-l above is not meant to reach narrow. */
+    --app-bar-title-padding-l: 16px;
     --month-header-font-size: 19px;
     --modal-title-size: 22px; /* = current value, dial in — matches what was already dialed in for the compact family; now shared by every modal */
     --modal-body-size: 17px; /* = current value, dial in — same */
@@ -3766,6 +3776,42 @@ body.library-recovery-active .library-recovery-dock {
        read this instead of each re-deriving their own width/margin pair
        (that's what let import-card's width and margin drift apart). */
     --modal-inset-mobile: 20px;
+  }
+
+  /* Thumbnail grid goes edge-to-edge at this breakpoint. #photoContainer
+     (.grid-root) is .page-wrapper's only child, so the inset is removed
+     at its source instead of fighting it with a negative margin on
+     .grid-root — a negative margin-inline there can't actually bleed
+     .grid-root full-width, because .grid-root has an explicit
+     `width: 100%` above: with width and both margins non-auto, the box
+     model treats the pair as over-constrained and discards the
+     margin-right you set (CSS2.1 10.3.3), so only the left edge would
+     move and the right edge would stay inset. Zeroing .page-wrapper's
+     own padding sidesteps that entirely — .grid-root's width:100% now
+     resolves to the full viewport, and everything under it
+     (.grid-canvas, .photo-grid / .grid-tile-row, the empty-state
+     overlays) is width:100%-chained off .grid-root, so it stretches
+     full-bleed for free. gridLayout.js reads the resulting clientWidth
+     live via getComputedStyle, so column/cell math adapts with no JS
+     change. Date headers are the one thing that must NOT go full-bleed —
+     .month-header-band re-applies an inset as padding so they don't
+     bleed with the rest of the grid. Right edge matches
+     .page-wrapper's old inset; left is intentionally narrower (16px) at
+     this breakpoint. */
+  .page-wrapper {
+    padding-inline: 0;
+  }
+
+  /* Shorter date-header row at this breakpoint. --grid-header-band-px
+     (spacer/band height) derives from this via calc(), and
+     gridLayout.js reads both live via getComputedStyle, so the smaller
+     band propagates with no JS change. */
+  .grid-root {
+    --grid-header-height-px: 32px;
+  }
+
+  .grid-root .month-header-band {
+    padding-inline: 16px var(--page-wrapper-padding-x);
   }
 
   /* Lighter glyph weight at this breakpoint — 400 reads heavy at the
