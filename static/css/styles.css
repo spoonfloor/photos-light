@@ -3768,10 +3768,8 @@ body.library-recovery-active .library-recovery-dock {
        title via share-overrides.css) sits from the viewport edge once the
        grid goes full-bleed at this breakpoint. One value so the title and
        the headers share an edge — see #1 in docs/lightbox-share-batch-plan.md.
-       Narrow-only, like --modal-inset-mobile above.
-       TEMP: 77px (was 2px) — bumped so it's easy to spot while dialing;
-       owner will settle the real value. */
-    --narrow-text-inset: 77px;
+       Narrow-only, like --modal-inset-mobile above. Owner-dialed. */
+    --narrow-text-inset: 6px;
 
     /* Lightbox info panel at this breakpoint (#9,
        docs/lightbox-share-batch-plan.md) — owner-dialed values, applies to
