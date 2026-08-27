@@ -97,7 +97,7 @@ const GridTile = (() => {
     const idAttr = photoId != null ? ` data-photo-id="${photoId}"` : '';
     const srcAttr = thumbSrc ? ` src="${thumbSrc}"` : '';
     return (
-      `<img${idAttr}${srcAttr} alt="${thumbAlt}" loading="lazy" class="photo-thumb">` +
+      `<img${idAttr}${srcAttr} alt="${thumbAlt}" loading="lazy" draggable="false" class="photo-thumb">` +
       buildStarBadgeHTML(caps, favorited) +
       buildVideoBadgeHTML(isVideo)
     );

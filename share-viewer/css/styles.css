@@ -27,9 +27,13 @@
   --filter-chip-rail-height: calc(
     var(--filter-chip-height) + 2 * var(--filter-chip-rail-vpad)
   );
-  --trash-chrome-height: 48px;
+  /* The trash bar is the app bar in another mode (its title/back-arrow
+     sizing already reference --app-bar-* tokens above); height follows
+     the same rule instead of carrying its own independent constant that
+     can drift out of sync, as it had before. */
+  --trash-chrome-height: var(--app-bar-height);
   --app-chrome-height: var(--app-bar-height);
-  --page-top-gap: 24px;
+  --page-top-gap: 18px;
 
   /* --- Filter chip knobs --- */
   --filter-chip-rail-bg: transparent;
@@ -60,6 +64,28 @@
      exists so non-grid consumers (e.g. .lightbox-top-bar) can reuse the
      same static value without inheriting the grid's squeeze behavior. */
   --app-bar-actions-gap: 8px;
+
+  /* App-bar L/R inset — one pair for all three bars (grid, lightbox,
+     trash; see the "trash bar is the app bar in another mode" comment
+     above and .lightbox-top-bar below, which now both read this instead
+     of carrying their own hardcoded values). --app-bar-padding-more-menu-r
+     is a separate dial for the trailing edge specifically when the last
+     action icon is the more-menu button (#utilitiesBtn / #lightboxMoreBtn)
+     — independent from the base inset so the two can be tuned without
+     fighting each other. All three (this, the more-menu dial, and the
+     title dial below) currently hold the same value at every width and
+     have no narrow-width entry in the @media (max-width: 480px) block —
+     narrow inherits these via the cascade until one is deliberately
+     given a different narrow value, same convention as every other
+     token that has no reason to differ yet (see that block's own header
+     comment). */
+  --app-bar-padding-x: 14px;
+  --app-bar-padding-more-menu-r: 18px;
+  /* Leading edge gets its own dial too, for the "Photos Light" title
+     specifically (.title-and-back — grid only; lightbox has no title
+     element here, see .lightbox-back-btn instead). Same delta pattern as
+     --app-bar-padding-more-menu-r above. */
+  --app-bar-title-padding-l: 16px;
 
   /* --- Lightbox chrome ---
      Bar height and icon sizing above reuse --app-bar-* directly (see
@@ -306,36 +332,26 @@ body.trash-view-active.filter-chip-rail-visible {
   gap: 0px;
   width: 100%;
   height: var(--trash-chrome-height);
-  padding: 0 12px;
+  padding: 0 var(--app-bar-padding-x);
   background: var(--body-bg);
   color: var(--text-primary);
 }
 
+/* Box model (size, padding, cursor, glyph sizing) comes from the shared
+   .app-bar-icon-button class now (see index.html) instead of a hand-copy
+   of its width/height/padding/cursor values — this rule is only the
+   trash-specific extra: a round tap target with hover feedback, which
+   the grid/lightbox icon buttons don't have. */
 .trash-chrome-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: none;
   border-radius: 50%;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
 }
 
 .trash-chrome-back:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
-.trash-chrome-back .material-symbols-outlined {
-  font-size: 24px;
-}
-
 .trash-chrome-title {
-  /* font-size: var(--app-bar-title-size); */
-  font-size: 18px;
+  font-size: var(--app-bar-title-size);
   font-weight: 300;
 }
 
@@ -396,7 +412,7 @@ body.trash-view-active #lightboxDownloadBtn {
   width: 100%;
   height: var(--app-bar-height);
   color: var(--text-primary);
-  padding: 0 20px;
+  padding: 0 var(--app-bar-padding-x);
   display: flex;
   align-items: center;
   font-size: var(--headline-font-size);
@@ -429,6 +445,10 @@ body.trash-view-active #lightboxDownloadBtn {
   min-width: 0;
   overflow: hidden;
   z-index: 1;
+  /* Leading edge sits flush against .app-bar-wrapper's own L padding
+     already (same reasoning as .actions' trailing-edge margin below) —
+     this only needs the delta between the two tokens. */
+  margin-left: calc(var(--app-bar-title-padding-l) - var(--app-bar-padding-x));
 }
 
 /* Date jumper — visibility from DatePickerChrome; position from AppBarLayout vars. */
@@ -525,6 +545,20 @@ body.trash-view-active #lightboxDownloadBtn {
   white-space: nowrap;
   background: transparent;
   z-index: 1;
+}
+
+/* Trailing edge gets its own dial, independent of --app-bar-padding-x:
+   .actions sits flush against .app-bar-wrapper's own R padding already
+   (the wrapper is the padding box), so this only needs to add the delta
+   between the two tokens — not restate the full inset. Targets both
+   surfaces' more-menu buttons directly (rather than ":last-child") so it
+   still applies correctly if a future icon ever gets added after either
+   one. */
+#utilitiesBtn,
+#lightboxMoreBtn {
+  margin-right: calc(
+    var(--app-bar-padding-more-menu-r) - var(--app-bar-padding-x)
+  );
 }
 
 .app-bar-elements-layer.app-bar-layout--actions-squeezed .app-bar-icon-button {
@@ -634,15 +668,9 @@ body.trash-view-active #lightboxDownloadBtn {
   text-align: center;
 }
 
-.catalog-filter-zero-heading {
-  font-size: 18px;
-  margin-bottom: 8px;
-}
-
-.catalog-filter-zero-detail {
-  font-size: 14px;
-  color: var(--text-secondary);
-}
+/* Title/body for this overlay now reuse .surface-empty-title /
+   .surface-empty-body (see below) instead of their own hardcoded sizes —
+   virtualGrid.js's mountCatalogEmptyOverlay assigns those classes. */
 
 .app-bar-icon-button {
   display: flex;
@@ -681,8 +709,14 @@ body.trash-view-active #lightboxDownloadBtn {
   pointer-events: none;
 }
 
-/* More options button - narrower width for narrow icon */
-#utilitiesBtn {
+/* More options button - narrower width for narrow icon. Grid and lightbox
+   share the identical more_vert glyph, so both get the same narrowing —
+   #lightboxMoreBtn used to sit at full --app-bar-icon-btn-size (44px)
+   with no stated reason for the delta, which put its glyph noticeably
+   further from the bar's trailing edge than grid's utilitiesBtn at the
+   same position. */
+#utilitiesBtn,
+#lightboxMoreBtn {
   width: 28px;
 }
 
@@ -963,8 +997,10 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .month-select-circle {
-  width: 20px;
-  height: 20px;
+  /* Same diameter as the photo thumbnail's own select-circle — see
+     --photo-badge-visual-size (24px desktop, 28px narrow). */
+  width: var(--photo-badge-visual-size);
+  height: var(--photo-badge-visual-size);
   border: 1px solid white;
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.3);
@@ -991,7 +1027,7 @@ body.surface-load-active .app-bar-icon-button {
   left: 50%;
   transform: translate(-50%, -50%);
   color: #000;
-  font-size: 12px;
+  font-size: 14px; /* matches .photo-card .select-circle::after at the same diameter */
   font-weight: bold;
 }
 
@@ -1205,7 +1241,11 @@ body.surface-load-active .app-bar-icon-button {
    token values by hand. .lightbox-top-bar is only the delta: grid's bar
    is opaque, lightbox's must stay transparent so the scrim behind it
    shows through. Sits in normal flow at the top of .lightbox-top-chrome
-   (the scrim is position:absolute, out of flow, so it doesn't push this). */
+   (the scrim is position:absolute, out of flow, so it doesn't push this).
+   L/R padding used to be hand-overridden here (12px/10px vs. grid's
+   18px) with no stated reason for the delta — now inherits
+   --app-bar-padding-x like every other app bar; dial it independently
+   via that token if a real reason shows up. */
 .app-bar-wrapper.lightbox-top-bar {
   background: transparent;
 }
@@ -1924,7 +1964,6 @@ body.surface-load-active .app-bar-icon-button {
   z-index: 10;
   opacity: calc(var(--lightbox-nav-shown) * var(--lightbox-nav-active-opacity));
   pointer-events: none;
-  transition: opacity 150ms ease;
 }
 
 .lightbox-nav-btn:hover {
@@ -2745,6 +2784,10 @@ body.library-recovery-active .library-recovery-dock {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   padding: 12px 0 8px;
   z-index: var(--z-dropdown);
+  /* max-height is set inline (chrome.js) from the button position and
+     viewport height; scroll internally rather than clip off-screen. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .utilities-menu-item {
@@ -2804,9 +2847,20 @@ body.library-recovery-active .library-recovery-dock {
 }
 
 .utilities-menu-divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.1);
+  /* border, not height+background: a 1px box's edges can pixel-round to
+     the same device pixel and vanish at fractional zoom/DPR, but a
+     nonzero border-width is guaranteed to paint at >=1 device px. */
+  height: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
   margin: 12px 16px;
+}
+
+/* Hidden by default (desktop): the narrow-width override below reveals it
+   as a tap alternative to the long-press gesture that arms select mode
+   (gridInteractions.js) — that gesture only arms under the same breakpoint,
+   so the tap alternative only needs to exist there too. */
+#selectModeBtn {
+  display: none;
 }
 
 .utilities-badge {
@@ -3178,6 +3232,40 @@ body.library-recovery-active .library-recovery-dock {
   justify-content: center;
   color: #666;
   font-size: var(--modal-body-size);
+}
+
+/* Full-surface empty states (first-run, trash, filtered results, empty
+   library): title/body share the modal size tokens so they pick up the
+   narrow-layout bump instead of being frozen at a hardcoded inline size,
+   as they were before. */
+.surface-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: calc(100vh - 64px);
+  margin-top: -48px;
+  color: var(--text-color);
+  gap: 24px;
+}
+
+.surface-empty-state-text {
+  text-align: center;
+}
+
+.surface-empty-title {
+  font-size: var(--modal-title-size);
+  margin-bottom: 8px;
+}
+
+.surface-empty-body {
+  font-size: var(--modal-body-size);
+  color: var(--text-secondary);
+}
+
+.surface-empty-actions {
+  display: flex;
+  gap: 12px;
 }
 
 /* Breadcrumb scrollbar */
@@ -3599,6 +3687,7 @@ body.library-recovery-active .library-recovery-dock {
 .share-manage-label {
   flex: 1;
   min-width: 0;
+  font-size: var(--modal-body-size);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3669,7 +3758,7 @@ body.library-recovery-active .library-recovery-dock {
     --btn-font-size: 17px; /* = current value, dial in */
     --btn-padding-block: 10px; /* = current value, dial in */
     --btn-padding-inline: 18px; /* = current value, dial in */
-    --month-header-font-size: 17px; /* = current value, dial in */
+    --month-header-font-size: 19px;
     --modal-title-size: 22px; /* = current value, dial in — matches what was already dialed in for the compact family; now shared by every modal */
     --modal-body-size: 17px; /* = current value, dial in — same */
     /* Single source for how far every modal sits from the viewport edge
@@ -3677,6 +3766,85 @@ body.library-recovery-active .library-recovery-dock {
        read this instead of each re-deriving their own width/margin pair
        (that's what let import-card's width and margin drift apart). */
     --modal-inset-mobile: 20px;
+  }
+
+  /* Lighter glyph weight at this breakpoint — 400 reads heavy at the
+     28px --photo-badge-visual-size used here. font-variation-settings
+     has no per-axis override, so both states restate the full list. */
+  .photo-card .star-badge .material-symbols-outlined {
+    font-variation-settings:
+      'FILL' 0,
+      'wght' 300,
+      'GRAD' 0,
+      'opsz' 24;
+  }
+
+  .photo-card .star-badge .material-symbols-outlined.filled {
+    font-variation-settings:
+      'FILL' 1,
+      'wght' 300,
+      'GRAD' 0,
+      'opsz' 24;
+  }
+
+  /* Grid select mode (long-press to enter — see gridInteractions.js):
+     reveals select-circle + star-badge on every card without requiring
+     :hover, which doesn't exist on touch. Desktop's hover-only reveal
+     (.photo-card:hover .select-circle / .star-badge above) is untouched. */
+  #photoContainer.select-mode .select-circle,
+  #photoContainer.select-mode .star-badge:not(.star-badge--readonly) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Date-cluster select-circle folds into the same overlay: outside
+     select mode it stays hidden even when its cluster is fully selected
+     (overriding .month-select-circle.selected's always-on opacity above,
+     which otherwise leaves a lit circle behind after exiting select
+     mode), and reveals for every cluster header while select mode is
+     on. Placeholder headers (still loading) stay excluded either way. */
+  .month-select-circle,
+  .month-select-circle.selected {
+    opacity: 0;
+  }
+
+  #photoContainer.select-mode .month-select-circle {
+    opacity: 1;
+  }
+
+  #photoContainer.select-mode .virtual-month-placeholder .month-select-circle {
+    opacity: 0;
+  }
+
+  /* Touch has no real :hover, but a tap leaves the tapped element's
+     :hover matching stuck until a different element is tapped (mobile
+     browsers' standard post-tap behavior). .photo-card:hover and
+     .month-header:hover (both above, unscoped, desktop-oriented) are
+     higher specificity than every override so far in this block, so a
+     stuck hover reveals a circle/star independent of select-mode —
+     e.g. tapping blank space inside a month-header to exit select mode
+     leaves that header's own circle lit. #photoContainer's id makes
+     this the one rule strong enough to beat them; it only fires outside
+     select mode, so select-mode's own reveal rule above still wins
+     while it's active. */
+  #photoContainer:not(.select-mode) .photo-card:hover .select-circle,
+  #photoContainer:not(.select-mode)
+    .photo-card:hover
+    .star-badge:not(.star-badge--readonly),
+  #photoContainer:not(.select-mode) .month-header:hover .month-select-circle {
+    opacity: 0;
+  }
+
+  /* Long-press needs Chrome/Safari's own press-and-hold handling (image
+     drag, text/image callout, context menu) out of the way so it doesn't
+     fight our gesture. contextmenu is also preventDefault'd in
+     gridInteractions.js; draggable="false" is set on the thumb markup in
+     gridTile.js. */
+  .photo-card .photo-thumb {
+    -webkit-touch-callout: none;
+    -webkit-user-drag: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   /* Icon gap vars are scoped to .app-bar-elements-layer (also read at
@@ -3761,12 +3929,23 @@ body.library-recovery-active .library-recovery-dock {
     font-size: 21.333px; /* 32px * (13.333/20), same ratio as desktop */
   }
 
+  /* Divider stays 1px like desktop, but desktop's 10%-opacity hairline
+     next to 20px icons/14px text loses to this breakpoint's 32px icons/
+     17px text — bump contrast and let it breathe with the taller rows so
+     it reads as the same visual weight as desktop instead of vanishing. */
+  .utilities-menu-divider {
+    margin: 16px 16px;
+    border-top-color: rgba(255, 255, 255, 0.18);
+  }
+
   /* Grid: download + change-date move into the more menu at this
-     breakpoint, per docs/lightbox-480-plan.md. Unconditional — editDateBtn
-     is already cap-hidden on share (edit date is app-only), and download
-     staying in the app bar on share is a documented delta restored by
-     share-overrides.css rather than carved out here. */
-  #downloadBtn,
+     breakpoint, per docs/lightbox-480-plan.md. editDateBtn is already
+     cap-hidden on share (edit date is app-only) so it doesn't need
+     scoping here, but download stays in share's app bar at every width
+     (docs/share-ui-deltas.md) — scope #downloadBtn to app instead of
+     leaving it unconditional and patching it back for share downstream
+     in share-overrides.css. */
+  body:not(.share-view) #downloadBtn,
   #editDateBtn {
     display: none;
   }
@@ -3784,6 +3963,15 @@ body.library-recovery-active .library-recovery-dock {
     order: -1;
   }
 
+  /* Select CTA (see utilitiesMenu.html/utilitiesMenuShare.html): reveal it
+     at this breakpoint and float it above Download/Change date's own
+     float-up — order beats their -2/-1, so it always lands at the very
+     top of the menu regardless of surface. */
+  #selectModeBtn {
+    display: flex;
+    order: -3;
+  }
+
   /* Lightbox: rotate/change-date/download move into the more menu at this
      breakpoint. Unconditional and fully shared — the more menu's items
      (#lightboxRotateMenuBtn etc.) live in the one shared lightbox.html
@@ -3799,5 +3987,18 @@ body.library-recovery-active .library-recovery-dock {
 
   #lightboxMoreBtn {
     display: flex;
+  }
+
+  /* Manage-links icon buttons (copy link, delete) had no narrow override
+     at all — frozen at desktop size, same bug pattern already fixed above
+     for .utilities-menu-item. Grow the touch target and glyph, keeping
+     the same ~12px padding proportion as desktop's 32px/20px pairing. */
+  .share-manage-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .share-manage-icon-btn .material-symbols-outlined {
+    font-size: 32px;
   }
 }

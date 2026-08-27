@@ -8,7 +8,7 @@ const PHOTO_PAGE_SIZE = 400;
 const IMPORT_SET_LIMIT = 5;
 
 /** Bump when static HTML fragments or main.js need cache invalidation. */
-const STATIC_ASSET_VERSION = '466';
+const STATIC_ASSET_VERSION = '467';
 
 function versionedStaticUrl(path) {
   return `${path}${path.includes('?') ? '&' : '?'}v=${STATIC_ASSET_VERSION}`;
@@ -8445,12 +8445,12 @@ function renderFirstRunEmptyState() {
   }
 
   container.innerHTML = `
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
-      <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">Create a library</div>
-        <div style="font-size: 14px; color: var(--text-secondary);">Add photos or open an existing library to get started.</div>
+    <div class="surface-empty-state">
+      <div class="surface-empty-state-text">
+        <div class="surface-empty-title">Create a library</div>
+        <div class="surface-empty-body">Add photos or open an existing library to get started.</div>
       </div>
-      <div style="display: flex; gap: 12px;">
+      <div class="surface-empty-actions">
         <button class="btn" onclick="logOpenLibraryAccessPoint('first-run-empty-state'); void openExistingLibrary();" style="display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-primary); white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">folder_open</span>
           <span>Open library</span>
@@ -8533,12 +8533,12 @@ function renderFilterEmptyState(options = {}) {
     : 'No images match the current filters.';
 
   container.innerHTML = `
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
-      <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">${heading}</div>
-        <div style="font-size: 14px; color: var(--text-secondary);">${detail}</div>
+    <div class="surface-empty-state">
+      <div class="surface-empty-state-text">
+        <div class="surface-empty-title">${heading}</div>
+        <div class="surface-empty-body">${detail}</div>
       </div>
-      <div style="display: flex; gap: 12px;">
+      <div class="surface-empty-actions">
         <button class="btn btn-primary" onclick="clearPhotoFilters()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span>Clear filters</span>
         </button>
@@ -8557,12 +8557,12 @@ function renderEmptyTrashState() {
   setPagedGridContainerMode(container, false);
 
   container.innerHTML = `
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
-      <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">Trash is empty</div>
-        <div style="font-size: 14px; color: var(--text-secondary);">Photos you delete from your library appear here.</div>
+    <div class="surface-empty-state">
+      <div class="surface-empty-state-text">
+        <div class="surface-empty-title">Trash is empty</div>
+        <div class="surface-empty-body">Photos you delete from your library appear here.</div>
       </div>
-      <div style="display: flex; gap: 12px;">
+      <div class="surface-empty-actions">
         <button class="btn btn-primary" onclick="void TrashView.exit()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span>Back to library</span>
         </button>
@@ -8583,12 +8583,12 @@ function renderEmptyLibraryState() {
   const heading = escapeHtml(getEmptyLibraryHeading());
 
   container.innerHTML = `
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: calc(100vh - 64px); margin-top: -48px; color: var(--text-color); gap: 24px;">
-      <div style="text-align: center;">
-        <div style="font-size: 18px; margin-bottom: 8px;">${heading}</div>
-        <div style="font-size: 14px; color: var(--text-secondary);">Add some photos to get started.</div>
+    <div class="surface-empty-state">
+      <div class="surface-empty-state-text">
+        <div class="surface-empty-title">${heading}</div>
+        <div class="surface-empty-body">Add some photos to get started.</div>
       </div>
-      <div style="display: flex; gap: 12px;">
+      <div class="surface-empty-actions">
         <button class="btn btn-primary" onclick="triggerImport()" style="display: flex; align-items: center; gap: 8px; white-space: nowrap;">
           <span class="material-symbols-outlined" style="font-size: 18px; width: 18px; height: 18px; display: inline-block; overflow: hidden;">add_a_photo</span>
           <span>Add photos</span>
@@ -10166,6 +10166,7 @@ async function loadUtilitiesMenu() {
     document.body.insertAdjacentHTML('beforeend', html);
 
     // Wire up menu items
+    const selectModeBtn = document.getElementById('selectModeBtn');
     const clearStarsBtn = document.getElementById('clearStarsBtn');
     const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
     const editDateSelectedBtn = document.getElementById('editDateSelectedBtn');
@@ -10173,6 +10174,15 @@ async function loadUtilitiesMenu() {
     const convertToLibraryBtn = document.getElementById('convertToLibraryBtn');
     const cleanOrganizeBtn = document.getElementById('cleanOrganizeBtn');
     const closeLibraryBtn = document.getElementById('closeLibraryBtn');
+
+    if (selectModeBtn) {
+      selectModeBtn.addEventListener('click', () => {
+        hideUtilitiesMenu();
+        const container = document.getElementById('photoContainer');
+        PhotoChrome.toggleSelectMode(container);
+        PhotoChrome.updateSelectModeButton(container, selectModeBtn);
+      });
+    }
 
     if (clearStarsBtn) {
       clearStarsBtn.addEventListener('click', () => {
@@ -10383,6 +10393,15 @@ function updateUtilityMenuAvailability() {
   const hasPhotos = state.photos && state.photos.length > 0;
   const caps = getViewCapabilities();
   const hasSelectedPhotos = state.selectedPhotos.size > 0;
+
+  const selectModeBtn = document.getElementById('selectModeBtn');
+  if (selectModeBtn) {
+    PhotoChrome.updateSelectModeButton(
+      document.getElementById('photoContainer'),
+      selectModeBtn,
+    );
+  }
+  enableMenuItem('selectModeBtn', hasPhotos);
 
   enableMenuItem(
     'clearStarsBtn',

@@ -1,5 +1,17 @@
-<!-- Utilities Dropdown Menu — Rebuild thumbnails removed from UI Apr 2026 (capability kept: API + JS below). -->
+<!-- Utilities Dropdown Menu — Rebuild thumbnails removed from UI Apr 2026 (capability kept: API + JS below).
+     Shared by app and share (build-share-viewer.sh reads this file directly); per-surface items are data-cap gated, not a second fragment. -->
 <div class="utilities-menu" id="utilitiesMenu" style="display: none">
+  <!-- Narrow width only (hidden by default in styles.css): tap alternative
+       to long-press-to-select (see gridInteractions.js) — summons the same
+       select-mode overlay. Always floats to the top of the menu (order in
+       the narrow block, styles.css), above Download/Change date's own
+       float-up. Label/icon swap to "Exit select & star" while overlay is active —
+       see chrome.js's updateSelectModeButton. -->
+  <button class="utilities-menu-item" id="selectModeBtn" type="button">
+    <span class="material-symbols-outlined">check_circle</span>
+    <span>Select &amp; star</span>
+  </button>
+
   <button class="utilities-menu-item" id="clearStarsBtn" type="button" data-cap="star">
     <span class="utilities-menu-icon-composite" aria-hidden="true">
       <span class="material-symbols-outlined">hide_source</span>
@@ -40,6 +52,20 @@
   >
     <span class="material-symbols-outlined">list</span>
     <span>Manage links</span>
+  </button>
+
+  <!-- Share viewer's own one-button equivalent of Get link/Manage links
+       above — mutually exclusive with them via data-cap (shareLink is
+       app-only, copyShareLink is share-only), so exactly one of the two
+       ever shows. Wired in shareBoot.js. -->
+  <button
+    class="utilities-menu-item"
+    id="copyShareLinkBtn"
+    type="button"
+    data-cap="copyShareLink"
+  >
+    <span class="material-symbols-outlined">link</span>
+    <span>Copy link</span>
   </button>
 
   <div class="utilities-menu-divider" data-cap="libraryMenu"></div>

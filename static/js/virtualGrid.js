@@ -168,12 +168,16 @@ const VirtualGrid = (() => {
     const copy = document.createElement('div');
     copy.className = 'catalog-filter-zero-copy';
 
+    // Title/body reuse the same classes as the paged-fallback empty states
+    // (main.js renderFirstRunEmptyState etc.) so there's one place that
+    // controls this text's size instead of two copies drifting apart —
+    // see .surface-empty-title / .surface-empty-body in styles.css.
     const headingEl = document.createElement('div');
-    headingEl.className = 'catalog-filter-zero-heading';
+    headingEl.className = 'surface-empty-title';
     headingEl.textContent = heading;
 
     const detailEl = document.createElement('div');
-    detailEl.className = 'catalog-filter-zero-detail';
+    detailEl.className = 'surface-empty-body';
     detailEl.textContent = detail;
 
     copy.appendChild(headingEl);

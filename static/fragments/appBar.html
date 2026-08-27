@@ -1,8 +1,16 @@
-<!-- App Bar Shell -->
+<!-- App Bar Shell — shared by app and share (build-share-viewer.sh reads
+     this file directly). Per-surface differences are data-cap gates,
+     resolved by ViewCapabilities.get() + chrome.js's [data-cap] loop —
+     not a second copy of this fragment. -->
 <div class="app-bar-wrapper no-select">
   <div class="app-bar-elements-layer">
     <div class="title-and-back">
-      <span class="title title-photos" id="appBarTitle">Photos Light</span>
+      <span
+        class="title title-photos"
+        id="appBarTitle"
+        data-title-short="P/Light"
+        >Photos Light</span
+      >
     </div>
 
     <div class="date-picker" data-cap="dateJumper" hidden aria-hidden="true">

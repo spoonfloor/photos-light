@@ -36,6 +36,7 @@
     deselectAllBtn: document.getElementById('deselectAllBtn'),
     utilitiesBtn: document.getElementById('utilitiesBtn'),
     utilitiesMenu: document.getElementById('utilitiesMenu'),
+    selectModeBtn: document.getElementById('selectModeBtn'),
     clearStarsBtn: document.getElementById('clearStarsBtn'),
     copyShareLinkBtn: document.getElementById('copyShareLinkBtn'),
     filterChipScroll: document.querySelector('.filter-chip-rail-scroll'),
@@ -365,6 +366,9 @@
     const starredCount = starredEffectiveSet().size;
     if (els.clearStarsBtn) {
       els.clearStarsBtn.disabled = starredCount === 0;
+    }
+    if (els.selectModeBtn) {
+      els.selectModeBtn.disabled = state.photos.length === 0;
     }
     saveLocalState();
   }
@@ -720,9 +724,21 @@
     els.deselectAllBtn.addEventListener('click', clearSelection);
 
     els.utilitiesBtn.addEventListener('click', () => {
-      PhotoChrome.toggleUtilitiesMenu(els.utilitiesBtn, els.utilitiesMenu);
+      PhotoChrome.toggleUtilitiesMenu(els.utilitiesBtn, els.utilitiesMenu, {
+        onBeforeShow: () => {
+          PhotoChrome.updateSelectModeButton(els.photoContainer, els.selectModeBtn);
+        },
+      });
     });
     PhotoChrome.wireUtilitiesDismiss(els.utilitiesMenu, els.utilitiesBtn);
+
+    if (els.selectModeBtn) {
+      els.selectModeBtn.addEventListener('click', () => {
+        PhotoChrome.hideUtilitiesMenu(els.utilitiesMenu);
+        PhotoChrome.toggleSelectMode(els.photoContainer);
+        PhotoChrome.updateSelectModeButton(els.photoContainer, els.selectModeBtn);
+      });
+    }
 
     els.clearStarsBtn.addEventListener('click', () => {
       PhotoChrome.hideUtilitiesMenu(els.utilitiesMenu);

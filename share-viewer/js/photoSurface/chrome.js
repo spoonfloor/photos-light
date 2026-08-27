@@ -29,9 +29,16 @@ const PhotoChrome = (() => {
     );
     const insetExtra = Number.isFinite(insetEnd) ? insetEnd : 0;
 
-    menu.style.top = `${btnRect.bottom + 8}px`;
+    const top = btnRect.bottom + 8;
+    const viewportMargin = 16;
+    menu.style.top = `${top}px`;
     menu.style.right = `${window.innerWidth - btnRect.right + insetExtra}px`;
     menu.style.left = '';
+    // The menu can hold more items than fit below the button (e.g. narrow
+    // viewports, or the library-menu section appended for desktop apps) —
+    // cap its height to the remaining viewport and let it scroll internally
+    // instead of silently clipping off the bottom edge.
+    menu.style.maxHeight = `${Math.max(window.innerHeight - top - viewportMargin, 120)}px`;
     // .utilities-menu's own class already declares display:flex/flex-direction:
     // column (styles.css) — this must match that, not 'block', or the menu
     // silently loses flex layout the instant it's actually shown and any
@@ -150,6 +157,43 @@ const PhotoChrome = (() => {
     }
   }
 
+  // Select CTA (utilities menu, narrow width only): tap alternative to the
+  // long-press gesture that arms select mode — see gridInteractions.js.
+  // One implementation shared by main.js (app) and shareBoot.js (share) so
+  // the label/icon swap and the toggle itself can't drift between surfaces.
+  function isSelectModeActive(container) {
+    return (
+      typeof GridInteractions !== 'undefined' &&
+      GridInteractions.isSelectModeActive(container)
+    );
+  }
+
+  function toggleSelectMode(container) {
+    if (!container || typeof GridInteractions === 'undefined') {
+      return;
+    }
+    if (GridInteractions.isSelectModeActive(container)) {
+      GridInteractions.exitSelectMode(container);
+    } else {
+      GridInteractions.enterSelectMode(container);
+    }
+  }
+
+  function updateSelectModeButton(container, btn) {
+    if (!btn) {
+      return;
+    }
+    const active = isSelectModeActive(container);
+    const icon = btn.querySelector('.material-symbols-outlined');
+    const label = btn.querySelector('span:last-child');
+    if (icon) {
+      icon.textContent = active ? 'hide_source' : 'check_circle';
+    }
+    if (label) {
+      label.textContent = active ? 'Exit select & star' : 'Select & star';
+    }
+  }
+
   function wireUtilitiesDismiss(menu, utilitiesBtn) {
     document.addEventListener('click', (event) => {
       if (
@@ -170,5 +214,8 @@ const PhotoChrome = (() => {
     updateFilterChips,
     applySurfaceChrome,
     wireUtilitiesDismiss,
+    isSelectModeActive,
+    toggleSelectMode,
+    updateSelectModeButton,
   };
 })();

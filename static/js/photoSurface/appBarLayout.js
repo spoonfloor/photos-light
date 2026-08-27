@@ -30,6 +30,22 @@ function createAppBarLayoutController(mountId) {
   // one doesn't move the others.
   let titleGapDefaultPx = TITLE_GAP_FALLBACK_PX;
 
+  // "P/Light"-style short title: shown instead of the full title the
+  // instant the full string would start truncating, so collision reads as
+  // a deliberate abbreviation rather than a mid-word ellipsis. titleGhostEl
+  // is a permanently offscreen twin of the title span, used purely to
+  // measure the full text's natural width every layout pass — unlike the
+  // jumper's width, this can't be measured once and cached, because
+  // --app-bar-title-size changes at breakpoints (see styles.css). Stays
+  // null (no-op) for instances whose title slot has no text node at all —
+  // lightbox's app bar puts a back button there instead.
+  let titleTextEl = null;
+  let titleFullText = null;
+  let titleShortText = null;
+  let titleMarginPx = 0;
+  let titleGhostEl = null;
+  let titleShowingShort = false;
+
   function queryElements() {
     const mount = document.getElementById(mountId);
     layer = mount ? mount.querySelector('.app-bar-elements-layer') : null;
@@ -122,6 +138,85 @@ function createAppBarLayoutController(mountId) {
     return measured;
   }
 
+  /**
+   * Binds to the title span inside (a possibly re-rendered) title-and-back
+   * markup and keeps an offscreen twin of it around for measuring the full
+   * title's natural width (see titleGhostEl comment above). Cheap no-op
+   * once bound, since it's called every layout() pass.
+   */
+  function ensureTitleGhost(containerEl) {
+    const el = containerEl ? containerEl.querySelector('.title') : null;
+    if (el === titleTextEl) {
+      return;
+    }
+
+    titleGhostEl?.remove();
+    titleTextEl = el;
+    titleGhostEl = null;
+    titleShowingShort = false;
+
+    if (!el) {
+      titleFullText = null;
+      titleShortText = null;
+      return;
+    }
+
+    titleFullText = el.textContent;
+    titleShortText = el.dataset.titleShort || null;
+    titleMarginPx = parseFloat(getComputedStyle(el).marginLeft) || 0;
+
+    if (!titleShortText) {
+      return;
+    }
+
+    // Appended as a sibling inside the same .title-and-back (not
+    // document.body) so the `.app-bar-wrapper .title` descendant selector
+    // — font-size, weight, margin, nowrap — still applies; a detached
+    // ghost would measure at the browser's default font instead.
+    const ghost = el.cloneNode(false);
+    ghost.removeAttribute('id');
+    ghost.removeAttribute('data-title-short');
+    ghost.setAttribute('aria-hidden', 'true');
+    ghost.textContent = titleFullText;
+    ghost.style.position = 'absolute';
+    ghost.style.visibility = 'hidden';
+    ghost.style.left = '-9999px';
+    ghost.style.top = '0';
+    ghost.style.maxWidth = 'none';
+    containerEl.appendChild(ghost);
+    titleGhostEl = ghost;
+  }
+
+  /**
+   * Swaps the title span between its full and short authored strings —
+   * short exactly when the full string's natural width (measured via the
+   * offscreen ghost) wouldn't fit the space just carved out for it. This
+   * compares against the *natural* width rather than whatever's currently
+   * rendered, so it can't oscillate: the decision never depends on which
+   * string happens to be showing already.
+   */
+  function applyTitleTruncation(titleMaxW) {
+    if (!titleTextEl || !titleShortText || !titleGhostEl) {
+      return;
+    }
+
+    const naturalW = measureWidth(titleGhostEl) + titleMarginPx;
+    const shouldShowShort = naturalW > titleMaxW;
+    if (shouldShowShort === titleShowingShort) {
+      return;
+    }
+
+    titleShowingShort = shouldShowShort;
+    titleTextEl.textContent = shouldShowShort ? titleShortText : titleFullText;
+    if (shouldShowShort) {
+      titleTextEl.setAttribute('aria-label', titleFullText);
+      titleTextEl.title = titleFullText;
+    } else {
+      titleTextEl.removeAttribute('aria-label');
+      titleTextEl.removeAttribute('title');
+    }
+  }
+
   function visibleActionButtons(actionsEl) {
     if (!actionsEl) {
       return [];
@@ -209,6 +304,8 @@ function createAppBarLayoutController(mountId) {
     const actionsEl = layer.querySelector('.actions');
     const jumperEl = layer.querySelector('.date-picker');
 
+    ensureTitleGhost(titleEl);
+
     const barW = barWidth();
 
     if (barW === 0) {
@@ -248,6 +345,8 @@ function createAppBarLayoutController(mountId) {
     if (showJumper) {
       titleMaxW = Math.min(titleMaxW, Math.max(0, jumperLeft - titleGapDefaultPx));
     }
+
+    applyTitleTruncation(titleMaxW);
 
     const showTitle = titleMaxW > 0;
 
@@ -335,6 +434,13 @@ function createAppBarLayoutController(mountId) {
     gapDefaultPx = GAP_FALLBACK_PX;
     actionsGapDefaultPx = ACTIONS_GAP_FALLBACK_PX;
     titleGapDefaultPx = TITLE_GAP_FALLBACK_PX;
+    titleGhostEl?.remove();
+    titleGhostEl = null;
+    titleTextEl = null;
+    titleFullText = null;
+    titleShortText = null;
+    titleMarginPx = 0;
+    titleShowingShort = false;
     if (pendingRaf != null) {
       cancelAnimationFrame(pendingRaf);
       pendingRaf = null;
