@@ -110,13 +110,20 @@ class ShareViewerBuildTest(unittest.TestCase):
         init_js = ROOT / "static" / "js" / "photoSurface" / "init.js"
         self.assertTrue(init_js.is_file())
         self.assertIn("renderGrid", init_js.read_text(encoding="utf-8"))
-        self.assertNotIn("shareAppBar.html", BUILD_SCRIPT.read_text(encoding="utf-8"))
-        self.assertIn("appBarShare.html", BUILD_SCRIPT.read_text(encoding="utf-8"))
-        self.assertIn("filterChipRailShare.html", BUILD_SCRIPT.read_text(encoding="utf-8"))
-        self.assertIn("surfaceLoadOverlayShareBoot.html", BUILD_SCRIPT.read_text(encoding="utf-8"))
+        build = BUILD_SCRIPT.read_text(encoding="utf-8")
+        # App bar and utilities menu are single shared fragments — per-surface
+        # differences are data-cap gates resolved at runtime by chrome.js, not
+        # *Share.html forks (see .claude/rules/app-share-inheritance.md).
+        self.assertNotIn("shareAppBar.html", build)
+        self.assertNotIn("appBarShare.html", build)
+        self.assertNotIn("utilitiesMenuShare.html", build)
+        self.assertIn("read_fragment appBar.html", build)
+        self.assertIn("read_fragment utilitiesMenu.html", build)
+        # Fragments that legitimately stay share-specific (share-only content).
+        self.assertIn("filterChipRailShare.html", build)
+        self.assertIn("surfaceLoadOverlayShareBoot.html", build)
         simple_grid = ROOT / "static" / "js" / "photoSurface" / "simpleGrid.js"
         self.assertIn("GridInteractions.wireContainer", simple_grid.read_text(encoding="utf-8"))
-        self.assertIn("utilitiesMenuShare.html", BUILD_SCRIPT.read_text(encoding="utf-8"))
         self.assertIn("toast.html", BUILD_SCRIPT.read_text(encoding="utf-8"))
         self.assertIn("copyShareLink", text)
         self.assertIn("shareDisplayUrl", text)
@@ -142,7 +149,15 @@ class ShareViewerBuildTest(unittest.TestCase):
         self.assertIn('data-filter="starred"', index)
         self.assertIn('id="addPhotoBtn"', index)
         self.assertIn('id="copyShareLinkBtn"', index)
-        self.assertNotIn('id="manageShareLinksBtn"', index)
+        # The utilities menu is one shared fragment: app-only items like
+        # #manageShareLinksBtn ship in the shell but are data-cap="shareLink"
+        # gated (chrome.js hides them for share), and the whole #utilitiesMenu
+        # ships display:none so the pre-JS shell never flashes them. The
+        # share-only counterpart is #copyShareLinkBtn (data-cap="copyShareLink").
+        self.assertIn('id="manageShareLinksBtn"', index)
+        self.assertIn('data-cap="shareLink"', index)
+        self.assertIn('data-cap="copyShareLink"', index)
+        self.assertRegex(index, r'id="utilitiesMenu"[^>]*style="display: ?none"')
         self.assertIn('id="toast"', index)
 
     def test_lightbox_fits_media_to_content_box(self):
