@@ -36,7 +36,7 @@ freelance.
 | 3 | Lightbox fully contains the grid | 2 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173`. **Not yet verified on iPhone Safari** (fix is `100dvh` + `touch-action: none`; the repro is iOS-only and can't be reproduced in desktop Chromium) |
 | 4 | Info panel: date only, tighten gap | 3 | share, all widths | session 0f18 (2026-08-27) | ✅ shipped — app `ac0de77`, share rebuilt + deployed `fdf170e` |
 | 9 | Info panel: 4 tuning vars | 3 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `a860b56`, share rebuilt + deployed `affa3d1` |
-| 1 | Shared text-inset token = 2px | 4 | share, narrow | session 0f18 (2026-08-27) | source done, needs share rebuild |
+| 1 | Shared text-inset token = 2px | 4 | share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `4ed2abf`, share rebuilt + deployed `476f318` |
 | 5 | Share download button stuck disabled | 5 | share, all widths | — | not started |
 | 7 | Clear-selection CTA also hides overlay | 6 | app+share, narrow | — | not started |
 | 6 | Share header dead-space hides overlay | 6 | share, narrow | — | not started |
