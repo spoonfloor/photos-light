@@ -73,6 +73,16 @@ body.share-view.share-view--not-found .share-error-retry {
   width: fit-content;
 }
 
+/* ≤480: the grid goes full-bleed (styles.css zeroes .page-wrapper's inset),
+   so the title would sit flush at the viewport edge. Inset it by the same
+   shared --narrow-text-inset the date headers use, so both share one left
+   edge. Value is shared (styles.css); only this consumer is share-only. */
+@media (max-width: 480px) {
+  .share-page-title {
+    padding-left: var(--narrow-text-inset);
+  }
+}
+
 /* #downloadBtn's ≤480px move into the more menu is scoped to app at its
    source (styles.css) — download always stays in share's app bar
    (docs/share-ui-deltas.md), so no restore patch is needed here. */
