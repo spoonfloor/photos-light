@@ -29,6 +29,13 @@ freelance.
 
 ## Status
 
+> **2026-08-27 — batch complete.** All 9 items shipped to `main` and deployed
+> to `spoonfloor/photos-light-sharing` (last: `65f9b75` / sharing `8524d62`).
+> Each phase was rebuilt + deployed as it landed rather than one deploy at the
+> end (owner's call). Close-out below was run incrementally. Outstanding:
+> #3's on-device iPhone-Safari check, and #9's owner-dialed numbers are a
+> live in-progress tuning (not a TEMP debug value any more).
+
 | # | Item | Phase | Scope | Claimed by | State |
 |---|------|-------|-------|-----------|-------|
 | 2 | Remove edge strips → concentric halo | 1 | app+share, all widths | session 0306 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173` |
@@ -39,7 +46,7 @@ freelance.
 | 1 | Shared text-inset token = 2px | 4 | share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `4ed2abf`, share rebuilt + deployed `476f318` |
 | 5 | Share download button stuck disabled | 5 | share, all widths | session 0f18 (2026-08-27) | ✅ shipped — app `08aa999`, share rebuilt + deployed `a91118a` |
 | 7 | Clear-selection CTA also hides overlay | 6 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `8a3ab48`, share rebuilt + deployed `88d4e28` |
-| 6 | Share header dead-space hides overlay | 6 | share, narrow | session 0f18 (2026-08-27) | source done, needs share rebuild |
+| 6 | Share header dead-space hides overlay | 6 | share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `adca953`, share rebuilt + deployed `65f9b75` |
 
 ---
 
