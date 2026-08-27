@@ -1543,18 +1543,26 @@ body.surface-load-active .app-bar-icon-button {
 .info-row {
   display: flex;
   align-items: baseline;
-  margin-bottom: 6px;
 }
 
-.info-row:last-child {
-  margin-bottom: 0;
+/* .info-row's display:flex outranks the UA [hidden] rule — needed for the
+   share/app filename-row gate in lightboxShell.js applyCapabilities(). */
+.info-row[hidden] {
+  display: none;
 }
 
+.info-row + .info-row {
+  margin-top: 6px;
+}
+
+/* No min-width: the label sizes to its text so the value sits right after it
+   ("Date: Aug 1, 1969"), not at a fixed 80px column. Share shows only the
+   Date row; app's Date/Filename labels no longer align in a column, which is
+   intended (docs/lightbox-share-batch-plan.md #4). */
 .info-label {
   font-size: 14px;
   color: #999;
-  min-width: 80px;
-  margin-right: 12px;
+  margin-right: 6px;
 }
 
 .info-value {
@@ -3727,8 +3735,8 @@ body.library-recovery-active .library-recovery-dock {
     --btn-font-size: 17px; /* = current value, dial in */
     --btn-padding-block: 10px; /* = current value, dial in */
     --btn-padding-inline: 18px; /* = current value, dial in */
-    /* Pin at the pre-18px wide-width value — the wide-width bump to
-       --app-bar-title-padding-l above is not meant to reach narrow. */
+    /* Own narrow dial, independent of the 18px wide value — the title sits
+       further off the leading edge at this breakpoint. */
     --app-bar-title-padding-l: 24px;
     --month-header-font-size: 19px;
     --modal-title-size: 22px; /* = current value, dial in — matches what was already dialed in for the compact family; now shared by every modal */
