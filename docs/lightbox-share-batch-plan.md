@@ -268,6 +268,17 @@ declaration, not a 5th knob. CSS only, no JS. Verified via a static harness
 at 375px (17px / 16px / rgba(0,0,0,.95) / 18px·300) and 1000px (unchanged:
 14px / 20px / 20px·200).
 
+**Owner follow-up, same day:**
+- `--lightbox-info-panel-bg` → `#1f1f1f` (opaque, = `--app-bar-bg`), all
+  widths.
+- Label/value looked like two sizes on the owner's device → iOS Safari
+  text auto-inflation was boosting the short "Date:" and the longer value
+  differently. Pinned with `-webkit-text-size-adjust: 100%` on
+  `.lightbox-info-panel`; both now move strictly off `--lightbox-info-font-size`.
+- `--lightbox-info-font-size` at ≤480 is **TEMP** `calc(var(--modal-body-size)
+  * 2)` (= 34px) — debug aid to make the tandem obvious. Drop back to plain
+  `var(--modal-body-size)` when done dialing.
+
 ---
 
 ### #5 — Share download button stuck disabled
