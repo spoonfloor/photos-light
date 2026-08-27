@@ -261,6 +261,9 @@
       },
       onToggleStar: (photoId) => toggleStar(photoId),
       onOpenLightbox: (photoId) => openLightbox(photoId),
+      // #7: refresh chrome when select mode toggles so the deselect-all
+      // button stays tappable while the ≤480 overlay is up (its way out).
+      onSelectModeChange: () => updateChrome(),
     },
     onAfterRender: () => {
       ShareDatePicker.refreshCatalog(filteredPhotos(), parseDate);
@@ -326,7 +329,11 @@
 
   function updateChrome() {
     const selectedCount = state.selected.size;
-    els.deselectAllBtn.classList.toggle('inactive', selectedCount === 0);
+    PhotoChrome.updateDeselectAllButton(
+      els.deselectAllBtn,
+      els.photoContainer,
+      selectedCount,
+    );
     els.sortIcon.textContent =
       state.sortOrder === 'newest' ? 'hourglass_arrow_down' : 'hourglass_arrow_up';
     els.sortToggleBtn.title = state.sortOrder === 'newest' ? 'Newest first' : 'Oldest first';
