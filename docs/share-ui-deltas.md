@@ -27,6 +27,10 @@ Only the items below may differ; everything else must come from shared source.
 - Download button in app bar (not utilities menu) at every width — the
   ≤480px rule that moves the app's own download button into the more menu
   (`styles.css`) is scoped to `body:not(.share-view)` at its source
+- Download button is **always enabled** (the app disables it without a
+  selection). No selection → downloads the whole filtered album; with a
+  selection → downloads the selection. `shareBoot.js` clears the `inactive`
+  class the shared `appBar.html` ships with
 - Utilities menu: **Select** (≤480px only, shared with app — see below) +
   **Clear stars** + **Copy link** only
 - Stars persisted in viewer `localStorage` (not library DB)

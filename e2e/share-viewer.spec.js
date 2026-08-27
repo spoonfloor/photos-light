@@ -258,6 +258,26 @@ test.describe('share viewer parity', () => {
     await expect(page.locator('#deselectAllBtn')).not.toHaveClass(/inactive/);
   });
 
+  test('app-bar download button is enabled on load and stays enabled', async ({ page }) => {
+    await mockShareResolve(page);
+    await page.goto('/?t=e2e-test-token');
+    await expect(page.locator('#surfaceLoadOverlay')).toBeHidden();
+
+    // Enabled with no selection (download = whole album).
+    await expect(page.locator('#downloadBtn')).toBeVisible();
+    await expect(page.locator('#downloadBtn')).not.toHaveClass(/\binactive\b/);
+
+    // Still enabled with a selection (download = selection).
+    await page
+      .locator('.photo-card[data-id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"] .select-circle')
+      .click();
+    await expect(page.locator('#downloadBtn')).not.toHaveClass(/\binactive\b/);
+
+    // And after clearing the selection.
+    await page.locator('#deselectAllBtn').click();
+    await expect(page.locator('#downloadBtn')).not.toHaveClass(/\binactive\b/);
+  });
+
   test('utilities menu shows copy link without manage links', async ({ page }) => {
     await mockShareResolve(page);
     await page.goto('/?t=e2e-test-token');

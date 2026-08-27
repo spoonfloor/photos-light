@@ -717,6 +717,14 @@
       rebuildPhotoGrid();
     });
 
+    // #5 — the shared appBar.html ships #downloadBtn `inactive` (the app's
+    // rule: download needs a selection, and main.js updateAppBar toggles it).
+    // In share, download is always usable — resolveDownloadTargets() falls
+    // back to the whole filtered album when nothing is selected — so clear it
+    // once here. Nothing in share re-adds `inactive` (updateChrome doesn't
+    // touch it; applySurfaceChrome only toggles `hidden`). See
+    // docs/share-ui-deltas.md.
+    els.downloadBtn.classList.remove('inactive');
     els.downloadBtn.addEventListener('click', () => {
       void downloadPhotos(resolveDownloadTargets());
     });
