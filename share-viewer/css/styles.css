@@ -106,13 +106,16 @@
   --lightbox-nav-btn-size: 40px;
   --lightbox-nav-glyph-size: 30px;
 
-  /* Edge nav strips (Step 5): wide invisible hit targets for prev/next,
-     one value at every breakpoint — unlike the chevron tokens above, this
-     one deliberately does NOT get a ≤480px override. 96px was sized for
-     touch thumb-reach, but the Google Photos hover-reveal design (see
-     docs/lightbox-480-plan.md) settled on reusing it for mouse too rather
-     than tuning a second value. */
-  --lightbox-edge-strip-width: 96px;
+  /* Invisible square hit halo around each nav chevron (a ::before on
+     .lightbox-nav-btn). Side = --lightbox-nav-btn-size + 2 * this pad, so
+     the halo stays centred on the chevron. It is the whole prev/next
+     pointer target — there is no full-height edge zone — and on wide it
+     is also the hover surface that reveals the chevron. One value at every
+     breakpoint. Chevron centre sits --lightbox-nav-btn-edge-gap + half the
+     button from the viewport edge (40px today), so any pad ≤ that keeps
+     the halo fully on-screen. */
+  --lightbox-nav-halo-pad: 8px;
+  --lightbox-nav-btn-edge-gap: 20px;
 
   /* --- Photo grid corner badges (select circle + star) ---
      Visual glyph size and tap-target size are independent knobs. The
@@ -1313,17 +1316,12 @@ body.surface-load-active .app-bar-icon-button {
    .lightbox-media-frame (position:relative, no z-index of its own) — with
    no stacking context anywhere in between, that positioned media element
    "escapes" this non-positioned container entirely and competes directly
-   in .lightbox-overlay's own stacking order, at the same z-index:auto/0
-   tier as .lightbox-edge-strip (Step 5). Tied z-index there is broken by
-   DOM order, and the photo is inserted after the strip — so without this
-   rule the photo paints (and hit-tests) above the strip, silently
-   swallowing every hover/click on it. Only reproduces with a real photo
-   loaded, which is why Step 5/6's testing (empty library, no image ever
-   in this element) never caught it. Negative, not just 0: 0 would only
-   make .lightbox-content itself tie with the strip and lose the same way
-   by DOM order; negative puts the whole contained subtree in the stacking
-   order's negative tier, unconditionally below the strip/chevrons/top-bar
-   regardless of DOM order. */
+   in .lightbox-overlay's own stacking order at the z-index:auto/0 tier.
+   Without this rule the photo can paint (and hit-test) above sibling
+   chrome, silently swallowing clicks on it — the chevrons (z:10) and top
+   chrome (z:1) both outrank z:auto so they'd survive, but a negative tier
+   keeps the whole contained subtree unconditionally below every control
+   regardless of DOM order. Only reproduces with a real photo loaded. */
 .lightbox-content {
   flex: 1;
   min-width: 0;
@@ -1932,7 +1930,7 @@ body.surface-load-active .app-bar-icon-button {
   font-size: 18px;
   font-weight: 300;
 }
-/* Lightbox navigation chevrons (Step 6, docs/lightbox-480-plan.md: arrow
+/* Lightbox navigation chevrons (docs/lightbox-480-plan.md: arrow
    visibility is width-gated, two independent designs sharing one formula).
    --lightbox-nav-shown / --lightbox-nav-active-opacity are separate knobs
    multiplied together in `opacity` so "is it revealed" (hover on wide,
@@ -1940,19 +1938,16 @@ body.surface-load-active .app-bar-icon-button {
    at a nav boundary) compose correctly on their own — neither rule needs
    to know about the other, and both-at-once (hidden AND inactive) just
    works out to 0 automatically.
-   Wide default (this rule, unscoped = desktop): hidden until the matching
-   edge strip is hovered (see the :has() rules below) — Google Photos
-   convention, no timer. pointer-events: none is deliberate: it hands all
-   pointer/touch hit-testing to the edge strip sitting beneath it (same
-   navigate() action either way), which keeps ':hover' on the strip
-   continuously true even while the cursor sits on top of the now-visible
-   chevron glyph — without this, the chevron (topmost, z-index 10) would
-   steal hover away from the strip the instant the cursor reached it,
-   instantly hiding the very control the cursor is moving toward.
-   Keyboard access is unaffected: pointer-events doesn't block Tab focus
-   or a keyboard-triggered click. Narrow (≤480px, touch) overrides both
-   of these back — see the EOF media block — to the original always-shown,
-   directly-tappable behavior, driven by the JS auto-hide timer instead. */
+   Wide default (this rule, unscoped = desktop): hidden until the chevron's
+   own hit halo (the ::before, see below) is hovered — Google Photos
+   convention, no timer. pointer-events: auto so that hover works and a
+   click through the still-invisible halo pages immediately. There is no
+   longer a separate full-height edge strip; the halo IS the pointer
+   target, and because reveal keys off the chevron's own :hover the cursor
+   sitting on the glyph keeps it revealed with no flicker.
+   Narrow (≤480px, touch) overrides the default back — see the EOF media
+   block — to the original always-shown behavior, driven by the JS
+   auto-hide timer instead. */
 .lightbox-nav-btn {
   --lightbox-nav-shown: 0;
   --lightbox-nav-active-opacity: 1;
@@ -1970,7 +1965,18 @@ body.surface-load-active .app-bar-icon-button {
   justify-content: center;
   z-index: 10;
   opacity: calc(var(--lightbox-nav-shown) * var(--lightbox-nav-active-opacity));
-  pointer-events: none;
+  pointer-events: auto;
+}
+
+/* Enlarged square hit halo, centred on the chevron: side = button +
+   2 * --lightbox-nav-halo-pad. Invisible — it only widens the pointer
+   target and (on wide) the hover surface that reveals the chevron. Events
+   on it forward to the button. Not affected by the button's opacity knob,
+   so the target stays live while the chevron is hidden. */
+.lightbox-nav-btn::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--lightbox-nav-halo-pad));
 }
 
 .lightbox-nav-btn:hover {
@@ -1978,31 +1984,23 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .lightbox-nav-left {
-  left: 20px;
+  left: var(--lightbox-nav-btn-edge-gap);
 }
 
 .lightbox-nav-right {
-  right: 20px;
+  right: var(--lightbox-nav-btn-edge-gap);
 }
 
-/* Wide-width reveal: hovering an edge strip shows only its own chevron
-   (exclusive per side, not both) — see .lightbox-edge-strip in Step 5's
-   rules above. Order-independent :has() rather than a `~` sibling
-   combinator on purpose: the strips currently sit after the chevrons in
-   lightbox.html, and a forward-only sibling selector would require
-   keeping that DOM order in lockstep with this CSS.
+/* Wide-width reveal: hovering a chevron (its halo included) reveals that
+   chevron only — the other is untouched, so it stays exclusive per side.
    Explicitly gated to wide widths, not left to fall out of the cascade by
    coincidence: this rule's specificity is high enough to beat the narrow
    .hidden class below regardless of viewport, so without this guard a
    mouse-hover on a narrow (≤480px) viewport — a real combination in a
    resized desktop browser, even though real touch devices never hover —
-   would pin the chevron visible and defeat Step 6's auto-hide timer. */
+   would pin the chevron visible and defeat the auto-hide timer. */
 @media (min-width: 481px) {
-  .lightbox-overlay:has(.lightbox-edge-strip--left:hover) .lightbox-nav-left {
-    --lightbox-nav-shown: 1;
-  }
-
-  .lightbox-overlay:has(.lightbox-edge-strip--right:hover) .lightbox-nav-right {
+  .lightbox-nav-btn:hover {
     --lightbox-nav-shown: 1;
   }
 }
@@ -2024,47 +2022,11 @@ body.surface-load-active .app-bar-icon-button {
    shown × active-opacity formula above (see .lightbox-nav-btn). A
    nav-boundary chevron (first/last photo) is fully hidden, never shown
    dimmed/disabled — product rule: a disabled chevron must never be
-   visible. Composes for free with the auto-hide timer or
-   hover-visibility also having it hidden (0 × 0 either way). */
+   visible. pointer-events: none also takes the halo out of play so the
+   edge is inert backdrop at a boundary. Composes for free with the
+   auto-hide timer or hover-visibility also having it hidden. */
 .lightbox-nav-btn.inactive {
   --lightbox-nav-active-opacity: 0;
-  pointer-events: none;
-  cursor: default;
-}
-
-/* Edge nav strips (Step 5, docs/lightbox-480-plan.md): wide invisible
-   click/tap targets for prev/next, full height, one per side. z-index is
-   deliberately below .lightbox-top-chrome (1) and .lightbox-nav-btn (10)
-   so clicks on those controls still win where the strip overlaps them —
-   the strip only catches surface clicks that don't land on an actual
-   control. Plain <button> so isInteractiveTarget() in lightboxShell.js
-   (selector includes `button`) excludes these from the swipe/tap
-   recognizer for free. aria-hidden/tabindex=-1 (see lightbox.html): the
-   chevron is the accessible control, this is a supplementary pointer
-   target only, not a second "Previous"/"Next" for keyboard/AT users. */
-.lightbox-edge-strip {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: var(--lightbox-edge-strip-width);
-  z-index: 0;
-  background: transparent;
-  border: none;
-  padding: 0;
-  margin: 0;
-  cursor: pointer;
-  appearance: none;
-}
-
-.lightbox-edge-strip--left {
-  left: 0;
-}
-
-.lightbox-edge-strip--right {
-  right: 0;
-}
-
-.lightbox-edge-strip.inactive {
   pointer-events: none;
   cursor: default;
 }
@@ -3767,7 +3729,7 @@ body.library-recovery-active .library-recovery-dock {
     --btn-padding-inline: 18px; /* = current value, dial in */
     /* Pin at the pre-18px wide-width value — the wide-width bump to
        --app-bar-title-padding-l above is not meant to reach narrow. */
-    --app-bar-title-padding-l: 16px;
+    --app-bar-title-padding-l: 24px;
     --month-header-font-size: 19px;
     --modal-title-size: 22px; /* = current value, dial in — matches what was already dialed in for the compact family; now shared by every modal */
     --modal-body-size: 17px; /* = current value, dial in — same */
@@ -3930,20 +3892,39 @@ body.library-recovery-active .library-recovery-dock {
     min-width: 0;
   }
 
-  /* Chevron visibility delta (Step 6): narrow/touch has no hover, so it
-     keeps the original always-shown, directly-tappable behavior instead
-     of wide's hover-per-strip reveal — visibility here is driven by the
-     JS auto-hide timer (lightboxShell.js scheduleChevronHide) toggling
-     .hidden instead. pointer-events reverts to auto since there's no
-     hover-flicker risk to guard against on touch. */
+  /* #3 — Lightbox is a full, self-contained layer at this breakpoint.
+     On iOS Safari the base rule's `height: 100vh` resolves to a fixed
+     viewport height that doesn't follow the visible area as the address
+     bar / bottom toolbar show and hide, so the grid page peeks past the
+     browser chrome (and the overlay reports a scrollbar) until a scroll
+     gesture forces a recompute. `100dvh` tracks the currently-visible
+     area directly, so the black backdrop always reaches the chrome and
+     nothing overflows. `touch-action: none` stops a drag on the
+     (non-scrolling) fixed overlay from chaining through to scroll the
+     grid behind it — iOS scrolls the document from a fixed overlay
+     otherwise, which is the scroll-leak in the repro. Swipe nav and
+     swipe-to-exit are unaffected: they read touchstart/touchend points,
+     never native panning. Body scroll-lock (document.body overflow:hidden
+     in lightboxShell.show) still covers non-touch. */
+  .lightbox-overlay {
+    height: 100dvh;
+    touch-action: none;
+  }
+
+  /* Chevron visibility delta: narrow/touch has no hover, so it keeps the
+     always-shown, directly-tappable behavior instead of wide's
+     hover-to-reveal — visibility here is driven by the JS auto-hide timer
+     (lightboxShell.js scheduleChevronHide) toggling .hidden instead.
+     .hidden only fades the chevron out (opacity); the hit halo stays live
+     (pointer-events inherited auto from the base rule) so a tap on the
+     halo still pages even after the chevron has faded, and re-reveals that
+     side. Only .inactive (nav boundary) kills the halo. */
   .lightbox-nav-btn {
     --lightbox-nav-shown: 1;
-    pointer-events: auto;
   }
 
   .lightbox-nav-btn.hidden {
     --lightbox-nav-shown: 0;
-    pointer-events: none;
   }
 
   /* More menu (.utilities-menu) had no narrow override at all — frozen at

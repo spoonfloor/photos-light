@@ -14,8 +14,6 @@ const LightboxShell = (() => {
     backBtn: null,
     prevBtn: null,
     nextBtn: null,
-    prevStrip: null,
-    nextStrip: null,
     infoBtn: null,
     infoPanel: null,
     infoCloseBtn: null,
@@ -43,8 +41,6 @@ const LightboxShell = (() => {
     els.backBtn = document.getElementById('lightboxBackBtn');
     els.prevBtn = document.getElementById('lightboxPrevBtn');
     els.nextBtn = document.getElementById('lightboxNextBtn');
-    els.prevStrip = document.getElementById('lightboxPrevStrip');
-    els.nextStrip = document.getElementById('lightboxNextStrip');
     els.infoBtn = document.getElementById('lightboxInfoBtn');
     els.infoPanel = document.getElementById('lightboxInfoPanel');
     els.infoCloseBtn = document.getElementById('infoCloseBtn');
@@ -82,22 +78,28 @@ const LightboxShell = (() => {
     els.topBar?.classList.add('hidden');
   }
 
-  // --- Chevron auto-hide (Step 6, docs/lightbox-480-plan.md) ---
+  // --- Chevron auto-hide (docs/lightbox-480-plan.md) ---
   // Narrow (≤480px, touch) only. Wide widths never run this timer — the
   // chevrons there are hidden by default and revealed purely by CSS
-  // :hover on the edge strips (see .lightbox-nav-btn in styles.css), with
-  // no JS-side state at all. The width check happens at arm-time
-  // (scheduleChevronHide), not continuously, so this doesn't chase a live
-  // resize across the breakpoint mid-session — matching how every other
-  // breakpoint delta in this codebase is plain CSS with no JS awareness.
+  // :hover on the chevron's own hit halo (see .lightbox-nav-btn in
+  // styles.css), with no JS-side state at all. The width check happens at
+  // arm-time (scheduleChevronHide), not continuously, so this doesn't
+  // chase a live resize across the breakpoint mid-session — matching how
+  // every other breakpoint delta in this codebase is plain CSS with no JS
+  // awareness.
   const CHEVRON_AUTO_HIDE_DELAY = 1500; // ms, from image load
   const NARROW_QUERY = '(max-width: 480px)';
   let chevronHideTimeout = null;
   // Which side was last used to navigate — null on initial open (show both),
   // -1/1 after a prev/next interaction (show only that side's chevron).
   // Set by navigate() below, the single place every nav trigger (chevron
-  // click, strip click, swipe, arrow key) funnels through.
+  // click, swipe, arrow key) funnels through.
   let lastNavDelta = null;
+  // True when the last navigate() came from a touch swipe. A swipe must do
+  // nothing to chevron visibility — not reveal, not re-arm the timer — so
+  // showChevrons() bails when this is set. Reset on a genuine open and by
+  // any non-swipe nav (the default arg).
+  let lastNavWasSwipe = false;
   // Tracks whether the overlay is currently open, so show() can tell a true
   // open-from-closed apart from a nav-triggered reshow (see show()).
   let isShowing = false;
@@ -122,14 +124,19 @@ const LightboxShell = (() => {
   }
 
   // Called on image load and re-armed on every nav interaction, since a
-  // nav interaction always results in a new image load (inactive
-  // chevrons/strips are unclickable, so there's no "reset without a new
-  // photo" case to handle separately) — this single call covers both of
-  // Step 6's narrow triggers ("1500ms from image load" and "any nav
-  // interaction resets the timer") at once. Which side(s) get revealed
-  // depends on lastNavDelta: initial open shows both, a nav interaction
-  // shows only the side just used (left after back, right after forward).
+  // nav interaction always results in a new image load (an inactive
+  // chevron is unclickable, so there's no "reset without a new photo"
+  // case to handle separately) — this single call covers both of the
+  // narrow triggers ("1500ms from image load" and "any nav interaction
+  // resets the timer") at once. Which side(s) get revealed depends on
+  // lastNavDelta: initial open shows both, a nav interaction shows only
+  // the side just used (left after back, right after forward).
+  // A swipe is the exception: it leaves chevron visibility and the timer
+  // completely untouched (see lastNavWasSwipe).
   function showChevrons() {
+    if (lastNavWasSwipe) {
+      return;
+    }
     if (lastNavDelta === -1) {
       els.prevBtn?.classList.remove('hidden');
       els.nextBtn?.classList.add('hidden');
@@ -143,11 +150,14 @@ const LightboxShell = (() => {
     scheduleChevronHide();
   }
 
-  // Single funnel for every navigate trigger (chevron click, strip click,
-  // swipe, arrow key) so lastNavDelta can't drift out of sync with what
-  // actually navigated.
-  function navigate(delta) {
+  // Single funnel for every navigate trigger (chevron click, swipe, arrow
+  // key) so lastNavDelta can't drift out of sync with what actually
+  // navigated. fromSwipe is set only by the swipe branch of
+  // classifyGesture — every other caller navigates "normally" and gets
+  // the usual chevron reveal.
+  function navigate(delta, { fromSwipe = false } = {}) {
     lastNavDelta = delta;
+    lastNavWasSwipe = fromSwipe;
     ctx?.navigate?.(delta);
   }
 
@@ -239,14 +249,6 @@ const LightboxShell = (() => {
     if (els.nextBtn) {
       els.nextBtn.classList.toggle('inactive', !canNext);
     }
-    // Edge strips (Step 5) are a supplementary hit target for the same
-    // action as the chevrons, so they share the same enabled/disabled state.
-    if (els.prevStrip) {
-      els.prevStrip.classList.toggle('inactive', !canPrev);
-    }
-    if (els.nextStrip) {
-      els.nextStrip.classList.toggle('inactive', !canNext);
-    }
   }
 
   function show() {
@@ -267,6 +269,7 @@ const LightboxShell = (() => {
     document.body.style.overflow = 'hidden';
     if (isInitialOpen) {
       lastNavDelta = null;
+      lastNavWasSwipe = false;
     }
     showUI();
     // Same overflow/squeeze engine as the grid app bar, scoped to
@@ -371,10 +374,9 @@ const LightboxShell = (() => {
   // drift between them, but drag-based nav/close is touch-only (revised
   // 2026-08-25): click-drag isn't a discoverable desktop convention the way
   // touch swipe is, and a mouse drag doesn't carry the same intentionality
-  // as a touch swipe at the same distance threshold — chevrons, edge
-  // strips (Step 5), and keyboard already cover desktop nav. Plain
-  // click-to-toggle (no drag) is still shared, since a click is a normal
-  // desktop interaction.
+  // as a touch swipe at the same distance threshold — chevrons and
+  // keyboard already cover desktop nav. Plain click-to-toggle (no drag) is
+  // still shared, since a click is a normal desktop interaction.
   // Hard cut only: we track start/end points on release, no live drag
   // tracking or filmstrip motion (locked decision, explicitly out of scope).
   const SWIPE_MIN_DISTANCE = 50; // px
@@ -407,8 +409,9 @@ const LightboxShell = (() => {
     if (allowDrag) {
       if (Math.abs(deltaX) >= SWIPE_MIN_DISTANCE && Math.abs(deltaX) > Math.abs(deltaY)) {
         // Swipe left → next, right → previous (same convention as the
-        // chevrons: navigate(-1) is prev, navigate(1) is next).
-        navigate(deltaX < 0 ? 1 : -1);
+        // chevrons: navigate(-1) is prev, navigate(1) is next). fromSwipe
+        // so the resulting reload leaves the chevrons untouched.
+        navigate(deltaX < 0 ? 1 : -1, { fromSwipe: true });
         return;
       }
       if (deltaY >= SWIPE_MIN_DISTANCE && deltaY > Math.abs(deltaX)) {
@@ -426,7 +429,7 @@ const LightboxShell = (() => {
       // (touchActive/mouseActive is already false — see the isInteractiveTarget
       // check in each start handler), so this only fires for genuinely
       // unclaimed surface. App bar only: no timer, no effect on chevron
-      // visibility (that's the independent Step 6 auto-hide).
+      // visibility (that's the independent auto-hide timer).
       toggleAppBar();
       return;
     }
@@ -461,7 +464,14 @@ const LightboxShell = (() => {
     // (mousedown/mouseup/click), which would otherwise replay this same
     // gesture through the mouse path a moment later — e.g. double-firing
     // toggleAppBar() and cancelling out the tap the user just made.
-    e.preventDefault();
+    // Guard on cancelable: a touchend that coincides with an in-progress
+    // scroll is non-cancelable, and calling preventDefault() on it only
+    // logs an [Intervention] warning. Kept as a guard even though #3's
+    // `touch-action: none` on the ≤480 overlay (styles.css) now stops the
+    // overlay from initiating a scroll in the first place.
+    if (e.cancelable) {
+      e.preventDefault();
+    }
     const touch = e.changedTouches[0];
     if (!touch) {
       return;
@@ -507,8 +517,6 @@ const LightboxShell = (() => {
     els.backBtn?.addEventListener('click', () => ctx?.onBack?.());
     els.prevBtn?.addEventListener('click', () => navigate(-1));
     els.nextBtn?.addEventListener('click', () => navigate(1));
-    els.prevStrip?.addEventListener('click', () => navigate(-1));
-    els.nextStrip?.addEventListener('click', () => navigate(1));
 
     els.infoBtn?.addEventListener('click', () => {
       refreshInfo();
