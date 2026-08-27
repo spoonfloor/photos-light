@@ -35,7 +35,7 @@ freelance.
 | 8 | Swipe no longer flashes chevron | 1 | app+share, narrow | session 0306 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173` |
 | 3 | Lightbox fully contains the grid | 2 | app+share, narrow | session 0f18 (2026-08-27) | ✅ shipped — app `6e6c38e`, share rebuilt + deployed `5958173`. **Not yet verified on iPhone Safari** (fix is `100dvh` + `touch-action: none`; the repro is iOS-only and can't be reproduced in desktop Chromium) |
 | 4 | Info panel: date only, tighten gap | 3 | share, all widths | session 0f18 (2026-08-27) | ✅ shipped — app `ac0de77`, share rebuilt + deployed `fdf170e` |
-| 9 | Info panel: 4 tuning vars | 3 | app+share, narrow | — | not started |
+| 9 | Info panel: 4 tuning vars | 3 | app+share, narrow | session 0f18 (2026-08-27) | source done, needs share rebuild |
 | 1 | Shared text-inset token = 2px | 4 | share, narrow | — | not started |
 | 5 | Share download button stuck disabled | 5 | share, all widths | — | not started |
 | 7 | Clear-selection CTA also hides overlay | 6 | app+share, narrow | — | not started |
@@ -255,6 +255,18 @@ Label and value must read the *same* font-size var.
 **DoD:** At ≤480, the info panel renders at 15px text, ~16px vertical padding,
 near-black background, 18px close glyph. Overriding any single var visibly
 changes only that dimension.
+
+**Resolved 2026-08-27 (session 0f18):** the font-size seed is
+`var(--modal-body-size)`, taken literally — which resolves to **17px** at
+≤480, not 15px, because `--modal-body-size` is overridden to 17px in that
+block. The "(15px)" / DoD "15px" was the plan author's stale read of the
+token. Kept as a live link to `--modal-body-size` (= `.toast-message`) since
+"match the toast" was the stated intent; owner to dial from there. Base vars
+live on `:root` seeded to the current wide look; the ≤480 `:root` block
+reseeds the deltas. Close-X `font-weight: 300` at ≤480 is a plain block
+declaration, not a 5th knob. CSS only, no JS. Verified via a static harness
+at 375px (17px / 16px / rgba(0,0,0,.95) / 18px·300) and 1000px (unchanged:
+14px / 20px / 20px·200).
 
 ---
 

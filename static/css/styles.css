@@ -117,6 +117,17 @@
   --lightbox-nav-halo-pad: 8px;
   --lightbox-nav-btn-edge-gap: 20px;
 
+  /* Lightbox info panel (bottom sheet) tuning knobs — #9,
+     docs/lightbox-share-batch-plan.md. Values here are the current
+     wide-width look; the @media (max-width: 480px) block reseeds them to
+     the toast's proportions for narrow (both surfaces). --...-close-size
+     is the close-X glyph; its font-weight is a plain narrow-block delta,
+     not a knob. */
+  --lightbox-info-font-size: 14px;
+  --lightbox-info-panel-pad-y: 20px;
+  --lightbox-info-panel-bg: rgba(0, 0, 0, 0.95);
+  --lightbox-info-close-size: 20px;
+
   /* --- Photo grid corner badges (select circle + star) ---
      Visual glyph size and tap-target size are independent knobs. The
      hit box is whichever is bigger: the best-practice floor, or the
@@ -1511,8 +1522,8 @@ body.surface-load-active .app-bar-icon-button {
   position: relative;
   flex: 0 0 auto;
   width: 100%;
-  background: rgba(0, 0, 0, 0.95);
-  padding: 20px 28px;
+  background: var(--lightbox-info-panel-bg);
+  padding: var(--lightbox-info-panel-pad-y) 28px;
   z-index: 1;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.5);
 }
@@ -1536,7 +1547,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .info-close-btn .material-symbols-outlined {
-  font-size: 20px;
+  font-size: var(--lightbox-info-close-size);
   font-weight: 200;
 }
 
@@ -1560,13 +1571,13 @@ body.surface-load-active .app-bar-icon-button {
    Date row; app's Date/Filename labels no longer align in a column, which is
    intended (docs/lightbox-share-batch-plan.md #4). */
 .info-label {
-  font-size: 14px;
+  font-size: var(--lightbox-info-font-size);
   color: #999;
   margin-right: 6px;
 }
 
 .info-value {
-  font-size: 14px;
+  font-size: var(--lightbox-info-font-size);
   color: var(--text-primary);
   word-break: break-all;
 }
@@ -3746,6 +3757,15 @@ body.library-recovery-active .library-recovery-dock {
        read this instead of each re-deriving their own width/margin pair
        (that's what let import-card's width and margin drift apart). */
     --modal-inset-mobile: 20px;
+
+    /* Lightbox info panel → toast proportions at this breakpoint (#9,
+       docs/lightbox-share-batch-plan.md). Text tracks the toast message
+       (--modal-body-size, 17px here); padding matches the toast's 16px
+       vertical; close-X matches .toast-close-btn's 18px. Background stays
+       near-black (its :root value) — deliberately NOT the toast's grey. */
+    --lightbox-info-font-size: var(--modal-body-size);
+    --lightbox-info-panel-pad-y: 16px;
+    --lightbox-info-close-size: 18px;
   }
 
   /* Thumbnail grid goes edge-to-edge at this breakpoint. #photoContainer
@@ -3917,6 +3937,13 @@ body.library-recovery-active .library-recovery-dock {
   .lightbox-overlay {
     height: 100dvh;
     touch-action: none;
+  }
+
+  /* Info-panel close-X: heavier glyph at this breakpoint to match
+     .toast-close-btn (#9). Size is the --lightbox-info-close-size knob;
+     weight is a static companion, not a knob. */
+  .info-close-btn .material-symbols-outlined {
+    font-weight: 300;
   }
 
   /* Chevron visibility delta: narrow/touch has no hover, so it keeps the
