@@ -397,6 +397,8 @@
     LightboxShell.setNavArrows(index > 0, index >= 0 && index < photos.length - 1);
   }
 
+  // Date only — share's info panel has no filename row (infoFilename
+  // capability off; see docs/share-ui-deltas.md).
   function formatShareLightboxInfo(photo) {
     const date = parseDate(photo.date_taken);
     if (date) {
@@ -412,12 +414,10 @@
       });
       return {
         dateText: `${dateString} at ${timeString}`,
-        filenameText: photo.original_filename || 'Unknown',
       };
     }
     return {
       dateText: 'No date in library',
-      filenameText: photo.original_filename || 'Unknown',
     };
   }
 

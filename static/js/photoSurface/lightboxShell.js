@@ -213,6 +213,17 @@ const LightboxShell = (() => {
     if (els.editDateBtn) {
       els.editDateBtn.hidden = !caps.editDate;
     }
+    // Info panel: share shows the Date row only, app shows Date + Filename
+    // (docs/share-ui-deltas.md). One shared panel in lightbox.html, gated
+    // here — not a forked panel. .info-row sets `display: flex`, which beats
+    // the UA [hidden] rule, so styles.css needs an explicit
+    // `.info-row[hidden] { display: none }` for this to take effect.
+    if (els.infoFilename) {
+      const filenameRow = els.infoFilename.closest('.info-row');
+      if (filenameRow) {
+        filenameRow.hidden = !caps.infoFilename;
+      }
+    }
     if (els.starBtn) {
       els.starBtn.hidden = !caps.star;
     }

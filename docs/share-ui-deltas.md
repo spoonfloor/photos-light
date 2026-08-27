@@ -15,6 +15,8 @@ Only the items below may differ; everything else must come from shared source.
 - `recent imports` filter chip
 - Virtual scroll / in-app month paging
 - Lightbox delete, rotate, edit date
+- Lightbox info panel filename row — share shows the Date row only
+  (`infoFilename` capability off in `viewCapabilities.js`)
 
 ## Share-only behavior
 
