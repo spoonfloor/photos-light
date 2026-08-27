@@ -3764,15 +3764,15 @@ body.library-recovery-active .library-recovery-dock {
        (that's what let import-card's width and margin drift apart). */
     --modal-inset-mobile: 20px;
 
-    /* Lightbox info panel → toast proportions at this breakpoint (#9,
-       docs/lightbox-share-batch-plan.md). Padding matches the toast's 16px
-       vertical; close-X matches .toast-close-btn's 18px.
-       Font size: TEMP DEBUG — 2x the toast message so the label/value
-       tandem is obvious while dialing it in; owner will drop this back to
-       plain var(--modal-body-size). */
-    --lightbox-info-font-size: calc(var(--modal-body-size) * 2);
-    --lightbox-info-panel-pad-y: 16px;
-    --lightbox-info-close-size: 18px;
+    /* Lightbox info panel at this breakpoint (#9,
+       docs/lightbox-share-batch-plan.md) — owner-dialed values, applies to
+       app + share. Font size 17px = the narrow --modal-body-size / toast
+       message (label + value both read --lightbox-info-font-size, so they
+       move as one). Padding and close-X glyph run larger than the toast's
+       16px / 18px here by choice. */
+    --lightbox-info-font-size: 17px;
+    --lightbox-info-panel-pad-y: 24px;
+    --lightbox-info-close-size: 28px;
   }
 
   /* Thumbnail grid goes edge-to-edge at this breakpoint. #photoContainer
