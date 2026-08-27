@@ -156,6 +156,15 @@ const GridSelection = (() => {
   function clearSelection(root, selectedIds) {
     selectedIds.clear();
     applyToDom(root, selectedIds);
+    // "Deselect all" is also the way out of the ≤480px long-press select
+    // mode — an emptied selection with the mode still armed leaves every
+    // card's select circle showing with nothing to act on. Both surfaces
+    // (main.js, shareBoot.js) route their deselect-all through here, so
+    // dropping the mode here keeps them in sync. gridInteractions.js is
+    // always loaded by this point; guard anyway, same idiom as callers.
+    if (typeof GridInteractions !== 'undefined') {
+      GridInteractions.exitSelectMode(root);
+    }
   }
 
   return {
