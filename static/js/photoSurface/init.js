@@ -30,6 +30,7 @@ const PhotoSurface = (() => {
       onMonthCircleClick: interactionHandlers.onMonthCircleClick,
       onToggleStar: interactionHandlers.onToggleStar,
       onOpenLightbox: interactionHandlers.onOpenLightbox,
+      onSelectModeChange: interactionHandlers.onSelectModeChange,
     };
 
     const gridCtx = {

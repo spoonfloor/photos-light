@@ -119,7 +119,7 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="js/photoSurface/shareDatePicker.js"></script>
     <script src="js/photoSurface/downloadExport.js"></script>
     <script src="js/shareResolveClient.js?v=1"></script>
-    <script src="js/shareBoot.js?v=12"></script>
+    <script src="js/shareBoot.js?v=13"></script>
   </body>
 </html>
 HTML_TAIL

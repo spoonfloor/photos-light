@@ -33,12 +33,29 @@ const GridInteractions = (() => {
     return Boolean(container?.classList.contains('select-mode'));
   }
 
+  // Every select-mode entry/exit funnels through these two — long-press,
+  // the utilities "Select & star" CTA (via PhotoChrome.toggleSelectMode),
+  // tap-outside, card-tap, and GridSelection.clearSelection. So this is the
+  // one place to notify the host that the mode changed. ctx comes from the
+  // wireContainer() call for this container; onSelectModeChange is optional.
+  function notifySelectMode(container, active) {
+    wired.get(container)?.ctx?.onSelectModeChange?.(active);
+  }
+
   function enterSelectMode(container) {
-    container?.classList.add('select-mode');
+    if (!container || container.classList.contains('select-mode')) {
+      return;
+    }
+    container.classList.add('select-mode');
+    notifySelectMode(container, true);
   }
 
   function exitSelectMode(container) {
-    container?.classList.remove('select-mode');
+    if (!container || !container.classList.contains('select-mode')) {
+      return;
+    }
+    container.classList.remove('select-mode');
+    notifySelectMode(container, false);
   }
 
   function handleCardClick(ctx, card, event, container) {

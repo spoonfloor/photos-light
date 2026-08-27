@@ -291,6 +291,28 @@ test.describe('share viewer parity', () => {
     await expect(page.locator('#getShareLinkBtn')).toBeHidden();
   });
 
+  test('clear-selection button exits select mode with nothing selected (#7)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 400, height: 800 });
+    await mockShareResolve(page);
+    await page.goto('/?t=e2e-test-token');
+    await expect(page.locator('#surfaceLoadOverlay')).toBeHidden();
+
+    // Enter select mode via the utilities CTA (long-press equivalent).
+    await page.locator('#utilitiesBtn').click();
+    await page.locator('#selectModeBtn').click();
+    await expect(page.locator('#photoContainer')).toHaveClass(/\bselect-mode\b/);
+
+    // Nothing selected, but the clear-selection button must stay tappable.
+    await expect(page.locator('#deselectAllBtn')).not.toHaveClass(/\binactive\b/);
+
+    // Tapping it exits select mode and re-inactivates the button.
+    await page.locator('#deselectAllBtn').click();
+    await expect(page.locator('#photoContainer')).not.toHaveClass(/\bselect-mode\b/);
+    await expect(page.locator('#deselectAllBtn')).toHaveClass(/\binactive\b/);
+  });
+
   test('copy link writes share url and shows toast', async ({ page }) => {
     await mockShareResolve(page);
     await page.goto('/?t=e2e-test-token');

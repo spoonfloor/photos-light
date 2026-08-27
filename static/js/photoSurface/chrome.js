@@ -194,6 +194,20 @@ const PhotoChrome = (() => {
     }
   }
 
+  // #7: the deselect-all / clear-selection app-bar control stays interactive
+  // while the ≤480 select-mode overlay is up even with nothing selected —
+  // tapping it is the way out of that mode (GridSelection.clearSelection
+  // exits select mode). Without this, an empty selection greys the button
+  // (.inactive → pointer-events: none) and strands the user in the overlay.
+  // Both surfaces route their deselect-all button state through here.
+  function updateDeselectAllButton(btn, container, selectedCount) {
+    if (!btn) {
+      return;
+    }
+    const keepActive = selectedCount > 0 || isSelectModeActive(container);
+    btn.classList.toggle('inactive', !keepActive);
+  }
+
   function wireUtilitiesDismiss(menu, utilitiesBtn) {
     document.addEventListener('click', (event) => {
       if (
@@ -217,5 +231,6 @@ const PhotoChrome = (() => {
     isSelectModeActive,
     toggleSelectMode,
     updateSelectModeButton,
+    updateDeselectAllButton,
   };
 })();

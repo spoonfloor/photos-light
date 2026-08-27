@@ -304,6 +304,9 @@ function getGridInteractionCtx() {
         openLightbox(libraryIndex);
       }
     },
+    // #7: keep the deselect-all button tappable when the ≤480 select-mode
+    // overlay opens with nothing selected, so it can be the way out.
+    onSelectModeChange: () => updateDeleteButtonVisibility(),
   };
 }
 
@@ -1869,13 +1872,11 @@ function updateDeleteButtonVisibility() {
     }
   }
 
-  if (deselectBtn) {
-    if (state.selectedPhotos.size > 0) {
-      deselectBtn.classList.remove('inactive');
-    } else {
-      deselectBtn.classList.add('inactive');
-    }
-  }
+  PhotoChrome.updateDeselectAllButton(
+    deselectBtn,
+    getPhotoContainer(),
+    state.selectedPhotos.size,
+  );
 
   if (typeof TrashView !== 'undefined') {
     TrashView.updateRestoreButtonVisibility();
