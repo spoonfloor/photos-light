@@ -40,6 +40,8 @@
     clearStarsBtn: document.getElementById('clearStarsBtn'),
     copyShareLinkBtn: document.getElementById('copyShareLinkBtn'),
     filterChipScroll: document.querySelector('.filter-chip-rail-scroll'),
+    filterChipRail: document.getElementById('filterChipRail'),
+    pageMain: document.querySelector('.page-main'),
     lightboxContent: document.getElementById('lightboxContent'),
   };
 
@@ -737,6 +739,31 @@
     });
 
     els.deselectAllBtn.addEventListener('click', clearSelection);
+
+    // #6 — extend "tap dead space to exit the ≤480 select-mode overlay"
+    // (gridInteractions.js does this for taps inside #photoContainer) to the
+    // share-only header chrome above the grid: the album-title row, the gap
+    // above it (.page-main's padding-top), and the filter-chip rail gutter.
+    // Calls the same shared exit — no reimplementation. Interactive controls
+    // (chips, retry button, links, inputs) keep their behaviour via the
+    // closest() guard; taps that land inside #photoContainer are left to
+    // gridInteractions. Select mode is ≤480-only, so this no-ops on wide.
+    const headerDeadSpaceZones = [els.pageMain, els.filterChipRail];
+    headerDeadSpaceZones.forEach((zone) => {
+      zone?.addEventListener('click', (event) => {
+        if (!PhotoChrome.isSelectModeActive(els.photoContainer)) {
+          return;
+        }
+        if (
+          event.target.closest(
+            '#photoContainer, button, a, input, select, textarea, [role="button"]',
+          )
+        ) {
+          return;
+        }
+        GridInteractions.exitSelectMode(els.photoContainer);
+      });
+    });
 
     els.utilitiesBtn.addEventListener('click', () => {
       PhotoChrome.toggleUtilitiesMenu(els.utilitiesBtn, els.utilitiesMenu, {
