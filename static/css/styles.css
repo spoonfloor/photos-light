@@ -1480,7 +1480,7 @@ body.surface-load-active .app-bar-icon-button {
 .lightbox-video-play-icon {
   font-variation-settings:
     'FILL' 1,
-    'wght' 500,
+    'wght' 200,
     'GRAD' 0,
     'opsz' 24;
 }
@@ -4132,8 +4132,11 @@ body.library-recovery-active .library-recovery-dock {
     height: 44px;
   }
 
+  /* Match the app-bar icon glyph (--app-bar-icon-glyph-size, 30px at this
+     width) so play/mute sit at the same optical size as the trash/etc.
+     icons above. */
   .lightbox-video-ctrl-btn .material-symbols-outlined {
-    font-size: 26px;
+    font-size: 30px;
   }
 
   /* Taller invisible hit area on the scrub bar (visual bar stays 6px). */

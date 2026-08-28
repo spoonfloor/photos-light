@@ -29,6 +29,17 @@ below for exact parameters — don't re-litigate these without the user.
     physics. `LightboxMedia.animateFrameEntry` (shared), gated on a signed
     `enterFrom` nav delta threaded from each host's nav funnel; honors
     `prefers-reduced-motion`.
+  - **Swipe-down exit (2026-08-28):** interactive drag-to-dismiss designed
+    and **deferred** (see "Deferred — interactive drag-to-dismiss"). The
+    interim is built: swipe-down plays a release-triggered `translateY(240px)
+    scale(0.9)` + `opacity 0` / 120ms linear exit on the frame, then the normal
+    close (`LightboxMedia.animateFrameExit`) — see "Interim — cheap 'scale +
+    move down' exit". Unverified on-device.
+  - **Open transition (2026-08-28):** genuine lightbox open plays a
+    fade-up-from-black — a one-shot black scrim over `#lightboxOverlay`,
+    `opacity 1 → 0` / 100ms `cubic-bezier(0.4, 0.4, 0, 1)`
+    (`LightboxShell.playOpenScrim`). See "Open transition — fade-up from
+    black". Unverified on-device.
 - ~~Edge nav strips: **96px** wide, full height, one per side.~~
   **Superseded 2026-08-27** (user "changed my mind" — see batch plan
   `docs/lightbox-share-batch-plan.md` #2 and session log below): the
@@ -108,7 +119,12 @@ below for exact parameters — don't re-litigate these without the user.
   unchanged above 480px. Playhead visibility is **bundled with the app-bar
   chrome** at ≤480px — both shown on open, both hidden together on the
   unclaimed-area tap (the desktop hover/idle model does not run on touch).
-  Tap-on-video toggles chrome, not play/pause, at this width.
+  Tap-on-video toggles chrome, not play/pause, at this width. The overlay is
+  parented to `.lightbox-content` (not the letterboxed media box) at ≤480px,
+  so it sits at the true bottom of the frame and the info panel pushes it
+  up. Audio defaults **off** (`session.muted`); progress is rAF-driven off a
+  `seekable`-validated duration, not `timeupdate` alone. See session log
+  2026-08-27 (round 2).
 
 ## Prereq diagnosis (agreed necessary before feature work)
 
@@ -169,6 +185,113 @@ Full diagnosis is in the session transcript from 2026-08-24; summary:
   style. Estimated an order of magnitude more work than a hard cut, touching
   `lightboxMedia.js` layout and `lightboxMediaCache.js` preload logic. User
   explicitly deferred this — hard cut only, for now.
+
+## Deferred — interactive drag-to-dismiss (down-swipe)
+
+**Status (2026-08-28):** full design captured below; **not building it now.**
+Shipping the cheap interim instead (see next section). Revisit only if the
+interim doesn't satisfy.
+
+The idea: the down-swipe exit becomes a real direct-manipulation gesture
+instead of a hard cut.
+
+1. **Engage.** First clearly-vertical move → photo animates to `g%` scale
+   over `n` ms. Reads as "picked it up, downward-dismiss armed."
+   **Locked (2026-08-28): err toward recognizing a horizontal swipe** —
+   anything ambiguous stays nav; the dismiss-drag only engages on a
+   clearly-vertical gesture.
+2. **Follow.** Photo is glued to the finger with full fidelity — `translate`
+   recomputed every frame, free 2D movement, not axis-locked once engaged.
+3. **Point-of-no-return signal.** A commit threshold (contact-relative: `h`
+   px below the initial touch point — preferred over a screen-bottom-relative
+   `i` px for predictability). While the finger is past it, the photo tweens
+   to `j%` scale (`j < g`); back across, it tweens back to `g%`. Fixed
+   duration each way. Add a dead-band (arm at `h`, disarm at `h − margin`) so
+   a finger resting on the line doesn't strobe.
+4. **Release.**
+   - Past threshold → animate an arbitrary continued downward move, then hard
+     cut to grid (`ctx.onBack()`).
+   - Under threshold → animate back to full size and original position
+     (not a snap).
+
+### Why it's deferred, not rejected
+
+Sound interaction; the two-state scale (`g%` → `j%`) is a genuinely good
+no-return signal. But it's ~40–50% of the filmstrip's cost:
+
+- **Position-follow means `transform` is written per-frame in JS**, so the
+  scale animations **cannot be CSS transitions** (same property). Both scale
+  tweens become rAF lerps folded into the same per-frame
+  `transform: translate(x,y) scale(s)` write.
+- Commit threshold + hysteresis + dead-band state machine.
+- Two release paths, both animated (commit continuation; cancel return).
+- Horizontal-swipe disambiguation in the first ~10px (bias toward nav).
+- Overlay is opaque `#000`, so the photo drags over black — no grid reveal
+  until the cut unless the overlay also goes transparent (more plumbing:
+  chrome handling, confirming the page paints through).
+- Scope ≤480 / touch; `prefers-reduced-motion` skips both scale animations;
+  the rotation-commit-can-bail wrinkle in `closeLightbox` applies to the
+  commit path.
+
+Tuning (`g`, `j`, `n`, `h`, durations, threshold feel) is only gettable by
+prototyping on-device.
+
+## Interim — cheap "scale + move down" exit (touch-end only)
+
+**Status (2026-08-28): built, unverified on-device.** `static/js/photoSurface/`
+(`lightboxMedia.js` + `lightboxShell.js`); share rebuilt.
+
+No drag tracking. Reuses the existing swipe-down recognition in
+`classifyGesture` (start/end delta past `SWIPE_MIN_DISTANCE`), which used to
+call `ctx.onBack()` directly. Now: on a recognized down-swipe it calls
+`LightboxMedia.animateFrameExit(content, () => ctx.onBack())` — the current
+`.lightbox-media-frame` transitions to `translateY(240px) scale(0.9)` +
+`opacity 0` over **120ms `linear`**, then `onBack()` runs the normal close.
+
+- Sibling to `animateFrameEntry`; exported from `lightboxMedia.js`, called
+  from `lightboxShell.js`. Shared, so share inherits it (share's `onBack` is
+  synchronous `closeLightbox`).
+- `transitionend` fires `onBack`; a `120 + 100`ms timeout is the backstop so
+  a missed event can't strand the lightbox open.
+- `frame.dataset.exiting` guards against a second swipe re-triggering mid-exit
+  (the second `onBack` is absorbed by `closeLightbox`'s `lightboxClosing` /
+  null-id guards).
+- `prefers-reduced-motion` → falls straight through to `onBack` (current
+  instant hide). No width gate in the helper — it rides the recognizer, which
+  is already touch-only via `allowDrag`.
+- **Frame fades, overlay doesn't** — the frame itself fades to `opacity 0`
+  during the exit; the black overlay stays opaque and is hard-cut to the grid
+  by `onBack()`. (A true dissolve-to-grid via overlay opacity was floated and
+  dropped for v1.)
+- **Known gap:** `closeLightbox` awaits the rotation commit and can bail
+  keeping the lightbox open (only if the user rotated a photo this session
+  *and* the save fails). The frame is left at `translateY/scale` in that case;
+  it self-heals on the next nav/reopen (`content.innerHTML = ''` rebuilds it),
+  and the user has a failure toast. Not worth plumbing around for v1.
+- **translateY sits outside `scale()`** in the transform string so the px
+  value is literal, not scaled.
+
+## Open transition — fade-up from black
+
+**Status (2026-08-28): built, unverified on-device.**
+`static/js/photoSurface/lightboxShell.js`; share rebuilt.
+
+On a genuine lightbox open (not nav reloads — those have the fake-swipe),
+`show()` calls `playOpenScrim()`: a one-shot opaque black `<div>` is appended
+to `#lightboxOverlay` (`position:absolute; inset:0; z-index:100` — clears
+chrome and chevrons; `pointer-events:none`) and transitioned
+`opacity 1 → 0` over **100ms `cubic-bezier(0.4, 0.4, 0, 1)`**, then removed
+(`transitionend`, `100 + 100`ms timeout backstop). Photo + chrome are already
+painted underneath (both hosts load media before `show()`), so it reads as a
+fade-up from black.
+
+- Gated on `show()`'s existing `isInitialOpen` flag; `prefers-reduced-motion`
+  → no scrim, instant.
+- Local to `LightboxShell` (not `LightboxMedia`) — it's an overlay-level
+  transition, not media-specific. Shared via `show()`, so share inherits it.
+- **Known wrinkle:** if the photo isn't cached, the scrim fades to reveal the
+  gray placeholder, then the image pops in. Accepted for v1; coupling the fade
+  to image-load was considered and skipped.
 
 ## Task order
 
@@ -1220,3 +1343,156 @@ behavior before declaring a step complete, not "it's fixed"). Draft:
     working tree still carries a parallel session's in-flight `enterFrom`
     fake-swipe changes (`main.js`, `lightboxMedia.js`, `shareBoot.js`), so
     commit/deploy is left to coordinate.
+
+- **2026-08-27** — Video playhead, round 2 (all in
+  `static/js/lightboxVideoControls.js`; no CSS this round — the base
+  `position: absolute; bottom: 0` and last round's `:has()` visibility rule
+  both carry through the new parent). Tested in Chrome DevTools mobile sim.
+  1. **Playhead moved to the bottom of the frame.** Was appended to
+     `.lightbox-video-stage` (the letterboxed media box), so on a landscape
+     clip it floated mid-screen. New `overlayHost(stage)`: at ≤480px the
+     overlay is parented to `.lightbox-content` (`stage.closest(...)`)
+     instead — a `flex: 1` sibling of `.lightbox-info-panel`, so it pins to
+     the true bottom of the content box and the info panel pushes it up via
+     flexbox, no JS. Wide keeps it in the stage (survives
+     `requestFullscreen()`; the FS button is narrow-hidden anyway).
+     `unmount()` now also removes the overlay node (it used to rely on the
+     caller's `innerHTML = ''`, still true, but the node can now be a direct
+     child of content).
+  2. **Progress ↔ actual progress.** `video.duration` on the streamed
+     share MP4 is unreliable (Infinity/NaN while buffering, or a
+     fragmented-moov length ≠ playable range → fill tops out partway and
+     wraps there on loop). New `playableDuration(video)`: finite
+     `video.duration` else `video.seekable.end(last)` else 0. All progress
+     math (`renderProgress`, the scrubber seek) goes through it, and `pct`
+     is clamped 0–100. `durationchange` + `seeked` added as listeners.
+  3. **Smoothness.** `timeupdate` (~4 Hz) was the only tick. Added a
+     `requestAnimationFrame` loop (`progressTick`/`startProgressLoop`/
+     `stopProgressLoop`) that runs only while `!video.paused` — started on
+     `play`, stopped on `pause`/`ended`/`unmount`. `timeupdate` stays as a
+     paused-state backstop. This also closes the loop-restart gap from #2:
+     the frame after the wrap reads `currentTime ≈ 0` immediately instead
+     of waiting ~250 ms.
+  4. **Audio defaults off.** `session.muted: false → true` (one line). Also
+     the only autoplay mobile allows without a gesture. Session-scoped, so
+     an explicit unmute still persists.
+  - Bumped `lightboxVideoControls.js?v=2→3` (`static/index.html` +
+    build script). Rebuilt `share-viewer/`.
+  - **Verified** (static harness, real `styles.css`, controls mounted on a
+    sourceless `<video>` in the real lightbox DOM shape): at 375px — overlay
+    parented to `#lightboxContent`, full-width, bottom edge == content
+    bottom; open the info panel → overlay bottom tracks the panel top
+    (pushed up); shrink the frame to a 150px landscape box → overlay stays
+    at content bottom, not the frame's; `.lightbox-top-chrome.hidden` still
+    hides it. At 1000px — overlay parented to `#stage`, loop + fullscreen
+    buttons back. Muted icon (`volume_off`) shows by default at both widths.
+    `node --check` clean; ref-check clean; `test_share_viewer_build.py` 12/12.
+  - **Not verified here:** the rAF smoothness / loop-wrap / duration-fallback
+    behavior against a real playing video — no video fixture in this env
+    (canvas-`captureStream` didn't produce a usable clip in the pane).
+    Logic-reviewed only; the user is testing with a real clip in DevTools.
+  - **Not committed or deployed** — same coordination caveat as the entries
+    above (parallel `enterFrom` work in the tree).
+
+- **2026-08-28** — Follow-on: narrow-width `.lightbox-video-ctrl-btn
+  .material-symbols-outlined` font-size `26px → 30px`, matching
+  `--app-bar-icon-glyph-size` so the play/mute glyphs read at the same
+  optical size as the trash/etc. icons in the top bar (weight was already
+  equal — both inherit the base `wght 200`; the play icon keeps its own
+  `wght 500 / FILL 1`). `styles.css?v=51→52` (app) / `?v=14→15` (share),
+  rebuilt `share-viewer/`. Verified at 375px: volume glyph computes 30px /
+  `wght 200`, identical to `#lightboxDeleteBtn`'s. Round-1 of this work is
+  now committed on `main` (`2096f9e`, `b6fbc8a`); round-2 + this follow-on
+  remain uncommitted.
+
+- **2026-08-28** — Follow-on: `.lightbox-video-play-icon` weight `wght 500
+  → 200` (kept `FILL 1`), so the play/pause glyph stops reading heavier
+  than the rest of the transport / the top-bar icons. Not width-scoped —
+  the only definition of this rule, applies everywhere. `styles.css?v=52→53`
+  (app) / `?v=15→16` (share), rebuilt `share-viewer/`. Still uncommitted.
+
+- **2026-08-28** — Progress bar: duration latch (client-side, container-
+  agnostic — the real fix for the jerk). Was dividing the fill by
+  `playableDuration()`, which fell back to `video.seekable.end()` every rAF
+  frame while the fragmented/streamed MP4 reported no total duration — a
+  moving denominator, so the bar stalled / crept backward / snapped
+  repeatedly, worst on a cold (uncached) load. Assessed the upstream option
+  (faststart / non-`empty_moov` in `image_pixels.py`'s browser-MP4
+  command): worthwhile but secondary, and doesn't cover the app's live
+  streaming proxy. Did the client fix instead so correctness doesn't depend
+  on the container:
+  - New module state `latchedDuration` (null until known). `renderProgress`
+    holds the fill at 0% + shows elapsed-only (`formatTime(currentTime)`,
+    no `/ total`) while null — this is also the permanent graceful fallback
+    if a duration never arrives.
+  - `tryLatchDuration()` on `loadedmetadata` + `durationchange` (and once
+    after `wireControls`, for already-cached sources): takes the **first**
+    finite `video.duration`, latches it, and calls `renderProgress()` once
+    — a single hard cut to the true current position, no catch-up sweep.
+    Later `durationchange` events are ignored on purpose.
+  - After latch, the rAF loop divides by the constant — the moving-
+    denominator jerk is gone.
+  - `playableDuration()` deleted (its `seekable.end` fallback was the bug).
+    Scrubber seek + `resetTransport` now key off `latchedDuration`;
+    `resetTransport` paints via `renderProgress()` instead of a blind zero
+    (it also fires on `loadedmetadata`, by which point the snap may already
+    have happened). `unmount()` clears the latch per video.
+  - `lightboxVideoControls.js?v=3→4` (app + build script), rebuilt
+    `share-viewer/`.
+  - **Verified** (static harness, real 3s faststart MP4 + a forced
+    `duration = Infinity` to simulate the no-metadata window; playback
+    itself can't run in the hidden preview pane, so progression was driven
+    by explicit seeks): unlatched with playback at 1.5s → fill `0%`, time
+    `0:01`, scrubber inert; `durationchange` fires → single snap to `50%` /
+    `0:01 / 0:03`; seeks to 1.5/2.85/0.02s of 3s → `50%` / `95%` / `0.67%`
+    (clean loop-wrap, no mid-jump); `unmount()` clears the latch. `node
+    --check` + `test_share_viewer_build.py` 12/12.
+  - **Not verified:** real continuous playback smoothness (hidden pane
+    suspends `<video>`); the user is testing in DevTools. Upstream
+    faststart change not done — tracked as the follow-up optimization.
+  - Still uncommitted (on top of committed round 1).
+
+- **2026-08-28** — Progress bar: latch on a *final* duration, not the first
+  finite one. The previous entry's "first finite value" was wrong for the
+  fragmented MP4 this pipeline serves — `video.duration` can report a small,
+  still-growing finite value mid-download, and latching it made the fill
+  race to 100% within a second or two and pin there. Fix in
+  `lightboxVideoControls.js`:
+  - `durationIsFinal(video)` — finite `duration` AND the media is fully
+    loaded: `buffered.end(last) >= duration - 0.25`, or
+    `networkState === NETWORK_IDLE (1)`. `tryLatchDuration` now gates on
+    this; also wired to `progress` + `canplaythrough` (not just
+    `loadedmetadata`/`durationchange`) so it re-checks as the buffered
+    range grows. Until final, the fill stays at 0 + elapsed-only readout
+    (unchanged fallback). For these short clips "fully buffered" is a
+    fraction of a second.
+  - Monotonic display clamp — `maxPct` tracks the highest fill % shown in
+    the current play-through; `renderProgress` renders `max(maxPct, raw)`
+    so a stray late correction can only stall the bar, never rewind it.
+    Reset when `currentTime` jumps back > 0.25s (loop wrap / backward seek —
+    covers both uniformly) and on each latch. Reset in `unmount()`.
+  - `lightboxVideoControls.js?v=4→5`, rebuilt `share-viewer/`.
+  - **Verified** (static harness, real 3s clip + stubbed
+    `duration`/`buffered`/`networkState`): finite `duration=0.4` with
+    `buffered` empty → does **not** latch, fill held at 0; buffered reaches
+    duration / `networkState` idle → latches, snaps to position. Seeks
+    1.5→2.7→0.6→0.03s of 3s → `50% → 90% → 20% → 1%` (forward tracks up,
+    backward jump resets the ceiling so the bar follows down — the
+    loop-wrap case). Remount on a cached clip re-latches immediately via the
+    post-`wireControls` check. `node --check` + tests 12/12.
+  - **Not verified:** continuous playback (hidden pane suspends `<video>`) —
+    DevTools test covers it. Still uncommitted.
+
+- **2026-08-28** — Progress-bar bug **still open**, work handed off.
+  `durationIsFinal` (buffered/networkState gate) still latches a too-small
+  duration on the app's **streamed proxy path** (`_browser_video_proxy_response`
+  → fragmented `empty_moov` MP4, no Content-Length) — `networkState` toggles
+  to idle under backpressure and `buffered.end` transiently equals the
+  partial-and-growing `duration`. Confirmed not-affected: any static-file
+  video path (all share videos; app browser-direct H.264). Repro needs a
+  real library with an iPhone `.mov`/HEVC clip — not available this session,
+  so the streaming path was never exercised directly.
+  **Full handoff + recommended fixes in `docs/video-playhead-handoff.md`**
+  (fix A: client self-healing lower-bound latch; fix B: drop `empty_moov`
+  from `FRAGMENTED_MP4_MOVFLAGS`; fix C: cached faststart proxy artifact).
+  All video-playhead work still uncommitted (8 files) on top of `fcbf027`.
