@@ -1,9 +1,10 @@
 # Video playhead — handoff
 
-**Status:** narrow-width custom playhead shipped and working; **one open bug** —
-the progress bar still "finishes prematurely" on the app's streamed-video path.
-All work below is **uncommitted** in the working tree (8 files) on top of
-`fcbf027`. Nothing here is deployed.
+**Status:** narrow-width custom playhead shipped, **committed, pushed, and
+deployed** (photos-light `120df80` + `bb56958`; share Pages repo `f5fcc2e`).
+**One open bug** — the progress bar still "finishes prematurely" on the app's
+streamed-video path (see below); not a regression (degrades to roughly the
+old behaviour on that one path only).
 
 Owner context: this grew out of the lightbox-480 batch
 (`docs/lightbox-480-plan.md` — see the 2026-08-27/28 session-log entries for
@@ -167,7 +168,14 @@ UX/perf problem, not just this bug.
 
 ---
 
-## Files touched this session (all uncommitted)
+## Shipped in
+
+- `photos-light` `120df80` — source (`lightboxVideoControls.js`, `styles.css`,
+  `index.html`, `build-share-viewer.sh`, this doc, plan-doc log)
+- `photos-light` `bb56958` — regenerated `share-viewer/`
+- `photos-light-sharing` `f5fcc2e` — deployed to GitHub Pages
+
+## Files touched this session
 
 | File | Change |
 |---|---|

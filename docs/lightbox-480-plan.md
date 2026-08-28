@@ -1495,4 +1495,6 @@ behavior before declaring a step complete, not "it's fixed"). Draft:
   **Full handoff + recommended fixes in `docs/video-playhead-handoff.md`**
   (fix A: client self-healing lower-bound latch; fix B: drop `empty_moov`
   from `FRAGMENTED_MP4_MOVFLAGS`; fix C: cached faststart proxy artifact).
-  All video-playhead work still uncommitted (8 files) on top of `fcbf027`.
+  Everything above **shipped + deployed** — photos-light `120df80` +
+  `bb56958`, share Pages repo `f5fcc2e`. The open bug is not a regression
+  (that one path degrades to ~the old behaviour).
