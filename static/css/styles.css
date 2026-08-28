@@ -41,6 +41,15 @@
   --app-chrome-height: var(--app-bar-height);
   --page-top-gap: 18px;
 
+  /* Full-surface empty states — the paged .surface-empty-state (first-run,
+     empty library, filter-zero, trash fallback) and the in-grid
+     .catalog-empty-overlay — share one centering recipe so the two can't
+     drift: a min-height sized to the area below the chrome, a small
+     upward optical lift, and a viewport-edge inset that keeps the copy
+     off both edges on narrow screens. Edit here, not in the two rules. */
+  --surface-empty-inset: 24px;
+  --surface-empty-lift: 48px;
+
   /* --- Filter chip knobs --- */
   --filter-chip-rail-bg: transparent;
   --filter-chip-bg: rgba(30, 30, 30, 0.85);
@@ -682,8 +691,10 @@ body.trash-view-active #lightboxDownloadBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - var(--app-chrome-height, 112px) - 48px);
-  padding: 24px;
+  min-height: calc(
+    100vh - var(--app-chrome-height, 112px) - var(--surface-empty-lift)
+  );
+  padding: var(--surface-empty-inset);
   color: var(--text-color);
 }
 
@@ -3240,14 +3251,20 @@ body.library-recovery-active .library-recovery-dock {
 /* Full-surface empty states (first-run, trash, filtered results, empty
    library): title/body share the modal size tokens so they pick up the
    narrow-layout bump instead of being frozen at a hardcoded inline size,
-   as they were before. */
+   as they were before. Geometry (min-height, lift, edge inset) is the
+   shared --surface-empty-* recipe, identical to .catalog-empty-overlay
+   above — was a divergent `height: 100vh - 64px` + `margin-top: -48px`
+   that centred ~28px higher than the overlay and had no edge inset, so
+   the copy ran to the viewport edges on narrow screens. */
 .surface-empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: calc(100vh - 64px);
-  margin-top: -48px;
+  min-height: calc(
+    100vh - var(--app-chrome-height, 112px) - var(--surface-empty-lift)
+  );
+  padding: var(--surface-empty-inset);
   color: var(--text-color);
   gap: 24px;
 }
