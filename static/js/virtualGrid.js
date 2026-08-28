@@ -576,7 +576,7 @@ const VirtualGrid = (() => {
               fallback.dataset.index = String(globalIndex);
               const videoBadgeHTML =
                 photo.file_type === 'video'
-                  ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
+                  ? '<div class="video-badge" aria-hidden="true"><svg class="video-glyph" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M12 0A12 12 0 1 0 12 24A12 12 0 1 0 12 0ZM9.2 6.6L9.2 17.4L18 12Z"/></svg></div>'
                   : '';
               fallback.innerHTML = `
         <img data-photo-id="${photo.id}" alt="" class="photo-thumb">

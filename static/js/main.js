@@ -6041,6 +6041,15 @@ function buildGridStarBadgeHTML(favorited = false) {
   );
 }
 
+function buildGridVideoBadgeHTML(isVideo) {
+  if (typeof GridTile !== 'undefined') {
+    return GridTile.buildVideoBadgeHTML(isVideo);
+  }
+  return isVideo
+    ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
+    : '';
+}
+
 function applyGridStarBadgeState(photoIdOrCard, favorited) {
   if (typeof GridTile !== 'undefined') {
     const card =
@@ -8692,10 +8701,9 @@ function renderPhotoGrid(photos, append = false) {
         card.dataset.id = photo.id;
         card.dataset.index = photo.globalIndex;
 
-        const videoBadgeHTML =
-          photo.file_type === 'video'
-            ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
-            : '';
+        const videoBadgeHTML = buildGridVideoBadgeHTML(
+          photo.file_type === 'video',
+        );
 
         card.innerHTML = `
           <img src="${getPhotoThumbnailUrl(photo.id)}" alt="" loading="lazy" class="photo-thumb" data-photo-id="${photo.id}">
@@ -8719,10 +8727,9 @@ function renderPhotoGrid(photos, append = false) {
       `;
 
       photosByMonth[month].forEach((photo) => {
-        const videoBadgeHTML =
-          photo.file_type === 'video'
-            ? '<div class="video-badge"><span class="material-symbols-outlined">play_circle</span></div>'
-            : '';
+        const videoBadgeHTML = buildGridVideoBadgeHTML(
+          photo.file_type === 'video',
+        );
 
         html += `
           <div class="photo-card${photo.rating === 5 ? ' is-starred' : ''}" data-id="${photo.id}" data-index="${photo.globalIndex}">
