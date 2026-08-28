@@ -493,7 +493,13 @@
       isVideo: LightboxMedia.isVideoPhoto(photo),
       getMediaUrl: () => mediaUrl(photo, 'display'),
       getAltText: (p) => p.original_filename || 'Shared photo',
-      nativeVideoControls: true,
+      // Same custom transport as the app — no native <video controls> (iOS
+      // Safari's is unstyleable). See .claude/rules/app-share-inheritance.md.
+      mountVideoControls: (stage, video) => {
+        if (typeof LightboxVideoControls !== 'undefined') {
+          LightboxVideoControls.mount(stage, video);
+        }
+      },
       onImageError: () => {
         showToast('Preview unavailable for this photo');
       },
@@ -520,7 +526,7 @@
     });
   }
 
-  function renderLightboxMedia() {
+  function renderLightboxMedia({ enterFrom = 0 } = {}) {
     const photo = photoById(state.lightboxPhotoId);
     if (!photo) {
       return false;
@@ -534,20 +540,25 @@
       els.lightboxContent.innerHTML = '';
       return false;
     }
+    if (typeof LightboxVideoControls !== 'undefined') {
+      LightboxVideoControls.unmount();
+    }
     LightboxMedia.prepareContentSwap(els.lightboxContent);
     els.lightboxContent.innerHTML = '';
     els.lightboxContent.style.backgroundColor = 'transparent';
-    LightboxMedia.loadIntoContent(
-      els.lightboxContent,
-      photo,
-      buildShareLightboxLoadOptions(photo),
-    );
+    LightboxMedia.loadIntoContent(els.lightboxContent, photo, {
+      ...buildShareLightboxLoadOptions(photo),
+      enterFrom,
+    });
     preloadAdjacentShareLightboxImages();
     return true;
   }
 
   function closeLightbox() {
     state.lightboxPhotoId = null;
+    if (typeof LightboxVideoControls !== 'undefined') {
+      LightboxVideoControls.unmount();
+    }
     LightboxMedia.prepareContentSwap(els.lightboxContent);
     els.lightboxContent.innerHTML = '';
     LightboxMediaCache.clear();
@@ -577,7 +588,7 @@
       return;
     }
     state.lightboxPhotoId = next.id;
-    if (!renderLightboxMedia()) {
+    if (!renderLightboxMedia({ enterFrom: Math.sign(delta) })) {
       closeLightbox();
       return;
     }

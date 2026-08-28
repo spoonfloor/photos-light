@@ -230,7 +230,7 @@ const LightboxShell = (() => {
     if (els.downloadBtn) {
       els.downloadBtn.hidden = !caps.download;
     }
-    // More-menu counterparts (narrow, app-only — see docs/lightbox-480-plan.md)
+    // More-menu counterparts (narrow width — see docs/lightbox-480-plan.md)
     // mirror the same capability gates as their inline siblings above.
     if (els.rotateMenuBtn) {
       els.rotateMenuBtn.hidden = !caps.rotate;
@@ -241,6 +241,20 @@ const LightboxShell = (() => {
     if (els.downloadMenuBtn) {
       els.downloadMenuBtn.hidden = !caps.download;
     }
+    // The narrow-width more menu only earns its place when it would hold at
+    // least two of rotate/change-date/download. With one (share: Download
+    // only) or zero (trash view) it is pure overhead — a tap to open a
+    // single-item popover — so collapse it and let the lone action, if any,
+    // stay inline at ≤480px. Consistent with the grid's own "download in the
+    // app bar, not the utilities menu" share delta (docs/share-ui-deltas.md).
+    // This only gates whether the menu is used; the inline/menu swap itself
+    // stays CSS-media-driven (styles.css ≤480 block).
+    const moreMenuItemCount =
+      (caps.rotate ? 1 : 0) + (caps.editDate ? 1 : 0) + (caps.download ? 1 : 0);
+    els.overlay?.classList.toggle(
+      'lightbox-more-menu-active',
+      moreMenuItemCount >= 2,
+    );
     if (els.restoreBtn) {
       els.restoreBtn.hidden = !caps.restore;
     }

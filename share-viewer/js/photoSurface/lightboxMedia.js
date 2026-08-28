@@ -11,6 +11,67 @@ const LightboxMedia = (() => {
   /** @type {HTMLElement | null} */
   let observedContent = null;
 
+  // --- Swipe-nav entry animation ("fake swipe", docs/lightbox-480-plan.md) ---
+  // Not a filmstrip: the outgoing frame is a hard cut (already gone — the
+  // caller cleared #lightboxContent before calling loadIntoContent). The
+  // incoming frame is the only thing that moves: it mounts shifted
+  // ENTRY_OFFSET_PX toward the side it is "coming from" and transitions to
+  // center. `enterFrom` is the signed nav delta (+1 = next, entered from the
+  // right; -1 = prev, entered from the left); 0/undefined (initial open,
+  // rotation reload, resize relayout) means no animation. Honors
+  // prefers-reduced-motion.
+  const ENTRY_OFFSET_PX = 80;
+  const ENTRY_DURATION_MS = 200;
+  const ENTRY_EASING = 'cubic-bezier(0.4, 0.4, 0, 1)';
+
+  function prefersReducedMotion() {
+    return (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+  }
+
+  function animateFrameEntry(content, enterFrom) {
+    const delta = Math.sign(enterFrom || 0);
+    if (!delta || prefersReducedMotion()) {
+      return;
+    }
+    // #lightboxContent was just cleared by the caller, so the frame the load
+    // path appended is the only .lightbox-media-frame in it. The frame's own
+    // transform is otherwise unused (applyMediaStyles transforms the media
+    // element, not the frame), so this can't collide with layout styling.
+    const frame = content.querySelector('.lightbox-media-frame');
+    if (!frame) {
+      return;
+    }
+    frame.style.transform = `translateX(${delta * ENTRY_OFFSET_PX}px)`;
+    // Force the start position to paint before arming the transition, else
+    // the browser coalesces both writes and nothing animates.
+    void frame.offsetWidth;
+    frame.style.transition = `transform ${ENTRY_DURATION_MS}ms ${ENTRY_EASING}`;
+    frame.style.transform = 'translateX(0)';
+    // Strip the inline transition/transform once settled so nothing else that
+    // touches frame.style.transform later gets silently animated. transitionend
+    // is the normal path; the timeout is the backstop for the cases it never
+    // fires (tab backgrounded mid-animation, interrupted, zero-delta).
+    let done = false;
+    let fallback = null;
+    const cleanup = (e) => {
+      if (done || (e && e.propertyName !== 'transform')) {
+        return;
+      }
+      done = true;
+      if (fallback !== null) {
+        clearTimeout(fallback);
+      }
+      frame.removeEventListener('transitionend', cleanup);
+      frame.style.transition = '';
+      frame.style.transform = '';
+    };
+    frame.addEventListener('transitionend', cleanup);
+    fallback = setTimeout(cleanup, ENTRY_DURATION_MS + 100);
+  }
+
   function normalizeRotationDegrees(degrees) {
     return ((degrees % 360) + 360) % 360;
   }
@@ -161,7 +222,6 @@ const LightboxMedia = (() => {
       onImageError = null,
       onVideoError = null,
       mountVideoControls = null,
-      nativeVideoControls = false,
     } = options;
 
     const previewRotation = () =>
@@ -180,7 +240,6 @@ const LightboxMedia = (() => {
       onImageError,
       onVideoError,
       mountVideoControls,
-      nativeVideoControls,
     };
   }
 
@@ -488,9 +547,6 @@ const LightboxMedia = (() => {
       video.autoplay = true;
       video.playsInline = true;
       video.preload = 'auto';
-      if (resolved.nativeVideoControls) {
-        video.controls = true;
-      }
 
       applyMediaStyles(
         frame,
@@ -515,6 +571,8 @@ const LightboxMedia = (() => {
       if (typeof resolved.mountVideoControls === 'function') {
         resolved.mountVideoControls(stage, video);
       }
+
+      animateFrameEntry(content, options.enterFrom);
 
       video.addEventListener('loadedmetadata', () => {
         if (typeof resolved.onVisualState === 'function') {
@@ -559,6 +617,7 @@ const LightboxMedia = (() => {
     }
 
     loadStillImage(content, photo, mediaUrl, resolved);
+    animateFrameEntry(content, options.enterFrom);
   }
 
   return {

@@ -1288,9 +1288,12 @@ body.surface-load-active .app-bar-icon-button {
   transform: translateY(-50%);
 }
 
-/* Hidden by default (desktop + share); narrow-width app-only override
-   below reveals it and hides rotate/edit-date/download inline in favor of
-   the new lightbox more menu — see docs/lightbox-480-plan.md. */
+/* Hidden by default at every width. The ≤480 block reveals it only when
+   #lightboxOverlay carries .lightbox-more-menu-active (≥2 of
+   rotate/edit-date/download available — set by LightboxShell), and hides
+   those inline in favor of the menu. Share (Download only) and trash view
+   (none) never get the class, so the lone action stays inline there —
+   see docs/lightbox-480-plan.md and docs/share-ui-deltas.md. */
 #lightboxMoreBtn {
   display: none;
 }
@@ -4054,20 +4057,23 @@ body.library-recovery-active .library-recovery-dock {
     order: -3;
   }
 
-  /* Lightbox: rotate/change-date/download move into the more menu at this
-     breakpoint. Unconditional and fully shared — the more menu's items
-     (#lightboxRotateMenuBtn etc.) live in the one shared lightbox.html
-     fragment and carry the same caps.* gates as their inline counterparts
-     (see lightboxShell.js applyCapabilities), so share ends up with a
-     more-button offering only Download, exactly as if it had always been
-     built that way. Nothing here needs a surface exception. */
-  #lightboxRotateBtn,
-  #lightboxEditDateBtn,
-  #lightboxDownloadBtn {
+  /* Lightbox: rotate/change-date/download collapse into the more menu at
+     this breakpoint — but only when the menu would hold ≥2 of them.
+     LightboxShell.applyCapabilities adds .lightbox-more-menu-active to
+     #lightboxOverlay based on the same caps.* gates the menu items carry.
+     Share has just Download and trash view has none, so neither surface
+     gets the menu: the lone action (if any) stays inline, matching the
+     grid's "download in the app bar, not the utilities menu" share delta
+     (docs/share-ui-deltas.md). Without the class, the inline buttons keep
+     their normal caps-gated state and #lightboxMoreBtn stays display:none
+     (its default, above). */
+  .lightbox-more-menu-active #lightboxRotateBtn,
+  .lightbox-more-menu-active #lightboxEditDateBtn,
+  .lightbox-more-menu-active #lightboxDownloadBtn {
     display: none;
   }
 
-  #lightboxMoreBtn {
+  .lightbox-more-menu-active #lightboxMoreBtn {
     display: flex;
   }
 
@@ -4082,5 +4088,77 @@ body.library-recovery-active .library-recovery-dock {
 
   .share-manage-icon-btn .material-symbols-outlined {
     font-size: 32px;
+  }
+
+  /* --- Video playhead, narrow/touch (docs/lightbox-480-plan.md) --- */
+  /* iOS Photos-style: one row, play / scrub / mute only — no loop, no
+     elapsed-time readout, no fullscreen, and no Liquid-Glass capsule (the
+     app's flat bottom-scrim is kept). The full six-control desktop transport
+     (lightboxVideoControls.js) is unchanged above this width. */
+  .lightbox-video-controls-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 12px 12px;
+  }
+
+  /* Collapse the wrapper row so play + mute share one flex line with the
+     progress track (their DOM sibling). display:contents is layout-only
+     here — the row is a bare <div> with no semantics to lose. */
+  .lightbox-video-controls-top-row {
+    display: contents;
+  }
+
+  .lightbox-video-time-display,
+  .lightbox-video-controls-spacer,
+  .lightbox-video-ctrl-btn[data-action='loop'],
+  .lightbox-video-ctrl-btn[data-action='fullscreen'] {
+    display: none;
+  }
+
+  .lightbox-video-progress-track {
+    order: 1;
+    flex: 1;
+    height: 6px;
+    margin: 0;
+  }
+
+  .lightbox-video-ctrl-btn[data-action='volume'] {
+    order: 2;
+  }
+
+  .lightbox-video-ctrl-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .lightbox-video-ctrl-btn .material-symbols-outlined {
+    font-size: 26px;
+  }
+
+  /* Taller invisible hit area on the scrub bar (visual bar stays 6px). */
+  .lightbox-video-progress-input {
+    inset: -14px 0;
+    height: calc(100% + 28px);
+  }
+
+  /* Visibility is bundled with the app-bar chrome at this width: both show
+     on open and hide together on the unclaimed-area tap (LightboxShell's
+     toggleAppBar flips .hidden on .lightbox-top-chrome). The desktop
+     hover/idle model still toggles .lightbox-video-controls-hidden here, but
+     it's overridden inert — the :has() rule below is the only thing that
+     hides the playhead at ≤480px. */
+  .lightbox-video-controls-overlay.lightbox-video-controls-hidden {
+    visibility: visible;
+  }
+
+  .lightbox-video-controls-overlay.lightbox-video-controls-hidden
+    .lightbox-video-controls-inner {
+    pointer-events: auto;
+  }
+
+  .lightbox-overlay:has(.lightbox-top-chrome.hidden)
+    .lightbox-video-controls-overlay {
+    visibility: hidden;
   }
 }
