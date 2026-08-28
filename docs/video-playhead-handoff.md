@@ -1,10 +1,10 @@
 # Video playhead — handoff
 
-**Status:** narrow-width custom playhead shipped, **committed, pushed, and
-deployed** (photos-light `120df80` + `bb56958`; share Pages repo `f5fcc2e`).
-**One open bug** — the progress bar still "finishes prematurely" on the app's
-streamed-video path (see below); not a regression (degrades to roughly the
-old behaviour on that one path only).
+**Status:** narrow-width custom playhead shipped + deployed (photos-light
+`120df80` + `bb56958`; share Pages repo `f5fcc2e`). The "finishes prematurely"
+bug is **fixed in the working tree via Fix A** (growing lower-bound duration,
+below) — `lightboxVideoControls.js?v=6`, not yet committed/deployed. Verified
+by logic sim only; still wants a real-device pass on the streamed proxy path.
 
 Owner context: this grew out of the lightbox-480 batch
 (`docs/lightbox-480-plan.md` — see the 2026-08-27/28 session-log entries for
@@ -119,7 +119,19 @@ during a premature-finish playback and watch how `duration` grows.
 
 ## Recommended fixes (in priority order)
 
-### A. Client: self-healing latch (do this first — unblocks UX, no repro needed)
+### A. Client: self-healing latch — ✅ DONE (working tree, `?v=6`, uncommitted)
+`durationIsFinal` / `tryLatchDuration` / the `networkState` gate are gone.
+`latchedDuration` → `estimatedDuration`, a monotonic **growing lower bound**
+grown by `noteDuration()` from `max(seen finite video.duration, currentTime +
+0.5)` on every `timeupdate` / `durationchange` / rAF tick. `sawRealDuration`
+gates the "/ total" readout so an estimate that's really just the playhead
+shows elapsed-only. `maxPct` clamp + loop-wrap reset kept. Logic-sim checked
+(30s clip, `video.duration` growing 2.2× ahead of playback → bar plateaus
+mid-range during the unknown window, tracks accurately once real duration
+known, never pins at 100%; loop-wrap pass is exact). **Still unverified on a
+real streamed-proxy video** — do that pass.
+
+Original sketch, for reference:
 Make `latchedDuration` a **growing lower bound**, not a one-shot:
 ```
 on loadedmetadata/durationchange/progress/timeupdate:

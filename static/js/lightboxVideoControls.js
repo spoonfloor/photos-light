@@ -23,23 +23,33 @@ const LightboxVideoControls = (() => {
   // startProgressLoop. timeupdate alone fires ~4x/sec, which reads as a
   // low frame rate and lags the loop-restart boundary.
   let progressRaf = null;
-  // The video's duration, latched once it's provably FINAL — see
-  // durationIsFinal(). Fragmented/streamed MP4 (the pipeline's format) has no
-  // declared duration; `video.duration` starts unknown and, worse, can report
-  // a small-and-growing finite value mid-download. Latching the first finite
-  // number made the bar race to 100% early; latching only when fully buffered
-  // means the number has stopped moving. Until then the fill holds at 0.
-  // Cleared per video in unmount(); later changes are ignored on purpose.
-  let latchedDuration = null;
+  // Best estimate of the video's total length, kept as a MONOTONIC LOWER
+  // BOUND. The app's streamed proxy serves fragmented MP4 with no declared
+  // duration, so `video.duration` starts unknown and then reports a small,
+  // still-growing finite value as fragments arrive. Instead of guessing when
+  // that value is "final" (every heuristic for that misfired on the
+  // Content-Length-less stream), we take the largest value we know the
+  // duration is at LEAST: any finite `video.duration` seen so far, and the
+  // current playhead. `currentTime / estimatedDuration` then can't exceed
+  // 100% — the denominator is always > currentTime — so the bar can't finish
+  // early. It tracks a little slow during the unknown window, then eases to
+  // accurate once the real duration is known. Null until the first finite
+  // value of either; cleared per video in unmount(). See noteDuration().
+  let estimatedDuration = null;
+  // Whether a finite `video.duration` has ever been observed — gates the
+  // "elapsed / total" readout so we never show a "total" that is really just
+  // the moving playhead.
+  let sawRealDuration = false;
+  // Small slack so the lower bound stays strictly ahead of the playhead even
+  // when `video.duration` is momentarily behind it — keeps the fill off a
+  // hard 100% during the unknown window.
+  const DURATION_FLOOR_EPS = 0.5;
   // Highest fill % shown in the current play-through — the bar is monotonic
-  // within a pass, so any stray late duration correction can only stall it,
+  // within a pass, so a late upward duration correction can only stall it,
   // never rewind it. Reset on loop-wrap / backward seek (currentTime jumps
-  // back) and on each latch. Belt to durationIsFinal's braces.
+  // back).
   let maxPct = 0;
   let lastRenderTime = 0;
-  // networkState === 1 (NETWORK_IDLE): resource selected, not fetching — i.e.
-  // done. Named here since the HTMLMediaElement constant isn't always handy.
-  const NETWORK_IDLE = 1;
 
   function formatTime(seconds) {
     if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
@@ -162,36 +172,29 @@ const LightboxVideoControls = (() => {
     );
   }
 
-  // True once video.duration can be trusted not to change again: it's finite
-  // AND the media is fully loaded (buffered range reaches it, or the element
-  // has stopped using the network). Before this, a finite duration is just
-  // "parsed so far" and will grow.
-  function durationIsFinal(video) {
-    const d = video.duration;
-    if (!Number.isFinite(d) || d <= 0) return false;
-    const b = video.buffered;
-    if (b && b.length && b.end(b.length - 1) >= d - 0.25) return true;
-    return video.networkState === NETWORK_IDLE;
-  }
-
-  // Latch the duration once it's final and snap the fill to the current
-  // position. No-op once latched or while duration is still in flux.
-  function tryLatchDuration() {
-    if (!active || latchedDuration != null) return;
-    if (durationIsFinal(active.video)) {
-      latchedDuration = active.video.duration;
-      maxPct = 0;
-      lastRenderTime = 0;
-      renderProgress();
+  // Grow the lower-bound duration estimate from whatever the element knows
+  // right now. Never shrinks (within a video); reset only in unmount().
+  function noteDuration() {
+    if (!active) return;
+    const { video } = active;
+    let next = estimatedDuration ?? 0;
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      next = Math.max(next, video.duration);
+      sawRealDuration = true;
     }
+    if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
+      next = Math.max(next, video.currentTime + DURATION_FLOOR_EPS);
+    }
+    if (next > 0) estimatedDuration = next;
   }
 
   function renderProgress() {
     if (!active) return;
     const { video } = active;
-    // Duration not known yet: hold the bar at 0, keep the elapsed readout
-    // live. This is also the permanent fallback if a duration never arrives.
-    if (latchedDuration == null) {
+    noteDuration();
+    // Nothing known yet (not playing, no finite duration): hold the bar at 0,
+    // keep the elapsed readout live.
+    if (estimatedDuration == null) {
       active.progressFill.style.width = '0%';
       if (!scrubbing) active.scrubber.value = '0';
       active.timeDisplay.textContent = formatTime(video.currentTime);
@@ -205,14 +208,18 @@ const LightboxVideoControls = (() => {
     lastRenderTime = video.currentTime;
     const raw = Math.min(
       100,
-      Math.max(0, (video.currentTime / latchedDuration) * 100),
+      Math.max(0, (video.currentTime / estimatedDuration) * 100),
     );
     maxPct = Math.max(maxPct, raw);
     active.progressFill.style.width = `${maxPct}%`;
     if (!scrubbing) {
       active.scrubber.value = String(Math.round((maxPct / 100) * 1000));
     }
-    active.timeDisplay.textContent = `${formatTime(video.currentTime)} / ${formatTime(latchedDuration)}`;
+    // Only show "/ total" once we've actually seen a real duration — until
+    // then the estimate is just the playhead and a total would look broken.
+    active.timeDisplay.textContent = sawRealDuration
+      ? `${formatTime(video.currentTime)} / ${formatTime(estimatedDuration)}`
+      : formatTime(video.currentTime);
   }
 
   function progressTick() {
@@ -241,9 +248,9 @@ const LightboxVideoControls = (() => {
     if (!active) return;
     setPlayIcon(false);
     // Paint from live state, not a hard zero — this also fires on
-    // loadedmetadata (via lightboxMedia.js), by which point the duration may
-    // already be latched and playback already advanced; a blind zero here
-    // would undo the latch snap for a frame.
+    // loadedmetadata (via lightboxMedia.js), by which point a duration may
+    // already be known and playback already advanced; a blind zero here
+    // would drop the fill for a frame.
     renderProgress();
     if (isVideoFullscreen()) {
       hidePlayControls();
@@ -344,8 +351,6 @@ const LightboxVideoControls = (() => {
     applyLoopState();
     setVolumeIcon();
     resetTransport();
-    // Cached/fast sources can already have a duration by the time we wire up.
-    tryLatchDuration();
 
     addListener(playBtn, 'click', (e) => {
       e.stopPropagation();
@@ -391,16 +396,14 @@ const LightboxVideoControls = (() => {
       stopProgressLoop();
     });
     // Backstop for the paused state (seeks, loop-to-pause); the rAF loop
-    // owns the smooth playing-state updates.
+    // owns the smooth playing-state updates. renderProgress() folds in the
+    // latest duration estimate via noteDuration().
     addListener(video, 'timeupdate', renderProgress);
     addListener(video, 'seeked', renderProgress);
-    // Re-test "is the duration final yet" as metadata arrives and as the
-    // buffered range grows. `progress` is the one that fires repeatedly
-    // during download, so it catches the moment buffering completes.
-    addListener(video, 'loadedmetadata', tryLatchDuration);
-    addListener(video, 'durationchange', tryLatchDuration);
-    addListener(video, 'progress', tryLatchDuration);
-    addListener(video, 'canplaythrough', tryLatchDuration);
+    // Duration bumps while paused won't hit the rAF loop — repaint the
+    // readout when the element reports a new (growing) value.
+    addListener(video, 'loadedmetadata', renderProgress);
+    addListener(video, 'durationchange', renderProgress);
 
     addListener(scrubber, 'pointerdown', (e) => {
       e.stopPropagation();
@@ -414,8 +417,8 @@ const LightboxVideoControls = (() => {
     addListener(scrubber, 'input', (e) => {
       e.stopPropagation();
       onStagePointerActivity();
-      if (latchedDuration == null) return;
-      video.currentTime = (Number(scrubber.value) / 1000) * latchedDuration;
+      if (estimatedDuration == null) return;
+      video.currentTime = (Number(scrubber.value) / 1000) * estimatedDuration;
       renderProgress();
     });
 
@@ -470,7 +473,8 @@ const LightboxVideoControls = (() => {
 
     clearControlsHideTimer();
     stopProgressLoop();
-    latchedDuration = null;
+    estimatedDuration = null;
+    sawRealDuration = false;
     maxPct = 0;
     lastRenderTime = 0;
     isPointerOverStage = false;

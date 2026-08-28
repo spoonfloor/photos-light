@@ -113,7 +113,7 @@ cat >> "$OUT/index.html" <<'HTML_TAIL'
     <script src="js/photoSurface/lightboxMediaCache.js"></script>
     <script src="js/photoSurface/lightboxMedia.js"></script>
     <script src="js/photoSurface/lightboxShell.js"></script>
-    <script src="js/lightboxVideoControls.js?v=5"></script>
+    <script src="js/lightboxVideoControls.js?v=6"></script>
     <script src="js/photoSurface/surfaceLoadOverlay.js"></script>
     <script src="js/photoSurface/surfaceLoadChrome.js"></script>
     <script src="js/photoSurface/datePickerChrome.js?v=2"></script>
