@@ -590,6 +590,29 @@ body.trash-view-active #lightboxDownloadBtn {
   max-width: 100%;
 }
 
+/* Narrow-width title form. Lands exactly where "Photos Light" starts
+   (same 4px leading margin as .title) and is vertically centered by
+   .title-and-back's own `align-items: center`. Fixed 20:22 aspect —
+   height drives it, width follows, no distortion. `flex: none` so the
+   crowded bar can't squash it; when there's not even room for it at
+   full size, AppBarLayout hides .title-and-back rather than let its
+   `overflow: hidden` clip the glyph.
+
+   -h / -shift are only ever declared in the @media (max-width: 480px)
+   :root block: the title only collides with the icons at narrow widths,
+   so the monogram never actually renders wider than that. The var()
+   fallback here (20px) is just belt-and-suspenders against an
+   undefined-token render at some hypothetical wide collision — not a
+   second dial; keep it in sync with the ≤480 value. */
+.app-bar-wrapper .title-monogram {
+  flex: none;
+  margin-left: 4px; /* == .app-bar-wrapper .title margin-left */
+  height: var(--app-bar-monogram-h, 20px);
+  width: auto;
+  color: var(--text-primary);
+  transform: translateY(var(--app-bar-monogram-shift, 0px));
+}
+
 .title-emoji {
   margin-right: 6px;
   font-size: calc(var(--app-bar-title-size) + 2px);
@@ -3794,6 +3817,16 @@ body.library-recovery-active .library-recovery-dock {
      nothing reads as a real override until you check both places.) */
   :root {
     --app-bar-title-size: 24px;
+    /* PL monogram (narrow-width title form, see .title-monogram +
+       appBar.html). Declared only here because the title only collides
+       with the app-bar icons at narrow widths — the monogram never
+       renders wider than this breakpoint. -h is dialed by eye against
+       the "Photos Light" capitals it stands in for (cap height of the
+       24px title is ~17px; sitting a little taller than that reads
+       right). -shift is the optical vertical nudge — text centers on
+       its line box, the SVG on its geometric middle. */
+    --app-bar-monogram-h: 20px;
+    --app-bar-monogram-shift: 0px;
     --app-bar-icon-glyph-size: 30px; /* = current value, dial in */
     /* Touch-target size — desktop's :root default is backed in smaller
        (mouse-driven, no touch-target floor needed) from this value. */
