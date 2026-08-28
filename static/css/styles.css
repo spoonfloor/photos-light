@@ -14,6 +14,20 @@
   --text-secondary: #b3b3b3; /* Dimmer text */
   --placeholder-bg: #2a2a2a; /* Dark placeholder boxes */
   --placeholder-hover: #333333; /* Slightly lighter on hover */
+  /* How much of a "peek" surface stays opaque — the rest lets the page
+     show through underneath. One value so every peek surface matches. */
+  --surface-peek-alpha: 85%;
+  /* App-bar color with a sliver of transparency so the page peeks through
+     underneath. For chrome that floats over scrolling content (filter
+     chips at rest, etc.). Consumes --app-bar-bg so the two can't drift. */
+  --surface-peek-bg: color-mix(
+    in srgb,
+    var(--app-bar-bg) var(--surface-peek-alpha),
+    transparent
+  );
+  /* One step lighter than the app bar — opaque. For raised/hover chrome
+     that should read as lifted off the app-bar plane (filter chip hover). */
+  --surface-raised-bg: #262626;
 
   /* --- Accent Colors --- */
   --accent-color: #6d49ff; /* Custom purple */
@@ -43,14 +57,23 @@
 
   /* --- Filter chip knobs --- */
   --filter-chip-rail-bg: transparent;
-  --filter-chip-bg: rgba(30, 30, 30, 0.85);
+  --filter-chip-bg: var(--surface-peek-bg);
   --filter-chip-text: var(--text-secondary);
-  --filter-chip-bg-hover: #000000;
+  --filter-chip-bg-hover: var(--surface-raised-bg);
   --filter-chip-text-hover: #ffffff;
   --filter-chip-bg-active: #e8e8e8;
   --filter-chip-text-active: #121212;
   --filter-chip-bg-active-hover: #ffffff;
   --filter-chip-text-active-hover: #000000;
+  /* Unavailable chip (e.g. "starred" with nothing starred) — darker than
+     the resting chip, at the shared peek opacity, with its own muted text
+     instead of a blanket opacity knockdown. */
+  --filter-chip-bg-inactive: color-mix(
+    in srgb,
+    #171717 var(--surface-peek-alpha),
+    transparent
+  );
+  --filter-chip-text-inactive: #545454;
   --filter-chip-font-size: 15px;
   --filter-chip-font-weight: 300;
   --filter-chip-height: 32px;
@@ -703,19 +726,22 @@ body.trash-view-active #lightboxDownloadBtn {
 
 .filter-chip.inactive,
 .filter-chip:disabled {
-  opacity: 0.45;
   pointer-events: none;
   cursor: default;
 }
 
+/* Unavailable chip — own bg/text, and every interaction state (incl. a
+   stale aria-pressed='true' from before it was disabled) collapses to it. */
+.filter-chip.inactive,
+.filter-chip:disabled,
 .filter-chip.inactive:hover,
 .filter-chip.inactive[aria-pressed='true'],
 .filter-chip.inactive[aria-pressed='true']:hover,
 .filter-chip:disabled:hover,
 .filter-chip:disabled[aria-pressed='true'],
 .filter-chip:disabled[aria-pressed='true']:hover {
-  background: var(--filter-chip-bg);
-  color: var(--filter-chip-text);
+  background: var(--filter-chip-bg-inactive);
+  color: var(--filter-chip-text-inactive);
 }
 
 .grid-root.grid-catalog-empty .grid-content-layer,
