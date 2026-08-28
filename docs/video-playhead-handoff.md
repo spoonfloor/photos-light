@@ -2,9 +2,12 @@
 
 **Status:** narrow-width custom playhead shipped + deployed (photos-light
 `120df80` + `bb56958`; share Pages repo `f5fcc2e`). The "finishes prematurely"
-bug is **fixed in the working tree via Fix A** (growing lower-bound duration,
-below) — `lightboxVideoControls.js?v=6`, not yet committed/deployed. Verified
-by logic sim only; still wants a real-device pass on the streamed proxy path.
+bug is **fixed via Fix A** (growing lower-bound duration, below) — committed,
+pushed, and deployed (`lightboxVideoControls.js?v=6`; photos-light `92aa39e` +
+`55eeada`; share Pages repo `7f1bc61`). Verified by logic sim only; still wants
+a real-device pass on the streamed proxy path, and first-play motion still
+steps/plateaus during the unknown window (smooth first play needs a
+server-supplied duration — see Fix B / the ffprobe-header note).
 
 Owner context: this grew out of the lightbox-480 batch
 (`docs/lightbox-480-plan.md` — see the 2026-08-27/28 session-log entries for
