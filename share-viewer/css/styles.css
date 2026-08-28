@@ -140,16 +140,17 @@
   --lightbox-nav-halo-pad: 8px;
   --lightbox-nav-btn-edge-gap: 20px;
 
-  /* Lightbox info panel (bottom sheet) tuning knobs — #9,
-     docs/lightbox-share-batch-plan.md. Values here are the current
-     wide-width look; the @media (max-width: 480px) block reseeds them to
-     the toast's proportions for narrow (both surfaces). --...-close-size
-     is the close-X glyph; its font-weight is a plain narrow-block delta,
-     not a knob. */
-  --lightbox-info-font-size: 14px;
+  /* Dismissible dark-overlay affordances — #9, docs/lightbox-share-batch-plan.md.
+     The lightbox info panel and the toast are the same affordance (a message
+     with a close-X on a dark sheet), so they share one text size and one
+     close-X size. Values here are the wide-width look; the @media
+     (max-width: 480px) block reseeds both to their narrow proportions. The
+     close-X font-weight is a plain narrow-block delta, not a knob. Panel-only
+     knobs (--lightbox-info-panel-*) stay below. */
+  --overlay-dismiss-text: 14px;
+  --overlay-dismiss-close: 20px;
   --lightbox-info-panel-pad-y: 20px;
   --lightbox-info-panel-bg: #1f1f1f; /* = --app-bar-bg; opaque */
-  --lightbox-info-close-size: 20px;
 
   /* --- Photo grid corner badges (select circle + star + video) ---
      Visual glyph size and tap-target size are independent knobs. The
@@ -1632,7 +1633,7 @@ body.surface-load-active .app-bar-icon-button {
   /* iOS Safari auto-inflates text per-element based on its block width, so
      the short "Date:" label and the longer value get different boosts and
      visibly diverge in size. Pin it off here so .info-label / .info-value
-     move strictly in tandem off --lightbox-info-font-size. */
+     move strictly in tandem off --overlay-dismiss-text. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -1656,7 +1657,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .info-close-btn .material-symbols-outlined {
-  font-size: var(--lightbox-info-close-size);
+  font-size: var(--overlay-dismiss-close);
   font-weight: 200;
 }
 
@@ -1680,13 +1681,13 @@ body.surface-load-active .app-bar-icon-button {
    Date row; app's Date/Filename labels no longer align in a column, which is
    intended (docs/lightbox-share-batch-plan.md #4). */
 .info-label {
-  font-size: var(--lightbox-info-font-size);
+  font-size: var(--overlay-dismiss-text);
   color: #999;
   margin-right: 6px;
 }
 
 .info-value {
-  font-size: var(--lightbox-info-font-size);
+  font-size: var(--overlay-dismiss-text);
   color: var(--text-primary);
   word-break: break-all;
 }
@@ -1998,6 +1999,11 @@ body.surface-load-active .app-bar-icon-button {
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
+  /* Size to content, not to the shrink-fit width that left:50% alone would
+     impose (~50vw), which wrapped short messages onto two lines. Narrow
+     (@media max-width:480px) drops the centered-pill model entirely. */
+  width: max-content;
+  max-width: calc(100vw - 32px);
   background: #2d2d2d;
   color: var(--text-primary);
   padding: 16px 40px 16px 20px;
@@ -2010,7 +2016,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .toast-message {
-  font-size: var(--modal-body-size);
+  font-size: var(--overlay-dismiss-text);
   font-weight: 400;
   color: #ffffff;
 }
@@ -2045,8 +2051,6 @@ body.surface-load-active .app-bar-icon-button {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  width: 24px;
-  height: 24px;
 }
 
 .toast-close-btn:hover {
@@ -2055,7 +2059,7 @@ body.surface-load-active .app-bar-icon-button {
 }
 
 .toast-close-btn .material-symbols-outlined {
-  font-size: 18px;
+  font-size: var(--overlay-dismiss-close);
   font-weight: 300;
 }
 /* Lightbox navigation chevrons (docs/lightbox-480-plan.md: arrow
@@ -3896,15 +3900,13 @@ body.library-recovery-active .library-recovery-dock {
        Narrow-only, like --modal-inset-mobile above. Owner-dialed. */
     --narrow-text-inset: 6px;
 
-    /* Lightbox info panel at this breakpoint (#9,
-       docs/lightbox-share-batch-plan.md) — owner-dialed values, applies to
-       app + share. Font size 17px = the narrow --modal-body-size / toast
-       message (label + value both read --lightbox-info-font-size, so they
-       move as one). Padding and close-X glyph run larger than the toast's
-       16px / 18px here by choice. */
-    --lightbox-info-font-size: 17px;
+    /* Dismissible-overlay text + close-X at this breakpoint (#9,
+       docs/lightbox-share-batch-plan.md) — owner-dialed, app + share,
+       shared by the lightbox info panel and the toast. 17px text lines up
+       with the narrow --modal-body-size; the close-X is 28px on both. */
+    --overlay-dismiss-text: 17px;
+    --overlay-dismiss-close: 28px;
     --lightbox-info-panel-pad-y: 24px;
-    --lightbox-info-close-size: 28px;
   }
 
   /* Thumbnail grid goes edge-to-edge at this breakpoint. #photoContainer
@@ -4059,11 +4061,24 @@ body.library-recovery-active .library-recovery-dock {
     touch-action: none;
   }
 
-  /* Info-panel close-X: heavier glyph at this breakpoint to match
-     .toast-close-btn (#9). Size is the --lightbox-info-close-size knob;
-     weight is a static companion, not a knob. */
+  /* Info-panel close-X: heavier glyph at this breakpoint, matching
+     .toast-close-btn (#9) — both now read the shared --overlay-dismiss-close
+     for size; weight is a static companion, not a knob. */
   .info-close-btn .material-symbols-outlined {
     font-weight: 300;
+  }
+
+  /* Toast spans the width like a snackbar at this breakpoint instead of
+     shrink-wrapping to a centered pill — left/right off the shared modal
+     inset (width:auto so `right` isn't dropped as over-constrained),
+     transform cleared. padding-right clears the 28px close-X (8px offset
+     + ~36px button box + ~4px gap). */
+  .toast {
+    left: var(--modal-inset-mobile);
+    right: var(--modal-inset-mobile);
+    width: auto;
+    transform: none;
+    padding-right: 48px;
   }
 
   /* Chevron visibility delta: narrow/touch has no hover, so it keeps the
