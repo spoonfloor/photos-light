@@ -30,21 +30,30 @@ function createAppBarLayoutController(mountId) {
   // one doesn't move the others.
   let titleGapDefaultPx = TITLE_GAP_FALLBACK_PX;
 
-  // "P/Light"-style short title: shown instead of the full title the
-  // instant the full string would start truncating, so collision reads as
-  // a deliberate abbreviation rather than a mid-word ellipsis. titleGhostEl
-  // is a permanently offscreen twin of the title span, used purely to
-  // measure the full text's natural width every layout pass — unlike the
-  // jumper's width, this can't be measured once and cached, because
-  // --app-bar-title-size changes at breakpoints (see styles.css). Stays
-  // null (no-op) for instances whose title slot has no text node at all —
-  // lightbox's app bar puts a back button there instead.
+  // PL monogram: an inline SVG (see appBar.html) shown instead of the
+  // full title the instant "Photos Light" would start truncating, so
+  // collision reads as a deliberate mark rather than a mid-word ellipsis.
+  // titleGhostEl is a permanently offscreen twin of the title span, used
+  // purely to measure the full text's natural width every layout pass —
+  // unlike the jumper's width, this can't be measured once and cached,
+  // because --app-bar-title-size changes at breakpoints (see styles.css).
+  // The monogram, being a fixed-aspect graphic, *can't* ellipsis: when
+  // even it won't fit, layout() hides .title-and-back outright (see
+  // measureMonogramWidth + the showTitle check). All this stays inert
+  // (titleMonogramEl null) for instances whose title slot has no text
+  // node at all — lightbox's app bar puts a back button there instead.
   let titleTextEl = null;
   let titleFullText = null;
-  let titleShortText = null;
+  let titleMonogramEl = null;
   let titleMarginPx = 0;
   let titleGhostEl = null;
-  let titleShowingShort = false;
+  let titleShowingMonogram = false;
+  // Monogram's rendered width, cached like cachedJumperW: a live read is
+  // 0 whenever .title-and-back is suppressed (display:none), so fall back
+  // to the last good value. Fixed aspect ratio means it only really
+  // moves at the --app-bar-title-size breakpoint, and a visible pass
+  // re-measures then.
+  let cachedMonogramW = 0;
 
   function queryElements() {
     const mount = document.getElementById(mountId);
@@ -139,6 +148,23 @@ function createAppBarLayoutController(mountId) {
   }
 
   /**
+   * Monogram's rendered width, with the jumper's defensive fallback:
+   * while .title-and-back is suppressed (display:none) a live read is 0,
+   * so reuse the last good value. See cachedMonogramW comment above.
+   */
+  function measureMonogramWidth() {
+    if (!titleMonogramEl) {
+      return 0;
+    }
+    const live = measureWidth(titleMonogramEl);
+    if (live > 0) {
+      cachedMonogramW = live;
+      return live;
+    }
+    return cachedMonogramW;
+  }
+
+  /**
    * Binds to the title span inside (a possibly re-rendered) title-and-back
    * markup and keeps an offscreen twin of it around for measuring the full
    * title's natural width (see titleGhostEl comment above). Cheap no-op
@@ -153,68 +179,74 @@ function createAppBarLayoutController(mountId) {
     titleGhostEl?.remove();
     titleTextEl = el;
     titleGhostEl = null;
-    titleShowingShort = false;
+    titleMonogramEl = null;
+    titleShowingMonogram = false;
+    cachedMonogramW = 0;
 
     if (!el) {
       titleFullText = null;
-      titleShortText = null;
       return;
     }
 
     titleFullText = el.textContent;
-    titleShortText = el.dataset.titleShort || null;
+    titleMonogramEl = containerEl.querySelector('.title-monogram');
     titleMarginPx = parseFloat(getComputedStyle(el).marginLeft) || 0;
 
-    if (!titleShortText) {
+    if (!titleMonogramEl) {
       return;
     }
 
-    // Appended as a sibling inside the same .title-and-back (not
-    // document.body) so the `.app-bar-wrapper .title` descendant selector
-    // — font-size, weight, margin, nowrap — still applies; a detached
-    // ghost would measure at the browser's default font instead.
+    // Appended to .app-bar-elements-layer, NOT .title-and-back: the
+    // full<->monogram decision reads the ghost's width every pass,
+    // including passes where .title-and-back is `hidden` (display:none)
+    // because the monogram didn't fit either — a ghost inside that
+    // container would measure 0 then and stall the swap. `.app-bar-wrapper
+    // .title` is ancestor-agnostic, so the clone still inherits the
+    // title's font-size / weight / nowrap here.
     const ghost = el.cloneNode(false);
     ghost.removeAttribute('id');
-    ghost.removeAttribute('data-title-short');
     ghost.setAttribute('aria-hidden', 'true');
+    ghost.removeAttribute('hidden');
     ghost.textContent = titleFullText;
     ghost.style.position = 'absolute';
     ghost.style.visibility = 'hidden';
     ghost.style.left = '-9999px';
     ghost.style.top = '0';
     ghost.style.maxWidth = 'none';
-    containerEl.appendChild(ghost);
+    layer.appendChild(ghost);
     titleGhostEl = ghost;
   }
 
   /**
-   * Swaps the title span between its full and short authored strings —
-   * short exactly when the full string's natural width (measured via the
-   * offscreen ghost) wouldn't fit the space just carved out for it. This
-   * compares against the *natural* width rather than whatever's currently
+   * Swaps the title between its full text span and the PL monogram —
+   * monogram exactly when the full string's natural width (measured via
+   * the offscreen ghost) wouldn't fit the space just carved out for it.
+   * Compares against the *natural* width rather than whatever's currently
    * rendered, so it can't oscillate: the decision never depends on which
-   * string happens to be showing already.
+   * form happens to be showing already. Visibility of the whole slot is
+   * layout()'s call, not this function's — the monogram can't ellipsis,
+   * so when even it won't fit, layout() hides .title-and-back.
+   *
+   * Writes both `hidden` attributes every pass rather than gating on a
+   * "did it change" flag: disconnect()/rebind resets titleShowingMonogram
+   * without touching the DOM, so a flag-gated write could early-return
+   * and leave a stale monogram showing at a width with room for the full
+   * text. toggleAttribute with an explicit force is a no-op when the
+   * attribute is already in the wanted state, so this stays cheap and
+   * doesn't churn the MutationObserver.
    */
   function applyTitleTruncation(titleMaxW) {
-    if (!titleTextEl || !titleShortText || !titleGhostEl) {
+    if (!titleTextEl || !titleMonogramEl || !titleGhostEl) {
       return;
     }
 
     const naturalW = measureWidth(titleGhostEl) + titleMarginPx;
-    const shouldShowShort = naturalW > titleMaxW;
-    if (shouldShowShort === titleShowingShort) {
-      return;
-    }
-
-    titleShowingShort = shouldShowShort;
-    titleTextEl.textContent = shouldShowShort ? titleShortText : titleFullText;
-    if (shouldShowShort) {
-      titleTextEl.setAttribute('aria-label', titleFullText);
-      titleTextEl.title = titleFullText;
-    } else {
-      titleTextEl.removeAttribute('aria-label');
-      titleTextEl.removeAttribute('title');
-    }
+    const shouldShowMonogram = naturalW > titleMaxW;
+    titleShowingMonogram = shouldShowMonogram;
+    // toggleAttribute, not `.hidden` — .hidden is an HTMLElement IDL
+    // property and titleMonogramEl is an SVGElement, where it's a no-op.
+    titleTextEl.toggleAttribute('hidden', shouldShowMonogram);
+    titleMonogramEl.toggleAttribute('hidden', !shouldShowMonogram);
   }
 
   function visibleActionButtons(actionsEl) {
@@ -348,7 +380,14 @@ function createAppBarLayoutController(mountId) {
 
     applyTitleTruncation(titleMaxW);
 
-    const showTitle = titleMaxW > 0;
+    // The monogram is a fixed-aspect graphic — it can't shrink or
+    // ellipsis. Once it's the active form and even it overflows the slot,
+    // hide .title-and-back rather than let its `overflow: hidden` slice
+    // the glyph in half.
+    let showTitle = titleMaxW > 0;
+    if (showTitle && titleShowingMonogram) {
+      showTitle = measureMonogramWidth() + titleMarginPx <= titleMaxW;
+    }
 
     layer.style.setProperty('--app-bar-gap', `${gapDefaultPx}px`);
     layer.style.setProperty('--app-bar-actions-gap', `${actionsLayout.gap}px`);
@@ -438,9 +477,10 @@ function createAppBarLayoutController(mountId) {
     titleGhostEl = null;
     titleTextEl = null;
     titleFullText = null;
-    titleShortText = null;
+    titleMonogramEl = null;
     titleMarginPx = 0;
-    titleShowingShort = false;
+    titleShowingMonogram = false;
+    cachedMonogramW = 0;
     if (pendingRaf != null) {
       cancelAnimationFrame(pendingRaf);
       pendingRaf = null;
