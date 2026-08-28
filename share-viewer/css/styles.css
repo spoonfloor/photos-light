@@ -138,13 +138,14 @@
      the hit box off from that corner so the visual glyph never moves as
      the hit box grows.
 
-     The three badges started from one shared size + gap; the narrow
-     breakpoint splits them (see the @media block at EOF) after a
-     per-element dial-in pass. Desktop/wide still renders the star and
-     video as Material Symbols font glyphs — the SVG glyphs below are
-     narrow-only until wide gets its own pass. */
+     The three badges started from one shared size + gap; each is now
+     dialed independently, per breakpoint. Star and video are inline SVG
+     glyphs (GridTile.js) — sharp 5-point star, filled play_circle disc —
+     sized/positioned entirely by the tokens below; the :root values are
+     the wide/desktop dial, the @media block at EOF is the narrow one. */
 
-  /* Selection circle (also the hit-inset math the star reuses). */
+  /* Selection circle (also the hit-inset math the star reuses). border-box,
+     so --photo-badge-visual-size is the ring's outer diameter. */
   --photo-badge-visual-size: 24px;
   --photo-badge-gap: 8px;
   --photo-badge-hit-min: 44px;
@@ -159,16 +160,15 @@
   );
   --select-ring-stroke: 1px; /* select circle + month-header circle border */
 
-  /* Star (SVG glyph, narrow only). --star-badge-size is the point-to-point
-     width; the bbox is --star-aspect times as tall. --star-badge-weight is
-     the outline stroke in px (non-scaling). Own per-axis corner gap; the
-     hit box is re-centred on the smaller glyph the same way the select
-     circle's is. */
+  /* Star (SVG glyph). --star-badge-size is the point-to-point width; the
+     bbox is --star-aspect times as tall. --star-badge-weight is the outline
+     stroke in px (non-scaling). Own per-axis corner gap; the hit box is
+     re-centred on the smaller glyph the same way the select circle's is. */
   --star-badge-size: 20px;
-  --star-badge-weight: 1.75px;
+  --star-badge-weight: 1.5px;
   --star-aspect: 0.951;
-  --star-gap-x: var(--photo-badge-gap);
-  --star-gap-y: var(--photo-badge-gap);
+  --star-gap-x: 9px;
+  --star-gap-y: 9.5px;
   --star-hit-inset-x: calc(
     var(--star-gap-x) - (var(--photo-badge-hit-size) - var(--star-badge-size)) /
       2
@@ -182,18 +182,15 @@
       2
   );
 
-  /* Video badge (SVG disc glyph, narrow only). --video-badge-size is the
-     disc diameter; --video-gap is the corner inset of the disc itself
-     (no hit box — the badge is not interactive). Desktop keeps the
-     Material play_circle at ~1.15x the shared size via
-     --video-badge-glyph-size below. */
+  /* Video badge (SVG disc glyph). --video-badge-size is the disc diameter;
+     --video-gap is the corner inset of the disc itself (no hit box — the
+     badge is not interactive). */
   --video-badge-size: 23px;
-  --video-gap: 10px;
-  --video-badge-glyph-size: calc(var(--photo-badge-visual-size) * 1.15);
+  --video-gap: 9px;
 
-  /* Month-header circle — was pinned to --photo-badge-visual-size; now its
-     own knob (shares the ring stroke, not the diameter). */
-  --month-header-circle-size: var(--photo-badge-visual-size);
+  /* Month-header circle — its own diameter (shares the ring stroke, not the
+     diameter, with the tile select circle). */
+  --month-header-circle-size: 23px;
 
   /* --- Modal typography (dial-in tokens) ---
      Every modal's title/body/caption/path text reads from one of these
@@ -1146,9 +1143,7 @@ body.surface-load-active .app-bar-icon-button {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  /* Desktop keeps content-box (outer = visual-size + 2 * 1px, as before).
-     The narrow block switches to border-box so --photo-badge-visual-size
-     reads as the true outer diameter there. */
+  box-sizing: border-box; /* ring stroke inside the diameter — visual-size is the outer d */
   width: var(--photo-badge-visual-size);
   height: var(--photo-badge-visual-size);
   border: var(--select-ring-stroke) solid white;
@@ -1160,13 +1155,13 @@ body.surface-load-active .app-bar-icon-button {
   opacity: 1;
 }
 
-/* Star button — filled when starred; outline on card hover when not.
-   Desktop renders the Material `star` glyph; the narrow breakpoint swaps
-   in .star-glyph (SVG) and repositions via --star-hit-inset-* (see EOF). */
+/* Star button — the invisible corner hit target; .star-glyph (SVG) draws the
+   5-point star inside it, re-centred off the corner via --star-hit-inset-*.
+   Filled when starred, outline otherwise. */
 .photo-card .star-badge {
   position: absolute;
-  top: var(--photo-badge-hit-inset);
-  right: var(--photo-badge-hit-inset);
+  top: var(--star-hit-inset-y);
+  right: var(--star-hit-inset-x);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1193,30 +1188,8 @@ body.surface-load-active .app-bar-icon-button {
   cursor: default;
 }
 
-.photo-card .star-badge .material-symbols-outlined {
-  font-size: var(--photo-badge-visual-size);
-  color: white;
-  font-variation-settings:
-    'FILL' 0,
-    'wght' 400,
-    'GRAD' 0,
-    'opsz' 24;
-  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
-  user-select: none;
-  pointer-events: none;
-}
-
-.photo-card .star-badge .material-symbols-outlined.filled {
-  font-variation-settings:
-    'FILL' 1,
-    'wght' 400,
-    'GRAD' 0,
-    'opsz' 24;
-}
-
-/* SVG star glyph — hidden until the narrow breakpoint enables it. */
 .photo-card .star-badge .star-glyph {
-  display: none;
+  display: block;
   width: var(--star-badge-size);
   height: calc(var(--star-badge-size) * var(--star-aspect));
   color: white;
@@ -1238,28 +1211,17 @@ body.surface-load-active .app-bar-icon-button {
   fill: currentColor;
 }
 
-/* Video badge (always visible for videos) */
+/* Video badge (always visible for videos) — .video-glyph (SVG) draws the
+   play_circle disc at --video-gap off the bottom-left corner. */
 .photo-card .video-badge {
   position: absolute;
-  bottom: var(--photo-badge-gap);
-  left: var(--photo-badge-gap);
+  bottom: var(--video-gap);
+  left: var(--video-gap);
   pointer-events: none;
 }
 
-.photo-card .video-badge .material-symbols-outlined {
-  font-size: var(--video-badge-glyph-size);
-  color: white;
-  font-variation-settings:
-    'FILL' 1,
-    'wght' 400,
-    'GRAD' 0,
-    'opsz' 24;
-  filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
-}
-
-/* SVG disc glyph — hidden until the narrow breakpoint enables it. */
 .photo-card .video-badge .video-glyph {
-  display: none;
+  display: block;
   width: var(--video-badge-size);
   height: var(--video-badge-size);
   color: white;
@@ -3837,10 +3799,9 @@ body.library-recovery-active .library-recovery-dock {
        (mouse-driven, no touch-target floor needed) from this value. */
     --lightbox-nav-btn-size: 48px;
     --lightbox-nav-glyph-size: 36px;
-    /* Photo grid corner badges — dialed per-element at this breakpoint
-       (token model in the :root block up top). The selection circle uses
-       the shared --photo-badge-gap; star and video carry their own gaps
-       and the star/video glyphs render as SVG here (toggled below). */
+    /* Photo grid corner badges — narrow dial. Same token model as :root
+       (up top); the rules there read these with no per-breakpoint rule
+       overrides needed. */
     --photo-badge-visual-size: 28px;
     --photo-badge-gap: 10px;
     --select-ring-stroke: 1.5px;
@@ -3848,9 +3809,9 @@ body.library-recovery-active .library-recovery-dock {
     --star-badge-size: 23.5px;
     --star-badge-weight: 1.5px;
     --star-gap-x: 11px;
-    --star-gap-y: 12px;
+    --star-gap-y: 11.5px;
     --video-badge-size: 26px;
-    --video-gap: 12px;
+    --video-gap: 10.5px;
     --filter-chip-height: 36px; /* = current value, dial in */
     --filter-chip-padding-x: 18px; /* = current value, dial in */
     --filter-chip-font-size: 17px; /* = current value, dial in */
@@ -3921,40 +3882,6 @@ body.library-recovery-active .library-recovery-dock {
 
   .grid-root .month-header-band {
     padding-inline: var(--narrow-text-inset) var(--page-wrapper-padding-x);
-  }
-
-  /* Star + video render as SVG glyphs at this breakpoint (the desktop
-     Material glyphs stay in the markup, just hidden). The star's hit box
-     re-centres on its smaller glyph via --star-hit-inset-*; the video
-     disc sits at its own --video-gap. */
-  .photo-card .star-badge .material-symbols-outlined,
-  .photo-card .video-badge .material-symbols-outlined {
-    display: none;
-  }
-
-  .photo-card .star-badge .star-glyph {
-    display: block;
-  }
-
-  .photo-card .star-badge {
-    top: var(--star-hit-inset-y);
-    right: var(--star-hit-inset-x);
-  }
-
-  .photo-card .video-badge .video-glyph {
-    display: block;
-  }
-
-  .photo-card .video-badge {
-    bottom: var(--video-gap);
-    left: var(--video-gap);
-  }
-
-  /* Ring stroke (2.25px here) stays inside the dialed diameter — the tokens
-     read as true outer diameters at this breakpoint. */
-  .photo-card .select-circle::before,
-  .month-select-circle {
-    box-sizing: border-box;
   }
 
   /* Grid select mode (long-press to enter — see gridInteractions.js):
