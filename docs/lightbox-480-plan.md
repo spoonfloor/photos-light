@@ -21,6 +21,14 @@ below for exact parameters — don't re-litigate these without the user.
 - Swipe left/right and swipe down are **hard cuts**, not a filmstrip drag.
   Fancy interactive filmstrip transition is explicitly out of scope (see
   "Explored & rejected" below) — don't revisit without the user raising it.
+  - **Amended 2026-08-27** — nav (swipe / chevron / arrow key) now plays a
+    "fake swipe": the outgoing frame is still a hard cut, but the incoming
+    `.lightbox-media-frame` mounts offset 80px toward the side it came from
+    and CSS-transitions to center over 200ms `cubic-bezier(0.4, 0.4, 0, 1)`.
+    Not the rejected filmstrip — no drag tracking, no neighbor pre-mount, no
+    physics. `LightboxMedia.animateFrameEntry` (shared), gated on a signed
+    `enterFrom` nav delta threaded from each host's nav funnel; honors
+    `prefers-reduced-motion`.
 - ~~Edge nav strips: **96px** wide, full height, one per side.~~
   **Superseded 2026-08-27** (user "changed my mind" — see batch plan
   `docs/lightbox-share-batch-plan.md` #2 and session log below): the
@@ -77,6 +85,30 @@ below for exact parameters — don't re-litigate these without the user.
   additionally reorders Download/Change-date above Clear stars at this
   breakpoint only (`order: -2`/`-1` on `#downloadSelectedBtn`/
   `#editDateSelectedBtn`).
+  - **Amended 2026-08-27** — the lightbox half of this was in fact *not*
+    scoped away from share: the ≤480 rule was unconditional, so share's
+    lightbox got a `⋮` more button opening a one-item (Download only)
+    menu, and trash view's lightbox got an *empty* more button. Now gated:
+    `LightboxShell.applyCapabilities` adds `.lightbox-more-menu-active` to
+    `#lightboxOverlay` only when ≥2 of rotate/change-date/download are
+    available, and the ≤480 inline→menu swap keys off that class. Share
+    (Download only) and trash view (none) keep the lone action — or
+    nothing — inline, no more button. See session log 2026-08-27.
+
+- **Video playhead, narrow width** (added 2026-08-27, see session log):
+  overriding iOS Safari's native `<video>` controls is not possible — the
+  `::-webkit-media-controls-*` pseudo-elements are effectively read-only on
+  iOS. So the custom transport (`lightboxVideoControls.js`) is used at every
+  width and on every surface (share dropped its `nativeVideoControls`
+  shortcut — was an undocumented inheritance break). At ≤480px it reduces to
+  three controls in one row — **play/pause · progress bar · mute** — taking
+  layout cues from the iOS Photos playhead but **not** its glass capsule
+  (the app's flat bottom-scrim is kept). No loop, no elapsed/duration
+  readout, no fullscreen at this width; the six-control desktop transport is
+  unchanged above 480px. Playhead visibility is **bundled with the app-bar
+  chrome** at ≤480px — both shown on open, both hidden together on the
+  unclaimed-area tap (the desktop hover/idle model does not run on touch).
+  Tap-on-video toggles chrome, not play/pause, at this width.
 
 ## Prereq diagnosis (agreed necessary before feature work)
 
@@ -1096,3 +1128,95 @@ behavior before declaring a step complete, not "it's fixed"). Draft:
        on `e.cancelable`. The scroll that makes touchend non-cancelable is
        the #3 bug (lightbox shouldn't scroll at all on narrow) — this only
        silences the warning.
+
+- **2026-08-27** — Collapse the single-item lightbox more menu. The ≤480
+  inline→more-menu swap (2026-08-26 entry) shipped unconditional, so
+  share's lightbox got a `⋮` button opening a Download-only menu and trash
+  view's got an empty `⋮`. Now gated on menu size:
+  - `static/js/photoSurface/lightboxShell.js` — `applyCapabilities()`
+    computes `moreMenuItemCount` from `caps.rotate/editDate/download` (the
+    same gates the menu items already carry) and toggles
+    `.lightbox-more-menu-active` on `#lightboxOverlay` when it is ≥2.
+  - `static/css/styles.css` — the ≤480 block's inline-hide +
+    `#lightboxMoreBtn { display: flex }` rules are now scoped under
+    `.lightbox-more-menu-active`. Without the class: inline buttons keep
+    their caps-gated state, `#lightboxMoreBtn` stays `display: none`
+    (unchanged default at line ~1294). Stale "app-only override" comment
+    there rewritten.
+  - Library lightbox (rotate + change-date + download = 3) is unchanged —
+    still uses the menu. Share (1) and trash view (0) now keep the lone
+    action inline / show nothing extra.
+  - Docs: `docs/share-ui-deltas.md` gains a lightbox-download bullet;
+    "More menu relocation" locked decision above gets a 2026-08-27
+    amendment.
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh`. **Not yet
+    committed or deployed** — the working tree also carries a parallel
+    session's in-flight changes (`lightboxMedia.js`, `shareBoot.js`,
+    `main.js`), so the commit/deploy step is left to coordinate.
+  - **Verified** (static server, `share-viewer/index.html`, lightbox
+    force-opened + `LightboxShell.refreshChrome()`, no backend): at 375px —
+    share surface: `#lightboxOverlay` has no `.lightbox-more-menu-active`,
+    `#lightboxMoreBtn` computes `display: none`, `#lightboxDownloadBtn`
+    computes `display: flex` (inline, `hidden=false`). Library surface:
+    class present, `#lightboxMoreBtn` `flex`, inline rotate/download `none`,
+    `#lightboxDownloadMenuBtn` `flex` — unchanged. `node --check` clean.
+  - Not yet done: real touch-device pass (standing caveat on every entry).
+
+- **2026-08-27** — Video playhead, narrow width. iOS Safari's native
+  `<video controls>` (Liquid Glass, un-resizable, unstyleable) was showing
+  in the **share** viewer because `buildShareLightboxLoadOptions`
+  (`shareBoot.js`) passed `nativeVideoControls: true` — an undocumented
+  break from app→share inheritance (the app has always used the custom
+  transport). Feasibility of restyling the native controls: nil
+  (`::-webkit-media-controls-*` is read-only on iOS). So: unify on the
+  custom transport everywhere, then simplify it at ≤480px.
+  - `static/js/shareBoot.js` — dropped `nativeVideoControls: true`, added
+    `mountVideoControls` mounting `LightboxVideoControls` (same closure as
+    `main.js`). Added `LightboxVideoControls.unmount()` in
+    `renderLightboxMedia` (before the content swap) and `closeLightbox`,
+    mirroring `main.js`'s teardown — share previously never needed it.
+  - `static/js/photoSurface/lightboxMedia.js` — removed the now-dead
+    `nativeVideoControls` option (`resolveLoadOptions` + the
+    `video.controls = true` branch). Nothing sets it any more.
+  - `scripts/build-share-viewer.sh` — `cp` `lightboxVideoControls.js` into
+    `share-viewer/js/` and add its `<script>` tag (was app-only). Bumped
+    `styles.css?v=13→14`, `shareBoot.js?v=14→15`.
+  - `static/index.html` — `styles.css?v=50→51`, `lightboxVideoControls.js
+    ?v=1→2`.
+  - `static/js/lightboxVideoControls.js` — the stage `click` → `togglePlay`
+    is gated to wide only (`matchMedia('(max-width: 480px)')`). At narrow a
+    tap on the video toggles chrome (via `LightboxShell`'s recognizer), not
+    playback; play/pause is the button.
+  - `static/css/styles.css` (EOF ≤480 block) — new video-playhead section:
+    `.lightbox-video-controls-inner` becomes a flex row;
+    `.lightbox-video-controls-top-row { display: contents }` hoists play +
+    mute onto that row alongside their sibling
+    `.lightbox-video-progress-track` (`order: 0 / 1 / 2`); time display,
+    spacer, loop, fullscreen → `display: none`; buttons 32→44px, glyph
+    22→26px, track 4→6px with a taller invisible `input` hit area.
+    Visibility bundling: `.lightbox-video-controls-hidden` (the desktop
+    hover-model class, still toggled by the JS) is overridden inert here,
+    and `.lightbox-overlay:has(.lightbox-top-chrome.hidden)
+    .lightbox-video-controls-overlay { visibility: hidden }` is the only
+    thing that hides the playhead — so it follows the app bar's
+    show/hide/tap exactly. Wide (>480px) untouched: `:has()` rule is inside
+    the media block, hover/idle model still owns visibility there.
+  - `test_share_viewer_build.py` — new `test_share_uses_custom_video_transport`
+    (share mounts `LightboxVideoControls`, no `nativeVideoControls` anywhere,
+    the script is bundled). All 12 tests pass.
+  - Rebuilt `share-viewer/` via `scripts/build-share-viewer.sh`.
+  - **Verified** (static file server, standalone harness with the real
+    `styles.css` + `material-symbols.css`, overlay markup from
+    `createControlsOverlay`, no backend): at 375px — single row
+    `[⏸ 44×44] [progress flex, h6] [🔊 44×44]`, order 0/1/2, glyph 26px;
+    loop/fullscreen/time `display: none`; overlay `visibility: visible` even
+    with `.lightbox-video-controls-hidden` present, flips to `hidden` when
+    `.lightbox-top-chrome.hidden` is added, back to `visible` when removed.
+    At 900px — `inner` block, `top-row` flex, all six controls `flex/block`,
+    play 32×32 / glyph 22px, track its own full-width row below, and the
+    chrome-hidden toggle has **no** effect (wide keeps its hover model).
+  - **Not yet done:** real touch-device pass (standing caveat); **not
+    committed or deployed** — same as the 2026-08-27 more-menu entry, the
+    working tree still carries a parallel session's in-flight `enterFrom`
+    fake-swipe changes (`main.js`, `lightboxMedia.js`, `shareBoot.js`), so
+    commit/deploy is left to coordinate.

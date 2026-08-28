@@ -327,6 +327,11 @@ const LightboxVideoControls = (() => {
 
     addListener(stage, 'click', (e) => {
       if (e.target.closest('.lightbox-video-controls-inner')) return;
+      // Narrow/touch bundles the playhead with the app-bar chrome: a tap on
+      // the video toggles chrome visibility (handled by LightboxShell's
+      // gesture recognizer), not playback — play/pause is the dedicated
+      // button there. Wide keeps tap-anywhere-to-toggle-play.
+      if (window.matchMedia('(max-width: 480px)').matches) return;
       togglePlay();
     });
 

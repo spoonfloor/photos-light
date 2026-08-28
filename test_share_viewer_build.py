@@ -90,6 +90,20 @@ class ShareViewerBuildTest(unittest.TestCase):
         text = SHARE_BOOT.read_text(encoding="utf-8")
         self.assertIn("LightboxShell.wire", text)
 
+    def test_share_uses_custom_video_transport(self):
+        # Share must mount the same custom transport as the app, not fall
+        # back to native <video controls> (iOS Safari's is unstyleable).
+        # See .claude/rules/app-share-inheritance.md.
+        boot = SHARE_BOOT.read_text(encoding="utf-8")
+        self.assertIn("LightboxVideoControls.mount", boot)
+        self.assertNotIn("nativeVideoControls", boot)
+        build = BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("lightboxVideoControls.js", build)
+        self.assertTrue((SHARE / "js" / "lightboxVideoControls.js").is_file())
+        self.assertIn("js/lightboxVideoControls.js", (SHARE / "index.html").read_text(encoding="utf-8"))
+        media = (ROOT / "static" / "js" / "photoSurface" / "lightboxMedia.js").read_text(encoding="utf-8")
+        self.assertNotIn("nativeVideoControls", media)
+
     def test_share_overrides_stay_minimal(self):
         text = SHARE_OVERRIDES.read_text(encoding="utf-8")
         for pattern in FORBIDDEN_OVERRIDE_PATTERNS:

@@ -6689,6 +6689,7 @@ function buildLightboxLoadOptions(photo, isVideo, options = {}) {
   return {
     isVideo,
     rotationDegrees: normalizeRotationDegrees(options.rotationDegrees || 0),
+    enterFrom: options.enterFrom ?? 0,
     getMediaUrl: () => getPhotoFileUrl(photo.id),
     getDimensions: getLightboxVisualDimensions,
     getAltText: (p) =>
@@ -6788,7 +6789,7 @@ function preloadAdjacentLightboxImages() {
 /**
  * Open lightbox with photo at index
  */
-async function openLightbox(photoIndex) {
+async function openLightbox(photoIndex, { enterFrom = 0 } = {}) {
   const overlay = document.getElementById('lightboxOverlay');
   const content = document.getElementById('lightboxContent');
 
@@ -6828,6 +6829,7 @@ async function openLightbox(photoIndex) {
 
   loadMediaIntoContent(content, photo, isVideo, {
     rotationDegrees: previewRotation,
+    enterFrom,
   });
 
   LightboxShell.show();
@@ -7295,12 +7297,14 @@ function updateLightboxArrowStates() {
 async function navigateLightbox(direction) {
   if (state.lightboxPhotoIndex === null) return;
 
+  const enterFrom = Math.sign(direction);
+
   const target = await resolveAdjacentLightboxTarget(direction);
   if (target) {
     if (target.globalIndex !== null && target.globalIndex !== undefined) {
       state.lightboxGlobalIndex = target.globalIndex;
     }
-    openLightbox(target.libraryIndex);
+    openLightbox(target.libraryIndex, { enterFrom });
     return;
   }
 
@@ -7315,7 +7319,7 @@ async function navigateLightbox(direction) {
       state.lightboxNavPhotoIds = state.photos.map((photo) => photo.id);
       const newIndex = state.lightboxPhotoIndex + 1;
       if (newIndex < state.photos.length) {
-        openLightbox(newIndex);
+        openLightbox(newIndex, { enterFrom });
       }
     }
   }
