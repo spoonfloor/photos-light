@@ -3841,15 +3841,15 @@ body.library-recovery-active .library-recovery-dock {
        (token model in the :root block up top). The selection circle uses
        the shared --photo-badge-gap; star and video carry their own gaps
        and the star/video glyphs render as SVG here (toggled below). */
-    --photo-badge-visual-size: 32px;
+    --photo-badge-visual-size: 28px;
     --photo-badge-gap: 10px;
-    --select-ring-stroke: 2.25px;
-    --month-header-circle-size: 30px;
-    --star-badge-size: 25px;
-    --star-badge-weight: 2px;
+    --select-ring-stroke: 1.5px;
+    --month-header-circle-size: 26px;
+    --star-badge-size: 23.5px;
+    --star-badge-weight: 1.5px;
     --star-gap-x: 11px;
-    --star-gap-y: 12.5px;
-    --video-badge-size: 28px;
+    --star-gap-y: 12px;
+    --video-badge-size: 26px;
     --video-gap: 12px;
     --filter-chip-height: 36px; /* = current value, dial in */
     --filter-chip-padding-x: 18px; /* = current value, dial in */
