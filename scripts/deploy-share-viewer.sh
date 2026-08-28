@@ -26,7 +26,12 @@ echo "Cloning $SHARING_REPO..."
 git clone --depth 1 "https://github.com/${SHARING_REPO}.git" "$DEPLOY_DIR"
 
 echo "Syncing share-viewer/ -> pages repo..."
-rsync -a --delete \
+# -c (checksum): the pages clone's files are stamped at clone time, so they
+# look "newer" than the freshly-built output; rsync's default size+mtime
+# quick-check then skips same-size edits (e.g. a ?v=17 -> ?v=18 cache-bust in
+# index.html), shipping a stale shell. Checksum compare is cheap here (~50
+# small files) and correct.
+rsync -ac --delete \
   --exclude .git \
   "$SHARE_OUT/" \
   "$DEPLOY_DIR/"
