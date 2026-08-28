@@ -4022,7 +4022,7 @@ body.library-recovery-active .library-recovery-dock {
   .app-bar-elements-layer {
     --app-bar-gap: 12px; /* = current value, dial in */
     --app-bar-actions-gap: 8px; /* = current value, dial in */
-    --app-bar-title-gap: 0px; /* = current value, dial in — min. distance from title to icons before truncation */
+    --app-bar-title-gap: 4px; /* = current value, dial in — min. distance from title to icons before truncation */
   }
 
   /* Bottom-docked modals (import progress, share-loading, clean library)
