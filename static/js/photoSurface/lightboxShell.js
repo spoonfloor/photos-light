@@ -276,6 +276,49 @@ const LightboxShell = (() => {
     }
   }
 
+  // --- Fade-up-from-black on open (docs/lightbox-480-plan.md) ---
+  // A one-shot opaque black scrim over the whole overlay, faded out and
+  // removed. Photo + chrome are already in the DOM underneath when show()
+  // runs (both hosts load media before calling show()). Only on a genuine
+  // open-from-closed — nav reloads have their own fake-swipe. Honors
+  // prefers-reduced-motion. Shared via show(), so share inherits it.
+  const OPEN_SCRIM_DURATION_MS = 100;
+  const OPEN_SCRIM_EASING = 'cubic-bezier(0.4, 0.4, 0, 1)';
+
+  function playOpenScrim() {
+    if (!els.overlay) {
+      return;
+    }
+    if (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return;
+    }
+    const scrim = document.createElement('div');
+    // z-index clears chrome (1) and chevrons (10); pointer-events:none so it
+    // can't swallow the first tap during the ~100ms fade.
+    scrim.style.cssText =
+      'position:absolute;inset:0;z-index:100;background:#000;' +
+      'opacity:1;pointer-events:none';
+    els.overlay.appendChild(scrim);
+    // Prime the opaque state before arming the transition (see animateFrameEntry).
+    void scrim.offsetWidth;
+    scrim.style.transition = `opacity ${OPEN_SCRIM_DURATION_MS}ms ${OPEN_SCRIM_EASING}`;
+    scrim.style.opacity = '0';
+    let done = false;
+    const remove = (e) => {
+      if (done || (e && e.propertyName !== 'opacity')) {
+        return;
+      }
+      done = true;
+      scrim.removeEventListener('transitionend', remove);
+      scrim.remove();
+    };
+    scrim.addEventListener('transitionend', remove);
+    setTimeout(remove, OPEN_SCRIM_DURATION_MS + 100);
+  }
+
   function show() {
     // openLightbox() (main.js/shareBoot.js) calls LightboxShell.show() on
     // EVERY photo load, not just the true initial open — a nav interaction
@@ -295,6 +338,7 @@ const LightboxShell = (() => {
     if (isInitialOpen) {
       lastNavDelta = null;
       lastNavWasSwipe = false;
+      playOpenScrim();
     }
     showUI();
     // Same overflow/squeeze engine as the grid app bar, scoped to
@@ -440,11 +484,13 @@ const LightboxShell = (() => {
         return;
       }
       if (deltaY >= SWIPE_MIN_DISTANCE && deltaY > Math.abs(deltaX)) {
-        // Swipe down → exit to grid. Same path as tapping the back/close
-        // button (commits pending rotations), not the Escape shortcut
-        // (which discards them) — a deliberate exit gesture, not a
-        // discard-and-bail escape hatch.
-        ctx?.onBack?.();
+        // Swipe down → exit to grid. Plays a short scale + slide-down exit on
+        // the current frame (LightboxMedia.animateFrameExit — shared, so share
+        // inherits it), then runs the same close as tapping the back/close
+        // button (commits pending rotations), not the Escape shortcut (which
+        // discards them) — a deliberate exit gesture, not a discard-and-bail
+        // escape hatch.
+        LightboxMedia.animateFrameExit(els.content, () => ctx?.onBack?.());
         return;
       }
     }

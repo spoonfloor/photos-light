@@ -72,6 +72,56 @@ const LightboxMedia = (() => {
     fallback = setTimeout(cleanup, ENTRY_DURATION_MS + 100);
   }
 
+  // --- Swipe-down exit animation (docs/lightbox-480-plan.md "Interim") ---
+  // Cheap: release-triggered only, no drag tracking. The current frame scales
+  // down + slides down, then `onDone` runs the host's real close (ctx.onBack),
+  // which tears the overlay down. A normal close removes the frame wholesale
+  // (caller's innerHTML clear), so nothing here needs resetting; the only
+  // stuck state is a close that bails (rotation-commit failure) — rare,
+  // self-heals on the next nav/reopen, and the user already has a failure
+  // toast. Honors prefers-reduced-motion (falls straight through to onDone).
+  const EXIT_TRANSLATE_PX = 240;
+  const EXIT_SCALE = 0.9;
+  const EXIT_OPACITY = 0;
+  const EXIT_DURATION_MS = 120;
+  const EXIT_EASING = 'linear';
+
+  function animateFrameExit(content, onDone) {
+    const finish = typeof onDone === 'function' ? onDone : () => {};
+    const frame = content && content.querySelector('.lightbox-media-frame');
+    if (!frame || frame.dataset.exiting === '1' || prefersReducedMotion()) {
+      finish();
+      return;
+    }
+    frame.dataset.exiting = '1';
+    let called = false;
+    const run = () => {
+      if (called) {
+        return;
+      }
+      called = true;
+      frame.removeEventListener('transitionend', onEnd);
+      finish();
+    };
+    const onEnd = (e) => {
+      if (e.propertyName === 'transform') {
+        run();
+      }
+    };
+    frame.addEventListener('transitionend', onEnd);
+    setTimeout(run, EXIT_DURATION_MS + 100);
+    // Already-mounted, already-painted element, so no reflow priming needed
+    // (unlike animateFrameEntry). translateY sits outside scale() so the
+    // px value is literal, not scaled. transitionend fires per-property
+    // (transform + opacity) — onEnd only acts on 'transform', and `called`
+    // guards the double anyway.
+    frame.style.transition =
+      `transform ${EXIT_DURATION_MS}ms ${EXIT_EASING}, ` +
+      `opacity ${EXIT_DURATION_MS}ms ${EXIT_EASING}`;
+    frame.style.transform = `translateY(${EXIT_TRANSLATE_PX}px) scale(${EXIT_SCALE})`;
+    frame.style.opacity = String(EXIT_OPACITY);
+  }
+
   function normalizeRotationDegrees(degrees) {
     return ((degrees % 360) + 360) % 360;
   }
@@ -632,5 +682,6 @@ const LightboxMedia = (() => {
     wireResizeUpgrade,
     maybeUpgradeViewport,
     relayoutCurrent,
+    animateFrameExit,
   };
 })();
