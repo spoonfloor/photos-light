@@ -293,6 +293,27 @@ fade-up from black.
   gray placeholder, then the image pops in. Accepted for v1; coupling the fade
   to image-load was considered and skipped.
 
+## Swipe-nav on an un-prefetched photo — gray box, not black
+
+**Status (2026-08-28): built, unverified on-device.** `LightboxMedia.loadStillImage`.
+
+`animateFrameEntry` slides the incoming `.lightbox-media-frame` in; when the
+next photo isn't in `LightboxMediaCache` yet (fast multi-swipe, non-adjacent
+jump, prefetch still in flight) that frame carries a gray `#2a2a2a`
+placeholder. The bug: `revealImage` removed the placeholder and appended the
+`<img>` in one step, with no wait for rasterization — for an HTTP-cached image
+the sync `img.complete` branch removed the placeholder before it ever painted.
+Either way the frame showed the black `#000` overlay for a frame or two mid-
+slide before the photo appeared.
+
+Fix: the `<img>` now mounts **over** the still-present placeholder, and the
+placeholder is removed only once `img.decode()` resolves (`requestAnimationFrame`
+fallback for no-`decode()` browsers / decode rejection on interrupted nav). The
+gray box rides the entry slide and the photo hard-cuts in over it whenever it's
+ready — mid-animation or after, no fade (matches the existing pop). Shared
+module, so share inherits it. `loadCachedStill` (decoded happy path) and the
+video path (keeps its own gray bg until `loadeddata`) are unchanged.
+
 ## Task order
 
 - [x] **0. Prereq — tokenize + consolidate**
@@ -1498,3 +1519,36 @@ behavior before declaring a step complete, not "it's fixed"). Draft:
   Everything above **shipped + deployed** — photos-light `120df80` +
   `bb56958`, share Pages repo `f5fcc2e`. The open bug is not a regression
   (that one path degrades to ~the old behaviour).
+
+- **2026-08-28** — Swipe-nav black flash on an un-prefetched photo. On a
+  narrow h-swipe to a photo not yet in `LightboxMediaCache`, the sliding
+  frame showed the black `#000` overlay for a frame or two before the photo
+  appeared, instead of the gray placeholder. Root cause in
+  `LightboxMedia.loadStillImage`'s `revealImage`: it removed the placeholder
+  and appended the `<img>` in one step with no wait for rasterization — and
+  for an HTTP-cached image the synchronous `img.complete` branch removed the
+  placeholder before it had ever painted, so `animateFrameEntry` slid an
+  empty frame.
+  - **Fix** (`lightboxMedia.js`): the `<img>` now mounts *over* the
+    still-present placeholder; the placeholder is removed only once
+    `img.decode()` resolves (`requestAnimationFrame` fallback for
+    no-`decode()` / decode rejection on interrupted nav). Gray box rides the
+    entry slide, photo hard-cuts in over it whenever ready (mid-animation or
+    after) — no fade, matches the existing pop. `revealed` guard added since
+    the reveal now schedules async work and can be entered twice
+    (`onload` + the sync `complete` check).
+  - Shared module → share inherits it. `loadCachedStill` (decoded happy
+    path) and the video path (own gray bg until `loadeddata`) untouched.
+    New section "Swipe-nav on an un-prefetched photo — gray box, not black".
+  - **Verified:** `node --check`; full share-viewer e2e suite 23/23 (covers
+    lightbox open, media element visibility, info-panel relayout). **Not
+    verified on-device** — no library available in this session's preview;
+    the sync `img.complete` path is exercised by the e2e data-URI pixels,
+    the network-load path is not.
+  - **Uncommitted, not deployed.** Working tree also carries a parallel
+    session's unrelated WIP (`static/css/styles.css`, `static/index.html`,
+    `static/fragments/appBar.html`, `static/js/main.js`,
+    `static/js/photoSurface/appBarLayout.js`) — the test run's
+    `build-share-viewer.sh` regenerated `share-viewer/` on top of that WIP,
+    so `share-viewer/` is dirty beyond this change. Deploy this from a clean
+    worktree of the target commit once it lands.

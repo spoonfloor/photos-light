@@ -411,11 +411,19 @@ const LightboxMedia = (() => {
     content.appendChild(frame);
 
     const img = new Image();
+    let revealed = false;
 
-    const revealImage = () => {
+    const dropPlaceholder = () => {
       if (placeholder.parentNode) {
         placeholder.parentNode.removeChild(placeholder);
       }
+    };
+
+    const revealImage = () => {
+      if (revealed) {
+        return;
+      }
+      revealed = true;
 
       LightboxMediaCache.put(photo.id, mediaUrl, img);
       img.className = 'lightbox-media-element';
@@ -427,8 +435,21 @@ const LightboxMedia = (() => {
         resolved.getDimensions,
       );
       img.alt = resolved.getAltText(photo);
+      // Mount the image *over* the still-present placeholder, not in its
+      // place. On a swipe to an un-prefetched photo the frame is already
+      // sliding in (animateFrameEntry); if the decode spills past this
+      // append, the frame keeps showing the gray box rather than the black
+      // overlay behind it. The placeholder only comes out once the image
+      // actually has pixels to paint — decode() resolving guarantees the
+      // next frame is real (rAF is the fallback for no-decode() browsers
+      // and the rare decode() rejection on interrupted nav).
       if (!img.parentNode) {
         frame.appendChild(img);
+      }
+      if (typeof img.decode === 'function') {
+        img.decode().then(dropPlaceholder, dropPlaceholder);
+      } else {
+        requestAnimationFrame(dropPlaceholder);
       }
       if (typeof resolved.onVisualState === 'function') {
         resolved.onVisualState(photo, img);
