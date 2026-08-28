@@ -150,6 +150,12 @@
     var(--photo-badge-gap) -
       (var(--photo-badge-hit-size) - var(--photo-badge-visual-size)) / 2
   );
+  /* The video badge (play_circle) is a solid disc; the star is a spiky
+     outline that touches its em box only at 5 points. At equal font-size
+     the disc reads noticeably smaller, so it's drawn ~1.15x up to make
+     the pair optically matched. Pinned to --photo-badge-visual-size as a
+     ratio so it tracks the desktop/narrow sizes automatically. */
+  --video-badge-visual-size: calc(var(--photo-badge-visual-size) * 1.15);
 
   /* --- Modal typography (dial-in tokens) ---
      Every modal's title/body/caption/path text reads from one of these
@@ -1165,19 +1171,19 @@ body.surface-load-active .app-bar-icon-button {
 /* Video badge (always visible for videos) */
 .photo-card .video-badge {
   position: absolute;
-  bottom: 8px;
-  left: 8px;
+  bottom: var(--photo-badge-gap);
+  left: var(--photo-badge-gap);
   pointer-events: none;
 }
 
 .photo-card .video-badge .material-symbols-outlined {
-  font-size: 20px;
+  font-size: var(--video-badge-visual-size);
   color: white;
   font-variation-settings:
     'FILL' 1,
     'wght' 400,
     'GRAD' 0,
-    'opsz' 20;
+    'opsz' 24;
   filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.45));
 }
 
