@@ -43,7 +43,7 @@ below for exact parameters — don't re-litigate these without the user.
     classes, forces the priming reflow, and derives its cleanup backstop from
     the element's resolved `transition-duration`
     (`LightboxMedia.transitionTimeoutMs`) — no timing constants mirrored in
-    JS. Current values: entry `80px` / `200ms` / `cubic-bezier(0.4,0.4,0,1)`;
+    JS. Current values: entry `180px` / `200ms` / `cubic-bezier(0.4,0.4,0,1)`;
     exit `240px` `scale(0.9)` `opacity 0` / `120ms` / `linear`; scrim
     `100ms` / `cubic-bezier(0.4,0.4,0,1)`.
 - ~~Edge nav strips: **96px** wide, full height, one per side.~~
