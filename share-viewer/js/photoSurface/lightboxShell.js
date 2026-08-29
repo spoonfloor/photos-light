@@ -277,14 +277,12 @@ const LightboxShell = (() => {
   }
 
   // --- Fade-up-from-black on open (docs/lightbox-480-plan.md) ---
-  // A one-shot opaque black scrim over the whole overlay, faded out and
-  // removed. Photo + chrome are already in the DOM underneath when show()
-  // runs (both hosts load media before calling show()). Only on a genuine
-  // open-from-closed — nav reloads have their own fake-swipe. Honors
-  // prefers-reduced-motion. Shared via show(), so share inherits it.
-  const OPEN_SCRIM_DURATION_MS = 100;
-  const OPEN_SCRIM_EASING = 'cubic-bezier(0.4, 0.4, 0, 1)';
-
+  // A one-shot opaque black scrim (.lightbox-open-scrim in styles.css, timing
+  // in --lightbox-anim-scrim-*) over the whole overlay, faded out and removed.
+  // Photo + chrome are already in the DOM underneath when show() runs (both
+  // hosts load media before calling show()). Only on a genuine open-from-
+  // closed — nav reloads have their own fake-swipe. Honors prefers-reduced-
+  // motion. Shared via show(), so share inherits it.
   function playOpenScrim() {
     if (!els.overlay) {
       return;
@@ -296,16 +294,11 @@ const LightboxShell = (() => {
       return;
     }
     const scrim = document.createElement('div');
-    // z-index clears chrome (1) and chevrons (10); pointer-events:none so it
-    // can't swallow the first tap during the ~100ms fade.
-    scrim.style.cssText =
-      'position:absolute;inset:0;z-index:100;background:#000;' +
-      'opacity:1;pointer-events:none';
+    scrim.className = 'lightbox-open-scrim';
     els.overlay.appendChild(scrim);
-    // Prime the opaque state before arming the transition (see animateFrameEntry).
+    // Prime the opaque state before arming the fade, else the two writes coalesce.
     void scrim.offsetWidth;
-    scrim.style.transition = `opacity ${OPEN_SCRIM_DURATION_MS}ms ${OPEN_SCRIM_EASING}`;
-    scrim.style.opacity = '0';
+    scrim.classList.add('is-fading');
     let done = false;
     const remove = (e) => {
       if (done || (e && e.propertyName !== 'opacity')) {
@@ -316,7 +309,7 @@ const LightboxShell = (() => {
       scrim.remove();
     };
     scrim.addEventListener('transitionend', remove);
-    setTimeout(remove, OPEN_SCRIM_DURATION_MS + 100);
+    setTimeout(remove, LightboxMedia.transitionTimeoutMs(scrim));
   }
 
   function show() {

@@ -23,23 +23,29 @@ below for exact parameters — don't re-litigate these without the user.
   "Explored & rejected" below) — don't revisit without the user raising it.
   - **Amended 2026-08-27** — nav (swipe / chevron / arrow key) now plays a
     "fake swipe": the outgoing frame is still a hard cut, but the incoming
-    `.lightbox-media-frame` mounts offset 80px toward the side it came from
-    and CSS-transitions to center over 200ms `cubic-bezier(0.4, 0.4, 0, 1)`.
-    Not the rejected filmstrip — no drag tracking, no neighbor pre-mount, no
-    physics. `LightboxMedia.animateFrameEntry` (shared), gated on a signed
-    `enterFrom` nav delta threaded from each host's nav funnel; honors
-    `prefers-reduced-motion`.
+    `.lightbox-media-frame` mounts offset toward the side it came from and
+    CSS-transitions to center. Not the rejected filmstrip — no drag tracking,
+    no neighbor pre-mount, no physics. `LightboxMedia.animateFrameEntry`
+    (shared), gated on a signed `enterFrom` nav delta threaded from each
+    host's nav funnel; honors `prefers-reduced-motion`.
   - **Swipe-down exit (2026-08-28):** interactive drag-to-dismiss designed
     and **deferred** (see "Deferred — interactive drag-to-dismiss"). The
-    interim is built: swipe-down plays a release-triggered `translateY(240px)
-    scale(0.9)` + `opacity 0` / 120ms linear exit on the frame, then the normal
-    close (`LightboxMedia.animateFrameExit`) — see "Interim — cheap 'scale +
-    move down' exit". Unverified on-device.
+    interim is built: swipe-down plays a release-triggered drop + shrink +
+    fade on the frame, then the normal close (`LightboxMedia.animateFrameExit`)
+    — see "Interim — cheap 'scale + move down' exit". Unverified on-device.
   - **Open transition (2026-08-28):** genuine lightbox open plays a
-    fade-up-from-black — a one-shot black scrim over `#lightboxOverlay`,
-    `opacity 1 → 0` / 100ms `cubic-bezier(0.4, 0.4, 0, 1)`
+    fade-up-from-black — a one-shot black scrim over `#lightboxOverlay`
     (`LightboxShell.playOpenScrim`). See "Open transition — fade-up from
     black". Unverified on-device.
+  - **All three animations (2026-08-28):** every timing/distance/easing lives
+    in CSS as `--lightbox-anim-*` tokens + `.is-animating-entry` /
+    `.is-exiting` / `.lightbox-open-scrim` classes (styles.css). JS toggles
+    classes, forces the priming reflow, and derives its cleanup backstop from
+    the element's resolved `transition-duration`
+    (`LightboxMedia.transitionTimeoutMs`) — no timing constants mirrored in
+    JS. Current values: entry `80px` / `200ms` / `cubic-bezier(0.4,0.4,0,1)`;
+    exit `240px` `scale(0.9)` `opacity 0` / `120ms` / `linear`; scrim
+    `100ms` / `cubic-bezier(0.4,0.4,0,1)`.
 - ~~Edge nav strips: **96px** wide, full height, one per side.~~
   **Superseded 2026-08-27** (user "changed my mind" — see batch plan
   `docs/lightbox-share-batch-plan.md` #2 and session log below): the
@@ -238,57 +244,66 @@ prototyping on-device.
 
 ## Interim — cheap "scale + move down" exit (touch-end only)
 
-**Status (2026-08-28): built, unverified on-device.** `static/js/photoSurface/`
-(`lightboxMedia.js` + `lightboxShell.js`); share rebuilt.
+**Status (2026-08-28): built, unverified on-device.**
+`static/js/photoSurface/lightboxMedia.js` + `lightboxShell.js`,
+`static/css/styles.css` (tokens + `.is-exiting`); share rebuilt.
 
 No drag tracking. Reuses the existing swipe-down recognition in
 `classifyGesture` (start/end delta past `SWIPE_MIN_DISTANCE`), which used to
 call `ctx.onBack()` directly. Now: on a recognized down-swipe it calls
 `LightboxMedia.animateFrameExit(content, () => ctx.onBack())` — the current
-`.lightbox-media-frame` transitions to `translateY(240px) scale(0.9)` +
-`opacity 0` over **120ms `linear`**, then `onBack()` runs the normal close.
+`.lightbox-media-frame` gets the `.is-exiting` class, which CSS transitions to
+`translateY(var(--lightbox-anim-exit-translate)) scale(--…-exit-scale)` +
+`opacity var(--…-exit-opacity)` over `--lightbox-anim-exit-duration`
+`--lightbox-anim-exit-ease`, then `onBack()` runs the normal close. Current
+token values: `240px` / `0.9` / `0` / `120ms` / `linear`.
 
 - Sibling to `animateFrameEntry`; exported from `lightboxMedia.js`, called
   from `lightboxShell.js`. Shared, so share inherits it (share's `onBack` is
   synchronous `closeLightbox`).
-- `transitionend` fires `onBack`; a `120 + 100`ms timeout is the backstop so
-  a missed event can't strand the lightbox open.
+- `transitionend` fires `onBack`; the backstop timeout is
+  `transitionTimeoutMs(frame)` = resolved `transition-duration` + 100ms slack,
+  so a missed event can't strand the lightbox open.
 - `frame.dataset.exiting` guards against a second swipe re-triggering mid-exit
   (the second `onBack` is absorbed by `closeLightbox`'s `lightboxClosing` /
   null-id guards).
 - `prefers-reduced-motion` → falls straight through to `onBack` (current
-  instant hide). No width gate in the helper — it rides the recognizer, which
-  is already touch-only via `allowDrag`.
-- **Frame fades, overlay doesn't** — the frame itself fades to `opacity 0`
-  during the exit; the black overlay stays opaque and is hard-cut to the grid
-  by `onBack()`. (A true dissolve-to-grid via overlay opacity was floated and
-  dropped for v1.)
+  instant hide), no class added. No width gate in the helper — it rides the
+  recognizer, which is already touch-only via `allowDrag`.
+- **Frame fades, overlay doesn't** — the frame itself fades to
+  `--lightbox-anim-exit-opacity`; the black overlay stays opaque and is
+  hard-cut to the grid by `onBack()`. (A true dissolve-to-grid via overlay
+  opacity was floated and dropped for v1.)
 - **Known gap:** `closeLightbox` awaits the rotation commit and can bail
   keeping the lightbox open (only if the user rotated a photo this session
-  *and* the save fails). The frame is left at `translateY/scale` in that case;
-  it self-heals on the next nav/reopen (`content.innerHTML = ''` rebuilds it),
+  *and* the save fails). The frame keeps `.is-exiting` in that case; it
+  self-heals on the next nav/reopen (`content.innerHTML = ''` rebuilds it),
   and the user has a failure toast. Not worth plumbing around for v1.
-- **translateY sits outside `scale()`** in the transform string so the px
+- **`translateY` sits outside `scale()`** in the CSS `transform` so the px
   value is literal, not scaled.
 
 ## Open transition — fade-up from black
 
 **Status (2026-08-28): built, unverified on-device.**
-`static/js/photoSurface/lightboxShell.js`; share rebuilt.
+`static/js/photoSurface/lightboxShell.js`, `static/css/styles.css`
+(`.lightbox-open-scrim`); share rebuilt.
 
 On a genuine lightbox open (not nav reloads — those have the fake-swipe),
-`show()` calls `playOpenScrim()`: a one-shot opaque black `<div>` is appended
-to `#lightboxOverlay` (`position:absolute; inset:0; z-index:100` — clears
-chrome and chevrons; `pointer-events:none`) and transitioned
-`opacity 1 → 0` over **100ms `cubic-bezier(0.4, 0.4, 0, 1)`**, then removed
-(`transitionend`, `100 + 100`ms timeout backstop). Photo + chrome are already
-painted underneath (both hosts load media before `show()`), so it reads as a
-fade-up from black.
+`show()` calls `playOpenScrim()`: a one-shot `<div class="lightbox-open-scrim">`
+is appended to `#lightboxOverlay` (styles.css gives it `position:absolute;
+inset:0; z-index:100` — clears chrome and chevrons — `pointer-events:none`, and
+an `opacity` transition over `--lightbox-anim-scrim-duration`
+`--lightbox-anim-scrim-ease`, currently `100ms` / `cubic-bezier(0.4,0.4,0,1)`).
+JS reflows, adds `.is-fading` (`opacity: 0`), and removes the node on
+`transitionend` (backstop = `transitionTimeoutMs(scrim)`). Photo + chrome are
+already painted underneath (both hosts load media before `show()`), so it reads
+as a fade-up from black.
 
 - Gated on `show()`'s existing `isInitialOpen` flag; `prefers-reduced-motion`
   → no scrim, instant.
-- Local to `LightboxShell` (not `LightboxMedia`) — it's an overlay-level
-  transition, not media-specific. Shared via `show()`, so share inherits it.
+- `LightboxShell` owns the scrim (overlay-level, not media-specific) but reuses
+  `LightboxMedia.transitionTimeoutMs` for the backstop. Shared via `show()`, so
+  share inherits it.
 - **Known wrinkle:** if the photo isn't cached, the scrim fades to reveal the
   gray placeholder, then the image pops in. Accepted for v1; coupling the fade
   to image-load was considered and skipped.

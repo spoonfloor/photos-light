@@ -152,6 +152,28 @@
   --lightbox-info-panel-pad-y: 20px;
   --lightbox-info-panel-bg: #1f1f1f; /* = --app-bar-bg; opaque */
 
+  /* --- Lightbox photo-surface animations ---
+     The three lightbox transitions (swipe-nav entry, swipe-down exit,
+     fade-up-on-open scrim) are driven by CSS classes toggled from
+     lightboxMedia.js / lightboxShell.js; every tunable value lives here.
+     JS only toggles classes, forces the priming reflow, and reads the
+     resolved transition-duration back off the element for its cleanup
+     backstop (LightboxMedia.transitionTimeoutMs) — so these are the single
+     source of truth for the timings, not mirrored in JS. Entry offset is a
+     magnitude only; JS picks the ±direction via .entering-from-{left,right}. */
+  --lightbox-anim-entry-offset: 80px;
+  --lightbox-anim-entry-duration: 200ms;
+  --lightbox-anim-entry-ease: cubic-bezier(0.4, 0.4, 0, 1);
+
+  --lightbox-anim-exit-translate: 240px;
+  --lightbox-anim-exit-scale: 0.9;
+  --lightbox-anim-exit-opacity: 0;
+  --lightbox-anim-exit-duration: 120ms;
+  --lightbox-anim-exit-ease: linear;
+
+  --lightbox-anim-scrim-duration: 100ms;
+  --lightbox-anim-scrim-ease: cubic-bezier(0.4, 0.4, 0, 1);
+
   /* --- Photo grid corner badges (select circle + star + video) ---
      Visual glyph size and tap-target size are independent knobs. The
      hit box is whichever is bigger: the best-practice floor, or the
@@ -1472,6 +1494,52 @@ body.surface-load-active .app-bar-icon-button {
 .lightbox-media-frame .lightbox-media-placeholder {
   width: 100%;
   height: 100%;
+}
+
+/* --- Lightbox photo-surface animations (tokens: --lightbox-anim-*) ---
+   Classes toggled from lightboxMedia.js (frame entry/exit) and
+   lightboxShell.js (open scrim). The frame's own transform is otherwise
+   unused — applyMediaStyles transforms the media element, not the frame. */
+
+/* Swipe-nav entry: incoming frame mounts offset toward the side it came
+   from (JS adds .entering-from-* + .is-animating-entry, reflows, then drops
+   the .entering-from-* class so it transitions to its natural position). */
+.lightbox-media-frame.is-animating-entry {
+  transition: transform var(--lightbox-anim-entry-duration)
+    var(--lightbox-anim-entry-ease);
+}
+.lightbox-media-frame.entering-from-right {
+  transform: translateX(var(--lightbox-anim-entry-offset));
+}
+.lightbox-media-frame.entering-from-left {
+  transform: translateX(calc(-1 * var(--lightbox-anim-entry-offset)));
+}
+
+/* Swipe-down exit: frame drops + shrinks + fades, then the host closes. */
+.lightbox-media-frame.is-exiting {
+  transition:
+    transform var(--lightbox-anim-exit-duration) var(--lightbox-anim-exit-ease),
+    opacity var(--lightbox-anim-exit-duration) var(--lightbox-anim-exit-ease);
+  transform: translateY(var(--lightbox-anim-exit-translate))
+    scale(var(--lightbox-anim-exit-scale));
+  opacity: var(--lightbox-anim-exit-opacity);
+}
+
+/* Fade-up-from-black on a genuine open: a one-shot opaque scrim over the
+   whole overlay (z-index clears chrome at 1 and chevrons at 10). JS appends
+   it, reflows, adds .is-fading, removes it on transitionend. */
+.lightbox-open-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  background: #000;
+  opacity: 1;
+  pointer-events: none;
+  transition: opacity var(--lightbox-anim-scrim-duration)
+    var(--lightbox-anim-scrim-ease);
+}
+.lightbox-open-scrim.is-fading {
+  opacity: 0;
 }
 
 /* Lightbox video — custom transport overlay (see lightboxVideoControls.js) */

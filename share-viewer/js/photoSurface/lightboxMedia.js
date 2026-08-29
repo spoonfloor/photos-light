@@ -11,18 +11,12 @@ const LightboxMedia = (() => {
   /** @type {HTMLElement | null} */
   let observedContent = null;
 
-  // --- Swipe-nav entry animation ("fake swipe", docs/lightbox-480-plan.md) ---
-  // Not a filmstrip: the outgoing frame is a hard cut (already gone — the
-  // caller cleared #lightboxContent before calling loadIntoContent). The
-  // incoming frame is the only thing that moves: it mounts shifted
-  // ENTRY_OFFSET_PX toward the side it is "coming from" and transitions to
-  // center. `enterFrom` is the signed nav delta (+1 = next, entered from the
-  // right; -1 = prev, entered from the left); 0/undefined (initial open,
-  // rotation reload, resize relayout) means no animation. Honors
-  // prefers-reduced-motion.
-  const ENTRY_OFFSET_PX = 80;
-  const ENTRY_DURATION_MS = 200;
-  const ENTRY_EASING = 'cubic-bezier(0.4, 0.4, 0, 1)';
+  // --- Lightbox photo-surface animations (docs/lightbox-480-plan.md) ---
+  // All timings/distances live in CSS (--lightbox-anim-* + the
+  // .is-animating-entry / .is-exiting / .lightbox-open-scrim classes in
+  // styles.css). JS here only toggles classes, forces the priming reflow,
+  // and derives its cleanup backstop from the element's resolved
+  // transition-duration — so there is no timing constant to keep in sync.
 
   function prefersReducedMotion() {
     return (
@@ -31,29 +25,49 @@ const LightboxMedia = (() => {
     );
   }
 
+  // Longest (duration + delay) of the element's current CSS transition, in ms,
+  // plus a fixed slack for the transitionend event itself to land. Used only
+  // as the backstop for cleanup when transitionend never fires (tab
+  // backgrounded mid-animation, interrupted, zero-delta) — the transition
+  // itself is entirely CSS-driven.
+  const TRANSITION_END_SLACK_MS = 100;
+  function transitionTimeoutMs(el) {
+    const cs = getComputedStyle(el);
+    const parseSecs = (prop) =>
+      cs.getPropertyValue(prop).split(',').map((v) => parseFloat(v) || 0);
+    const durations = parseSecs('transition-duration');
+    const delays = parseSecs('transition-delay');
+    const longest = Math.max(
+      0,
+      ...durations.map((d, i) => d + (delays[i] || 0)),
+    );
+    return longest * 1000 + TRANSITION_END_SLACK_MS;
+  }
+
+  // Swipe-nav entry ("fake swipe"): the outgoing frame is a hard cut (already
+  // gone — the caller cleared #lightboxContent before loadIntoContent). The
+  // incoming frame mounts offset toward the side it came from and slides to
+  // its natural position. `enterFrom` is the signed nav delta (+1 = next,
+  // from the right; -1 = prev, from the left); 0/undefined (initial open,
+  // rotation reload, resize relayout) → no animation.
   function animateFrameEntry(content, enterFrom) {
     const delta = Math.sign(enterFrom || 0);
     if (!delta || prefersReducedMotion()) {
       return;
     }
-    // #lightboxContent was just cleared by the caller, so the frame the load
-    // path appended is the only .lightbox-media-frame in it. The frame's own
-    // transform is otherwise unused (applyMediaStyles transforms the media
-    // element, not the frame), so this can't collide with layout styling.
     const frame = content.querySelector('.lightbox-media-frame');
     if (!frame) {
       return;
     }
-    frame.style.transform = `translateX(${delta * ENTRY_OFFSET_PX}px)`;
-    // Force the start position to paint before arming the transition, else
-    // the browser coalesces both writes and nothing animates.
+    const fromClass = delta > 0 ? 'entering-from-right' : 'entering-from-left';
+    frame.classList.add('is-animating-entry', fromClass);
+    // Force the offset start position to paint before dropping it, else the
+    // browser coalesces both writes and nothing animates.
     void frame.offsetWidth;
-    frame.style.transition = `transform ${ENTRY_DURATION_MS}ms ${ENTRY_EASING}`;
-    frame.style.transform = 'translateX(0)';
-    // Strip the inline transition/transform once settled so nothing else that
-    // touches frame.style.transform later gets silently animated. transitionend
-    // is the normal path; the timeout is the backstop for the cases it never
-    // fires (tab backgrounded mid-animation, interrupted, zero-delta).
+    frame.classList.remove(fromClass);
+    // Drop the transition class once settled so a later frame.style.transform
+    // (there is none today) can't be silently animated. transitionend is the
+    // normal path; the timeout is the backstop.
     let done = false;
     let fallback = null;
     const cleanup = (e) => {
@@ -65,27 +79,18 @@ const LightboxMedia = (() => {
         clearTimeout(fallback);
       }
       frame.removeEventListener('transitionend', cleanup);
-      frame.style.transition = '';
-      frame.style.transform = '';
+      frame.classList.remove('is-animating-entry');
     };
     frame.addEventListener('transitionend', cleanup);
-    fallback = setTimeout(cleanup, ENTRY_DURATION_MS + 100);
+    fallback = setTimeout(cleanup, transitionTimeoutMs(frame));
   }
 
-  // --- Swipe-down exit animation (docs/lightbox-480-plan.md "Interim") ---
-  // Cheap: release-triggered only, no drag tracking. The current frame scales
-  // down + slides down, then `onDone` runs the host's real close (ctx.onBack),
-  // which tears the overlay down. A normal close removes the frame wholesale
-  // (caller's innerHTML clear), so nothing here needs resetting; the only
-  // stuck state is a close that bails (rotation-commit failure) — rare,
-  // self-heals on the next nav/reopen, and the user already has a failure
-  // toast. Honors prefers-reduced-motion (falls straight through to onDone).
-  const EXIT_TRANSLATE_PX = 240;
-  const EXIT_SCALE = 0.9;
-  const EXIT_OPACITY = 0;
-  const EXIT_DURATION_MS = 120;
-  const EXIT_EASING = 'linear';
-
+  // Swipe-down exit (docs "Interim"): release-triggered, no drag tracking.
+  // The frame drops + shrinks + fades, then `onDone` runs the host's real
+  // close (ctx.onBack). A normal close removes the frame wholesale (caller's
+  // innerHTML clear), so nothing here needs resetting; the only stuck state
+  // is a close that bails (rotation-commit failure) — rare, self-heals on the
+  // next nav/reopen, and the user already has a failure toast.
   function animateFrameExit(content, onDone) {
     const finish = typeof onDone === 'function' ? onDone : () => {};
     const frame = content && content.querySelector('.lightbox-media-frame');
@@ -103,23 +108,16 @@ const LightboxMedia = (() => {
       frame.removeEventListener('transitionend', onEnd);
       finish();
     };
+    // transitionend fires per-property (transform + opacity) — act on
+    // 'transform' only; `called` guards the double anyway.
     const onEnd = (e) => {
       if (e.propertyName === 'transform') {
         run();
       }
     };
+    frame.classList.add('is-exiting');
     frame.addEventListener('transitionend', onEnd);
-    setTimeout(run, EXIT_DURATION_MS + 100);
-    // Already-mounted, already-painted element, so no reflow priming needed
-    // (unlike animateFrameEntry). translateY sits outside scale() so the
-    // px value is literal, not scaled. transitionend fires per-property
-    // (transform + opacity) — onEnd only acts on 'transform', and `called`
-    // guards the double anyway.
-    frame.style.transition =
-      `transform ${EXIT_DURATION_MS}ms ${EXIT_EASING}, ` +
-      `opacity ${EXIT_DURATION_MS}ms ${EXIT_EASING}`;
-    frame.style.transform = `translateY(${EXIT_TRANSLATE_PX}px) scale(${EXIT_SCALE})`;
-    frame.style.opacity = String(EXIT_OPACITY);
+    setTimeout(run, transitionTimeoutMs(frame));
   }
 
   function normalizeRotationDegrees(degrees) {
@@ -704,5 +702,6 @@ const LightboxMedia = (() => {
     maybeUpgradeViewport,
     relayoutCurrent,
     animateFrameExit,
+    transitionTimeoutMs,
   };
 })();
