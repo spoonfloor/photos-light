@@ -161,7 +161,7 @@
      backstop (LightboxMedia.transitionTimeoutMs) — so these are the single
      source of truth for the timings, not mirrored in JS. Entry offset is a
      magnitude only; JS picks the ±direction via .entering-from-{left,right}. */
-  --lightbox-anim-entry-offset: 80px;
+  --lightbox-anim-entry-offset: 180px;
   --lightbox-anim-entry-duration: 200ms;
   --lightbox-anim-entry-ease: cubic-bezier(0.4, 0.4, 0, 1);
 
